@@ -116,8 +116,8 @@ how many. A run with nothing left to count is `insufficient`, never a pass.
 hit rate is hits / (hits + misses). It passes at **≥ 85%**, compared exactly
 (17 of 20 passes). Orientation: higher is better. The report adds a two-sided
 95% interval from 10,000 session-bootstrap rounds (owner choice 6; a session is
-a local calendar day) and the margin `delta_hit_rate`, which the owner has not
-set.
+a local calendar day with at least one point counted, and the report gives how
+many days had none) and the margin `delta_hit_rate`, which the owner has not set.
 
 **Misses explained.** Each counted miss gets one cause, tested in this order:
 

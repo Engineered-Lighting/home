@@ -521,8 +521,10 @@ class Run:
                "gate": m["hit_rate_min"], "orientation": "higher is better",
                "delta": m["delta_hit_rate"], "delta_status": "promotion-margins: no delta set by the owner",
                "verdict": ("insufficient" if not n else "pass" if Fraction(hits, n) >= gate else "fail")}
-        sessions = list(counted_by_day.values())
+        # A day with nothing counted is no evidence: it must not narrow the interval.
+        sessions = [day for day in counted_by_day.values() if day[1]]
         out["sessions"] = len(sessions)
+        out["days_with_nothing_counted"] = len(counted_by_day) - len(sessions)
         if len(sessions) >= 2:
             rng = random.Random(0)
             rates = []
@@ -538,7 +540,7 @@ class Run:
                                       "session-bootstrap rounds (owner choice 6)")
         else:
             out["interval"] = None
-            out["interval_status"] = "one session: no session-bootstrap interval"
+            out["interval_status"] = f"{'one session' if sessions else 'no session'}: no session-bootstrap interval"
         return out
 
     def run(self):

@@ -679,6 +679,38 @@ class HitRateBoundary(unittest.TestCase):
         self.assertEqual(hr["sessions"], 2)
         self.assertEqual(hr["interval"], [0.85, 0.85])
 
+    def test_a_day_with_nothing_counted_is_not_a_session(self):
+        fake = type("R", (), {"m": closed()})()
+        hr = Run.hit_rate(fake, {1: (17, 20), 2: (0, 0)})
+        self.assertEqual((hr["sessions"], hr["interval"], hr["days_with_nothing_counted"]), (1, None, 1))
+        self.assertIn("one session", hr["interval_status"])
+        hr = Run.hit_rate(fake, {1: (17, 20), 2: (0, 0), 3: (18, 20)})
+        self.assertEqual((hr["sessions"], hr["days_with_nothing_counted"]), (2, 1))
+        self.assertEqual(hr["interval"], [0.85, 0.9])
+        hr = Run.hit_rate(fake, {1: (0, 0)})
+        self.assertEqual((hr["sessions"], hr["interval"], hr["verdict"]), (0, None, "insufficient"))
+
+    def test_a_day_left_out_whole_does_not_build_an_interval_end_to_end(self):
+        names = [f"p{i:02d}" for i in range(20)]
+        model = syn.hue_model({n: {B0: 400.0, B1: 150.0} for n in names}, kelvins=(2700,))
+        targets = {f"T{i}": {"surface_id": n} for i, n in enumerate(names)}
+
+        def case(did, t, held, values):
+            ref = syn.light_state(t, {n: 400 * 0.2 + 150 * 0.3 for n in names}, anchored=False, ident=f"ls-{did}")
+            applied = {B0: {"level": 0.8, "steps": send(t + 0.5)}, B1: {"status": "held" if held else "sent", "level": 0.3}}
+            hold_set = {"revision": 4, "held": [{"entity_id": B1, "channels": [B1],
+                                                 "pinned": {"level_pct": 30, "cct_k": 2700}}]} if held else None
+            dec = syn.hue_decision(did, t + 0.5, {B0: 0.2, B1: 0.3}, applied, f"ls-{did}", targets=targets, hold_set=hold_set)
+            return [dec], [ref, syn.light_state(t + 5, values, anchored=False, ident=f"ls-{did}-after")]
+
+        on_target = 400 * 0.8 + 150 * 0.3
+        d1, f1 = case("d-1", syn.T0, False, {n: on_target if i < 17 else on_target * 0.6 for i, n in enumerate(names)})
+        d2, f2 = case("d-2", syn.T0 + 86400, True, {n: on_target for n in names})
+        both = {"held_rule": "exclude_both", "held_share_min": 0.05}
+        hr = score(d1 + d2, f1 + f2, model, overrides=both)[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["sessions"], hr["interval"]), (17, 3, 1, None))
+        self.assertEqual(hr["days_with_nothing_counted"], 1)
+
 
 class EyesFallbackGold(unittest.TestCase):
     """Eyes are never verified; a fallback patch is a verify aid, never delivered service."""

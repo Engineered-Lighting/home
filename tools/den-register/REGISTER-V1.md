@@ -145,9 +145,14 @@ looks at a frame of a later take in three steps.
    with no depth counts at `mount_view_reach_m`: a dark far floor or a bare wall
    has no depth and is still room. How far a rigid motion moves a point is convex
    in the point, so nothing between the camera and those surfaces moves further.
-   At most `gate_m`: `confirmed`. Over it: `not_confirmed`. So is a registration
-   frame with under `mount_min_cells` cells of depth, which cannot say what the
-   view holds.
+   At most `gate_m`: `confirmed`, with one more condition. Over it:
+   `not_confirmed`. So is a registration frame with under `mount_min_cells` cells
+   of depth, which cannot say what the view holds, and so are marks whose second
+   principal RMS spread is under `mount_min_spread_m`: a turn about the line
+   through them hardly moves them, so noise can hide it. (On synthetic noise of
+   1 px and 0.5% depth, a 1.5° turn about that line, 7.6 cm off across the room,
+   confirmed 20% of the time at a spread of 0.29 m and 9% at 0.47 m.) `fit` says
+   so when it registers such marks.
 
 `changed` appends a RoomModel revision whose entry carries `invalidated`, with
 what the owner must re-check; from then on that `transform_id` resolves as
@@ -192,4 +197,5 @@ mount_tolerance_fraction = open   # open, proposed 0.03 of the cell's depth
 mount_changed_fraction = open     # open, proposed 0.5 of compared cells
 mount_min_cells = open            # open, proposed 16 comparable cells
 mount_view_reach_m = open         # open, proposed 6.0 (past the room's far corner: a window or a doorway)
+mount_min_spread_m = open         # open, proposed 0.4 (all the marks, off their best line; a confirmation needs it)
 ```

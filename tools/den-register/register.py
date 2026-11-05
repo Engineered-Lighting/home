@@ -467,6 +467,10 @@ def run_fit(work, take_dir, frame=None, *, m=None, now=time.time, out=sys.stdout
     write_json(path, report)
     if report["result"] == "registered":
         print(f"REGISTERED {report['transform_id']}", file=out)
+        spread = rigid.spread([p["camera_xyz_m"] for p in verdict["pairs"]])
+        if spread < m["mount_min_spread_m"]:
+            print(f"  But the mount check could not confirm it: these marks spread {_cm(spread)} off their best line, "
+                  f"and it needs {_cm(m['mount_min_spread_m'])}. Add a cross away from that line and fit again.", file=out)
     else:
         print("REFUSED", file=out)
         for r in report["reasons"]:
@@ -607,6 +611,11 @@ def why_not_confirmed(entry, mount, marks, m):
         return (f"each mark is within {_cm(gate)}, but the movement they show together would put something in view "
                 f"{_cm(movement)} off"), ("Record a new take and click every mark again. If it says the same, treat "
                                           "the camera as moved and register again."), facts
+    spread = rigid.spread(start)
+    facts["marks_spread_m"] = records.rounded(spread)
+    if spread < m["mount_min_spread_m"]:
+        return (f"the marks are too close to one line to show a turn about it (they spread {_cm(spread)} off it, and "
+                f"{_cm(m['mount_min_spread_m'])} is needed)"), "Register again with a cross away from that line.", facts
     return None, None, facts
 
 

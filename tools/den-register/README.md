@@ -63,9 +63,10 @@ wall is `x = 0` and which is `y = 0` under `references`.
 
 1. Put six small tape crosses on flat surfaces the camera sees, spread across
    the room: some on the floor, one or two on a table or counter top, one on a
-   wall, and at least one at the far end from the camera. Not all on one line,
-   and not on edges or corners, where depth jumps. Leave them in place after the
-   fit: the mount check below clicks them again.
+   wall, and at least one at the far end from the camera. Not all on one line:
+   the mount check below cannot confirm crosses closer to one line than about
+   40 cm, and `fit` says so. Not on edges or corners, where depth jumps. Leave
+   them in place after the fit: the mount check clicks them again.
 2. Measure each cross's centre: `x` from the `x = 0` wall, `y` from the
    `y = 0` wall, `z` from the floor, with a tape or a laser. Write it as
    `"room_xyz_m": [x, y, z]` in metres, for example `[2.31, 1.07, 0.0]`.
@@ -187,7 +188,7 @@ works out how far that movement would carry anything else in view:
 | Line | Means | What to do |
 |---|---|---|
 | `MOUNT CONFIRMED` | Every cross is within 5 cm, and so is everything in view. Any part of the view the registration frame had no depth for counts as 6 m away. The registration holds. | Nothing. |
-| `MOUNT NOT CONFIRMED` | A cross is not clicked, or one cross does not move with the others, or one is more than 5 cm from your tape position, or the crosses show a movement that puts something else in view further off. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same: a cross on furniture that moved, measure it again; otherwise treat the camera as moved. Then steps 4, 5 and 7. |
+| `MOUNT NOT CONFIRMED` | A cross is not clicked, or one cross does not move with the others, or one is more than 5 cm from your tape position, or the crosses show a movement that puts something else in view further off, or they are too close to one line to show a turn about it. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same: a cross on furniture that moved, measure it again; otherwise treat the camera as moved. Then steps 4, 5 and 7. |
 | `MOUNT CHANGED` | The depth moved a lot, or the crosses moved together by more than 5 cm. The registration is now invalidated, for good, and takes it had vouched for can no longer be replayed. | The line lists what to re-check. Then steps 4, 5 and 7. |
 | `mount_take_not_later` | That take is not newer than the registration's own. | Record a new take. |
 | `mount_take_in_future` | That take ended later than this PC's clock says it is now, so it could vouch for takes not recorded yet. | Check the PC's clock, then record a new take. |

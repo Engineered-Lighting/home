@@ -199,11 +199,13 @@ class MethodTests(unittest.TestCase):
                                     "max_left_depth_skew_s": 0.067})
         self.assertEqual(set(m.open), {"min_spread_m", "depth_window_px", "min_depth_valid_fraction",
                                        "mount_tolerance_mm", "mount_tolerance_fraction",
-                                       "mount_changed_fraction", "mount_min_cells", "mount_view_reach_m"})
+                                       "mount_changed_fraction", "mount_min_cells", "mount_view_reach_m",
+                                       "mount_min_spread_m"})
         self.assertIsNone(m.scored())
         with self.assertRaises(KeyError):
             m["min_spread_m"]
         self.assertEqual(m.get("min_spread_m"), 0.25)
+        self.assertEqual(m.get("mount_min_spread_m"), 0.4)
 
     def test_ladder_still_states_the_gate_this_method_closes(self):
         rung = next(r for r in json.loads(LADDER.read_text(encoding="utf-8"))["rungs"] if r.get("n") == 1)
@@ -1070,9 +1072,9 @@ class MountTests(Base):
             far[reach] = self.check(s, later.take)[1]["view_movement_m"]
         self.assertLess(far[1.0], far[6.0])
 
-    def holed_registration(self, points, fit, checks, plane, pose, later_plane, clicked=None, holes=()):
+    def holed_registration(self, points, fit, checks, plane, pose, later_plane, clicked=None, holes=(), m=None):
         """A registration from a frame that has depth only where plane does, and a later take from this pose."""
-        s = Scene(self, points=points, fit=fit, checks=checks, holes=holes, ended=1_800_000_100.0, background=plane)
+        s = Scene(self, points=points, fit=fit, checks=checks, holes=holes, ended=1_800_000_100.0, background=plane, m=m)
         s.click_all(clicked)
         code, fitted = s.fit()
         self.assertEqual(code, 0, s.out)
@@ -1141,7 +1143,8 @@ class MountTests(Base):
 
     def test_an_unmoved_camera_with_holes_in_its_view_is_still_confirmed(self):
         plane = near_table_plane()
-        s, later = self.holed_registration(NEAR_TABLE, ("a", "b", "c", "d"), ("e", "f"), plane, None, plane)
+        s, later = self.holed_registration(NEAR_TABLE, ("a", "b", "c", "d"), ("e", "f"), plane, None, plane,
+                                           m=closed_method(mount_min_spread_m=0.2))
         code, report, text = self.check(s, later.take)
         self.assertEqual((code, report["result"]), (0, "confirmed"), text)
         self.assertLess(report["view_movement_m"], 0.05)
@@ -1334,6 +1337,62 @@ class MountTests(Base):
             else:
                 tally["not_confirmed" if register.why_not_confirmed(entry, mount, marks, m)[0] else "confirmed"] += 1
         return tally
+
+    def thin_turn(self, deg, side=0.3):
+        """Six marks along a line with a little lateral offset, and the pose after a turn about that line."""
+        points = {f"t{i}": synthetic.in_view((-1) ** i * side, 0.25, 2.0 + 0.5 * i) for i in range(6)}
+        centre = [sum(p[i] for p in points.values()) / 6 for i in range(3)]
+        apart = [points["t5"][i] - points["t0"][i] for i in range(3)]
+        x, y, z = (v / math.hypot(*apart) for v in apart)
+        c, s, t = math.cos(math.radians(deg)), math.sin(math.radians(deg)), 1 - math.cos(math.radians(deg))
+        turn = [[c + x * x * t, x * y * t - z * s, x * z * t + y * s], [y * x * t + z * s, c + y * y * t, y * z * t - x * s],
+                [z * x * t - y * s, z * y * t + x * s, c + z * z * t]]
+        rotation, translation = synthetic.camera_pose()
+        return points, ([[sum(turn[i][k] * rotation[k][j] for k in range(3)) for j in range(3)] for i in range(3)],
+                        [sum(turn[i][j] * (translation[j] - centre[j]) for j in range(3)) + centre[i] for i in range(3)])
+
+    THIN_ROLES = ("t0", "t1", "t2", "t3"), ("t4", "t5")
+
+    def test_marks_near_one_line_cannot_confirm_a_turn_about_it(self):
+        # The 2026-11-05 verifier's estimate: with 1 px and 0.5% depth noise, a 1.5 degree turn about the marks' line,
+        # about 8 cm off across the room, was confirmed one time in five.
+        points, turned = self.thin_turn(1.5)
+        self.assertEqual(self.noisy_checks(points, *self.THIN_ROLES, turned)["confirmed"], 0)
+        points, turned = self.thin_turn(2.0, side=0.6)  # spread enough: the turn has somewhere to show
+        self.assertLessEqual(self.noisy_checks(points, *self.THIN_ROLES, turned)["confirmed"], 1)
+
+    def test_marks_near_one_line_are_not_confirmed_even_on_an_unmoved_camera_and_the_line_says_why(self):
+        points, _ = self.thin_turn(0)
+        s = Scene(self, points=points, fit=self.THIN_ROLES[0], checks=self.THIN_ROLES[1], ended=1_800_000_100.0,
+                  background=synthetic.room_depth())
+        s.click_all()
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        self.assertIn("could not confirm", s.out, "said at the fit, before takes are recorded on it")
+        later = Scene(self, points=points, fit=self.THIN_ROLES[0], checks=self.THIN_ROLES[1], name="later",
+                      ended=1_800_001_000.0, background=synthetic.room_depth())
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertLess(report["marks_spread_m"], 0.4)
+        self.assertIn("too close to one line", text)
+        self.assertIn("Register again", text)
+        self.assertNotIn("register.py click", text)
+        self.assertEqual(len(s.room_models()), 1)
+
+    def test_the_spread_the_marks_need_is_the_slot_and_a_wide_layout_is_told_nothing(self):
+        s, fitted = self.furnished()
+        self.assertNotIn("could not confirm", s.out)
+        later = self.later_in_the_room()
+        later.click_all()
+        spread = rigid.spread([mark["camera_xyz_m"] for mark in s.room_models()[0]["cameras"][0]["mount"]["marks"]])
+        for needed, expected in ((spread + 0.001, "not_confirmed"), (spread - 0.001, "confirmed")):
+            with self.subTest(needed=needed):
+                out = io.StringIO()
+                report = register.run_check_mount(s.work, later.take, m=closed_method(mount_min_spread_m=needed),
+                                                  now=lambda: 1_800_002_000.0, out=out)[1]
+                self.assertEqual(report["result"], expected, out.getvalue())
+                self.assertAlmostEqual(report["marks_spread_m"], spread, places=4)
 
     def test_noise_on_an_unmoved_camera_does_not_invalidate_it(self):
         # Half a percent of depth noise, per mark: comparing each mark with its tape position said CHANGED on 27% of

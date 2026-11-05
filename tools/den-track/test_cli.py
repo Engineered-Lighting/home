@@ -13,6 +13,7 @@ from unittest import mock
 import den_track
 import method
 import records
+import scorer_core
 import synth
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +28,43 @@ def cli(*argv):
 
 def no_connections(*args, **kwargs):
     raise AssertionError('den-track must not open a socket')
+
+
+def labels_and_mark(truth_path):
+    labels, mark = {}, None
+    for line in records.read_jsonl(truth_path):
+        if line['kind'] == 'frame':
+            labels.update(line['labels'])
+        elif line['kind'] == 'crossing':
+            mark = line['interval']
+    return labels, mark
+
+
+def reject_when(rule):
+    """An edit of a take's observations: rejected, with no position, wherever rule(person, time, mark) holds."""
+    def edit(obs_path, truth_path):
+        labels, mark = labels_and_mark(truth_path)
+        rows = records.read_jsonl(obs_path)
+        for row in rows:
+            if rule(labels.get(row['obs_id']), row['capture_ts'], mark):
+                row['validity'] = 'rejected:no_room_position:depth_absent'
+                row.pop('room_position', None)
+        records.write_jsonl(obs_path, rows)
+    return edit
+
+
+def only_one_sighting_each(obs_path, truth_path):
+    """In the padded window, only one observation of A before the mark and one of B after it survive."""
+    labels, mark = labels_and_mark(truth_path)
+    rows = records.read_jsonl(obs_path)
+    before = max(r['capture_ts'] for r in rows if labels.get(r['obs_id']) == 'A' and mark[0] - 2.0 <= r['capture_ts'] < mark[0])
+    after = min(r['capture_ts'] for r in rows if labels.get(r['obs_id']) == 'B' and mark[1] < r['capture_ts'] <= mark[1] + 2.0)
+    for row in rows:
+        who, ts = labels.get(row['obs_id']), row['capture_ts']
+        if mark[0] - 2.0 <= ts <= mark[1] + 2.0 and (who, ts) not in (('A', before), ('B', after)):
+            row['validity'] = 'rejected:no_room_position:depth_absent'
+            row.pop('room_position', None)
+    records.write_jsonl(obs_path, rows)
 
 
 def reject_person(person):
@@ -212,6 +250,17 @@ class PracticeRunTest(Base):
         self.assertIn('UNSCORED', text)
         self.assertEqual(set(os.listdir(HERE)), before)
 
+    def test_the_proposed_trial_rule_counts_nearly_every_crossing_the_scenes_stage(self):
+        rows = den_track.practice_rows(method.Method(), sorted(synth.SCENES), range(2000, 2020), 'typical', 4.0)
+        for row in rows:
+            self.assertEqual(row['crossings_marked'], 20, row['scene'])
+            self.assertGreaterEqual(row['crossings'], 19, (row['scene'], row['crossings_excluded']))
+
+    def test_a_crossing_along_the_view_ends_with_both_people_in_view(self):
+        scene = next(s for s in (synth.scenario('close_crossing', seed=k, noise='clean') for k in range(20))
+                     if len({round(o['xy'][0]) for o in s['frames'][0]['obs']}) == 1)
+        self.assertEqual({o['pid'] for o in scene['frames'][-1]['obs']}, {'A', 'B'})
+
     def test_practice_can_try_another_value_and_refuses_an_unknown_one(self):
         code, _ = cli('practice', '--seeds', '1', '--scene', 'near_pass', '--set', 'tracker.accel_sigma=0.5')
         self.assertEqual(code, 0)
@@ -352,6 +401,104 @@ class ScoredRunTest(Base):
                                                          'because': 'fewer than 2 people scored'}])
         self.assertAlmostEqual(report['silent_swap_rate_upper_95'], 1 - 0.05 ** (1 / 2))
 
+    def test_twenty_takes_where_one_person_stalls_for_good_at_the_contact_are_refused(self):
+        meth = self.closed_method()
+        stall = reject_when(lambda who, ts, mark: who == 'B' and ts >= mark[0])
+        takes = [self.make_take(seed=seed, meth=meth, edit_observations=stall) for seed in range(20)]
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'at least 20')
+
+    def test_a_person_who_stalls_at_the_contact_and_comes_back_is_a_trial_under_the_proposed_rule(self):
+        meth = self.small_method()
+        stall = reject_when(lambda who, ts, mark: who == 'B' and mark[0] <= ts <= mark[1])
+        takes = [self.make_take(seed=seed, meth=meth, edit_observations=stall) for seed in range(2)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertNotIn('EXCLUDED', text)
+
+    def test_twenty_windows_each_holding_one_sighting_of_each_person_are_refused(self):
+        meth = self.closed_method()
+        takes = [self.make_take(seed=seed, meth=meth, edit_observations=only_one_sighting_each) for seed in range(20)]
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'at least 20')
+
+    def test_twenty_windows_of_cannot_tell_but_one_sighting_of_each_person_are_refused(self):
+        meth = self.closed_method()
+        takes = []
+        for seed in range(20):
+            take = self.make_take(seed=seed, meth=meth)
+            lines = records.read_jsonl(take[2])
+            mark = next(l for l in lines if l['kind'] == 'crossing')['interval']
+            frames = sorted((l for l in lines if l['kind'] == 'frame'), key=lambda l: l['capture_ts'])
+            inside = [l for l in frames if mark[0] - 2.0 <= l['capture_ts'] <= mark[1] + 2.0]
+            first = max(l['capture_ts'] for l in inside if l['capture_ts'] < mark[0])
+            last = min(l['capture_ts'] for l in inside if l['capture_ts'] > mark[1])
+            for frame in inside:
+                keep = {first: 'A', last: 'B'}.get(frame['capture_ts'])
+                frame['labels'] = {o: (p if p == keep or p is None else '?') for o, p in frame['labels'].items()}
+            records.write_jsonl(take[2], lines)
+            takes.append(take)
+        self.assert_refused(self.score_args(takes, scored=True, meth=meth), 'at least 20')
+
+    def far_apart_take(self, meth, kind='crossing'):
+        """200 s of A and B 5.6 m apart, standing still, with twenty marks typed into it."""
+        folder = self.path('takes', 'apart-' + kind)
+        os.makedirs(folder)
+        t0 = 1793066600.0
+        rows, lines = [], []
+        for k in range(800):
+            ts = round(t0 + k / 4.0, 3)
+            row = {}
+            for person, x, y in (('A', -1.9, 1.0), ('B', 1.9, 5.0)):
+                oid = 'o-%s-%d' % (person, k)
+                rows.append({'version': 'observation/v1', 'obs_id': oid, 'kind': 'person_box', 'capture_ts': ts,
+                             'source': {'sensor_id': 'den-oak', 'model': 'm', 'model_version': None},
+                             'room_position': {'x': x, 'y': y, 'z': 1.0, 'cov': [[0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01]]},
+                             'image_box': [1, 1, 2, 2], 'transform_id': 'x', 'depth_ts': ts, 'score': 0.8,
+                             'visibility': 'visible', 'validity': 'valid'})
+                row[oid] = person
+            lines.append({'kind': 'frame', 'capture_ts': ts, 'labels': row})
+        obs_path = os.path.join(folder, 'observations.jsonl')
+        records.write_jsonl(obs_path, rows)
+        crossings = [{'kind': 'crossing', 'crossing_id': 'q%02d' % n, 'type': kind, 'interval': [t0 + 6 + 8 * n, t0 + 7 + 8 * n]}
+                     for n in range(20)]
+        head = {'version': 'den-track-truth/1', 'kind': 'header', 'take': 'apart-' + kind, 'people': ['A', 'B'],
+                'labeller': 'owner', 'blind': True, 'observations_sha256': den_track.text_sha256(obs_path)}
+        truth_path = os.path.join(folder, 'truth.jsonl')
+        records.write_jsonl(truth_path, [head] + lines + crossings)
+        run_folder = os.path.join(folder, 'track-1')
+        code, text = cli('--method', meth, 'track', '--observations', obs_path, '--out', run_folder)
+        self.assertEqual(code, 0, text)
+        return [obs_path, os.path.join(run_folder, 'tracks.jsonl'), truth_path]
+
+    def test_twenty_marks_typed_where_nobody_met_are_refused_whatever_kind_they_say(self):
+        for kind in ('crossing', 'crossing_occluded', 'near_pass', 'occlusion', 'door'):
+            with self.subTest(kind=kind):
+                def plan(block, kind=kind):
+                    block['scoring']['crossings_plan'] = {kind: 20}
+                meth = self.closed_method('METHOD-%s.md' % kind, plan)
+                self.assert_refused(self.score_args([self.far_apart_take(meth, kind)], 'score-' + kind, scored=True, meth=meth),
+                                    'at least 20')
+
+    def test_how_a_crossing_becomes_a_trial_is_an_open_slot_a_scored_run_reads(self):
+        self.assertIn('scoring.trial_rule', [name for name, _ in method.Method().open])
+        self.assertEqual(scorer_core.trial_problem(method.Method().scoring['trial_rule']), None)
+        for n, bad in enumerate(({'sides': 'either', 'min_scored': 2, 'contact_reach_m': 1.6, 'unseen_s': 0.6}, None, 2)):
+            def close(block, bad=bad):
+                block['scoring']['trial_rule'] = bad
+            meth = self.closed_method('METHOD-rule-%d.md' % n, close)
+            self.assert_refused(self.score_args([self.make_take(seed=70 + n, meth=meth)], 'rule-%d' % n, scored=True, meth=meth),
+                                'trial_rule')
+
+    def test_the_stricter_rule_can_be_closed_and_is_what_a_scored_run_uses(self):
+        def strict(block):
+            block['scoring'].update(min_crossings=2, crossings_plan={'crossing': 2})
+            block['scoring']['trial_rule'] = dict(block['scoring']['trial_rule'], sides='window')
+        meth = self.closed_method('METHOD-window.md', strict)
+        back = reject_when(lambda who, ts, mark: who == 'B' and mark[0] <= ts <= mark[1] + 2.5)
+        takes = [self.make_take(seed=seed, meth=meth) for seed in range(2)] + [self.make_take(seed=50, meth=meth, edit_observations=back)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('clean_crossing-50/c1', text)
+
     def test_a_take_cut_short_at_the_contact_is_excluded(self):
         def cut(obs_path, truth_path):
             lines = records.read_jsonl(truth_path)
@@ -367,7 +514,7 @@ class ScoredRunTest(Base):
         self.assert_refused(self.score_args(good[:1] + [short], scored=True, meth=meth), 'clean_crossing-50/c1')
         code, text = cli(*self.score_args(good + [short], 'score2', scored=True, meth=meth))
         self.assertEqual(code, 0, text)
-        self.assertIn('nobody scored after the mark', text)
+        self.assertIn('followed through', text)
 
     def test_a_crossing_that_holds_no_observation_is_excluded_named_and_not_counted(self):
         meth = self.small_method()

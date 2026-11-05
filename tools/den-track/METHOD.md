@@ -143,13 +143,32 @@ person. A link joins an observation's person to the track that listed it in
   observation level). The gate's number sums the windows' counts. Whole-take IDF1,
   one mapping per take, is reported beside it and is harsher: a flagged swap costs
   everything after it.
-- **Which crossings count**: a crossing is a trial only if its window holds a silent
-  swap, or scored observations of at least `min_people_per_crossing` people, with some
-  before the owner's mark and some after it. One that saw one person or nobody (the
-  detector stalled, a mistyped time) or nothing after the contact (a take cut short) shows
-  nothing about identity. It is listed as excluded, and left out of n, the bound and IDF1.
-  A scored observation has a person's letter and could have been tracked: it is valid,
-  with a position. "Not a person" and rejected observations do not count.
+- **Which crossings count**: a marked crossing is a trial only if it shows what its kind
+  claims, by the numbers in `trial_rule`. A sighting is a frame with a scored observation
+  of that person: valid, with a position and a person's letter. "Not a person", rejected
+  and `?` observations are not sightings, and two boxes of one person in a frame are one.
+  A person is **followed through** the mark if at least `min_scored` frames see them in the
+  window, and as many before the mark and after it. Under `sides` `take` those before and
+  after may come from anywhere in the take; under `window`, only from the window.
+  - `crossing`, `crossing_occluded`, `near_pass`: at least `min_people_per_crossing` people
+    followed through, who came within `contact_reach_m` of each other inside the window. A
+    person hidden in that time is read in a straight line between their sightings.
+  - `occlusion`: the same people followed through, with no need to be near, and one of
+    them unseen for at least `unseen_s` during the mark.
+  - `door`: inside the window, one person seen in `min_scored` frames before the mark and
+    none after it, and another the other way round. Nobody is on both sides of a door swap.
+
+  A window that holds a silent swap is always a trial. Anything else is listed as excluded,
+  with why, and left out of n, the bound and IDF1. So a crossing with one person scored, a
+  person gone for good at the contact, one sighting of A before and one of B after, a take
+  cut short, a mistyped time, or a mark typed while the two stood across the room shows
+  nothing about identity and does not count.
+
+  From the observations alone, a person hidden behind the other after the contact looks
+  the same as a detector stalling on them. Under `take` both count once the person is seen
+  again later in the take: the tracker then has to find them again, which is a real test.
+  What the rule cannot judge is the owner's intent: a mark typed where the two stand a metre
+  apart and do nothing passes it. The marks stay the owner's.
 - **The bound**: one-sided Clopper-Pearson at `alpha` on the admitted crossings with a
   silent swap. With 0 of n it is `1 - alpha ** (1 / n)`: 13.9% at 20, 9.5% at 30.
 - **The gate**: no silent swap anywhere in the takes, inside a crossing or not, and
@@ -228,6 +247,7 @@ folder, so an earlier one stays.
     "min_people_per_crossing": 2,
     "window_pad_s": {"open": true, "proposed": 2.0, "why": "Padding on each side of the owner's mark, so a window holds frames before and after and a swap shows in its own IDF1. The contracts name none. Proposed 2.0: about what walkers need to come together and part. Staged crossings must be further apart than twice this."},
     "face_visible_score_min": {"open": true, "proposed": 0.4, "why": "E2 asks how often a face is even visible. Without reading frames, the stand-in is nose and both eyes above this keypoint score. Proposed 0.4, rung 2's proposed keypoint_score_min."},
+    "trial_rule": {"open": true, "proposed": {"sides": "take", "min_scored": 2, "contact_reach_m": 2.0, "unseen_s": 0.6}, "why": "What a marked crossing must show to count as a trial; see 'Which crossings count'. sides, take or window: where a person's sightings before and after the mark may come from. take: anywhere in the take, so a far person hidden behind the near one past the padding counts once they are seen again, and a detector that stalls on someone counts only if it comes back. window: only inside the padded window, which is stricter and needs along-the-view crossings staged so both are seen again within window_pad_s (on synthetic close crossings it admits about half). min_scored: how many frames must see each person in the window and on each side; proposed 2 because 3 starts to refuse real crossings behind the armchair. contact_reach_m: how near the two must come inside the window. It is a check against a mistyped mark, not a definition of a crossing, so it is wider than arm's reach: depth error adds to what is read, and synthetic crossings marked at 1.6 read up to 1.7. unseen_s: how long someone must be unseen during an occlusion's mark; proposed from tracker.coasting_after_s."},
     "unresolved_switch": {"open": true, "proposed": "flagged", "why": "A track changes person across cannot-tell labels, with the tracker confident for part of that span: the labels cannot say whether the change came while it was sure. flagged: it does not fail the gate, and its number is reported. A swap made while confident, then ambiguous before the labels resume, would pass; the review saw that only on constructed records, never on tracker output. silent: it fails the gate. A labeller who stays unsure about a second past the parting then fails a swap the tracker did report; the review saw 1 flip in 80 hard takes. flagged or silent."},
     "crossings_plan": {"open": true, "proposed": {"crossing": 12, "crossing_occluded": 5, "occlusion": 3, "near_pass": 3, "door": 2}, "why": "E2 says 20 to 30 staged crossings and occlusions, not how many of each. Fixed before recording, so the sample is set in advance: a scored run refuses when the crossings that count fall short of it for any kind, so the hard ones cannot quietly go missing. Proposed: the README's script, 25 crossings weighted toward what geometry finds hard (bound 11.3% at 0 failures). 30 would give 9.5%."}
   }

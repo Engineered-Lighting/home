@@ -78,6 +78,16 @@ def unsure_links(observations, track_lines, truth):
             for oid in sorted(truth.unsure) if oid in listed]
 
 
+def floor_positions(observations):
+    """{obs_id: (x, y)} for every person observation with a usable position."""
+    out = {}
+    for obs in observations:
+        where = records.floor_measurement(obs) if obs.get('kind') in records.PERSON_KINDS else None
+        if where is not None:
+            out[obs['obs_id']] = where[0]
+    return out
+
+
 def windows_of(truth, pad_s):
     return [{'id': c['crossing_id'], 'kind': c['type'], 'mark': c['interval'],
              'start': c['interval'][0] - pad_s, 'end': c['interval'][1] + pad_s} for c in truth.crossings]
@@ -112,6 +122,9 @@ def plan_counts(rows, plan):
 
 def score_session(takes, scoring):
     """takes: [{'name', 'observations', 'tracks', 'truth'}]. Returns the full report body."""
+    problem = scorer_core.trial_problem(scoring.get('trial_rule'))
+    if problem:
+        raise ScoreError(problem)
     results, left_out = [], {'rejected': 0, 'no_position': 0, 'unlabelled': 0, 'unsure': 0}
     crossing_lines = []
     for take in takes:
@@ -121,7 +134,8 @@ def score_session(takes, scoring):
         windows = windows_of(take['truth'], scoring['window_pad_s'])
         result = scorer_core.score_take(links, windows, scoring['min_people_per_crossing'],
                                         unsure_links(take['observations'], take['tracks'], take['truth']),
-                                        scoring['unresolved_switch'] == 'silent')
+                                        scoring['unresolved_switch'] == 'silent', scoring['trial_rule'],
+                                        floor_positions(take['observations']))
         faces = face_share(take['observations'], take['truth'], windows, scoring['face_visible_score_min'])
         for row, crossing in zip(result['windows'], take['truth'].crossings):
             row['take'] = take['name']

@@ -370,13 +370,14 @@ def cmd_practice(args):
     scenes = args.scene or sorted(synth.SCENES)
     seeds = range(args.first_seed, args.first_seed + args.seeds)
     rows = practice_rows(method, scenes, seeds, args.noise, args.fps)
-    print('%-26s %5s %8s %7s %7s %8s %8s %7s %7s' % ('scene', 'runs', 'switches', 'silent', 'IDF1', 'contact', 'outside', 'tracks', 'face'))
+    print('%-26s %5s %7s %8s %7s %7s %8s %8s %7s %7s'
+          % ('scene', 'runs', 'counted', 'switches', 'silent', 'IDF1', 'contact', 'outside', 'tracks', 'face'))
     silent = 0
     for r in rows:
         contacts = [w['contact_ambiguous_share'] for w in r['windows'] if w['contact_ambiguous_share'] is not None]
         silent += r['silent_swaps'] + r['silent_swaps_outside_crossings']
-        print('%-26s %5d %8d %7d %7s %8s %8s %7.1f %7s' % (
-            r['scene'], r['crossings_marked'], r['silent_swaps'] + r['flagged_switches'],
+        print('%-26s %5d %7d %8d %7d %7s %8s %8s %7.1f %7s' % (
+            r['scene'], r['crossings_marked'], r['crossings'], r['silent_swaps'] + r['flagged_switches'],
             r['silent_swaps'] + r['silent_swaps_outside_crossings'], fmt(r['pooled']['idf1']),
             fmt(sum(contacts) / len(contacts) if contacts else None, '%.2f'),
             fmt(r['ambiguous_share_outside_crossings'], '%.2f'), r['tracks_per_run'],

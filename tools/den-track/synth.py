@@ -270,10 +270,10 @@ def to_records(scene):
 def _cross(rng, gap, along_view):
     """A and B walk past each other; `gap` is the closest distance (m)."""
     speed_a, speed_b = rng.uniform(0.8, 1.3), rng.uniform(0.8, 1.3)
-    if along_view:   # one walks toward the camera, the other away, left of the armchair
-        xa, xb = -0.8 - gap / 2, -0.8 + gap / 2
+    if along_view:   # one walks toward the camera, the other away, left of the armchair; then the near one steps aside,
+        xa, xb = -0.8 - gap / 2, -0.8 + gap / 2     # since otherwise they can hide the far one until the take ends
         a = Walker('A', [(xa, 1.3, 0.3), (xa, 4.9, 0)], speed_a)
-        b = Walker('B', [(xb, 4.9, 0.3), (xb, 1.3, 0)], speed_b)
+        b = Walker('B', [(xb, 4.9, 0.3), (xb, 1.3, 0.6), (xb + 1.5, 1.3, 0)], speed_b)
     else:            # across the view, in front of the armchair
         y = rng.uniform(1.8 + gap / 2, 2.9 - gap / 2)
         a = Walker('A', [(-2.0, y - gap / 2, 0.3), (2.0, y - gap / 2, 0)], speed_a)

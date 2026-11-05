@@ -258,6 +258,158 @@ class WindowTest(unittest.TestCase):
         self.assertEqual(res['flagged_switches'], 1)
 
 
+RULE = {'sides': 'take', 'min_scored': 2, 'contact_reach_m': 1.6, 'unseen_s': 0.6}
+
+
+def walkers(spans, gap=1.0):
+    """spans: {person: [(from, to), ...]}, in seconds, one observation every 0.25 s. They stand gap m apart."""
+    links, positions = [], {}
+    tracks = {'A': 'trk-1', 'B': 'trk-2', 'C': 'trk-3'}
+    for person, rows in spans.items():
+        for start, end in rows:
+            t = start
+            while t <= end:
+                oid = '%s-%.2f' % (person, t)
+                links.append((t, oid, person, tracks[person], False))
+                positions[oid] = (0.0 if person == 'A' else gap, 1.0)
+                t += 0.25
+    return sorted(links), positions
+
+
+def trial_row(spans, kind='crossing', mark=(10.0, 12.0), pad=2.0, rule=None, **kw):
+    links, positions = walkers(spans, **kw)
+    window = {'id': 'w', 'kind': kind, 'mark': list(mark), 'start': mark[0] - pad, 'end': mark[1] + pad}
+    return scorer_core.score_take(links, [window], 2, trial=rule or RULE, positions=positions)['windows'][0]
+
+
+class TrialRuleTest(unittest.TestCase):
+    """A crossing is a trial only if the people in it can be followed through the owner's mark."""
+
+    def admitted(self, spans, **kw):
+        row = trial_row(spans, **kw)
+        return row['admitted'], row['excluded_because']
+
+    def test_two_people_seen_all_through_are_a_trial(self):
+        self.assertEqual(self.admitted({'A': [(0, 20)], 'B': [(0, 20)]}), (True, None))
+
+    def test_a_person_gone_from_the_mark_to_the_end_of_the_take_is_no_trial(self):
+        for sides in ('take', 'window'):
+            ok, why = self.admitted({'A': [(0, 20)], 'B': [(0, 10)]}, rule=dict(RULE, sides=sides))
+            self.assertFalse(ok, sides)
+            self.assertIn('followed through', why)
+            self.assertIn('B', why)
+
+    def test_a_person_seen_only_after_the_mark_is_no_trial(self):
+        self.assertFalse(self.admitted({'A': [(0, 20)], 'B': [(13, 20)]})[0])
+
+    def test_one_person_before_and_the_other_after_is_no_trial(self):
+        self.assertFalse(self.admitted({'A': [(9.5, 9.5)], 'B': [(12.5, 12.5)]})[0])
+        self.assertFalse(self.admitted({'A': [(0, 9.5)], 'B': [(12.5, 20)]})[0], 'nobody is ever seen on both sides')
+
+    def test_a_person_hidden_past_the_window_counts_only_under_take(self):
+        spans = {'A': [(0, 20)], 'B': [(0, 10), (15, 20)]}
+        self.assertTrue(self.admitted(spans, rule=dict(RULE, sides='take'))[0])
+        self.assertFalse(self.admitted(spans, rule=dict(RULE, sides='window'))[0])
+
+    def test_seen_only_outside_the_window_is_no_trial_under_either(self):
+        spans = {'A': [(0, 7), (15, 20)], 'B': [(0, 7), (15, 20)]}
+        for sides in ('take', 'window'):
+            self.assertFalse(self.admitted(spans, rule=dict(RULE, sides=sides))[0], sides)
+
+    def test_fewer_than_min_scored_on_a_side_is_no_trial(self):
+        spans = {'A': [(0, 20)], 'B': [(8, 8), (10, 20)]}          # one sighting of B before the mark, at 8
+        self.assertFalse(self.admitted(spans)[0])
+        self.assertTrue(self.admitted(spans, rule=dict(RULE, min_scored=1))[0])
+
+    def test_two_boxes_of_one_person_in_a_frame_are_one_sighting(self):
+        links, positions = walkers({'A': [(0, 20)], 'B': [(10, 20)]})
+        links = sorted(links + [(8.0, 'b1', 'B', 'trk-2', False), (8.0, 'b2', 'B', 'trk-3', False)])
+        positions.update(b1=(1.0, 1.0), b2=(1.0, 1.0))
+        window = {'id': 'w', 'kind': 'crossing', 'mark': [10.0, 12.0], 'start': 8.0, 'end': 14.0}
+        self.assertFalse(scorer_core.score_take(links, [window], 2, trial=RULE, positions=positions)['windows'][0]['admitted'])
+
+    def test_people_who_never_came_near_are_no_trial(self):
+        ok, why = self.admitted({'A': [(0, 20)], 'B': [(0, 20)]}, gap=5.6)
+        self.assertFalse(ok)
+        self.assertIn('1.6', why)
+        self.assertTrue(self.admitted({'A': [(0, 20)], 'B': [(0, 20)]}, gap=1.5)[0])
+
+    def test_contact_is_judged_inside_the_window_only(self):
+        links, positions = walkers({'A': [(0, 40)], 'B': [(0, 40)]}, gap=5.6)
+        for link in links:          # they meet at t 30, long after the window
+            if link[2] == 'B' and link[0] >= 30:
+                positions[link[1]] = (1.0, 1.0)
+        window = {'id': 'w', 'kind': 'crossing', 'mark': [10.0, 12.0], 'start': 8.0, 'end': 14.0}
+        self.assertFalse(scorer_core.score_take(links, [window], 2, trial=RULE, positions=positions)['windows'][0]['admitted'])
+
+    def test_contact_while_both_are_hidden_is_read_between_the_sightings(self):
+        links, positions = [], {}
+        for k in range(80):
+            t = k * 0.25
+            for person, x, track in (('A', -4.0 + t * 0.4, 'trk-1'), ('B', 4.0 - t * 0.4, 'trk-2')):
+                if 9.0 < t < 12.0:
+                    continue
+                oid = '%s%d' % (person, k)
+                links.append((t, oid, person, track, False))
+                positions[oid] = (x, 0.5)
+        window = {'id': 'w', 'kind': 'crossing_occluded', 'mark': [9.5, 11.5], 'start': 7.5, 'end': 13.5}
+        rule = dict(RULE, contact_reach_m=0.6)
+        row = scorer_core.score_take(sorted(links), [window], 2, trial=rule, positions=positions)['windows'][0]
+        self.assertTrue(row['admitted'], row['excluded_because'])
+        self.assertLess(row['closest_m'], 0.6)
+
+    def test_an_occlusion_needs_someone_out_of_sight_during_the_mark(self):
+        seen = {'A': [(0, 20)], 'B': [(0, 20)]}
+        ok, why = self.admitted(seen, kind='occlusion', gap=5.6)
+        self.assertFalse(ok)
+        self.assertIn('out of sight', why)
+        self.assertTrue(self.admitted({'A': [(0, 10), (12, 20)], 'B': [(0, 20)]}, kind='occlusion', gap=5.6)[0],
+                        'and the one who stays in view need not be near')
+
+    def test_an_occlusion_outside_the_mark_is_no_occlusion(self):
+        self.assertFalse(self.admitted({'A': [(0, 3), (5, 20)], 'B': [(0, 20)]}, kind='occlusion')[0])
+
+    def test_an_occlusion_still_needs_two_people_followed(self):
+        self.assertFalse(self.admitted({'A': [(0, 10), (12, 20)], 'B': [(0, 10)]}, kind='occlusion')[0])
+
+    def test_a_door_is_one_person_leaving_and_another_coming_in(self):
+        self.assertTrue(self.admitted({'A': [(0, 10)], 'B': [(12, 20)]}, kind='door', gap=5.6)[0])
+
+    def test_a_door_with_both_people_in_view_throughout_is_no_trial(self):
+        ok, why = self.admitted({'A': [(0, 20)], 'B': [(0, 20)]}, kind='door')
+        self.assertFalse(ok)
+        self.assertIn('door', why)
+
+    def test_a_door_with_one_sighting_each_is_no_trial(self):
+        self.assertFalse(self.admitted({'A': [(9.5, 9.5)], 'B': [(12.5, 12.5)]}, kind='door')[0])
+
+    def test_the_row_says_what_was_seen_on_each_side(self):
+        row = trial_row({'A': [(0, 20)], 'B': [(0, 10)]})
+        self.assertEqual(row['followed'], ['A'])
+        self.assertEqual(row['scored_sides']['B'], {'window': 9, 'before': 40, 'after': 0})
+        self.assertEqual(trial_row({'A': [(0, 20)], 'B': [(0, 20)]})['closest_m'], 1.0)
+
+    def test_a_silent_swap_is_a_trial_whatever_the_window_holds(self):
+        links = [(8.0, 'a', 'A', 'trk-1', True), (13.0, 'b', 'B', 'trk-1', True)]
+        window = {'id': 'w', 'kind': 'crossing', 'mark': [10.0, 12.0], 'start': 8.0, 'end': 14.0}
+        row = scorer_core.score_take(links, [window], 2, trial=RULE, positions={})['windows'][0]
+        self.assertEqual((row['silent_swaps'], row['admitted']), (1, True))
+
+    def test_a_window_with_no_mark_or_no_rule_needs_only_two_people(self):
+        links, positions = walkers({'A': [(9, 9)], 'B': [(9, 9)]})
+        row = scorer_core.score_take(links, [{'id': 'w', 'start': 8.0, 'end': 10.0}], 2, trial=RULE, positions=positions)['windows'][0]
+        self.assertTrue(row['admitted'])
+
+    def test_a_rule_that_checks_nothing_is_named(self):
+        self.assertIsNone(scorer_core.trial_problem(RULE))
+        self.assertIsNone(scorer_core.trial_problem(dict(RULE, sides='window')))
+        for bad in (None, 5, [], {}, dict(RULE, sides='either'), dict(RULE, min_scored=0), dict(RULE, min_scored=1.5),
+                    dict(RULE, min_scored=True), dict(RULE, contact_reach_m=0), dict(RULE, contact_reach_m='2'),
+                    dict(RULE, unseen_s=-1), dict(RULE, contact_reach_m=float('inf'))):
+            with self.subTest(rule=bad):
+                self.assertIn('trial_rule', scorer_core.trial_problem(bad))
+
+
 def good_truth_lines():
     return [
         {'version': truth.VERSION, 'kind': 'header', 'take': 't1', 'people': ['A', 'B']},

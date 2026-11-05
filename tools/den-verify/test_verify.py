@@ -564,6 +564,80 @@ class HeldPointsCount(unittest.TestCase):
         out.encode("ascii")
 
 
+class HoldRevision(unittest.TestCase):
+    """A Correction pins only past the revision the decision copied: that copy already says what an older one became."""
+
+    names = [f"p{i:02d}" for i in range(20)]
+    K = 300.0
+    t = syn.T0
+
+    def setUp(self):
+        self.model = syn.hue_model({n: {b: self.K for b in syn.HUE} for n in self.names}, kelvins=(2700,))
+
+    def correction(self, cid, revision, pct, since):
+        hold = {"entity_id": B3, "channels": [B3], "pinned": {"level_pct": pct, "cct_k": 2700},
+                "since": since, "ended": None}
+        if revision is not None:
+            hold["hold_set_revision"] = revision
+        return {"correction_id": cid, "ts": since, "action": {"settle_s": 0.0}, "snapshot": {"light_state": []}, "hold": hold}
+
+    def landed(self, corrections, hold_set, b3=0.8):
+        """B0 goes 0.2 -> 0.8, B3 reads b3 before and after, and everything lands where it should."""
+        t = self.t
+        before = {B0: 0.2, B1: 0.2, B2: 0.2, B3: b3}
+        ref = syn.light_state(t, {n: self.K * sum(before.values()) for n in self.names}, anchored=False, ident="ls-r")
+        applied = {B0: {"level": 0.8, "steps": send(t + 0.5)}}
+        dec = syn.hue_decision("d", t + 0.5, before, applied, "ls-r", hold_set=hold_set,
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)})
+        after = syn.light_state(t + 9, {n: self.K * (0.8 + 0.2 + 0.2 + b3) for n in self.names}, anchored=False)
+        decisions, states, report = score([dec], [ref, after], self.model, corrections=corrections)
+        hr = report["hit_rate"]
+        return (hr["hits"], hr["misses"], hr["verdict"]), residual(states, t + 9, "p00")
+
+    def test_a_hold_older_than_the_decisions_copy_has_lapsed(self):
+        # nothing writes `ended` after capture; the decision's own revision 9 lists nothing, so B3 is free again
+        old = self.correction("c-8", 8, 50, self.t - 900)
+        no_correction, _ = self.landed([], {"revision": 9, "held": []})
+        self.assertEqual(no_correction, (20, 0, "pass"))
+        result, r = self.landed([old], {"revision": 9, "held": []})
+        self.assertEqual(result, no_correction)
+        self.assertEqual(r["against"]["hold_set_revision"], 9)
+        self.assertNotIn("held", r["flags"])
+
+    def test_a_correction_at_the_decisions_own_revision_is_in_its_copy(self):
+        result, r = self.landed([self.correction("c-9", 9, 50, self.t - 900)], {"revision": 9, "held": []})
+        self.assertEqual(result, (20, 0, "pass"))
+        self.assertNotIn("held", r["flags"])
+
+    def test_the_decisions_own_pin_stands_over_an_older_correction(self):
+        pin = {"revision": 9, "held": [{"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 30, "cct_k": 2700}}]}
+        result, r = self.landed([self.correction("c-8", 8, 90, self.t - 900)], pin, b3=0.3)
+        self.assertEqual(result, (20, 0, "pass"))
+        self.assertEqual(r["against"]["hold_set_revision"], 9)
+        self.assertIn("held", r["flags"])
+
+    def test_later_holds_pin_in_revision_order_whatever_the_file_order(self):
+        first = self.correction("c-9", 9, 20, self.t + 1)
+        second = self.correction("c-10", 10, 80, self.t + 2)
+        for corrections in ([first, second], [second, first]):
+            result, r = self.landed(corrections, {"revision": 7, "held": []})
+            self.assertEqual(result, (20, 0, "pass"))
+            self.assertEqual(r["against"]["hold_set_revision"], 10)
+            self.assertIn("held", r["flags"])
+
+    def test_a_hold_past_the_decisions_revision_still_pins(self):
+        result, r = self.landed([self.correction("c-10", 10, 20, self.t + 1)], {"revision": 9, "held": []})
+        self.assertEqual(result, (0, 20, "fail"))  # pinned at 20% and read at 80%
+        self.assertEqual(r["against"]["hold_set_revision"], 10)
+
+    def test_with_no_revision_to_compare_the_time_decides(self):
+        for hold_set, correction_revision in (({"held": []}, 8), ({"revision": 9, "held": []}, None)):
+            earlier, _ = self.landed([self.correction("c", correction_revision, 20, self.t - 900)], hold_set)
+            self.assertEqual(earlier, (20, 0, "pass"))
+            later, _ = self.landed([self.correction("c", correction_revision, 20, self.t + 1)], hold_set)
+            self.assertEqual(later, (0, 20, "fail"))
+
+
 class WhatCountsIgnoresTheReading(unittest.TestCase):
     """Whether a point counts comes from predictions alone, so no reading can leave a miss out or keep only hits."""
 

@@ -27,8 +27,12 @@ For each point at the verify frame:
 - The prediction is the light model's, for the **actual resulting state**: the
   read-back of every channel in `Decision.applied_scene`, the channels it does
   not list taken from `Decision.inputs.actuator_state`, and then every hold in
-  force at the frame (`Correction.hold.pinned`, at the hold set's revision)
-  pinned over them. Requested values are never used.
+  force at the frame pinned over them: the decision's own copy
+  (`Decision.inputs.hold_set`), then each `Correction.hold` past that copy's
+  revision, in revision order. A Correction at or below the copy's revision is
+  already in it, or has lapsed; nothing writes `ended` after capture, so the copy
+  is what says so. With no revision on either side, a hold counts only if it began
+  after the decision. Requested values are never used.
 - `residual` = (measured − predicted) / predicted, null when the prediction is
   not positive.
 - `status`:

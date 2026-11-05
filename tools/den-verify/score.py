@@ -84,6 +84,15 @@ class Hold:
     def active(self, t):
         return self.since <= t and (self.ended is None or self.ended > t)
 
+    def after_copy(self, revision, ts):
+        """Past a decision's copy of the hold set, which already says what became of any earlier hold."""
+        if self.revision is None or revision is None:
+            return self.since > ts
+        return self.revision > revision
+
+    def order(self):
+        return (self.revision is not None, self.revision or 0, self.since)
+
 
 class Dec:
     """A Decision with its times resolved and its settle facts."""
@@ -136,7 +145,8 @@ class Dec:
             p = h.get("pinned") or {}
             pins.append(Hold(h.get("entity_id"), h.get("channels"), p.get("level_pct"), p.get("cct_k"),
                              -math.inf, None, revision, self.id))
-        pins += [h for h in holds if h.active(t)]
+        copied = revision
+        pins += sorted((h for h in holds if h.active(t) and h.after_copy(copied, self.ts)), key=Hold.order)
         for h in pins:
             for ch in h.keys(state):
                 if h.level is not None:

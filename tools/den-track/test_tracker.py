@@ -218,6 +218,22 @@ class DuplicateBoxTest(unittest.TestCase):
         by_id = {tr.id: tr for tr, _ in rows}
         self.assertEqual((by_id[1].near, by_id[2].near), ([], [1]), 'a phantom is not someone within reach of a person')
         self.assertTrue(by_id[2].ambiguous)
+        by_id = {tr.id: tr for tr, _ in core.step(101.25, [det('a5', 0.0, 0.0)])}
+        self.assertFalse(by_id[2].confirmed, 'still tentative')
+        self.assertEqual((by_id[1].near, by_id[2].near), ([], [1]))
+
+    def test_a_tentative_track_that_comes_near_a_person_doubts_itself_on_the_line_that_confirms_it(self):
+        reach = params()['crossing_radius_m']
+        core = tracker_core.TrackerCore(params())
+        for k in range(4):
+            core.step(100.0 + k * 0.25, [det('a%d' % k, 0.0, 0.0)])
+        rows = core.step(101.0, [det('a4', 0.0, 0.0), det('far', reach + 0.3, 0.0)])
+        born = {tr.id: tr for tr, _ in rows}[2]
+        self.assertFalse(born.ambiguous, 'beyond reach when it starts')
+        rows = core.step(101.25, [det('a5', 0.0, 0.0), det('near', reach - 0.6, 0.0)])
+        state = {tr.id: state for tr, state in rows}[2]
+        self.assertEqual(state, 'confirmed')
+        self.assertTrue(born.ambiguous, 'in reach on the line that confirms it, so that line claims no confidence')
 
     def test_a_person_far_from_anyone_starts_a_track_with_no_doubt(self):
         core = tracker_core.TrackerCore(params())

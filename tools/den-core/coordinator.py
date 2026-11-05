@@ -212,7 +212,7 @@ class Coordinator:
         self.applied = dict.fromkeys(LIGHTS)
         self.solved, self.pending, self.last_rule = None, None, None
         self.made = 0
-        self._memo = {}  # each hold's bound and what a channel's setting does against it, while holds and people stand still
+        self._memo = {}  # each hold's bound and what a channel's setting does against it, for one event's plan
 
     # What each event changes -----------------------------------------------------------------------------------------
 
@@ -363,7 +363,7 @@ class Coordinator:
         key = ("surfaces", hold_bulb, channel, scene["on"], scene.get("brightness"), scene.get("kelvin"), scene.get("aim"))
         if key not in self._memo:
             amounts = self._against(hold_bulb, channel, scene)
-            found = {name: sum(amounts.get(n, 0.0) for n in members) for name, members in self.light.members.items()} if amounts else {}
+            found = {name: sum(amounts.get(n, 0.0) for n in blocks) for name, blocks in self.light.members.items()} if amounts else {}
             self._memo[key] = {name: amount for name, amount in found.items() if amount}
         return self._memo[key]
 
@@ -412,7 +412,6 @@ class Coordinator:
                 if (ref["direction"] == "dim" and all(d <= EPS for d in deltas)
                         or ref["direction"] == "brighten" and all(d >= -EPS for d in deltas)):
                     ref["scene"][channel] = scene
-        self._memo = {}
 
     # Glare --------------------------------------------------------------------------------------------------------------
 
@@ -725,8 +724,7 @@ class Coordinator:
         if self.config["compensation"]["option"] != "P0":
             record["hold_limited"] = plan["hold_limited"]
         self._rows(record, result, tasks)
-        self._fit_the_line(record, result, tasks)
-        return {"kind": "decision", "data": copy.deepcopy(record)}
+        return {"kind": "decision", "data": copy.deepcopy(self._fitted(record, result, tasks))}
 
     def _rows(self, record, result, tasks):
         """What a Decision says per track about the actual resulting state."""
@@ -741,29 +739,40 @@ class Coordinator:
                           "no numbers: rung 8 writes glare null, and no glare model or numeric limit exists yet"),
             "daylight": "excluded: rung 8 does not model it"}
 
-    def _fit_the_line(self, record, result, tasks):
+    def _fitted(self, record, result, tasks):
         """events.validate refuses a line over its limit and the run then stops with no log, and a track is never forgotten:
         its id is never reused and a PersonState says nothing when it ends. So when a Decision would not fit, the rows of the
         tracks longest unheard from go, readers last, and inputs.tracks_not_logged counts them. They stay in the plan: this
-        only decides what the line says. Every row of a track goes together, so predicted.eyes still reproduces."""
-        inputs = record["inputs"]
-        order = sorted(self.people, key=lambda track: decide.reading(self.people[track]))  # oldest first, each group
-        for track in order[:-1]:
-            if len(events.dumps(record)) <= LINE_ROOM:
-                break
-            inputs["person_state"] = [s for s in inputs["person_state"] if s.split("@")[0] != track]
-            inputs["field_support"] = {s: v for s, v in inputs["field_support"].items() if s.split("@")[0] != track}
-            inputs["tracks_not_logged"] = inputs.get("tracks_not_logged", 0) + 1
-            record["targets"].pop(track, None)
-            record["hard_conflicts"] = [row for row in record["hard_conflicts"] if row["track"] != track]
-            tasks.pop(track, None)
-            kept = set(tasks.values())
-            for held in inputs["hold_set"]["held"]:
-                if "footprint" in held:
-                    held["footprint"]["surfaces"] = [s for s in held["footprint"]["surfaces"] if s in kept]
-            if "hold_limited" in record:
-                record["hold_limited"] = [row for row in record["hold_limited"] if row["point_id"] in kept]
-            self._rows(record, result, tasks)
+        only decides what the line says. The last track always stays."""
+        most = len(self.people) - 1
+        if most < 1 or len(events.dumps(record)) <= LINE_ROOM:
+            return record
+        order = sorted(self.people, key=lambda track: decide.reading(self.people[track]))  # oldest first, readers after
+        fewest = 1
+        while fewest < most:  # the fewest to leave out, by halves, since tracks can run to hundreds in an evening
+            middle = (fewest + most) // 2
+            if len(events.dumps(self._without(record, order[:middle], result, tasks))) <= LINE_ROOM:
+                most = middle
+            else:
+                fewest = middle + 1
+        return self._without(record, order[:fewest], result, tasks)
+
+    def _without(self, record, tracks, result, tasks):
+        """The Decision with every row of these tracks gone, from every list, so predicted.eyes still reproduces."""
+        gone, inputs = set(tracks), record["inputs"]
+        stay = {track: surface for track, surface in tasks.items() if track not in gone}
+        here = set(stay.values())
+        held = [{**h, "footprint": {**h["footprint"], "surfaces": [s for s in h["footprint"]["surfaces"] if s in here]}}
+                if "footprint" in h else h for h in inputs["hold_set"]["held"]]
+        out = {**record, "targets": {track: row for track, row in record["targets"].items() if track not in gone},
+               "hard_conflicts": [row for row in record["hard_conflicts"] if row["track"] not in gone],
+               "inputs": {**inputs, "person_state": [s for s in inputs["person_state"] if s.split("@")[0] not in gone],
+                          "field_support": {s: v for s, v in inputs["field_support"].items() if s.split("@")[0] not in gone},
+                          "hold_set": {**inputs["hold_set"], "held": held}, "tracks_not_logged": len(gone)}}
+        if "hold_limited" in record:
+            out["hold_limited"] = [row for row in record["hold_limited"] if row["point_id"] in here]
+        self._rows(out, result, stay)
+        return out
 
     def handle(self, event):
         t, out = event["t"], []

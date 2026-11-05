@@ -649,10 +649,10 @@ class BlockFootprintTest(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
 
-    def model(self, reach=150.0):
+    def model(self, reach=150.0, glare=None):
         """Rung 8's 576 blocks with 'desk' at the first 144 and 'bench' at the next 144. Front left reaches only the first
         CORNER blocks of the desk, with `reach` lux at full; the other three reach every block."""
-        model = fake_light.build(filler=576 - 12, surfaces=False)
+        model = fake_light.build(filler=576 - 12, surfaces=False, glare=glare)
         points = [p["point_id"] for p in model["sample_points"]]
         for key, row in model["basis"].items():
             own = key.startswith("den_front_left")
@@ -688,6 +688,8 @@ class BlockFootprintTest(unittest.TestCase):
         self.assertEqual((held["footprint"]["points"], held["footprint"]["of"]), (self.CORNER, 576))
         self.assertEqual(p1.light.unmask(held["footprint"]["mask"]), p1.light.points[:self.CORNER])
         self.assertEqual(held["footprint"]["surfaces"], ["desk"])
+        _, both = self.touched("P1", reader="bench")  # someone else is tracked at a surface the dim never reached
+        self.assertEqual(both["inputs"]["hold_set"]["held"][0]["footprint"]["surfaces"], ["desk"])
 
     def test_p1_binds_at_the_blocks_a_brighten_moved(self):
         # Front left's blocks go up, so the solve would bring the free bulbs down if only the desk's mean counted.
@@ -741,6 +743,16 @@ class BlockFootprintTest(unittest.TestCase):
         self.assertIn(FL, d["hold_limited"][0]["reason"])
         self.assertIn("dim", d["hold_limited"][0]["reason"])
         p, d = self.touched("P1", reach=900.0, surface="bench")  # the bench is out of the footprint
+        self.assertEqual(d["hold_limited"], [])
+
+    def test_a_shortfall_the_hold_did_not_cause_is_not_hold_limited(self):
+        # The glare limit keeps the three free bulbs low, so the bench is short of its target, and the dim never reached it.
+        glare = {b: {"A": {"G": 3.0, "sd": 0.0}} for b in (FR, RL, RR)}
+        p = policy(light_model=self.model(glare=glare), compensation={"option": "P1", "form": "mode"})
+        start(p)
+        feed(p, ps(T0 + 10, "A", "engaged", "bench"))
+        [d] = feed(p, *touch(T0 + 30, FL, 80))
+        self.assertLess(d["predicted"]["surfaces"]["bench"], 0.9 * d["targets"]["A"]["value"])
         self.assertEqual(d["hold_limited"], [])
 
     def test_a_share_exactly_at_the_threshold_follows_the_membership_rule(self):
@@ -881,7 +893,7 @@ class WideMapLineTest(unittest.TestCase):
                     for d in out:
                         events.validate(ev(T0, "decision", {**d, "actuation": "replay"}, "decide"))
 
-    def test_one_surface_per_block_fits_and_binds_at_the_blocks(self):
+    def test_one_surface_per_block_fits(self):
         model = fake_light.build(filler=576 - 12, surfaces=False)
         names = [p["point_id"] for p in model["sample_points"]]
         spec = {"source": "fake", "params": {"filler": 576 - 12, "surfaces": False}, "surfaces": {"block-%s" % n: [n] for n in names}}
@@ -1000,6 +1012,32 @@ class ManyTracksLineTest(unittest.TestCase):
         self.assertEqual(d["inputs"]["hold_set"]["held"][0]["footprint"]["surfaces"], ["counter-1"])
         self.assertEqual(sorted(d["predicted"]["surfaces"]), ["counter-1", "room", "unit"])
         self.assertLess(d["predicted"]["surfaces"]["counter-1"], d["targets"]["T29"]["value"])
+
+    def test_as_few_tracks_as_will_do_are_left_out_and_never_the_last(self):
+        p, _ = self.seen(30, reading=[29])
+        [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T29")))
+        self.assertEqual(self.tracks(d), sorted("T%d" % k for k in range(30 - len(self.tracks(d)), 30)))
+        kept = {**d, "inputs": {**d["inputs"], "tracks_not_logged": 0}}
+        self.assertLess(len(events.dumps(kept)), coordinator.LINE_ROOM)
+        self.assertGreater(len(events.dumps(kept)) + 2500, coordinator.LINE_ROOM)  # one more track would not have fit
+        lone = policy()
+        start(lone)
+        name = "A" * 20000  # no use on any line, but it is the only track there is
+        [d] = feed(lone, ev(T0 + 2, "person_state", person_state(T0 + 2, name, "engaged", "counter-1"), "need"))
+        self.assertEqual(self.tracks(d), [name])
+        self.assertNotIn("tracks_not_logged", d["inputs"])
+
+    def test_hundreds_of_tracks_stay_under_100_ms(self):
+        def rounds():
+            p, _ = self.seen(300, reading=[299])
+            spans = []
+            for item in touch(T0 + 400, FL, 80, "T299") + [ps(T0 + 410, "T299", "none"), ps(T0 + 420, "T299", "engaged")]:
+                begin = time.perf_counter()
+                self.valid([o["data"] for o in p.handle(item)])
+                spans.append(time.perf_counter() - begin)
+            return spans
+        fastest = [min(column) for column in zip(rounds(), rounds(), rounds())]
+        self.assertLess(max(fastest), 0.1, "slowest %.1f ms" % (max(fastest) * 1000))
 
     def test_the_room_left_on_the_line_covers_the_runners_envelope(self):
         event = ev(T0 + 1234567.125, "decision", {"actuation": "synthetic"}, "decide")

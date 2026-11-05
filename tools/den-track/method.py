@@ -5,8 +5,8 @@
     ```
 
 This module reads that block (CRLF or LF, it reads the same), resolves open
-slots and fingerprints the block, so a score always names the exact method
-it ran under. A slot is open when its value is
+slots and fingerprints the block and the tool's own source, so a score always
+names the exact method and code it ran under. A slot is open when its value is
 
     {"open": true, "proposed": <value>, "why": "<what decides it>"}
 
@@ -19,6 +19,7 @@ import os
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 METHOD_PATH = os.path.join(HERE, 'METHOD.md')
+CODE_DIR = HERE
 FENCE = '```json den-track-method'
 
 
@@ -78,6 +79,17 @@ def fingerprint(block):
     return 'sha256:' + hashlib.sha256(canon.encode('ascii')).hexdigest()
 
 
+def code_fingerprint(folder=None):
+    """sha256 over the tool's own source: every .py file but the tests, as text, so CRLF and LF hash alike."""
+    folder = folder or CODE_DIR
+    digest = hashlib.sha256()
+    for name in sorted(os.listdir(folder)):
+        if name.endswith('.py') and not name.startswith('test_'):
+            with open(os.path.join(folder, name), encoding='utf-8-sig', newline=None) as f:
+                digest.update(('%s\0%s\0' % (name, f.read())).encode('utf-8'))
+    return 'sha256:' + digest.hexdigest()
+
+
 class Method:
     def __init__(self, path=METHOD_PATH):
         self.path = path
@@ -85,6 +97,7 @@ class Method:
         self.open = open_slots(self.block)
         self.values = resolve(self.block)
         self.fingerprint = fingerprint(self.block)
+        self.code_fingerprint = code_fingerprint()
         self.version = self.block.get('version')
 
     @property

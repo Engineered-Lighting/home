@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import tempfile
 import unittest
@@ -337,6 +338,131 @@ class ScoredRunTest(Base):
         self.assert_refused(self.score_args(takes, scored=True, meth=meth), den_track.TRACK_RUN_FILE)
 
 
+class FreshTakesTest(Base):
+    """A take that has been scored is used: looking again after a retune needs fresh takes (the ladder's rule)."""
+
+    def setUp(self):
+        super().setUp()
+        self.meth = self.closed_method()
+
+    def takes(self, first=0, meth=None):
+        return [self.make_take(seed=seed, meth=meth or self.meth) for seed in range(first, first + 20)]
+
+    def retrack(self, takes, name, meth=None):
+        out = []
+        for obs, tracks, truth in takes:
+            folder = os.path.join(os.path.dirname(os.path.dirname(tracks)), name)
+            code, text = cli('--method', meth or self.meth, 'track', '--observations', obs, '--out', folder)
+            self.assertEqual(code, 0, text)
+            out.append([obs, os.path.join(folder, 'tracks.jsonl'), truth])
+        return out
+
+    def score_once(self, takes):
+        code, text = cli(*self.score_args(takes, 'score-1', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        with open(self.path('score-1', 'score.json'), 'rb') as f:
+            return f.read()
+
+    def retune_the_code(self):
+        """From here on the tool's source is a copy with one tracker line changed, and METHOD.md is untouched."""
+        folder = self.path('tool-copy')
+        shutil.copytree(HERE, folder, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+        path = os.path.join(folder, 'tracker_core.py')
+        with open(path, encoding='utf-8', newline='') as f:
+            text = f.read()
+        self.assertEqual(text.count("if risk < self.p['risk_floor']:"), 1)
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(text.replace("if risk < self.p['risk_floor']:", 'if risk < 0.6:'))
+        patcher = mock.patch.object(method, 'CODE_DIR', folder)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def assert_refused_as_used(self, args):
+        out = args[args.index('--out') + 1]
+        code, text = cli(*args)
+        self.assertEqual(code, 2, text)
+        self.assertIn('already scored', text)
+        self.assertIn('fresh takes', text)
+        self.assertFalse(os.path.exists(os.path.join(out, 'score.json')))
+
+    def test_the_same_takes_after_a_tracker_code_change_are_refused_and_the_first_report_stays(self):
+        takes = self.takes()
+        first = self.score_once(takes)
+        self.retune_the_code()
+        self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
+        with open(self.path('score-1', 'score.json'), 'rb') as f:
+            self.assertEqual(f.read(), first)
+
+    def test_the_same_takes_under_a_changed_method_are_refused(self):
+        takes = self.takes()
+        self.score_once(takes)
+        other = self.closed_method('METHOD-other.md', lambda b: b['tracker'].update(accel_sigma=0.7))
+        self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2', other), 'score-2', scored=True, meth=other))
+
+    def test_labels_changed_after_a_score_are_refused(self):
+        takes = self.takes()
+        self.score_once(takes)
+        lines = records.read_jsonl(takes[0][2])
+        frame = next(l for l in lines if l['kind'] == 'frame' and l['labels'])
+        frame['labels'] = {o: {'A': 'B', 'B': 'A'}.get(p, p) for o, p in frame['labels'].items()}
+        records.write_jsonl(takes[0][2], lines)
+        self.assert_refused_as_used(self.score_args(takes, 'score-2', scored=True, meth=self.meth))
+
+    def test_a_replay_with_nothing_changed_gives_the_same_report(self):
+        takes = self.takes()
+        first = self.score_once(takes)
+        code, text = cli(*self.score_args(takes, 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        with open(self.path('score-2', 'score.json'), 'rb') as f:
+            self.assertEqual(f.read(), first)
+        retracked = self.retrack(takes, 'track-2')
+        code, text = cli(*self.score_args(retracked, 'score-3', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+
+    def test_fresh_takes_are_scored_after_a_retune(self):
+        self.score_once(self.takes())
+        self.retune_the_code()
+        code, text = cli(*self.score_args(self.takes(first=100), 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('SCORED', text)
+
+    def test_tracks_made_before_a_code_change_are_refused_on_a_first_score(self):
+        takes = self.takes()
+        self.retune_the_code()
+        args = self.score_args(takes, scored=True, meth=self.meth)
+        code, text = cli(*args)
+        self.assertEqual(code, 2, text)
+        self.assertIn('another version of the code', text)
+        self.assertFalse(os.path.exists(self.path('score', 'score.json')))
+        code, text = cli(*self.score_args(self.retrack(takes, 'track-2'), 'score-2', scored=True, meth=self.meth))
+        self.assertEqual(code, 0, text)
+
+    def test_a_take_read_in_practice_under_other_numbers_is_used(self):
+        takes = self.takes()
+        code, text = cli(*self.score_args(takes, 'peek'))
+        self.assertEqual(code, 0, text)
+        self.assertIn('PRACTICE', text)
+        self.assert_refused_as_used(self.score_args(self.retrack(takes, 'track-2'), 'score-1', scored=True, meth=self.meth))
+
+    def test_practice_is_never_refused_on_a_used_take(self):
+        takes = self.takes()
+        self.score_once(takes)
+        code, text = cli(*self.score_args(takes, 'practice-after'))
+        self.assertEqual(code, 0, text)
+
+    def test_the_report_names_the_code_and_the_note_holds_only_hashes(self):
+        takes = self.takes()
+        self.score_once(takes)
+        with open(self.path('score-1', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertEqual(report['method']['code_fingerprint'], method.code_fingerprint())
+        notes = records.read_jsonl(os.path.splitext(takes[0][2])[0] + den_track.SCORE_RUNS_SUFFIX)
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(set(notes[0]), {'method_fingerprint', 'code_fingerprint', 'observations_sha256',
+                                         'tracks_sha256', 'truth_sha256'})
+        self.assertTrue(all(v.startswith('sha256:') for v in notes[0].values()))
+
+
 class OutputFolderTest(Base):
     def test_a_folder_inside_git_is_refused(self):
         target = os.path.join(HERE, 'not-here')
@@ -377,6 +503,25 @@ class MethodFileTest(Base):
             f.write(raw.replace(b'\n', b'\r\n'))
         self.assertEqual(method.Method(lf).fingerprint, method.Method(crlf).fingerprint)
         self.assertEqual(den_track.text_sha256(lf), den_track.text_sha256(crlf))
+
+    def test_the_code_fingerprint_follows_the_source_not_the_tests_or_line_endings(self):
+        folder = self.path('source')
+        os.makedirs(folder)
+        with open(os.path.join(folder, 'tracker.py'), 'wb') as f:
+            f.write(b'x = 1\n')
+        with open(os.path.join(folder, 'test_tracker.py'), 'wb') as f:
+            f.write(b'y = 1\n')
+        before = method.code_fingerprint(folder)
+        with open(os.path.join(folder, 'tracker.py'), 'wb') as f:
+            f.write(b'x = 1\r\n')
+        with open(os.path.join(folder, 'test_tracker.py'), 'wb') as f:
+            f.write(b'y = 2\n')
+        with open(os.path.join(folder, 'notes.md'), 'wb') as f:
+            f.write(b'not code\n')
+        self.assertEqual(method.code_fingerprint(folder), before)
+        with open(os.path.join(folder, 'tracker.py'), 'wb') as f:
+            f.write(b'x = 2\n')
+        self.assertNotEqual(method.code_fingerprint(folder), before)
 
     def test_closing_a_slot_changes_the_fingerprint(self):
         self.assertNotEqual(method.Method().fingerprint, method.Method(self.closed_method()).fingerprint)

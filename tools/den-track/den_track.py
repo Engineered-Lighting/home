@@ -28,6 +28,7 @@ import truth as truth_mod       # noqa: E402
 EXIT_OK, EXIT_GATE, EXIT_REFUSED = 0, 1, 2
 TRACKS_FILE, TRACK_RUN_FILE = 'tracks.jsonl', 'track-run.json'
 SCORE_FILE, CROSSINGS_FILE = 'score.json', 'crossings.jsonl'
+SCORE_RUNS_SUFFIX = '.score-runs.jsonl'     # beside a take's truth file: truth.score-runs.jsonl
 
 
 class Refused(Exception):
@@ -72,7 +73,7 @@ def write_json(path, obj):
 
 def method_stamp(method):
     return {'version': method.version, 'fingerprint': method.fingerprint,
-            'open': [name for name, _ in method.open]}
+            'code_fingerprint': method.code_fingerprint, 'open': [name for name, _ in method.open]}
 
 
 def print_open(method):
@@ -128,6 +129,37 @@ def load_take(triple):
             'truth': truth, 'paths': triple}
 
 
+def score_stamp(method, take):
+    """What a score of this take looked at, as hashes only."""
+    obs_path, tracks_path, truth_path = take['paths']
+    return {'method_fingerprint': method.fingerprint, 'code_fingerprint': method.code_fingerprint,
+            'observations_sha256': text_sha256(obs_path), 'tracks_sha256': text_sha256(tracks_path),
+            'truth_sha256': text_sha256(truth_path)}
+
+
+def score_runs_path(take):
+    return os.path.splitext(take['paths'][2])[0] + SCORE_RUNS_SUFFIX
+
+
+def earlier_scores(take):
+    path = score_runs_path(take)
+    return records.read_jsonl(path) if os.path.exists(path) else []
+
+
+def note_score(method, takes):
+    """Beside each truth file, one line per different score of that take, practice or scored.
+
+    Any score shows results, so it uses the take. This is the record that lets a
+    scored run refuse a take looked at under other code, another method, or other
+    tracks, labels or observations.
+    """
+    for take in takes:
+        stamp = score_stamp(method, take)
+        if stamp not in earlier_scores(take):
+            with open(score_runs_path(take), 'a', encoding='utf-8', newline='\n') as f:
+                f.write(json.dumps(stamp) + '\n')
+
+
 def check_scored(method, takes, report):
     """Everything a scored run needs that a practice run does not. Raises Refused."""
     try:
@@ -145,10 +177,17 @@ def check_scored(method, takes, report):
             run = json.load(f)
         if run.get('method', {}).get('fingerprint') != method.fingerprint:
             problems.append('%s: its tracks were made under another method; run track again' % take['name'])
+        if run.get('method', {}).get('code_fingerprint') != method.code_fingerprint:
+            problems.append('%s: its tracks were made by another version of the code; run track again' % take['name'])
         if run.get('observations_sha256') != text_sha256(obs_path):
             problems.append('%s: its observations are not the ones tracked' % take['name'])
         if run.get('tracks_sha256') != text_sha256(tracks_path):
             problems.append('%s: its tracks changed after they were written' % take['name'])
+        stamp = score_stamp(method, take)
+        if any(line != stamp for line in earlier_scores(take)):
+            problems.append('%s: already scored under other code, another method, or other tracks, labels or observations '
+                            '(%s). A take that has been scored is used, and a re-score needs fresh takes'
+                            % (take['name'], score_runs_path(take)))
     need = method.scoring['min_crossings']
     if report['crossings'] < need:
         left = ['%s/%s' % (e['take'], e['id']) for e in report['crossings_excluded']]
@@ -205,6 +244,7 @@ def cmd_score(args):
     body = score_mod.score_session(takes, scoring)
     if args.scored:
         check_scored(method, takes, body)
+    note_score(method, takes)
     crossing_lines = body.pop('crossing_lines')
     report = dict(body, tool='den-track', command='score', scored=bool(args.scored), method=method_stamp(method),
                   labelling='a single labeller, the owner, blind to system output',
@@ -220,8 +260,8 @@ def cmd_score(args):
         print_open(method)
         print('PRACTICE: this is not a score. The gate would %s.' % ('pass' if gate['passed'] else 'fail'))
         return EXIT_OK
-    print('SCORED under %s: the gate %s (0 silent swaps: %s; IDF1 >= %s: %s)'
-          % (method.fingerprint, 'PASSED' if gate['passed'] else 'FAILED', gate['silent_swaps_zero'],
+    print('SCORED under %s, code %s: the gate %s (0 silent swaps: %s; IDF1 >= %s: %s)'
+          % (method.fingerprint, method.code_fingerprint, 'PASSED' if gate['passed'] else 'FAILED', gate['silent_swaps_zero'],
              gate['idf1_at_least'], gate['idf1_met']))
     return EXIT_OK if gate['passed'] else EXIT_GATE
 

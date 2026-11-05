@@ -7,13 +7,15 @@ how each value is made. Every number the tool uses is in the one block below.
 A slot the contracts leave open is `{"open": true, "proposed": ..., "why": ...}`.
 Practice runs use the proposed value and say so. `den_track.py score --scored`
 refuses while any slot is open. To close a slot, write the value in place of the
-object. The block's fingerprint (sha256 over its canonical JSON) is stamped on
-every run file and score, so a score names the exact method it ran under.
+object. The block's fingerprint (sha256 over its canonical JSON) and the code's
+(sha256 over the tool's source, without the tests) are stamped on every run file and
+score, so a score names the exact method and code it ran under.
 
 The tracker's plain numbers were tuned on synthetic scenes, as recorded below.
 **They are frozen before any real crossing is scored**: closing
-`freeze.frozen_on` is the freeze. A take that informs a change to this block
-moves to development, and the score then needs fresh takes (the ladder's rule).
+`freeze.frozen_on` is the freeze. A take that informs a change to this block or the
+code moves to development, and the score then needs fresh takes (the ladder's rule).
+The tool holds to it: see "A take is scored once", below.
 
 ## Input
 
@@ -144,9 +146,17 @@ person. A link joins an observation's person to the track that listed it in
   outside every crossing, so a tracker cannot pass by doubting everything; a stand-in
   for E2's "how often a face is even visible".
 
-A scored run also refuses tracks made under another method, changed files, unlabelled
-observations, fewer than `min_crossings` admitted crossings, or crossings that overlap
-once padded.
+A scored run also refuses tracks made under another method or another version of the
+code, changed files, unlabelled observations, fewer than `min_crossings` admitted
+crossings, or crossings that overlap once padded.
+
+**A take is scored once.** Any `score`, practice or scored, shows results, so it notes
+what it looked at in `truth.score-runs.jsonl` beside the take's truth file: the method's
+and the code's fingerprints and the hashes of the observations, tracks and truth. A scored
+run refuses a take noted under anything different, so a retune, of the numbers or the code,
+cannot be tried on takes that have been looked at, and neither can new labels. Replaying
+with nothing changed is allowed, and gives the same report. Each report goes to a new
+folder, so an earlier one stays.
 
 ## The block
 

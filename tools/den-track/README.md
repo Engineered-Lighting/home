@@ -102,7 +102,9 @@ How the command line behaves:
   PowerShell 5.1's `>` would write UTF-16, which the tool refuses to read. Files with
   CRLF or a BOM read the same.
 - **Folders.** `--out` is refused inside a git checkout or OneDrive, and nothing is
-  overwritten: a new run needs a new folder.
+  overwritten: a new run needs a new folder. `score` also adds to `truth.score-runs.jsonl`
+  beside each truth file: hashes only, the record of what has been scored. Keep it with
+  the take.
 
 ## Records
 
@@ -133,8 +135,9 @@ must have written a camera entry, or rung 2 refuses, and rung 4's labeller must 
 
 **2. A pilot, if you want one.** Record a take or two, and compare the slots' proposed
 values with what you see: how long someone stays hidden, and how much of the time the
-tracker is in doubt. Pilot takes are never scored. Then close `freeze.frozen_on`, which
-freezes the method.
+tracker is in doubt. Pilot takes are never scored, and the tool holds to that: once a
+take has gone through `score`, even without `--scored`, a scored run under other numbers
+or code refuses it. Then close `freeze.frozen_on`, which freezes the method.
 
 **3. Record.** R takes with this script. Leave at least 6 s between crossings, so their
 padded windows do not overlap. Any number of crossings per take works; tracks restart
@@ -178,11 +181,13 @@ python -B tools\den-track\den_track.py score --scored --out C:\den-takes\crossin
 and the method's fingerprint. A crossing whose window does not hold scored observations
 of two people on both sides of the mark (the detector stalled, a time was mistyped, the
 take was cut short) is listed as excluded and does not count; a scored run refuses when
-too few are left. An agent may read `score.json` and `track-run.json`, which
-hold counts and ids, but not `observations.jsonl`, `tracks.jsonl`, `truth.jsonl` or any
-frame. If geometry alone misses the gate, the ladder's next step is session appearance
-as its own rung, after the owner's decision on learning permissions. A take used to
-diagnose a miss moves to development, and a re-score needs fresh takes.
+too few are left. An agent may read `score.json`, `track-run.json` and
+`truth.score-runs.jsonl`, which hold counts, ids and hashes, but not `observations.jsonl`,
+`tracks.jsonl`, `truth.jsonl` or any frame. If geometry alone misses the gate, the ladder's
+next step is session appearance as its own rung, after the owner's decision on learning
+permissions. A take that has been scored is used. A re-score after any change to the numbers,
+the code or the labels needs fresh takes, and a scored run refuses the old ones. Replaying
+with nothing changed gives the same report.
 
 ## Open slots
 

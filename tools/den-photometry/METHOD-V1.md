@@ -118,9 +118,10 @@ name), with the light logged (`--illuminant`, one of `illuminant_classes`;
 unknown):
 
 1. **Before anything.** It refuses (writing nothing) while any line here or in
-   rung 8's Stage 0 block is `open`, when the day's pinned Stage 0 response,
-   normalisation parameters or this block's hash differ from now, when rung
-   8's white balance or clipping limits differ from the pinned parameters,
+   rung 8's Stage 0 block is `open`, when the day's pinned normalisation
+   parameters no longer hash what `day.json` recorded, when this block's or
+   rung 8's Stage 0 block's hash differs from the day's, when rung 8's white
+   balance or clipping limits differ from the pinned parameters,
    and unless the camera answers healthy, unheld, with the meter keys
    (`sweep.camera_ready`). It also refuses a plan outside the camera's range
    (step 4), before any hold.
@@ -232,8 +233,10 @@ matte where the box is.
 
 ## Which captures count
 
-A capture counts only when it is kept (not void) and its frames hash what
-`frames.jsonl` recorded. A row with a reading or a `surface_box` but no
+A capture counts only when it is kept. Void captures, and a capture folder
+left without `capture.json` (cut off mid-capture), are skipped and listed in
+`report.json`. A kept capture whose frames do not hash what `frames.jsonl`
+recorded stops the score, which names it. A row with a reading or a `surface_box` but no
 `card_box` is refused: the score stops and names it. The score lists every
 capture it does not use, with the reason: nothing typed, a box not usable, a
 reading not used, or a repeat of the fit.
@@ -281,7 +284,7 @@ Each score writes JSON Lines (one record per line, UTF-8, LF) in
   `illuminant`}, `checks` {`round_trip`, `held_out`, `exposure_invariance`},
   `ts`, `version` (`cal-<camera_id>-kL-<score n>`, with the class appended
   per class), `supersedes` and `supersedes_method` / `supersedes_value` when
-  an earlier score exists. `inputs` also carries
+  an earlier score exists. Both kinds of record's `inputs` also carry
   `normalisation_parameters_sha256`, additive: meter-norm/v1 is a rule plus
   fitted curves, and a k_L belongs to one fit of them. `black_level` is null:
   meter-norm/v1 has no separate black level (its fitted curve maps codes to
@@ -317,8 +320,9 @@ Each score writes JSON Lines (one record per line, UTF-8, LF) in
   without a location, which is never stored), `blinds` is as logged and
   `residual` is empty (rung 10 fills it).
 - `report.json`: every capture's statistics, the exclusions with reasons,
-  the groups, the coverage, the verdicts, and the hashes of this file, rung
-  8's Stage 0 block, the pinned response and the code.
+  the skipped folders, the groups, the coverage, the verdicts, and the
+  hashes of this file, rung 8's Stage 0 block, the pinned responses and the
+  code.
 
 ## E8's daylight day
 

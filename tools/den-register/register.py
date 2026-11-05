@@ -535,39 +535,89 @@ def mount_record(entry, tid, m):
     return mount
 
 
+def marks_motion(mount, marks):
+    """How every mark of the registration moved since then, in the camera frame; None unless every one is clicked.
+
+    The rigid motion they show together: moved_m, the farthest it carries one of them (farthest), and off_m, the most
+    one of them is off it (worst).
+    """
+    clicked = {mark["id"]: mark for mark in marks}
+    if any(mark["id"] not in clicked for mark in mount["marks"]):
+        return None
+    before = [mark["camera_xyz_m"] for mark in mount["marks"]]
+    after = [clicked[mark["id"]]["camera_xyz_m"] for mark in mount["marks"]]
+    rotation, translation = rigid.kabsch(before, after)
+    carried = [rigid.apply(rotation, translation, point) for point in before]
+    moved = [math.dist(point, start) for point, start in zip(carried, before)]
+    off = [math.dist(point, seen) for point, seen in zip(carried, after)]
+    farthest, worst = moved.index(max(moved)), off.index(max(off))
+    return {"moved_m": records.rounded(moved[farthest]), "farthest": mount["marks"][farthest]["id"],
+            "off_m": records.rounded(off[worst]), "worst": mount["marks"][worst]["id"]}
+
+
+def camera_moved(motion, m):
+    """Did the marks move together past the gate, by more than they disagree? Only that says the camera moved.
+
+    A mark compared with its tape position has no margin when the fit accepted it near the gate, and one mark's depth
+    or click is noisy. An invalidation cannot be undone, so one mark never makes one (REGISTER-V1.md, "A moved camera").
+    """
+    return motion["moved_m"] - motion["off_m"] > m["gate_m"]
+
+
 def why_not_confirmed(entry, mount, marks, m):
     """(why these marks do not confirm the registration, or None; what to do; what to record).
 
     REGISTER-V1.md, "A moved camera". What to do is None when it is to click the marks.
     """
+    gate = m["gate_m"]
     clicked = {mark["id"]: mark for mark in marks}
     not_clicked = [mark["id"] for mark in mount["marks"] if mark["id"] not in clicked]
     facts = {"not_clicked": not_clicked}
     if not_clicked:
         return (f"every mark of the registration counts, and these are not clicked on this take: "
                 f"{', '.join(not_clicked)}"), None, facts
-    before = [mark["camera_xyz_m"] for mark in mount["marks"]]
-    after = [clicked[mark["id"]]["camera_xyz_m"] for mark in mount["marks"]]
-    movement = rigid.largest_move(before, after, before + scene.view_points(
+    before = {mark["id"]: mark["camera_xyz_m"] for mark in mount["marks"]}
+    start, now = list(before.values()), [clicked[pid]["camera_xyz_m"] for pid in before]
+    movement = rigid.largest_move(start, now, start + scene.view_points(
         mount["signature"], entry["intrinsics"]["rectified_left"], m["mount_view_reach_m"]))
     facts["view_movement_m"] = records.rounded(movement)
+    motion = marks_motion(mount, marks)
+    if motion["off_m"] > gate:
+        facts["click_again"] = [motion["worst"]]
+        return (f"the marks did not move together: {motion['worst']} is {_cm(motion['off_m'])} from where the movement "
+                f"they show together puts it (gate {_cm(gate)}), so its click is off or it moved on its own"), (
+                    f"Click {motion['worst']} again on this take, then run this again. If it says the same and what "
+                    "carries it moved, measure it again and register again."), facts
+    over = [mark for mark in marks if mark["error_m"] > gate]
+    if over:
+        worst = max(over, key=lambda mark: mark["error_m"])
+        since = ""
+        if worst["id"] in before:
+            apart = math.dist(before[worst["id"]], clicked[worst["id"]]["camera_xyz_m"])
+            since = f", though {worst['id']} moved only {_cm(apart)} in the camera's view since the registration"
+        facts["click_again"] = [mark["id"] for mark in over]
+        return (", ".join(f"{mark['id']} is {_cm(mark['error_m'])}" for mark in over)
+                + f" from its measured position (gate {_cm(gate)}){since}, so this alone does not show the camera "
+                  "moved"), ("Click it again on this take, then run this again. If it says the same, measure it "
+                             "again and register again."), facts
     if sum(v is not None for row in mount["signature"]["cells"] for v in row) < m["mount_min_cells"]:
         return (f"the registration frame has too little depth to say what the view holds (under "
                 f"{m['mount_min_cells']:g} of its cells)"), "Register again from a frame with more depth in view.", facts
-    if movement > m["gate_m"]:
-        return (f"each mark is within {_cm(m['gate_m'])}, but together they show the camera moved: something in "
-                f"view would be {_cm(movement)} off"), ("Record a new take and click every mark again. If it says "
-                                                        "the same, the camera moved: register again."), facts
+    if movement > gate:
+        return (f"each mark is within {_cm(gate)}, but the movement they show together would put something in view "
+                f"{_cm(movement)} off"), ("Record a new take and click every mark again. If it says the same, treat "
+                                          "the camera as moved and register again."), facts
     return None, None, facts
 
 
 def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=time.time, out=sys.stdout):
     """Has the camera moved since the registration? 0 confirmed, 1 otherwise (REGISTER-V1.md, "A moved camera").
 
-    A large depth change, or a mark past the gate, invalidates. Only every mark of
-    the registration re-clicked on this later take can confirm: each within the
-    gate, and the movement they show together within it across the whole view. A
-    confirmation goes into room-model.jsonl, where a scored rung 2 replay looks.
+    A large depth change, or every mark moving together past the gate, invalidates.
+    Only every mark of the registration re-clicked on this later take can confirm:
+    each within the gate, and the movement they show together within it across the
+    whole view. A confirmation goes into room-model.jsonl, where a scored rung 2
+    replay looks.
     """
     work = work_dir(work)
     m = m or method_file.load()
@@ -604,14 +654,17 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
                                    minimum_cells=m["mount_min_cells"])
         report["check"] = result
         marks = None if result["status"] == "changed" else measure_marks(work, take_dir, row, bundle, sheet, entry, m)
-        over = [mark for mark in marks or [] if mark["error_m"] > m["gate_m"]]
-        if result["status"] == "changed" or over:
+        motion = marks_motion(mount, marks) if marks else None
+        if motion:
+            report["marks_motion"] = motion
+        moved = motion is not None and camera_moved(motion, m)
+        if result["status"] == "changed" or moved:
             report["result"] = "changed"
             invalidated = {"ts": round(now(), 3), "reason": "mount_changed", "take": take.get("take"),
                            "take_ended_unix": take.get("ended_unix"), "frame": row["n"], "check": result,
                            "recheck": RECHECK}
-            if over:
-                invalidated["marks"] = marks
+            if moved:
+                invalidated.update(marks=marks, marks_motion=motion)
             records.append_jsonl(work / ROOM_MODEL, records.invalidated_revision(latest, camera_id, invalidated))
             report["recheck"] = RECHECK
         elif marks is None:
@@ -640,12 +693,12 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
               f"{_cm(worst['error_m'])}), and the movement they show is at most "
               f"{_cm(report['view_movement_m'])} in view.", file=out)
     elif status == "changed":
-        over = [mark for mark in report.get("marks", []) if mark["error_m"] > m["gate_m"]]
-        if over:
-            detail = ", ".join(f"{mark['id']} is {_cm(mark['error_m'])}" for mark in over)
-            detail += f" from its measured position (gate {_cm(m['gate_m'])})"
-        else:
+        if report["check"]["status"] == "changed":
             detail = f"{report['check']['changed_cells']} of {report['check']['compared_cells']} depth cells moved"
+        else:
+            motion = report["marks_motion"]
+            detail = (f"the marks moved together, {motion['farthest']} by {_cm(motion['moved_m'])} in the camera's view "
+                      f"since the registration (gate {_cm(m['gate_m'])})")
         print(f"MOUNT CHANGED: {report['transform_id']} is invalidated: {detail}. Re-check:", file=out)
         for item in RECHECK:
             print(f"  - {item}", file=out)
@@ -654,10 +707,8 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
               f"Depth alone cannot see a small turn or slide ({report['check']['changed_cells']} of "
               f"{report['check']['compared_cells']} cells moved). A scored replay of a take after the last "
               "confirmation stays refused.", file=out)
-        if next_step:
-            print(next_step, file=out)
-        else:
-            print("Click every mark on this take, then run this again:", file=out)
+        print(next_step or "Click every mark on this take, then run this again:", file=out)
+        if not next_step or report.get("click_again"):
             print(f"  python -B tools\\den-register\\register.py click {work} --take {Path(take_dir)}", file=out)
     else:
         print(f"REFUSED {report['reason']}: {report['detail']}", file=out)

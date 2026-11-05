@@ -180,21 +180,22 @@ finds none, it says `MOUNT NOT CONFIRMED`: depth cannot see a small turn or
 slide, even one that puts room positions 40 cm off. So click every cross the
 registration used on the new take, and run the check again. A turn shows most at
 the far crosses, so leaving one out confirms nothing, and the line names it. The
-check carries each click through the registration and compares it with your tape
-position. Then it works out how the crosses moved together, and how far that
-movement would carry anything else in view:
+check works out how the crosses moved together since the registration, carries
+each click through the registration to compare it with your tape position, and
+works out how far that movement would carry anything else in view:
 
 | Line | Means | What to do |
 |---|---|---|
 | `MOUNT CONFIRMED` | Every cross is within 5 cm, and so is everything in view. Any part of the view the registration frame had no depth for counts as 6 m away. The registration holds. | Nothing. |
-| `MOUNT NOT CONFIRMED` | A cross is not clicked, or the crosses are within 5 cm but show a movement that puts something else in view further off. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same, the camera moved: steps 4, 5 and 7. |
-| `MOUNT CHANGED` | The depth moved a lot, or a cross is more than 5 cm off. The registration is now invalidated, for good. | The line lists what to re-check. A cross on furniture that moved: measure it again. Then steps 4, 5 and 7. |
+| `MOUNT NOT CONFIRMED` | A cross is not clicked, or one cross does not move with the others, or one is more than 5 cm from your tape position, or the crosses show a movement that puts something else in view further off. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same: a cross on furniture that moved, measure it again; otherwise treat the camera as moved. Then steps 4, 5 and 7. |
+| `MOUNT CHANGED` | The depth moved a lot, or the crosses moved together by more than 5 cm. The registration is now invalidated, for good, and takes it had vouched for can no longer be replayed. | The line lists what to re-check. Then steps 4, 5 and 7. |
 | `mount_take_not_later` | That take is not newer than the registration's own. | Record a new take. |
 
-If a single cross is off because you misclicked it, it still invalidates; a new
-take and fit put that right. The same goes for a person standing close to the
-camera during the check take: filling over half of the frame moves the depth
-enough to give `MOUNT CHANGED`. This is why the room stays clear for that take.
+One cross off on its own, because you misclicked it or it moved, gives `MOUNT NOT
+CONFIRMED` and names it: only the crosses moving together invalidate. A person
+standing close to the camera during the check take is the exception: filling over
+half of the frame moves the depth enough to give `MOUNT CHANGED`. This is why the
+room stays clear for that take.
 
 `MOUNT CONFIRMED` is saved in `room-model.jsonl`. It vouches for the takes
 recorded since the registration, up to the one you just checked, so a scored

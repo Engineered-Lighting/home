@@ -7,9 +7,10 @@ in `docs/architecture/live-v1/schemas.json` (`room_model`,
 REGISTER-V2 and register again. Before any registration had run, the 2026-11-05
 review's fixes changed REGISTER-V1 in place: "A moved camera" below no longer
 lets a depth comparison confirm a registration, needs every mark and the whole
-view to agree before it confirms, and writes a confirmation where rung 2 reads
-it; the camera entry now holds the geometry rung 2 needs; and a leave-one-out
-error over the gate is refused, because rung 2 refuses the bound it would write.
+view to agree before it confirms, lets only the marks moving together invalidate,
+and writes a confirmation where rung 2 reads it; the camera entry now holds the
+geometry rung 2 needs; and a leave-one-out error over the gate is refused, because
+rung 2 refuses the bound it would write.
 
 ## What is measured
 
@@ -116,20 +117,31 @@ looks at a frame of a later take in three steps.
    the cells, because a floor's depth does not change when a level camera turns
    about the vertical. Depth noise limits how far the slots could tighten.
 2. **The marks, against the same gate.** Depth alone never confirms. The owner
-   clicks every mark on that later frame with the `click` step. Each click and
-   the depth under it go through the registered transform to a room position,
-   compared with the worksheet's tape position:
-   - any mark more than `gate_m` away: `changed`;
-   - any mark the registration used not clicked: `not_confirmed`, naming it. A
-     turn shows most at the far marks, so none may be left out;
-   - every one clicked, all within `gate_m`: the third step decides.
+   clicks every mark on that later frame with the `click` step. A turn shows most
+   at the far marks, so any mark the registration used and this frame does not
+   have clicked gives `not_confirmed`, naming it. With every one clicked, their
+   camera-frame positions on the two frames (the entry keeps the first as
+   `mount.marks`) give the rigid motion they show together: `moved_m`, the
+   farthest it carries a mark, and `off_m`, the most a mark is off it.
+   - `moved_m - off_m` over `gate_m`: `changed`. A moved camera carries every mark
+     with it, so this is what says the camera moved, past how much the marks
+     disagree among themselves;
+   - a mark `off_m` over `gate_m` from that motion: `not_confirmed`, naming it.
+     Its click is off, or something moved it on its own;
+   - a mark more than `gate_m` from its tape position, carried through the
+     registered transform: `not_confirmed`, naming it. A mark the fit accepted near
+     the gate has no margin, so half a pixel can put it past;
+   - otherwise the third step decides.
+
+   Neither of the last two invalidates. `changed` cannot be undone and it loses
+   the takes a confirmation vouched for, so one mark's click or depth never makes
+   it. A real knock that this leaves short of `changed` is still never confirmed.
 3. **The whole view, against the same gate.** A mark within the gate says little
    about a point elsewhere: marks near the optical axis hardly show a roll, and
-   a swing about the marks' centre hardly moves them. So the marks' camera-frame
-   positions on the two frames (the entry keeps the first as `mount.marks`) give
-   the rigid motion they show together, and `view_movement_m` is the farthest
-   that motion carries anything in view: the marks, the camera, and the corners
-   of each signature cell at its depth, capped at `mount_view_reach_m`. A cell
+   a swing about the marks' centre hardly moves them. So `view_movement_m` is the
+   farthest the marks' rigid motion carries anything in view: the marks, the
+   camera, and the corners of each signature cell at its depth, capped at
+   `mount_view_reach_m`. A cell
    with no depth counts at `mount_view_reach_m`: a dark far floor or a bare wall
    has no depth and is still room. How far a rigid motion moves a point is convex
    in the point, so nothing between the camera and those surfaces moves further.

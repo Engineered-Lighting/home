@@ -6,10 +6,12 @@ fictional room and a known camera pose. The click page is served on
 
     python -B -m unittest discover -s tools/den-register -v
 """
+import array
 import http.client
 import io
 import json
 import math
+import random
 import re
 import sys
 import tempfile
@@ -884,8 +886,12 @@ class MountTests(Base):
                 code, report, text = self.check(s, later.take)
                 self.assertEqual((code, report["result"]), (1, "changed"), text)
                 self.assertIn("MOUNT CHANGED", text)
-                self.assertIn("from its measured position", text)
-                self.assertGreater(max(mark["error_m"] for mark in report["marks"]), 0.05)
+                self.assertIn("moved together", text)
+                self.assertIn(f"{report['marks_motion']['farthest']} by", text)
+                self.assertGreater(report["marks_motion"]["moved_m"], 0.05)
+                found = records.resolve(s.room_models(), fitted["transform_id"])
+                self.assertEqual(found["invalidated"]["marks_motion"], report["marks_motion"])
+                self.assertEqual(found["invalidated"]["marks"], report["marks"])
                 out = io.StringIO()
                 self.assertEqual(register.main(["resolve", str(s.work), fitted["transform_id"]], out=out), 1)
                 self.assertIn("INVALIDATED", out.getvalue())
@@ -1012,7 +1018,7 @@ class MountTests(Base):
         later.click_all(["far"])
         code, report, text = self.check(s, later.take)
         self.assertEqual((code, report["result"]), (1, "changed"), text)
-        self.assertIn("far is", text)
+        self.assertIn("far by", text)
 
     def test_a_cluster_of_marks_near_the_optical_axis_cannot_confirm_a_roll(self):
         s, later = self.knocked_registration(CLUSTER, ("a", "b", "c", "d"), ("e", "f"), synthetic.moved(roll_deg=3.0))
@@ -1023,7 +1029,7 @@ class MountTests(Base):
         self.assertGreater(report["view_movement_m"], 0.05)
         self.assertNotIn("still holds", text)
         self.assertIn("in view", text)
-        self.assertIn("the camera moved: register again", text)
+        self.assertIn("treat the camera as moved and register again", text)
         self.assertNotIn("register.py click", text, "clicking this frame again would say the same")
 
     def test_a_swing_about_the_marks_centre_cannot_be_confirmed(self):
@@ -1152,9 +1158,9 @@ class MountTests(Base):
         self.assertIn("Register again", text)
         self.assertNotIn("register.py click", text)
 
-    def test_one_mark_past_the_gate_is_enough_and_the_gate_is_five_cm(self):
+    def test_a_mark_past_the_gate_from_its_tape_position_confirms_nothing_and_says_nothing_about_the_camera(self):
         for mark in ("c1", "p2"):  # a check mark or a fit mark
-            for offset, expected, code_wanted in ((0.049, "confirmed", 0), (0.051, "changed", 1)):
+            for offset, expected, code_wanted, revisions in ((0.049, "confirmed", 0, 2), (0.051, "not_confirmed", 1, 1)):
                 with self.subTest(mark=mark, offset=offset):
                     self.tearDown()
                     self.setUp()
@@ -1165,6 +1171,183 @@ class MountTests(Base):
                     (s.work / "worksheet.json").write_text(json.dumps(sheet), encoding="utf-8")
                     code, report, text = self.check(s, later.take)
                     self.assertEqual((code, report["result"]), (code_wanted, expected), text)
+                    self.assertEqual(len(s.room_models()), revisions, "only a confirmation adds a revision")
+                    self.assertIsNone(records.resolve(s.room_models(), fitted["transform_id"])["invalidated"])
+                    self.assertNotIn("MOUNT CHANGED", text)
+                    if expected == "not_confirmed":
+                        self.assertIn(f"{mark} is 5.", text)
+                        self.assertIn("from its measured position", text)
+                        self.assertIn("does not show the camera moved", text)
+                        self.assertIn("register.py click", text)
+                        self.assertEqual(report["click_again"], [mark])
+
+    def test_a_cross_added_since_the_registration_past_the_gate_confirms_nothing(self):
+        s, fitted = self.furnished()
+        points = dict(synthetic.POINTS, n9=[2.8, 2.9, 0.3])
+        later = Scene(self, points=points, checks=synthetic.CHECKS + ("n9",), offsets={"n9": [0, 0, 0.2]},
+                      name="later", ended=1_800_001_000.0, background=synthetic.room_depth())
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertEqual(len(s.room_models()), 1)
+        self.assertIn("n9 is", text)
+        self.assertNotIn("moved only", text, "the registration never saw it")
+
+    def near_the_gate(self, tape_off):
+        """A registration the fit accepted with one check mark's tape nearly at the gate."""
+        s = Scene(self, ended=1_800_000_100.0, background=synthetic.room_depth(), offsets={"c1": [0, 0, tape_off]})
+        s.click_all()
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        return s, fitted
+
+    def later_near_the_gate(self, name, ended, tape_off):
+        return Scene(self, name=name, ended=ended, background=synthetic.room_depth(), offsets={"c1": [0, 0, tape_off]})
+
+    def test_half_a_pixel_on_a_mark_the_fit_accepted_near_the_gate_does_not_invalidate(self):
+        # The 2026-11-05 verifier's case: tape 4.7 cm off, an unmoved camera, a click half a pixel off.
+        s, fitted = self.near_the_gate(0.047)
+        self.assertGreater(s.room_models()[0]["cameras"][0]["error_bound_m"], 0.046)
+        later = self.later_near_the_gate("later", 1_800_001_000.0, 0.047)
+        later.click_all(shift={"c1": (0, 0.5)})
+        code, report, text = self.check(s, later.take)
+        self.assertGreater(next(mark for mark in report["marks"] if mark["id"] == "c1")["error_m"], 0.05)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertEqual(len(s.room_models()), 1)
+        self.assertIn("c1 is 5.", text)
+        self.assertIn("moved only 0.", text, "half a pixel at 3 m is half a centimetre")
+        later.click_all()  # the same take, the click put right
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (0, "confirmed"), text)
+
+    def test_a_misclick_on_a_later_check_keeps_what_an_earlier_check_vouched_for(self):
+        # The 2026-11-05 verifier's case: confirmed, then a second check of the same unmoved camera, one click 4 px off.
+        s, fitted = self.near_the_gate(0.048)
+        first = self.later_near_the_gate("first", 1_800_001_000.0, 0.048)
+        first.click_all()
+        self.assertEqual(self.check(s, first.take)[0], 0)
+        second = self.later_near_the_gate("second", 1_800_001_500.0, 0.048)
+        second.click_all(shift={"c1": (0, 4.0)})
+        code, report, text = self.check(s, second.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        found = records.resolve(s.room_models(), fitted["transform_id"])
+        self.assertIsNone(found["invalidated"])
+        self.assertEqual(found["confirmed"]["take"], "first")
+
+    def test_a_mark_off_the_others_is_named_and_invalidates_nothing(self):
+        moved_cross = dict(synthetic.POINTS, p3=[synthetic.POINTS["p3"][0] + 0.3, synthetic.POINTS["p3"][1],
+                                                 synthetic.POINTS["p3"][2]])
+        u, v, _ = Scene(self, name="look", ended=1_800_000_050.0).seen["p1"]
+        cases = {"a click far off": ({"shift": {"c2": (30, 0)}}, {}, "c2"),
+                 "a cross clicked on another": ({"at": {"c2": (u, v)}}, {}, "c2"),
+                 "a cross on furniture that moved": ({}, {"points": moved_cross}, "p3")}
+        for name, (click, scene_args, named) in cases.items():
+            with self.subTest(name):
+                self.tearDown()
+                self.setUp()
+                s, fitted = self.furnished()
+                later = Scene(self, name="later", ended=1_800_001_000.0, background=synthetic.room_depth(),
+                              sheet=s.sheet, **scene_args)
+                session = later.session()
+                for pid, (x, y, _) in later.seen.items():
+                    x, y = click.get("at", {}).get(pid, (x, y))
+                    dx, dy = click.get("shift", {}).get(pid, (0, 0))
+                    session.click({"id": pid, "u": round(x + dx, 1), "v": round(y + dy, 1)})
+                session.done()
+                code, report, text = self.check(s, later.take)
+                self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+                self.assertEqual(len(s.room_models()), 1)
+                self.assertGreater(report["marks_motion"]["off_m"], 0.05)
+                self.assertEqual(report["marks_motion"]["worst"], named)
+                self.assertEqual(report["click_again"], [named])
+                self.assertIn(f"{named} is", text)
+                self.assertIn("did not move together", text)
+                self.assertIn("register.py click", text)
+                self.assertNotIn("MOUNT CHANGED", text)
+
+    def test_marks_moved_together_past_the_gate_is_what_invalidates(self):
+        along_wall = (math.cos(math.radians(40)), -math.sin(math.radians(40)), 0.0)
+        for slide, expected, revisions in ((0.04, "confirmed", 2), (0.06, "changed", 2)):
+            with self.subTest(slide=slide):
+                self.tearDown()
+                self.setUp()
+                s, fitted = self.furnished()
+                later = self.later_in_the_room(synthetic.moved(shift=tuple(slide * v for v in along_wall)))
+                later.click_all()
+                report = self.check(s, later.take)[1]
+                self.assertEqual(report["result"], expected)
+                self.assertAlmostEqual(report["marks_motion"]["moved_m"], slide, delta=0.003)
+                self.assertEqual(len(s.room_models()), revisions)
+
+    def test_the_motion_of_the_marks_is_measured_against_the_gate_after_their_disagreement(self):
+        before = [[1.0, 0.0, 3.0], [-1.0, 0.5, 2.0], [0.0, -0.5, 4.0], [0.5, 1.0, 2.5], [-0.5, -1.0, 3.5], [1.5, 0.5, 5.0]]
+        mount = {"marks": [{"id": f"m{i}", "camera_xyz_m": p} for i, p in enumerate(before)]}
+        m = closed_method()
+
+        def motion(by, lone=None):
+            after = [[p[0] + by, p[1], p[2]] for p in before]
+            if lone:
+                after[lone[0]][2] += lone[1]
+            return register.marks_motion(mount, [{"id": f"m{i}", "camera_xyz_m": p} for i, p in enumerate(after)])
+
+        for by, moved in ((0.051, True), (0.049, False)):
+            found = motion(by)
+            self.assertAlmostEqual(found["moved_m"], by, places=5)
+            self.assertAlmostEqual(found["off_m"], 0.0, places=5)
+            self.assertEqual(register.camera_moved(found, m), moved, by)
+        lone = motion(0.0, lone=(2, 0.30))
+        self.assertGreater(lone["moved_m"], 0.05, "one mark pulls the fit")
+        self.assertEqual(lone["worst"], "m2")
+        self.assertFalse(register.camera_moved(lone, m), "one mark off the others is not the camera")
+        self.assertTrue(register.camera_moved(motion(0.09), m))
+        self.assertIsNone(register.marks_motion(mount, [{"id": "m0", "camera_xyz_m": before[0]}]), "every mark counts")
+
+    def noisy_checks(self, points, fit, checks, pose, *, sigma_px=1.0, sigma_depth=0.005, sigma_tape=0.005, trials=150):
+        """What the tool's own decisions say on fits that pass, with click, depth and tape noise. Synthetic noise."""
+        rng = random.Random(20261105)
+        k = {"fx": 450.0, "fy": 450.0, "cx": 320.0, "cy": 200.0}
+        m = closed_method()
+        signature = scene.mount_signature({"depth": array.array("H", synthetic.room_depth())})
+        entry = {"intrinsics": {"rectified_left": k}}
+        ids = list(fit) + list(checks)
+
+        def seen(room, camera_pose):
+            u, v = synthetic.project(synthetic.to_camera(*camera_pose, room))
+            z = synthetic.to_camera(*camera_pose, room)[2] * (1 + rng.gauss(0, sigma_depth))
+            return scene.back_project(k, u + rng.gauss(0, sigma_px), v + rng.gauss(0, sigma_px), z)
+
+        tally = {"changed": 0, "not_confirmed": 0, "confirmed": 0}
+        while sum(tally.values()) < trials:
+            tape = {p: [points[p][i] + rng.gauss(0, sigma_tape) for i in range(3)] for p in ids}
+            before = {p: seen(points[p], synthetic.camera_pose()) for p in ids}
+            fitted = rigid.fit([before[p] for p in fit], [tape[p] for p in fit])
+            rotation, translation = fitted["rotation"], fitted["translation"]
+            errors = [math.dist(rigid.apply(rotation, translation, before[p]), tape[p]) for p in checks]
+            if max(fitted["residuals_m"] + errors + (fitted["loo_m"] or [])) > m["gate_m"]:
+                continue
+            after = {p: seen(points[p], pose) for p in ids}
+            mount = {"marks": [{"id": p, "camera_xyz_m": before[p]} for p in ids], "signature": signature}
+            marks = [{"id": p, "camera_xyz_m": after[p],
+                      "error_m": math.dist(rigid.apply(rotation, translation, after[p]), tape[p])} for p in ids]
+            if register.camera_moved(register.marks_motion(mount, marks), m):
+                tally["changed"] += 1
+            else:
+                tally["not_confirmed" if register.why_not_confirmed(entry, mount, marks, m)[0] else "confirmed"] += 1
+        return tally
+
+    def test_noise_on_an_unmoved_camera_does_not_invalidate_it(self):
+        # Half a percent of depth noise, per mark: comparing each mark with its tape position said CHANGED on 27% of
+        # these, and comparing each mark with itself on 26%.
+        tally = self.noisy_checks(synthetic.POINTS, synthetic.FIT, synthetic.CHECKS, synthetic.camera_pose())
+        self.assertEqual(tally["changed"], 0, tally)
+        self.assertGreater(tally["confirmed"], 0, tally)
+
+    def test_noise_does_not_hide_a_large_knock_or_confirm_a_small_one(self):
+        tally = self.noisy_checks(synthetic.POINTS, synthetic.FIT, synthetic.CHECKS, synthetic.moved(yaw_deg=5.0))
+        self.assertEqual(tally["changed"], 150, tally)
+        for knock in ({"yaw_deg": 1.0}, {"pitch_deg": 1.0}, {"shift": (0.061, -0.051, 0.0)}):
+            tally = self.noisy_checks(synthetic.POINTS, synthetic.FIT, synthetic.CHECKS, synthetic.moved(**knock))
+            self.assertEqual(tally["confirmed"], 0, (knock, tally))
 
     def test_a_later_take_whose_end_time_is_not_a_number_is_refused_by_name(self):
         s, fitted = self.furnished()

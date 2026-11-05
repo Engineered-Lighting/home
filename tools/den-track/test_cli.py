@@ -1031,14 +1031,28 @@ class FreshTakesTest(Base):
         self.assertEqual((earlier[0]['passed'], earlier[0]['takes']), (False, 3))
         self.assertNotEqual(earlier[0]['code_fingerprint'], method.code_fingerprint())
 
+    def test_a_take_looked_at_alone_and_left_out_leaves_a_trace_in_the_report(self):
+        """Nothing ties it to the session, so it cannot be refused. It can be seen."""
+        takes = self.takes()
+        left_out = self.takes(first=2)[:1]
+        code, text = cli(*self.score_args(left_out, 'peek', meth=self.meth))
+        self.assertEqual(code, 0, text)
+        code, text = self.scored_exit(takes, 'score-1')
+        self.assertEqual(code, 0, text)
+        self.assertIn('1 other take', text)
+        with open(self.path('score-1', 'score.json'), encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['other_takes_looked_at'], 1)
+
     def test_a_first_score_and_its_replay_name_no_earlier_run(self):
         takes = self.takes()
         self.score_once(takes)
         code, text = cli(*self.score_args(takes, 'score-2', scored=True, meth=self.meth))
         self.assertEqual(code, 0, text)
         self.assertNotIn('earlier scored run', text)
+        self.assertNotIn('other take', text)
         with open(self.path('score-2', 'score.json'), encoding='utf-8') as f:
-            self.assertEqual(json.load(f)['earlier_scored_runs'], [])
+            report = json.load(f)
+        self.assertEqual((report['earlier_scored_runs'], report['other_takes_looked_at']), ([], 0))
 
     def test_this_users_record_defaults_to_local_app_data_and_says_so_in_the_refusal(self):
         env = {k: v for k, v in os.environ.items() if k != den_track.LEDGER_ENV}

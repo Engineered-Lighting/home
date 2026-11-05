@@ -226,6 +226,12 @@ def earlier_scored(current, takes):
     return out
 
 
+def other_takes_looked_at(current, takes):
+    """How many takes this record has looked at that this run does not name."""
+    named = {row['take_id'] for row in current['takes']}
+    return len({row.get('take_id') for run in earlier_runs(takes) for row in run['takes']} - named)
+
+
 def note_score(method, takes, scored, passed):
     """One line per different look at these takes, practice or scored, in each place that keeps the record."""
     stamp = dict(run_stamp(method, takes, scored), passed=passed if scored else None)
@@ -368,11 +374,12 @@ def cmd_score(args):
     body = score_mod.score_session(takes, scoring)
     if args.scored:
         check_scored(method, takes, body)
-    earlier = earlier_scored(run_stamp(method, takes, args.scored), takes)
+    current = run_stamp(method, takes, args.scored)
+    earlier, others = earlier_scored(current, takes), other_takes_looked_at(current, takes)
     note_score(method, takes, args.scored, body['gate']['passed'])
     crossing_lines = body.pop('crossing_lines')
     report = dict(body, tool='den-track', command='score', scored=bool(args.scored), method=method_stamp(method),
-                  earlier_scored_runs=earlier,
+                  earlier_scored_runs=earlier, other_takes_looked_at=others,
                   labelling={'labellers': sorted({t['truth'].labeller for t in takes if t['truth'].labeller}),
                              'takes': len(takes), 'declared_blind': sum(1 for t in takes if t['truth'].blind is True)},
                   takes=[dict(take_stamp(t), name=t['name'], labeller=t['truth'].labeller, blind=t['truth'].blind)
@@ -387,6 +394,9 @@ def cmd_score(args):
     if earlier:
         print('this record holds %d earlier scored run(s), on other takes, under other numbers or code: %d failed'
               % (len(earlier), sum(1 for run in earlier if run['passed'] is not True)))
+    if others:
+        print('this record holds looks at %d other take(s) that this run does not name: a pilot, or one left out after a look'
+              % others)
     print('wrote %s' % os.path.join(args.out, SCORE_FILE))
     if not args.scored:
         print_open(method)

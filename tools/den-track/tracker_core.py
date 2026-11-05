@@ -231,7 +231,7 @@ class TrackerCore:
             if j not in taken:
                 x, P = kalman.initial(det['xy'], det['R'], p['new_track_speed_sigma'])
                 born = Track(self.next_id, x, P, t, det['obs_ids'])
-                born.near = [o.id for o in confirmed if o not in ended and self._within_reach(born, o, t)]
+                born.near = [o.id for o in confirmed if self._within_reach(born, o, t)]
                 if born.near:
                     born.ambiguous, born.last_doubt = True, t
                 self._accept_heading(born, det, t)

@@ -316,6 +316,14 @@ class TrialRuleTest(unittest.TestCase):
         for sides in ('take', 'window'):
             self.assertFalse(self.admitted(spans, rule=dict(RULE, sides=sides))[0], sides)
 
+    def test_seen_plenty_outside_the_window_and_barely_in_it_is_no_trial_under_take(self):
+        """Each person is seen before and after, far from the contact, and once in the window around it."""
+        spans = {'A': [(0, 7), (9.5, 9.5), (15, 20)], 'B': [(0, 7), (12.5, 12.5), (15, 20)]}
+        ok, why = self.admitted(spans)
+        self.assertFalse(ok)
+        self.assertIn('1 in the window', why)
+        self.assertTrue(self.admitted({'A': [(0, 7), (9, 9.5), (15, 20)], 'B': [(0, 7), (12.5, 13), (15, 20)]})[0])
+
     def test_fewer_than_min_scored_on_a_side_is_no_trial(self):
         spans = {'A': [(0, 20)], 'B': [(8, 8), (10, 20)]}          # one sighting of B before the mark, at 8
         self.assertFalse(self.admitted(spans)[0])

@@ -210,8 +210,9 @@ scored runs the record holds and whether they passed (`earlier_scored_runs`), so
 a failure says so. A refused run shows no result and uses no take.
 
 Three things get past it. Deleting both notes by hand, which nothing can stop. A take looked
-at alone and then left out of the session: nothing ties it to the others, and the plan
-catches it only if a kind falls short, so run `score` only on a complete session. And rung
+at alone and then left out of the session: nothing ties it to the others, so it cannot be
+refused, the plan catches it only if a kind falls short, and the report counts it among
+`other_takes_looked_at`, beside any pilot takes. So run `score` only on a complete session. And rung
 2 run again on the footage if its frames come out different: one with nobody seen is no
 frame, so that is a new take to this tool.
 

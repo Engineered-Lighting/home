@@ -41,8 +41,6 @@ def changed_light(now, was, tolerance):
     A move inside the ladder's tolerance of that level counts in proportion, so a read-back step, a colour
     nudge or a pin's rounding widens a bound by about its own size, never by a whole bulb.
     """
-    if math.isclose(now, was, rel_tol=1e-9):
-        return 0.0
     brighter, moved = max(now, was), abs(now - was)
     return moved / tolerance if moved < tolerance * brighter else brighter
 
@@ -157,8 +155,7 @@ class Dec:
             p = h.get("pinned") or {}
             pins.append(Hold(h.get("entity_id"), h.get("channels"), p.get("level_pct"), p.get("cct_k"),
                              -math.inf, None, revision, self.id))
-        copied = revision
-        pins += sorted((h for h in holds if h.active(t) and h.after_copy(copied, self.ts)), key=Hold.order)
+        pins += sorted((h for h in holds if h.active(t) and h.after_copy(revision, self.ts)), key=Hold.order)
         for h in pins:
             for ch in h.keys(state):
                 if h.level is not None:

@@ -453,6 +453,23 @@ class HeldPointsCount(unittest.TestCase):
                 self.assertEqual(hr["hits"] + hr["misses"], 1, (reading, held))
                 self.assertEqual(report["excluded_held_or_superseded"], 0, (reading, held))
 
+    def test_a_free_bulb_stuck_on_after_an_off_beside_a_steady_hold_is_a_miss(self):
+        # the free bulb's light now is nothing, but what it answers for is the level it was told to leave
+        model = syn.hue_model({n: {B0: self.K, B3: self.K} for n in self.names}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {n: self.K * 1.3 for n in self.names}, anchored=False, ident="ls-r")
+        dec = syn.hue_decision("d", t + 0.5, {B0: 0.8, B3: 0.5},
+                               {B0: {"level": 0.0, "steps": send(t + 0.5)}, B3: {"status": "held", "level": 0.5}}, "ls-r",
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)},
+                               hold_set={"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                                                  "pinned": {"level_pct": 50, "cct_k": 2700}}]})
+        for reading, expected in ((self.K * 1.3, (0, 20, "fail")), (self.K * 0.5, (20, 0, "pass"))):
+            after = syn.light_state(t + 5, {n: reading for n in self.names}, anchored=False)
+            report = score([dec], [ref, after], model)[2]
+            hr = report["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), expected, reading)
+            self.assertEqual(report["excluded_held_or_superseded"], 0, reading)
+
     def test_a_held_bulb_nudged_inside_the_bound_counts_like_a_steady_one(self):
         decisions, _, report = self.steady_beside_a_hold(True, 135.0, level_after=0.52)
         self.assertEqual(point(decisions[0], "pt")["status"], "outside")
@@ -655,6 +672,14 @@ class HoldRevision(unittest.TestCase):
         result, r = self.landed([self.correction("c-10", 10, 20, self.t + 1)], {"revision": 9, "held": []})
         self.assertEqual(result, (0, 20, "fail"))  # pinned at 20% and read at 80%
         self.assertEqual(r["against"]["hold_set_revision"], 10)
+
+    def test_the_revision_decides_where_both_sides_have_one_not_the_time(self):
+        # logged just before the decision but past the copy it read: it pins
+        result, _ = self.landed([self.correction("c-10", 10, 20, self.t - 1)], {"revision": 9, "held": []})
+        self.assertEqual(result, (0, 20, "fail"))
+        # dated after the decision but already inside its copy, which does not list it: it does not
+        result, _ = self.landed([self.correction("c-9", 9, 20, self.t + 1)], {"revision": 9, "held": []})
+        self.assertEqual(result, (20, 0, "pass"))
 
     def test_with_no_revision_to_compare_the_time_decides(self):
         for hold_set, correction_revision in (({"held": []}, 8), ({"revision": 9, "held": []}, None)):
@@ -1337,6 +1362,13 @@ class MeterNoise(unittest.TestCase):
         self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), (76, 4, 0.95, "fail"))
         self.assertEqual((report["below_meter_noise"]["value_without"], report["below_meter_noise"]["verdict_without"]),
                          (0.8, "fail"))
+
+    def test_a_small_change_where_the_ladders_tolerance_is_the_wider_is_an_ordinary_point(self):
+        # 500 to 495 lx: 15% of the level is 74 lx, past the noise, so the ladder's own check stands
+        decisions, _, report = self.case(0.5, 0.495, 495.0, basis=1000.0)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
+        self.assertEqual(report["below_meter_noise"]["count"], 0)
+        self.assertEqual(report["hit_rate"]["verdict"], "pass")
 
     def test_points_left_out_or_not_admitted_are_not_in_the_noise_count(self):
         model = syn.hue_model({"desk-1": {B0: 100.0, B1: 900.0}}, unit="lx", kelvins=(2700,))

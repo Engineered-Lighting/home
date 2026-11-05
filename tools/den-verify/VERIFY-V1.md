@@ -9,9 +9,10 @@ unnamed are listed under "Keys the contracts do not name" and sit behind an
 open slot.
 
 This note was committed before any code, and revised on 2026-11-05 after the
-pipeline review, with no session yet run: the held rule, the rule for dims and
-the meter's noise in the level check. Which points count now comes from
-predictions alone, never from a reading. Nothing here has run on real light.
+pipeline review, with no session yet run: the held rule, which holds pin a
+bulb, the rule for dims and the meter's noise in the level check. Which points
+count now comes from predictions alone, never from a reading. Nothing here has
+run on real light.
 Running needs the owner's go-ahead; building does not.
 
 ## What is scored

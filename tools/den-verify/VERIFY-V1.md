@@ -64,9 +64,9 @@ level left. With the model 5% off and every bulb landing as commanded, a 0.8 to
 widest of `tolerance` × predicted, `change_allowance` × the brighter level of
 every bulb that changed, summed, and the meter's noise (see "Measurement
 uncertainty"). A bulb that did not change adds nothing: its error is in both
-frames and cancels. For a bright-up the first is the widest, so the ladder's ±15%
-stands exactly; on a dim or an off the second usually is, and the record gives
-that point's `level_bound`.
+frames and cancels. For a bright-up the first is normally the widest, so the
+ladder's ±15% stands; on a dim or an off the second usually is. The record gives
+`level_bound` wherever the first is not the widest.
 
 Every point is then a hit or a miss, whichever way the model is off. The rule
 looks at no reading, so it cannot keep hits and drop misses. What it costs:

@@ -993,6 +993,10 @@ class DimsAndOffs(unittest.TestCase):
         decisions, _, report = score(d, f, model, overrides={"change_allowance": 0})
         self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
         self.assertEqual(report["hit_rate"]["verdict"], "fail")
+        # with the meter's bounds at zero too, an off has no level to take 15% of, and cannot be judged
+        literal = {"change_allowance": 0, "uncertainty_rel": 0, "uncertainty_abs_lx": 0}
+        d, f, model = self.one_point(0.8, 0.0, 0.5)
+        self.assertEqual(point(score(d, f, model, overrides=literal)[0][0], "desk-1")["status"], "unverifiable")
 
     def room(self, before, after, read, reads, anchored=False, overrides=None):
         """Four equal bulbs, 50 each at full, all commanded from `before` to `after`."""

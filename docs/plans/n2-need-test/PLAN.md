@@ -162,19 +162,36 @@ Status: plan only. Nothing here is built or run. Written 2026-11-05.
 - **Timed onsets** are the sure `touch` onsets of units: N1 protocol items 2
   and 5, the first frame of the hand touching the worked object, timed to the
   first `starting`. `no_touch` onsets are reported apart.
-- For a timed onset at t_on:
-  - if the state in force at t_on is `starting` or `engaged`, d_on = 0,
-    tagged `entered_on`;
-  - otherwise d_on runs to the first later record in `starting` or `engaged`
-    before the interval's offset. From `none` that is a new `starting`;
-  - **re-entry**: if the state is still `ending` from an earlier task, the onset
-    output is need v1's `ending → engaged` record, tagged `entered_from_ending`;
-  - with no such record before the offset, the onset is **missed**: d_on = +∞
-    in the median, and counted.
+- For a timed onset at t_on, take the state in force at t_on. If it is on,
+  its **on-run** is the unbroken run of on records that holds it; it began at
+  the run's first record.
+  - **On, and the run began after the previous labelled offset** (the latest
+    interval offset before t_on in the same segment; with none, any run
+    counts): d_on = 0, tagged `entered_on`. The estimator turned on in the
+    gap, ahead of the touch.
+  - **On, and the run began at or before that offset**: the onset is
+    **missed**, tagged `stayed_on`. The estimator never left the earlier task,
+    so it has no time for this one.
+  - **Off**: d_on runs to the first later record in `starting` or `engaged`
+    before the interval's offset. From `none` that is a new `starting`.
+  - **Re-entry**: if the state is still `ending` from an earlier task, the
+    onset output is need v1's `ending → engaged` record, tagged
+    `entered_from_ending`.
+  - With no such record before the offset, the onset is **missed**.
+  - A missed onset is d_on = +∞ in the median, and counted with its tag.
+- **Why `stayed_on` is a miss, not a share gate.** 15 of every 20 N1 onsets
+  follow a 30 s gap that lies wholly inside the previous task's τ_off, where
+  false_on scores nothing. Taking d_on = 0 for any onset already on would let
+  an estimator that stays engaged across the counter tasks score 0 on those 15
+  and pass. A cap on the `entered_on` share would need a new owner number and
+  would still pass zeros up to the cap. A miss needs no new number and scores
+  the case as what it is: this task's start went unnoticed. The cost falls on
+  an estimator that holds `engaged` through a hidden-hands gap (hold rows
+  pause its exit); the diagnosis reads that from the `stayed_on` count.
 - The onset score is max(d_on, 0) (A13); by this rule d_on is never negative.
   The dwell, from the onset output to the first `engaged`, is reported only.
-- With 30 s free of tasks before each task, both tags should be rare; many
-  point to a slow exit.
+- With 30 s free of tasks before each task, every tag should be rare; many
+  `entered_from_ending` or `stayed_on` point to a slow exit.
 
 ### 4.3 Demand: grace and fall
 

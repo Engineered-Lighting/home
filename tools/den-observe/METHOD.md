@@ -19,9 +19,10 @@ lists it in the run file; `replay.py --scored` refuses while any slot is open.
   refuses the run. An invalidation of the entry on any line holds, as rung 1
   resolves it. The contracts say `intrinsics` names its source, the EEPROM values
   today, and give no inner form; `den-observe-camera-1` (slot `camera_entry_form`)
-  is the one den-register writes and this tool reads: `intrinsics` holds `source`, `rectified_left` and `rgb` ({fx, fy, cx, cy} or
-  3x3), `rgb_distortion` (8 terms), `rgb_from_rectified_left` {rotation,
-  translation_m}, `stereo_baseline_m`, `depth_size` and `rgb_size`; `pose` holds
+  is the one den-register writes and this tool reads: `intrinsics` holds `source`,
+  `rectified_left` and `rgb` ({fx, fy, cx, cy} or 3x3), `rgb_distortion` (8 terms),
+  `rgb_from_rectified_left` {rotation, translation_m}, `stereo_baseline_m`,
+  `depth_size` and `rgb_size`; `pose` holds
   `camera_frame: "rectified_left"` and `room_from_camera`, a 4x4 metre matrix
   into the room frame (z up, floor at z = 0). Other keys in the entry are not read.
 

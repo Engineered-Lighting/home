@@ -117,7 +117,8 @@ only fills in its number:
 - **sampling and timing**: the pixel step (every n-th pixel each way), the
   frames kept per exposure, the settle limit (how long a step may wait for
   its first agreeing frame), the still-scene span, the camera's exposure and
-  ISO limits, the fit's iteration count and the minimum samples per code.
+  ISO limits, the fit's iteration count and smoothing weight, and the minimum
+  samples per code.
 
 **`meter-norm/v1`** (the normalisation version A9 and E7 ask for) works on
 one pixel of one frame: decode NV12 as BT.601 limited range, as the server
@@ -164,7 +165,10 @@ refit. Rung 7 later reuses it for its camera scale.
 **The response fit and the global check.** `meter.py` fits a monotone inverse
 response per channel: alternating least squares on a piecewise-linear curve
 with a knot at every code, made monotone with pool-adjacent-violators. The
-fit fixes the curve only up to scale: the global curve is scaled so that
+irradiance step weights each sample by a hat over codes, and the knot step
+adds a light smoothing penalty: with every step the same 1.41x, the data
+alone fix the curve only up to a ripple that repeats every step. The fit
+fixes the curve only up to scale: the global curve is scaled so that
 f(128) = 1, and each region curve is scaled to the global curve by least
 squares before the region test (above). The global check is the residual and
 the region test as METHOD-V1 names them: one curve must fit the whole image

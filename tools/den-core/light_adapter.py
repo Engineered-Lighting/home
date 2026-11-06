@@ -80,38 +80,101 @@ def is_surface_map(value):
     return isinstance(value, dict) and all(isinstance(blocks, list) and all(isinstance(p, str) for p in blocks) for blocks in value.values())
 
 
-def _number(value):
-    return type(value) in (int, float)
+def _text(value):
+    return isinstance(value, str) and bool(value)
+
+
+def _numbers(values):
+    return isinstance(values, list) and bool(values) and all(map(events.is_number, values))
+
+
+def _own_text(values):
+    """Ids a dict can key, with no two the same."""
+    return all(map(_text, values)) and len(set(values)) == len(values)
+
+
+def _check_ids(model):
+    """The blocks' and channels' ids, which key every table after them; [point_id, ...]."""
+    points, channels = model["sample_points"], model["channels"]
+    if not isinstance(points, list) or not points or not all(isinstance(point, dict) for point in points):
+        raise TypeError("its sample_points must be a list of points")
+    if not isinstance(channels, list) or not channels or not all(isinstance(channel, dict) for channel in channels):
+        raise TypeError("its channels must be a list of channels")
+    ids = [point["point_id"] for point in points]
+    if not _own_text(ids):
+        raise TypeError("each sample point needs its own point_id, as text")
+    if not _own_text([channel["channel_key"] for channel in channels]):
+        raise TypeError("each channel needs its own channel_key, as text")
+    if not _own_text([channel["entity_id"] for channel in channels]):
+        raise TypeError("each channel needs its own entity_id, as text")
+    return ids
+
+
+def _check_channel(key, model, ids):
+    """What predict.py reads for one channel: a basis per temperature, each row over every block, and a dimming table it can
+    interpolate. A repeated temperature or falling levels would give a wrong number and no word."""
+    cct, dimming = model["cct"][key], model["dimming"][key]
+    kelvin, basis_keys = cct["kelvin"], cct["basis_keys"]
+    if (not _numbers(kelvin) or min(kelvin) <= 0 or len(set(kelvin)) != len(kelvin) or not isinstance(basis_keys, list)
+            or len(basis_keys) != len(kelvin)):
+        raise TypeError("channel %s needs one basis per temperature, each above 0 K and no two the same" % key)
+    levels, g = dimming["levels"], dimming["g"]
+    if not _numbers(levels) or not _numbers(g) or len(levels) != len(g) or not all(a < b for a, b in zip(levels, levels[1:])):
+        raise TypeError("channel %s needs a dimming table of numbers, its levels rising" % key)
+    for basis_key in basis_keys:
+        row = model["basis"][basis_key]
+        if not isinstance(row, dict) or not all(value is None or events.is_number(value) for value in row.values()):
+            raise TypeError("its basis %s must be numbers or null" % basis_key)
+        if not row.keys() >= set(ids):
+            raise TypeError("its basis %s must name every sample point, with null for one the fit excluded" % basis_key)
+
+
+def _check_glare(table):
+    """Canon's per channel, per eye position: {G, sd, model_status}. A solve trips on a bad row only at the eye it names."""
+    for key, rows in table.items():
+        if not isinstance(rows, dict):
+            raise TypeError("its glare for channel %s must be {eye: {G, sd, model_status}}" % key)
+        for eye, row in rows.items():
+            if not (isinstance(row, dict) and events.is_number(row.get("G")) and events.is_number(row.get("sd")) and _text(row.get("model_status"))):
+                raise TypeError("its glare for channel %s at eye %s needs G and sd as numbers, and a model_status" % (key, eye))
+
+
+def _check_spots(table):
+    """{channel: {aim: {point_id: value}}}, which only fake_light reads: a real-path model with a spot_model stops in LightModel."""
+    for key, aims in table.items():
+        if not isinstance(aims, dict) or not all(
+                isinstance(row, dict) and all(value is None or events.is_number(value) for value in row.values()) for row in aims.values()):
+            raise TypeError("its spot_model for channel %s must be {aim: {point_id: number or null}}" % key)
 
 
 def check_shape(model, where):
-    """A sentence for a file that is not a light model, here rather than as a TypeError in the first solve. A model is
-    Stage-1-shaped when it has a `channels` list, and each channel needs what predict.py reads for it."""
+    """A sentence for a file that is not a light model, here rather than as a TypeError in the first solve, or at the first eye
+    or aim a bad table names, or as a wrong number with no word. A model is Stage-1-shaped when it has a `channels` list, and
+    this reads what predict.py and this adapter read of it, and nothing they ignore."""
     try:
         if not isinstance(model, dict):
             raise TypeError("it must be a JSON object")
-        model["version"], model["basis_unit"]
-        [point["point_id"] for point in model["sample_points"]]
-        if not isinstance(model["channels"], list) or not model["channels"]:
-            raise TypeError("its channels must be a list of channels")
+        for key in ("version", "basis_unit"):
+            if not _text(model[key]):
+                raise TypeError("its %s must be text" % key)
+        if model.get("fake") is not None and type(model["fake"]) is not bool:
+            raise TypeError("its fake must be true or false")
+        ids = _check_ids(model)
+        for key in ("cct", "dimming", "basis"):
+            if not isinstance(model[key], dict):
+                raise TypeError("its %s must be an object" % key)
         for channel in model["channels"]:
-            key, cct, dimming = channel["channel_key"], model["cct"][channel["channel_key"]], model["dimming"][channel["channel_key"]]
-            channel["entity_id"]
-            if len(cct["kelvin"]) != len(cct["basis_keys"]) or not cct["kelvin"] or not all(_number(k) and k > 0 for k in cct["kelvin"]):
-                raise TypeError("channel %s needs one basis per temperature, each above 0 K" % key)
-            if len(dimming["levels"]) != len(dimming["g"]) or not dimming["g"] or not all(map(_number, dimming["levels"] + dimming["g"])):
-                raise TypeError("channel %s needs a dimming table of numbers" % key)
-            for basis_key in cct["basis_keys"]:
-                if not all(value is None or _number(value) for value in model["basis"][basis_key].values()):
-                    raise TypeError("its basis %s must be numbers or null" % basis_key)
+            _check_channel(channel["channel_key"], model, ids)
         if "surfaces" in model and not is_surface_map(model["surfaces"]):
             raise TypeError("its surfaces must be {surface_id: [point_id, ...]}")
         for key in ("error", "glare", "spot_model"):
-            if model.get(key) and not isinstance(model[key], dict):
+            if model.get(key) is not None and not isinstance(model[key], dict):
                 raise TypeError("its %s must be an object or null" % key)
         p90 = (model.get("error") or {}).get("p90_pct")
-        if p90 is not None and not _number(p90):
+        if p90 is not None and not events.is_number(p90):
             raise TypeError("its error.p90_pct must be a number or null")
+        _check_glare(model.get("glare") or {})
+        _check_spots(model.get("spot_model") or {})
     except KeyError as error:
         raise events.BadFile("%s is not a light model: it has no %s" % (where, error)) from None
     except (TypeError, AttributeError) as error:
@@ -132,7 +195,10 @@ def describe(spec):
         logged = {"source": "file", "path": str(spec["path"])}
     else:
         raise ValueError("light_model source must be fake or file: %r" % (spec["source"],))
-    sha = events.sha256_json(model)
+    try:
+        sha = events.sha256_json(model)
+    except ValueError:  # json.loads reads NaN and Infinity, in a field nothing here reads too; a log can't hold them
+        raise events.BadFile("%s is not a light model: it holds NaN or Infinity, which JSON has no form for" % spec.get("path", "fake")) from None
     if spec.get("sha256", sha) != sha:
         raise ValueError("light model changed: %s" % spec.get("path", "fake"))
     module, backend, code = backend_of(model)

@@ -6,6 +6,7 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 
 Everything is synthetic, and nothing reaches a host or a light.
 """
+import copy
 import json
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ import coordinator  # noqa: E402
 import events  # noqa: E402
 import fake_light  # noqa: E402
 import incumbent  # noqa: E402
+import light_adapter  # noqa: E402
 import run  # noqa: E402
 import score  # noqa: E402
 import sources  # noqa: E402
@@ -274,6 +276,112 @@ class MalformedInputTest(Temp):
         path = self.write("short.json", json.dumps(gate))
         with mock.patch.object(coordinator, "GATE_FILE", path), self.assertRaisesRegex(events.BadFile, "look_brightness"):
             coordinator.make_policy()
+
+
+class WrongInsideAModelTest(Temp):
+    """CONTRACT section 7's wrong-shaped model, wrong one level further in than a missing key: an id that can't key a dict, a
+    glare or spot table a solve would only trip on at the eye or aim it names, and a value that used to run on with no word."""
+
+    KEY = "den_front_left.white"
+    ROW = {"G": 0.1, "sd": 0.01, "model_status": "unvalidated"}
+
+    def stage1_shaped(self):
+        model = fake_light.build(surfaces=False)
+        del model["fake"]
+        return model
+
+    def cases(self, whole):
+        """(name, words the sentence must have, the model). Each is wrong whichever backend would read it."""
+        def edited(path, value):
+            model = copy.deepcopy(whole)
+            at = model
+            for key in path[:-1]:
+                at = at[key]
+            at[path[-1]] = value
+            return model
+        first = whole["sample_points"][0]["point_id"]
+        basis_key = whole["cct"][self.KEY]["basis_keys"][0]
+        return (
+            ("version a list", "version", edited(("version",), [])), ("version a number", "version", edited(("version",), 5)),
+            ("basis_unit a number", "basis_unit", edited(("basis_unit",), 5)), ("basis_unit null", "basis_unit", edited(("basis_unit",), None)),
+            ("fake as text", "fake", edited(("fake",), "false")), ("fake a number", "fake", edited(("fake",), 1)),
+            ("no sample points", "sample_points", edited(("sample_points",), [])), ("sample_points an object", "sample_points", edited(("sample_points",), {})),
+            ("a sample point a number", "sample_points", edited(("sample_points", 0), 5)),
+            ("point_id a list", "point_id", edited(("sample_points", 0, "point_id"), [first])),
+            ("point_id an object", "point_id", edited(("sample_points", 0, "point_id"), {"a": 1})),
+            ("point_id a number", "point_id", edited(("sample_points", 0, "point_id"), 5)), ("point_id null", "point_id", edited(("sample_points", 0, "point_id"), None)),
+            ("a point twice", "point_id", edited(("sample_points",), whole["sample_points"] + whole["sample_points"][:1])),
+            ("a channel a number", "channels", edited(("channels", 0), 5)),
+            ("entity_id a list", "entity_id", edited(("channels", 0, "entity_id"), ["light.den_front_left"])),
+            ("entity_id an object", "entity_id", edited(("channels", 0, "entity_id"), {"a": 1})),
+            ("entity_id a number", "entity_id", edited(("channels", 0, "entity_id"), 5)), ("entity_id null", "entity_id", edited(("channels", 0, "entity_id"), None)),
+            ("channel_key a list", "channel_key", edited(("channels", 0, "channel_key"), [self.KEY])),
+            ("a channel twice", "channel_key", edited(("channels",), whole["channels"] + whole["channels"][:1])),
+            ("a bulb on two channels", "entity_id", edited(("channels",), whole["channels"] + [{**whole["channels"][0], "channel_key": "other.white"}])),
+            ("cct a list", "cct", edited(("cct",), [])), ("basis a list", "basis", edited(("basis",), [])),
+            ("kelvin twice", "temperature", edited(("cct", self.KEY, "kelvin"), [2700, 2700, 2700])),
+            ("levels falling", "dimming", edited(("dimming", self.KEY), {"levels": [5, 3, 1], "g": [1, 2, 3]})),
+            ("levels repeated", "dimming", edited(("dimming", self.KEY), {"levels": [5, 5], "g": [1, 2]})),
+            ("a basis row empty", "sample point", edited(("basis", basis_key), {})),
+            ("a basis row missing a block", "sample point", edited(("basis", basis_key), {"a": 1.0})),
+            ("a 401-digit basis value", "numbers", edited(("basis", basis_key, first), 10 ** 400)),
+            ("NaN in a basis row", "numbers", edited(("basis", basis_key, first), float("nan"))),
+            ("error zero", "error", edited(("error",), 0)), ("error a list", "error", edited(("error",), [])),
+            ("glare zero", "glare", edited(("glare",), 0)), ("glare a list", "glare", edited(("glare",), [])),
+            ("a glare channel a number", "glare", edited(("glare",), {self.KEY: 5})),
+            ("a glare eye a number", "glare", edited(("glare",), {self.KEY: {"room": 5}})),
+            ("a glare row empty", "glare", edited(("glare",), {self.KEY: {"room": {}}})),
+            ("a glare row of text", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "G": "x"}}})),
+            ("a glare row of nulls", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "G": None, "sd": None}}})),
+            ("a glare row with no status", "glare", edited(("glare",), {self.KEY: {"room": {"G": 0.1, "sd": 0.01}}})),
+            ("spot_model zero", "spot_model", edited(("spot_model",), 0)), ("spot_model a list", "spot_model", edited(("spot_model",), [])),
+            ("a spot channel a number", "spot_model", edited(("spot_model",), {self.KEY: 5})),
+            ("a spot aim a number", "spot_model", edited(("spot_model",), {self.KEY: {"a": 5}})),
+            ("a spot aim of text", "spot_model", edited(("spot_model",), {self.KEY: {"a": {first: "x"}}})))
+
+    def test_each_is_refused_at_the_file_by_what_is_wrong(self):
+        for label, whole in (("fake", fake_light.build()), ("Stage 1's shape", self.stage1_shaped())):
+            for name, words, model in self.cases(whole):
+                with self.subTest(label, name=name):
+                    with self.assertRaises(events.BadFile) as refused:
+                        light_adapter.check_shape(model, "model.json")
+                    said = str(refused.exception)
+                    self.assertTrue(said.startswith("model.json is not a light model: "), said)
+                    self.assertIn(words, said)
+
+    def test_what_the_coordinator_reads_stops_at_the_command_line_as_a_sentence(self):
+        for name, _, model in self.cases(self.stage1_shaped()):
+            if name in ("entity_id a list", "point_id a list", "version a list", "basis_unit a number", "no sample points", "a glare eye a number"):
+                path = self.write("model.json", json.dumps(model))
+                with self.subTest(name):
+                    code, out, err = tool("run.py", *COORDINATOR, "--touch", "--light-model", path, "--out", self.tmp / "out")
+                    self.refused(code, out, err, "%s is not a light model: " % path)
+                    self.assertFalse((self.tmp / "out" / "log.jsonl").exists())
+
+    def test_a_fake_marked_file_with_a_broken_spot_table_stops_too(self):
+        for table in ({self.KEY: 5}, {self.KEY: {"a": 5}}):
+            path = self.write("model.json", json.dumps({**fake_light.build(), "spot_model": table}))
+            code, out, err = tool("run.py", *COORDINATOR, "--touch", "--light-model", path, "--out", self.tmp / "out")
+            self.refused(code, out, err, "%s is not a light model: " % path)
+
+    def test_nan_where_nothing_reads_it_is_a_sentence_and_not_a_codec_message(self):
+        path = self.write("model.json", json.dumps({**self.stage1_shaped(), "note": float("nan")}))
+        code, out, err = tool("run.py", *COORDINATOR, "--light-model", path, "--out", self.tmp / "out")
+        self.refused(code, out, err, "%s is not a light model: " % path)
+
+    def test_a_right_model_still_passes_with_every_table_it_may_carry(self):
+        glare = {events.LIGHTS[0]: {"room": {"G": 0.3, "sd": 0.01}}}
+        spot = {events.LIGHTS[0]: {"a": dict.fromkeys(("counter-1", "armchair-book", "wall-west"), 100.0)}}
+        for model in (fake_light.build(), fake_light.build(glare=glare), fake_light.build(spot=spot), self.stage1_shaped(),
+                      {**self.stage1_shaped(), "fake": False}, {**self.stage1_shaped(), "fake": None}, {**self.stage1_shaped(), "error": None},
+                      {**self.stage1_shaped(), "error": {"median_pct": 1.5, "p90_pct": 9.0}}):
+            light_adapter.check_shape(model, "model.json")
+
+    def test_a_real_run_on_a_glare_table_still_logs(self):
+        path = self.write("model.json", json.dumps(fake_light.build(glare={events.LIGHTS[0]: {"room": {"G": 0.3, "sd": 0.01}}})))
+        code, out, err = tool("run.py", *COORDINATOR, "--touch", "--light-model", path, "--out", self.tmp / "out")
+        self.assertEqual(code, 0, out + err)
+        self.assertEqual(tool("check.py", self.tmp / "out" / "log.jsonl")[0], 0)
 
 
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")

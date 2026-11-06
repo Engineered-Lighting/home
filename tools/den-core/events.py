@@ -46,6 +46,17 @@ class BadFile(ValueError):
     """A file given to a tool that cannot be read at all. A tool exits 2 with this sentence and nothing else."""
 
 
+def is_number(value):
+    """True for a JSON number a float can hold. json.loads also reads NaN, Infinity and a 401-digit integer, which
+    math.isfinite answers with OverflowError, and a bool is not a number here."""
+    if type(value) not in (int, float):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _utf16(head, path):
     """PowerShell 5.1's `>` writes a byte-order mark, UTF-16LE and CRLF. A NUL this early is the same text with no mark."""
     if head[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\0" in head[:4]:

@@ -66,6 +66,18 @@ NEAR_TABLE = {"a": synthetic.in_view(-0.8, 0.1, 1.8), "b": synthetic.in_view(0.8
               "e": synthetic.in_view(0.7, 0.6, 1.8), "f": synthetic.in_view(0.2, 0.3, 1.8)}
 
 
+def far_surface_plane():
+    """The furnished room with FAR_AND_NEAR's far cross on a surface wide enough that a slip reads the same depth."""
+    plane = synthetic.room_depth()
+    far = synthetic.to_camera(*synthetic.camera_pose(), FAR_AND_NEAR["far"])
+    u, v = synthetic.project(far)
+    for y in range(int(v) - 40, int(v) + 41):
+        for x in range(int(u) - 40, int(u) + 41):
+            if 0 <= x < synthetic.W and 0 <= y < synthetic.H:
+                plane[y * synthetic.W + x] = int(round(far[2] * 1000))
+    return plane
+
+
 def near_table_plane():
     """A depth plane with depth on a table 1.8 m away only: 40 of the 64 cells."""
     plane = [0] * (synthetic.W * synthetic.H)
@@ -877,7 +889,7 @@ class MountTests(Base):
                 self.assertEqual(report["result"], "not_confirmed")
                 self.assertEqual(len(s.room_models()), 1, "nothing was checked, so nothing is invalidated")
 
-    def test_re_clicked_marks_catch_a_small_knock_and_invalidate(self):
+    def test_re_clicked_marks_catch_a_small_knock_and_two_takes_that_agree_invalidate(self):
         for name, knock in self.KNOCKS.items():
             with self.subTest(name):
                 self.tearDown()
@@ -886,17 +898,188 @@ class MountTests(Base):
                 later = self.later_in_the_room(synthetic.moved(**knock))
                 later.click_all()
                 code, report, text = self.check(s, later.take)
+                self.assert_looks_moved(s, fitted, code, report, text)
+                self.assertIsNone(records.resolve(s.room_models(), fitted["transform_id"])["confirmed"])
+                again = self.later_in_the_room(synthetic.moved(**knock), name="again", ended=1_800_001_200.0)
+                again.click_all()
+                code, report, text = self.check(s, again.take)
                 self.assertEqual((code, report["result"]), (1, "changed"), text)
                 self.assertIn("MOUNT CHANGED", text)
                 self.assertIn("moved together", text)
+                self.assertIn("later and again", text)
                 self.assertIn(f"{report['marks_motion']['farthest']} by", text)
                 self.assertGreater(report["marks_motion"]["moved_m"], 0.05)
                 found = records.resolve(s.room_models(), fitted["transform_id"])
+                self.assertEqual(found["invalidated"]["take"], "again")
+                self.assertIsNone(found["confirmed"], "nothing was confirmed on the way")
                 self.assertEqual(found["invalidated"]["marks_motion"], report["marks_motion"])
                 self.assertEqual(found["invalidated"]["marks"], report["marks"])
                 out = io.StringIO()
                 self.assertEqual(register.main(["resolve", str(s.work), fitted["transform_id"]], out=out), 1)
                 self.assertIn("INVALIDATED", out.getvalue())
+
+    def assert_looks_moved(self, s, fitted, code, report, text, revisions=1):
+        """One take that shows the marks moved: nothing is confirmed by it and nothing is invalidated."""
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertTrue(report["looks_moved"], text)
+        self.assertIn("MOUNT NOT CONFIRMED", text)
+        self.assertIn("look moved together", text)
+        self.assertIn(f"{report['marks_motion']['farthest']} by", text)
+        self.assertIn("Record a new take", text)
+        self.assertNotIn("MOUNT CHANGED", text)
+        self.assertEqual(len(s.room_models()), revisions)
+        self.assertIsNone(records.resolve(s.room_models(), fitted["transform_id"])["invalidated"])
+
+    FAR_ROLES = ("far", "n1", "n2", "n3"), ("c1", "c2")
+
+    def far_cross_registration(self):
+        """README step 3's layout, one far cross and the rest near, with room around the far cross to slip on."""
+        s = Scene(self, points=FAR_AND_NEAR, fit=self.FAR_ROLES[0], checks=self.FAR_ROLES[1], ended=1_800_000_100.0,
+                  background=far_surface_plane())
+        s.click_all()
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        return s, fitted
+
+    def far_cross_take(self, name, ended, slip=None):
+        """A later take of an unmoved camera, every mark clicked exactly but for this slip on the far cross."""
+        later = Scene(self, points=FAR_AND_NEAR, fit=self.FAR_ROLES[0], checks=self.FAR_ROLES[1], name=name, ended=ended,
+                      background=far_surface_plane())
+        later.click_all(shift={"far": slip} if slip else None)
+        return later
+
+    def test_one_slipped_click_on_a_far_cross_invalidates_nothing_and_a_clean_re_click_clears_it(self):
+        # The 2026-11-05 verifier's case: the rigid motion absorbs the far cross, so moved_m - off_m passes the gate
+        # while off_m stays under it, on a camera that never moved.
+        s, fitted = self.far_cross_registration()
+        slipped = self.far_cross_take("slipped", 1_800_001_000.0, slip=(0, 6))
+        code, report, text = self.check(s, slipped.take)
+        self.assertGreater(report["marks_motion"]["moved_m"] - report["marks_motion"]["off_m"], 0.05)
+        self.assertLess(report["marks_motion"]["off_m"], 0.05)
+        self.assert_looks_moved(s, fitted, code, report, text)
+        self.assertIsNone(records.resolve(s.room_models(), fitted["transform_id"])["confirmed"])
+        slipped.click_all()  # the same take, the click put right
+        code, report, text = self.check(s, slipped.take)
+        self.assertEqual((code, report["result"]), (0, "confirmed"), text)
+        self.assertNotIn("looks_moved", report)
+
+    def test_a_clean_new_take_clears_a_slip_so_two_slips_with_a_clean_take_between_do_not_add_up(self):
+        s, fitted = self.far_cross_registration()
+        self.assert_looks_moved(s, fitted, *self.check(s, self.far_cross_take("one", 1_800_001_000.0, slip=(0, 6)).take))
+        code, report, text = self.check(s, self.far_cross_take("clean", 1_800_001_100.0).take)
+        self.assertEqual((code, report["result"]), (0, "confirmed"), text)
+        self.assert_looks_moved(s, fitted, *self.check(s, self.far_cross_take("two", 1_800_001_200.0, slip=(0, 6)).take),
+                                revisions=2)
+        self.assertEqual(records.resolve(s.room_models(), fitted["transform_id"])["confirmed"]["take"], "clean")
+
+    def test_the_same_take_clicked_again_or_copied_is_not_a_second_take(self):
+        s, fitted = self.far_cross_registration()
+        slipped = self.far_cross_take("slipped", 1_800_001_000.0, slip=(0, 6))
+        self.assert_looks_moved(s, fitted, *self.check(s, slipped.take))
+        self.assert_looks_moved(s, fitted, *self.check(s, slipped.take))
+        slipped.click_all(shift={"far": (0, 6.5)})
+        self.assert_looks_moved(s, fitted, *self.check(s, slipped.take))
+        copied = self.far_cross_take("copied", 1_800_001_000.0, slip=(0, 6))
+        self.assert_looks_moved(s, fitted, *self.check(s, copied.take))
+
+    def test_two_takes_that_show_different_movements_do_not_agree(self):
+        s, fitted = self.far_cross_registration()
+        self.assert_looks_moved(s, fitted, *self.check(s, self.far_cross_take("down", 1_800_001_000.0, slip=(0, 8)).take))
+        self.assert_looks_moved(s, fitted, *self.check(s, self.far_cross_take("up", 1_800_001_100.0, slip=(0, -8)).take))
+        code, report, text = self.check(s, self.far_cross_take("up-again", 1_800_001_200.0, slip=(0, -8)).take)
+        self.assertEqual((code, report["result"]), (1, "changed"), "the last two agree, even if a slip made them: " + text)
+        self.assertIn("up and up-again", text)
+
+    def turned_first_take(self, s, fitted):
+        """A 1 degree knock and a first take of it, checked. Returns the pose for the takes after it."""
+        turned = synthetic.moved(yaw_deg=1.0)
+        first = self.later_in_the_room(turned)
+        first.click_all()
+        self.assert_looks_moved(s, fitted, *self.check(s, first.take))
+        return turned
+
+    def test_a_check_with_marks_unclicked_does_not_clear_the_first_take(self):
+        # README's own order: check-mount on the new take, then click, then check-mount again.
+        s, fitted = self.furnished()
+        turned = self.turned_first_take(s, fitted)
+        second = self.later_in_the_room(turned, name="second", ended=1_800_001_200.0)
+        code, report, text = self.check(s, second.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertIn("no marks are clicked", text)
+        second.click_all(["p1", "p2"])
+        self.assertEqual(self.check(s, second.take)[1]["not_clicked"], ["p3", "p4", "c1", "c2"])
+        self.assertEqual(len(s.room_models()), 1)
+        second.click_all()
+        self.assertEqual(self.check(s, second.take)[1]["result"], "changed")
+
+    def test_a_refused_check_does_not_clear_the_first_take_either(self):
+        s, fitted = self.furnished()
+        turned = self.turned_first_take(s, fitted)
+        self.assertEqual(self.check(s, s.take)[1]["reason"], "mount_take_not_later")
+        second = self.later_in_the_room(turned, name="second", ended=1_800_001_200.0)
+        second.click_all()
+        self.assertEqual(self.check(s, second.take)[1]["result"], "changed")
+
+    def test_a_take_with_every_mark_clicked_that_does_not_show_the_movement_clears_the_first(self):
+        s, fitted = self.far_cross_registration()
+        self.assert_looks_moved(s, fitted, *self.check(s, self.far_cross_take("one", 1_800_001_000.0, slip=(0, 6)).take))
+        wild = self.far_cross_take("wild", 1_800_001_100.0)
+        wild.click_all(shift={"c1": (30, 0)})
+        code, report, text = self.check(s, wild.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertNotIn("looks_moved", report)
+        self.assert_looks_moved(s, fitted, *self.check(s, self.far_cross_take("two", 1_800_001_200.0, slip=(0, 6)).take))
+
+    def test_a_new_registration_owes_nothing_to_the_old_one_s_first_take(self):
+        s, fitted = self.furnished()
+        turned = self.turned_first_take(s, fitted)
+        refit = self.later_in_the_room(turned, name="refit", ended=1_800_001_200.0)
+        refit.click_all()
+        code, again = refit.fit()
+        self.assertEqual(code, 0, refit.out)
+        third = self.later_in_the_room(synthetic.moved(pose=turned, yaw_deg=1.0), name="third", ended=1_800_001_500.0)
+        third.click_all()
+        self.assert_looks_moved(s, again, *self.check(s, third.take), revisions=2)
+
+    def test_an_earlier_report_that_does_not_read_is_no_first_take(self):
+        def edited(change):
+            def apply(report):
+                change(report)
+                return json.dumps(report)
+            return apply
+
+        cases = {"torn": lambda report: json.dumps(report)[:40], "a list": lambda report: "[1, 2]",
+                 "no time": edited(lambda r: r.pop("take_ended_unix")),
+                 "text for a time": edited(lambda r: r.update(take_ended_unix="soon")),
+                 "no marks": edited(lambda r: r.pop("marks")),
+                 "a mark short": edited(lambda r: r["marks"].pop()),
+                 "text for a position": edited(lambda r: r["marks"][0].update(camera_xyz_m="here")),
+                 "marks that are text": edited(lambda r: r.update(marks="here"))}
+        for name, change in cases.items():
+            with self.subTest(name):
+                self.tearDown()
+                self.setUp()
+                s, fitted = self.furnished()
+                turned = self.turned_first_take(s, fitted)
+                path = s.work / "mount-1.json"
+                path.write_text(change(json.loads(path.read_text(encoding="utf-8"))), encoding="utf-8")
+                second = self.later_in_the_room(turned, name="second", ended=1_800_001_200.0)
+                second.click_all()
+                self.assert_looks_moved(s, fitted, *self.check(s, second.take))
+
+    def test_a_far_cross_on_furniture_that_stays_moved_ends_invalidated_as_the_readme_says(self):
+        # Two takes agree on what they saw. The tool cannot tell this from a turn, so the README says so.
+        s, fitted = self.far_cross_registration()
+        pushed = dict(FAR_AND_NEAR, far=synthetic.in_view(0.8, 0.0, 5.2))
+
+        def take(name, ended):
+            later = Scene(self, points=pushed, fit=self.FAR_ROLES[0], checks=self.FAR_ROLES[1], name=name, ended=ended,
+                          background=far_surface_plane(), sheet=s.sheet)
+            later.click_all()
+            return later
+
+        self.assert_looks_moved(s, fitted, *self.check(s, take("one", 1_800_001_000.0).take))
+        self.assertEqual(self.check(s, take("two", 1_800_001_100.0).take)[1]["result"], "changed")
 
     def test_re_clicked_marks_confirm_an_unmoved_camera(self):
         s, fitted = self.furnished()
@@ -976,12 +1159,17 @@ class MountTests(Base):
         later = self.later_in_the_room()
         later.click_all()
         self.assertEqual(self.check(s, later.take)[0], 0)
-        knocked = self.later_in_the_room(synthetic.moved(yaw_deg=5.0), name="knocked", ended=1_800_001_500.0)
-        knocked.click_all()
-        self.assertEqual(self.check(s, knocked.take)[1]["result"], "changed")
+        self.knock_twice(s, synthetic.moved(yaw_deg=5.0), 1_800_001_500.0)
         found = records.resolve(s.room_models(), fitted["transform_id"])
         self.assertEqual(found["confirmed"]["take"], "later")
-        self.assertEqual(found["invalidated"]["take"], "knocked")
+        self.assertEqual(found["invalidated"]["take"], "knocked-2")
+
+    def knock_twice(self, s, pose, ended):
+        """Two takes from this pose, each clicked and checked: the first looks moved, the second invalidates."""
+        for name, when, expected in (("knocked-1", ended - 100, "not_confirmed"), ("knocked-2", ended, "changed")):
+            knocked = self.later_in_the_room(pose, name=name, ended=when)
+            knocked.click_all()
+            self.assertEqual(self.check(s, knocked.take)[1]["result"], expected, name)
 
     def test_too_few_marks_confirm_nothing(self):
         s, fitted = self.furnished()
@@ -1019,7 +1207,8 @@ class MountTests(Base):
         self.assertEqual(len(s.room_models()), 1)
         later.click_all(["far"])
         code, report, text = self.check(s, later.take)
-        self.assertEqual((code, report["result"]), (1, "changed"), text)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertTrue(report["looks_moved"])
         self.assertIn("far by", text)
 
     def test_a_cluster_of_marks_near_the_optical_axis_cannot_confirm_a_roll(self):
@@ -1270,16 +1459,20 @@ class MountTests(Base):
 
     def test_marks_moved_together_past_the_gate_is_what_invalidates(self):
         along_wall = (math.cos(math.radians(40)), -math.sin(math.radians(40)), 0.0)
-        for slide, expected, revisions in ((0.04, "confirmed", 2), (0.06, "changed", 2)):
+        for slide, expected, then, revisions in ((0.04, "confirmed", "confirmed", 3), (0.06, "not_confirmed", "changed", 2)):
             with self.subTest(slide=slide):
                 self.tearDown()
                 self.setUp()
                 s, fitted = self.furnished()
-                later = self.later_in_the_room(synthetic.moved(shift=tuple(slide * v for v in along_wall)))
+                pose = synthetic.moved(shift=tuple(slide * v for v in along_wall))
+                later = self.later_in_the_room(pose)
                 later.click_all()
                 report = self.check(s, later.take)[1]
                 self.assertEqual(report["result"], expected)
                 self.assertAlmostEqual(report["marks_motion"]["moved_m"], slide, delta=0.003)
+                again = self.later_in_the_room(pose, name="again", ended=1_800_001_200.0)
+                again.click_all()
+                self.assertEqual(self.check(s, again.take)[1]["result"], then)
                 self.assertEqual(len(s.room_models()), revisions)
 
     def test_the_motion_of_the_marks_is_measured_against_the_gate_after_their_disagreement(self):
@@ -1427,9 +1620,7 @@ class MountTests(Base):
         later = self.later_in_the_room()
         later.click_all()
         self.assertEqual(self.check(s, later.take)[0], 0)
-        knocked = self.later_in_the_room(synthetic.moved(yaw_deg=5.0), name="knocked", ended=1_800_001_500.0)
-        knocked.click_all()
-        self.assertEqual(self.check(s, knocked.take)[1]["result"], "changed")
+        self.knock_twice(s, synthetic.moved(yaw_deg=5.0), 1_800_001_500.0)
         path = s.work / "room-model.jsonl"
         first, confirmed, invalidated = path.read_text(encoding="utf-8").splitlines()
         path.write_text(f"{first}\n{invalidated}\n{confirmed}\n", encoding="utf-8", newline="\n")

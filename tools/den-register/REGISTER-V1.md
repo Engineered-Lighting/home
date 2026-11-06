@@ -7,8 +7,9 @@ in `docs/architecture/live-v1/schemas.json` (`room_model`,
 REGISTER-V2 and register again. Before any registration had run, the 2026-11-05
 review's fixes changed REGISTER-V1 in place: "A moved camera" below no longer
 lets a depth comparison confirm a registration, needs every mark and the whole
-view to agree before it confirms, lets only the marks moving together invalidate,
-and writes a confirmation where rung 2 reads it; the camera entry now holds the
+view to agree before it confirms, lets the marks invalidate only when two
+separately clicked takes agree that they moved together, and writes a confirmation
+where rung 2 reads it; the camera entry now holds the
 geometry rung 2 needs; and a leave-one-out error over the gate is refused, because
 rung 2 refuses the bound it would write.
 
@@ -123,9 +124,13 @@ looks at a frame of a later take in three steps.
    camera-frame positions on the two frames (the entry keeps the first as
    `mount.marks`) give the rigid motion they show together: `moved_m`, the
    farthest it carries a mark, and `off_m`, the most a mark is off it.
-   - `moved_m - off_m` over `gate_m`: `changed`. A moved camera carries every mark
-     with it, so this is what says the camera moved, past how much the marks
-     disagree among themselves;
+   - `moved_m - off_m` over `gate_m`: the marks look moved. A moved camera carries
+     every mark with it, so this is what can say it moved, past how much the marks
+     disagree among themselves. But one take never says more than that: the rigid
+     motion can absorb one far mark, so one slipped click can pass this with every
+     other mark exact. So this take gives `not_confirmed` with `looks_moved`: it
+     confirms nothing, invalidates nothing and asks for a new take. See "Two takes
+     that agree" below;
    - a mark `off_m` over `gate_m` from that motion: `not_confirmed`, naming it.
      Its click is off, or something moved it on its own;
    - a mark more than `gate_m` from its tape position, carried through the
@@ -133,8 +138,8 @@ looks at a frame of a later take in three steps.
      the gate has no margin, so half a pixel can put it past;
    - otherwise the third step decides.
 
-   Neither of the last two invalidates. `changed` cannot be undone and it loses
-   the takes a confirmation vouched for, so one mark's click or depth never makes
+   None of these invalidates. `changed` cannot be undone and it loses the takes a
+   confirmation vouched for, so one take's clicks or depth at the marks never make
    it. A real knock that this leaves short of `changed` is still never confirmed.
 3. **The whole view, against the same gate.** A mark within the gate says little
    about a point elsewhere: marks near the optical axis hardly show a roll, and
@@ -154,13 +159,29 @@ looks at a frame of a later take in three steps.
    confirmed 20% of the time at a spread of 0.29 m and 9% at 0.47 m.) `fit` says
    so when it registers such marks.
 
+**Two takes that agree.** The marks invalidate only when two separately clicked
+takes agree that they moved together. The second must be recorded later than the
+first (the same take clicked again is not a second take), must also have
+`moved_m - off_m` over `gate_m`, and the rigid motion from the first take's marks
+to its own must carry no mark more than `gate_m`. Then the result is `changed`.
+The first take is the newest `mount-N.json` of this registration with every mark
+clicked, where its marks are kept. So a clean re-click clears it, on that take or
+on a new one, because that report then says no such thing; a take with every mark
+clicked that shows something else clears it too, and only costs one more take. A
+check with marks unclicked, or a refused one, leaves it standing, and a report that
+does not read counts as no take. A real knock ends `changed` after two takes, and
+because nothing is confirmed on the way, a scored replay of a take after the last
+confirmation stays refused throughout. Two takes cannot tell a camera that moved
+from a far mark on furniture that moved and stays moved, or from the same slip made
+twice: those end `changed` too, at the price of a new take and fit.
+
 `changed` appends a RoomModel revision whose entry carries `invalidated`, with
 what the owner must re-check; from then on that `transform_id` resolves as
 invalidated, and a fit from a take recorded before that check is refused.
 `confirmed` appends a revision whose entry carries `confirmed`: the take, its
 `take_ended_unix`, the frame, `worst_mark_m` and `view_movement_m`. Only a later
-take than the one already there moves it on. `not_confirmed` writes nothing and
-confirms nothing. A take not recorded after the registration's own take is
+take than the one already there moves it on. `not_confirmed` writes nothing to
+`room-model.jsonl` and confirms nothing. A take not recorded after the registration's own take is
 refused (`mount_take_not_later`), so a registration never confirms itself. So is
 a take that ended later than the check's own clock says it is now
 (`mount_take_in_future`): `take.py` and this tool run on one PC, and a clock

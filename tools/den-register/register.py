@@ -560,12 +560,47 @@ def marks_motion(mount, marks):
 
 
 def camera_moved(motion, m):
-    """Did the marks move together past the gate, by more than they disagree? Only that says the camera moved.
+    """Do the marks on one take look moved together past the gate, by more than they disagree?
 
-    A mark compared with its tape position has no margin when the fit accepted it near the gate, and one mark's depth
-    or click is noisy. An invalidation cannot be undone, so one mark never makes one (REGISTER-V1.md, "A moved camera").
+    That alone only says they look moved. A rigid motion can absorb one far mark, so one slipped click can pass this
+    with every other mark exact. An invalidation cannot be undone, so it takes two separately clicked takes that agree
+    (agreeing_take). One take confirms nothing, invalidates nothing and asks for a new take; a clean re-click clears it
+    (REGISTER-V1.md, "A moved camera").
     """
     return motion["moved_m"] - motion["off_m"] > m["gate_m"]
+
+
+def agreeing_take(work, tid, mount, take, marks, m):
+    """The report of the earlier take these marks agree with, or None.
+
+    It is the newest mount-N.json of this registration with every mark clicked, so a take that does not show the
+    movement clears it and a check with marks unclicked does not. It must have looked moved on an earlier take: the
+    same take clicked again is not a second look. And the movement from it to this take must carry no mark past the
+    gate. A report that does not read is no take, which only asks for one more.
+    """
+    numbered = [(int(found[1]), path) for path in work.glob("mount-*.json")
+                if (found := re.fullmatch(r"mount-([0-9]+)\.json", path.name))]
+    for _, path in sorted(numbered, reverse=True):
+        try:
+            report = json.loads(path.read_bytes().decode("utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        if type(report) is dict and report.get("transform_id") == tid and report.get("marks_motion"):
+            break
+    else:
+        return None
+    if (not report.get("looks_moved") or not scene._finite(report.get("take_ended_unix"))
+            or take["ended_unix"] <= report["take_ended_unix"]):
+        return None
+    ids = [mark["id"] for mark in mount["marks"]]
+    now_at = {mark["id"]: mark["camera_xyz_m"] for mark in marks}
+    try:
+        then_at = {mark["id"]: mark["camera_xyz_m"] for mark in report["marks"]}
+        start = [then_at[pid] for pid in ids]
+        apart = rigid.largest_move(start, [now_at[pid] for pid in ids], start)
+    except (KeyError, TypeError, ValueError):
+        return None
+    return report if apart <= m["gate_m"] else None
 
 
 def why_not_confirmed(entry, mount, marks, m):
@@ -622,11 +657,13 @@ def why_not_confirmed(entry, mount, marks, m):
 def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=time.time, out=sys.stdout):
     """Has the camera moved since the registration? 0 confirmed, 1 otherwise (REGISTER-V1.md, "A moved camera").
 
-    A large depth change, or every mark moving together past the gate, invalidates.
-    Only every mark of the registration re-clicked on this later take can confirm:
-    each within the gate, and the movement they show together within it across the
-    whole view. A confirmation goes into room-model.jsonl, where a scored rung 2
-    replay looks.
+    A large depth change invalidates at once. Every mark moving together past the
+    gate invalidates only when two separately clicked takes agree on it: the first
+    says the marks look moved, writes nothing to room-model.jsonl and asks for a new
+    take. Only every mark of the registration re-clicked on this later take can
+    confirm: each within the gate, and the movement they show together within it
+    across the whole view. A confirmation goes into room-model.jsonl, where a scored
+    rung 2 replay looks.
     """
     work = work_dir(work)
     m = m or method_file.load()
@@ -671,18 +708,28 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
         if motion:
             report["marks_motion"] = motion
         moved = motion is not None and camera_moved(motion, m)
-        if result["status"] == "changed" or moved:
+        first = agreeing_take(work, tid, mount, take, marks, m) if moved else None
+        if result["status"] == "changed" or first:
             report["result"] = "changed"
             invalidated = {"ts": round(now(), 3), "reason": "mount_changed", "take": take.get("take"),
                            "take_ended_unix": take.get("ended_unix"), "frame": row["n"], "check": result,
                            "recheck": RECHECK}
-            if moved:
+            if first:
+                report["first_take"] = first.get("take")
                 invalidated.update(marks=marks, marks_motion=motion)
             records.append_jsonl(work / ROOM_MODEL, records.invalidated_revision(latest, camera_id, invalidated))
             report["recheck"] = RECHECK
         elif marks is None:
             report["result"] = "not_confirmed"
             why_not = "no marks are clicked on this take yet"
+        elif moved:
+            report.update(result="not_confirmed", looks_moved=True, take_ended_unix=take["ended_unix"])
+            why_not = (f"the marks look moved together, {motion['farthest']} by {_cm(motion['moved_m'])} in the camera's "
+                       f"view since the registration (gate {_cm(m['gate_m'])}), but one take's clicks never invalidate")
+            next_step = ("Record a new take and click every mark on it, then run this again. If it shows the same "
+                         "movement, the registration is invalidated. If it does not, this is cleared. If you know a "
+                         "click slipped, clicking it again on this take clears it too. If what carries a cross moved, "
+                         "the next take will agree with this one, so measure that cross again and register again.")
         else:
             why_not, next_step, facts = why_not_confirmed(entry, mount, marks, m)
             report.update(facts, result="not_confirmed" if why_not else "confirmed")
@@ -710,8 +757,9 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
             detail = f"{report['check']['changed_cells']} of {report['check']['compared_cells']} depth cells moved"
         else:
             motion = report["marks_motion"]
-            detail = (f"the marks moved together, {motion['farthest']} by {_cm(motion['moved_m'])} in the camera's view "
-                      f"since the registration (gate {_cm(m['gate_m'])})")
+            detail = (f"two takes, {report['first_take']} and {report['take']}, agree that the marks moved together, "
+                      f"{motion['farthest']} by {_cm(motion['moved_m'])} in the camera's view since the registration "
+                      f"(gate {_cm(m['gate_m'])})")
         print(f"MOUNT CHANGED: {report['transform_id']} is invalidated: {detail}. Re-check:", file=out)
         for item in RECHECK:
             print(f"  - {item}", file=out)

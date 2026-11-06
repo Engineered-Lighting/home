@@ -157,6 +157,11 @@ class LightModel:
     def has(self, surface_id):
         return surface_id in self.surfaces
 
+    def surface_problem(self, surface_id):
+        """Why this model has no prediction for a surface a Decision names."""
+        return (f"{surface_id} is not a surface of light model {self.version}: "
+                "give the surfaces.json of the run that made this decision with --surfaces")
+
     def kind(self, surface_id):
         blocks = self.surfaces.get(surface_id) or []
         return self.sample_points[blocks[0]].get("kind") if len(blocks) == 1 else None

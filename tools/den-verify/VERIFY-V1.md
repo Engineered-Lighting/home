@@ -176,6 +176,20 @@ gives the points left out, in total and by status (`excluded_held_or_superseded`
 `excluded_held_by_status`), and the console says how many. A run with nothing left
 to count is `insufficient`, never a pass.
 
+**Verified.** A decision counts as **verified** when something was judged: at
+least one of its points read `within` or `outside` against a prediction and was not
+left out under the held rule, so that `verify.within_tolerance` is true or false.
+Nothing else makes it verified: not having a verify frame, and not having a `verify`
+block. A decision with a verify frame and nothing judged keeps its block, each point
+giving its `why`. Any decision not verified has a sibling `verify_status`, and the
+report lists it in `decisions.not_verified` with the reason and its kind: no read
+frame, no frame after settling, no surface map, no `applied_scene`, unknown state,
+read frame stale, superseded, model error, nothing readable, nothing lit, left out,
+no surface named, another light model or no settle time. A verified decision may
+still be out of the hit rate, as one not admitted is, so the console's first line
+gives both counts and then the points the hit rate counted. Nothing counted reads
+`insufficient`, however many decisions there are.
+
 **The gate.** A hit is a scored surface point (`within` or `outside`, basis
 `measured` or `fallback_patch`, not excluded, admitted) that is `within`. The
 hit rate is hits / (hits + misses). It passes at **≥ 85%**, compared exactly
@@ -298,12 +312,15 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   there is below the meter's noise).
 - `spill[]` and `increments[]` entries add `uncertainty`, in the block's `unit`.
 - `points[]` entries add `level_bound`, in the block's `unit`, only where the
-  point is judged to more than `tolerance` × predicted.
+  point is judged to more than `tolerance` × predicted, and `why`, only where the
+  point is `unverifiable`.
 - `explanation` is null when nothing missed, else a list of
   `{point_id, cause, basis}`.
-- `verify` is null with a sibling `verify_status` when no verify frame exists;
-  a frame with no residual (mid-fade, before any decision, or under a decision
-  whose read frame is stale) keeps `residual: []` with a sibling `residual_status`.
+- `verify` is null with a sibling `verify_status` when no verify frame exists; a
+  decision with a frame and nothing judged keeps `verify` and has `verify_status`
+  too. A frame with no residual (mid-fade, before any decision, under a decision
+  whose read frame is stale, or with no surface it reads and a prediction reaches)
+  keeps `residual: []` with a sibling `residual_status`.
 - A LightState is named by an `id` key when its line has one, else
   `ls-HHMMSS` in local time, with hundredths for a frame off the whole second
   (the contracts cite `ls-190409` but give LightState no id field).

@@ -29,6 +29,7 @@ from score import Run  # noqa: E402
 
 OUTPUTS = ("decisions.verified.jsonl", "light_states.verified.jsonl", "report.json")
 MOST_OFFSET_H = 14  # the world's clocks reach UTC-12 to UTC+14
+SAID = {"no surface map": "no surface map (--surfaces)"}
 
 
 def _sha(path):
@@ -88,8 +89,8 @@ def cmd_run(args):
               occupancy=read_jsonl(args.occupancy, records.occupancy_problem),
               gold=read_jsonl(args.gold, records.gold_problem), clock=clock, scored=not args.preview)
     decisions, states, report = run.run()
-    report["method"] = {"file": m.file, "sha256": m.sha256, "open": m.describe_open(),
-                        "values": values}
+    report["method"] = {"file": m.file, "sha256": m.sha256, "block_sha256": m.block_sha256,
+                        "open": m.describe_open(), "values": values}
     report["inputs"] = {k: _sha(getattr(args, k)) for k in
                         ("decisions", "light_states", "model", "corrections", "occupancy", "gold")}
     out.mkdir(parents=True, exist_ok=True)
@@ -101,10 +102,14 @@ def cmd_run(args):
         write_jsonl(out / OUTPUTS[0], decisions)
         write_jsonl(out / OUTPUTS[1], states)
         write_json(out / OUTPUTS[2], report)
-    hr = report["hit_rate"]
-    _say(f"decisions verified {report['decisions']['verified']} of {report['decisions']['total']}; "
+    hr, counts = report["hit_rate"], report["decisions"]
+    _say(f"decisions verified {counts['verified']} of {counts['total']}, {counts['total'] - counts['verified']} not verified; "
          f"hit rate {hr['value']} ({hr['hits']} of {hr['hits'] + hr['misses']}), "
          f"gate {hr['gate']}: {hr['verdict']}{' (preview)' if args.preview else ''}")
+    if counts["not_verified"]:
+        kinds = ", ".join(f"{n} {SAID.get(kind, kind)}" for kind, n in counts["not_verified_by_kind"].items())
+        _say(f"not verified: {kinds}; {names[-1]} lists each with why")
+    _say(f"light model {model.version}: {model.backend}")
     left, noise = report["excluded_held_or_superseded"], report["below_meter_noise"]
     if left:
         _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs")

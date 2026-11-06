@@ -6,6 +6,7 @@ says what is scored and why; this file follows it section by section.
 import copy
 import math
 import random
+from collections import Counter
 from fractions import Fraction
 
 import method as method_mod
@@ -14,6 +15,8 @@ from records import BadFile, light_state_id, person_state_anchor
 
 TOLERANCE_STATUS = "relative, either way; target, to validate"
 SCORED_BASES = ("measured", "fallback_patch")
+# Why a decision with a verify frame judged nothing, the first of these that any of its points gives.
+NOT_JUDGED = ("read frame stale", "no read frame", "no surface map", "unknown state", "nothing readable", "nothing lit")
 
 
 def within(measured, predicted, tol, extra=0.0):
@@ -114,6 +117,9 @@ class Dec:
         self.inputs = inputs
         ref_id = inputs.get("light_state")
         self.ref = run.frames_by_id.get(ref_id) if ref_id else None
+        self.no_ref = None
+        if self.ref is None:
+            self.no_ref = f"{ref_id} names no frame here" if ref_id else inputs.get("light_state_status") or "the decision names none"
         anchor = (self.ref.ts if self.ref else None) or person_state_anchor(inputs.get("person_state")) \
             or run.first_ts
         self.resolve = lambda v: run.clock.resolve(v, anchor)
@@ -122,6 +128,7 @@ class Dec:
         except ValueError:
             raise BadFile(f"decision {self.id}: its clock time {rec.get('ts')!r} has no date, and nothing in the record or the frames gives one") from None
         self.problem = self.stale_read = None
+        self.problem_kind = "no settle time"
         try:
             self.steps = settle.decision_steps(rec, self.resolve, run.m)
         except settle.Unsettleable as e:
@@ -130,8 +137,10 @@ class Dec:
         self.first_sent = min((s.sent_at for s in self.steps), default=None)
         self.changed = sorted({s.channel for s in self.steps})
         lm = inputs.get("light_model")
-        if lm and lm != run.model.version and not self.problem:
-            self.problem = f"light model {lm} in the decision, {run.model.version} loaded"
+        if not rec.get("applied_scene"):
+            self.problem, self.problem_kind = "no applied_scene: nothing says what the bulbs did", "no applied_scene"
+        elif lm and lm != run.model.version and not self.problem:
+            self.problem, self.problem_kind = f"light model {lm} in the decision, {run.model.version} loaded", "another light model"
 
     def before_state(self):
         state = {}
@@ -299,10 +308,12 @@ class Run:
             row = {"point_id": sid, "unit": frame.unit}
             measured, why = frame.usable(sid, m) if unit_ok else (None, "unit mismatch")
             row["basis"] = (frame.estimates.get(sid) or {}).get("basis")
-            ref_val, rwhy = None, "no reference frame in the same unit"
+            ref_val, rwhy, rkind = None, "no reference frame in the same unit", "nothing readable"
             if d.stale_read:
-                rwhy = f"reference frame: {d.stale_read}"
-            elif ref is not None and ref.unit == frame.unit:
+                rwhy, rkind = f"reference frame: {d.stale_read}", "read frame stale"
+            elif ref is None:
+                rwhy, rkind = f"no read frame: {d.no_ref}", "no read frame"
+            elif ref.unit == frame.unit:
                 ref_val, rwhy = ref.usable(sid, m)
                 rwhy = rwhy and f"reference frame: {rwhy}"
             if m["background"] == "zero":
@@ -326,9 +337,9 @@ class Run:
             row["held_share"] = held_light / max(predicted, held_light) if held_light > 0 and predicted is not None else 0.0
             row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
             if measured is None:
-                row["status"] = "prior_only" if why == "prior_only" else "unverifiable"
+                row["status"], row["why_kind"] = "prior_only" if why == "prior_only" else "unverifiable", "nothing readable"
             elif predicted is None:
-                row["status"], row["why"] = "unverifiable", rwhy
+                row["status"], row["why"], row["why_kind"] = "unverifiable", rwhy, rkind
             else:
                 self.judge_level(row, measured, predicted, ref_val, brightest, own, frame.unit)
             # increments: measured change against the model's own change
@@ -368,7 +379,7 @@ class Run:
             noise = math.hypot(noise, self.u(ref_val, unit))
         wide = max(inherited, noise)
         if predicted <= 0 and not (brightest and wide):
-            row["status"], row["why"] = "unverifiable", "prediction not positive"
+            row["status"], row["why"], row["why_kind"] = "unverifiable", "prediction not positive", "nothing lit"
             return
         level_tolerance = m["tolerance"] * max(predicted, 0.0)
         row["error"] = measured - predicted
@@ -408,13 +419,20 @@ class Run:
 
     # -- Decision.verify ------------------------------------------------------
 
+    def no_frame(self, d, why):
+        """A decision with no verify frame, and no read frame either where the background needs one."""
+        if d.ref is None and self.m["background"] != "zero":
+            why += f"; no read frame: {d.no_ref}"
+        return None, "no frame after settling", why
+
     def verify_frame(self, d, later):
+        """(frame, None, None), or (None, what kind of reason, the reason)."""
         if d.problem:
-            return None, d.problem
+            return None, d.problem_kind, d.problem
         nxt = min((x for x in later if x.first_sent is not None), key=lambda x: x.first_sent, default=None)
         t_next = nxt.first_sent if nxt else math.inf
         if t_next < d.settled:
-            return None, f"superseded before it settled: {nxt.id} sent a step first"
+            return None, "superseded", f"superseded before it settled: {nxt.id} sent a step first"
         busy_seen = None
         for f in self.frames:
             if f.ts < d.settled:
@@ -425,21 +443,23 @@ class Run:
             if reason:
                 busy_seen = busy_seen or reason
                 continue
-            return f, None
+            return f, None, None
         if busy_seen:
-            return None, f"no settled frame before the next decision: frames were {busy_seen}"
-        return None, "no frame after the decision settled and before the next one"
+            return self.no_frame(d, f"no settled frame before the next decision: frames were {busy_seen}")
+        return self.no_frame(d, "no frame after the decision settled and before the next one")
 
     def verify(self, d, frame):
         m = self.m
         rows, _ = self.evaluate(d, frame, frame.ts)
         pts, kinds, eyes = d.verify_points()
-        points, increments, explanation, counted = [], [], [], []
+        points, increments, explanation, counted, whys = [], [], [], [], []
         for p in pts:
             row = rows.get(p)
             if row is None:
+                why = self.model.surface_problem(p)
                 points.append({"point_id": p, "kind": kinds.get(p), "status": "unverifiable",
-                               "camera_estimate": None, "residual": None})
+                               "camera_estimate": None, "residual": None, "why": why})
+                whys.append(("no surface map", why))
                 continue
             kind = kinds.get(p) or self.model.kind(p)
             judged = row["status"] in ("within", "outside")
@@ -447,6 +467,10 @@ class Run:
                            "residual": _r(row.get("residual"), 4) if judged else None})
             if row.get("widened"):
                 points[-1]["level_bound"] = _r(row["level_bound"], 3)
+            if not judged:
+                whys.append((row["why_kind"], row["why"]))
+                if row["status"] == "unverifiable":
+                    points[-1]["why"] = row["why"]
             inc = dict(row["increment"])
             for k in ("measured_change", "predicted_change", "uncertainty"):
                 inc[k] = _r(inc[k], 3)
@@ -464,7 +488,19 @@ class Run:
             "within_tolerance": (all(r["status"] == "within" for r in scored) if scored else None),
             "explanation": explanation or None,
         }
-        return verify, rows, counted
+        return verify, whys, counted
+
+    def not_judged(self, verify, whys, counted):
+        """(kind, reason) for a decision with a verify frame and no verdict of its own."""
+        if counted:
+            return "left out", (f"the {len(counted)} point(s) it could judge are left out of the hit rate: "
+                                "lit by held or superseded bulbs that its own could not show beside")
+        if not verify["points"]:
+            return "no surface named", "it names no surface to judge"
+        kind = next(k for k in NOT_JUDGED if any(w[0] == k for w in whys))
+        texts = list(dict.fromkeys(text for _, text in whys))
+        more = f"; and {len(texts) - 3} more" if len(texts) > 3 else ""
+        return kind, f"no point judged: {'; '.join(texts[:3])}{more}"
 
     def spill(self, d, frame):
         m, out = self.m, []
@@ -543,6 +579,8 @@ class Run:
                             "residual_pct": _r(100 * row["residual"], 2) if "residual" in row else None, "unit": frame.unit,
                             "against": {"decision_id": d.id, "hold_set_revision": revision},
                             "flags": flags})
+        if not entries:
+            return None, f"decision {d.id}: no surface here has both a reading and a prediction"
         return entries, None
 
     # -- gold need time -------------------------------------------------------
@@ -636,25 +674,30 @@ class Run:
         excluded_by_status = {"within": 0, "outside": 0}
         not_admitted, not_verified, read_frame_stale = [], [], []
         spill_counts, inc_counts = {}, {}
+
+        def unjudged(d, rec, kind, why):
+            rec["verify_status"] = why
+            not_verified.append({"decision_id": d.id, "kind": kind, "reason": why})
+
         for i, d in enumerate(self.decs):
             rec = copy.deepcopy(d.rec)
-            frame, why = self.verify_frame(d, self.decs[i + 1:])
+            decisions_out.append(rec)
+            frame, kind, why = self.verify_frame(d, self.decs[i + 1:])
             if frame is None:
-                rec["verify"], rec["verify_status"] = None, why
-                not_verified.append({"decision_id": d.id, "reason": why})
-                decisions_out.append(rec)
+                rec["verify"] = None
+                unjudged(d, rec, kind, why)
                 continue
             try:
-                verify, _, counted = self.verify(d, frame)
+                verify, whys, counted = self.verify(d, frame)
             except KeyError as e:
-                why = str(e.args[0])
-                rec["verify"], rec["verify_status"] = None, why
-                not_verified.append({"decision_id": d.id, "reason": why})
-                decisions_out.append(rec)
+                rec["verify"] = None
+                unjudged(d, rec, "model error", str(e.args[0]))
                 continue
             rec["verify"] = verify
-            rec.pop("verify_status", None)
-            decisions_out.append(rec)
+            if verify["within_tolerance"] is None:
+                unjudged(d, rec, *self.not_judged(verify, whys, counted))
+            else:
+                rec.pop("verify_status", None)
             if d.stale_read:
                 read_frame_stale.append({"decision_id": d.id, "why": d.stale_read})
             admitted = not any(s.mid_transition for s in d.steps)
@@ -732,9 +775,10 @@ class Run:
             "tool": "den-verify", "rung": 10, "scored": self.scored,
             "model": {"version": self.model.version, "basis_unit": self.model.basis_unit,
                       "backend": self.model.backend},
-            "decisions": {"total": len(self.decs), "verified": len(rows_out),
-                          "not_verified": not_verified, "not_admitted": not_admitted,
-                          "read_frame_stale": read_frame_stale},
+            "decisions": {"total": len(self.decs), "verified": len(self.decs) - len(not_verified),
+                          "not_verified": not_verified,
+                          "not_verified_by_kind": dict(Counter(e["kind"] for e in not_verified)),
+                          "not_admitted": not_admitted, "read_frame_stale": read_frame_stale},
             "frames": frame_counts,
             "hit_rate": rate,
             "excluded_held_or_superseded": excluded_held,

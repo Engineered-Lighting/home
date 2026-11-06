@@ -61,7 +61,12 @@ folder; it refuses while `VERIFY-V1.md` has an open slot. Optional inputs:
 when the records' clock strings are not in this PC's time zone. Run folders
 stay on the PC: no records, frames or reports go into git.
 
-The console gives the verdict, then how many points were left out of the hit
+The console's first line gives how many decisions were verified and how many not,
+then the hit rate and the verdict. A decision counts as verified only when something
+was judged: at least one point read against a prediction and not left out. The next
+line counts the rest by reason, and the report lists each with why
+(`decisions.not_verified`). The console then says what the light model ran on, how
+many points were left out of the hit
 rate (lit by held or superseded bulbs where the decision's own bulbs could not
 show), how many decisions read a frame from before a step landed, so nothing taken
 from that frame was judged, how many counted points have a change below the meter's noise, with the

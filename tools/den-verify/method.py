@@ -52,8 +52,10 @@ def sha256_lf(path):
 
 
 class Method:
-    def __init__(self, values, open_slots, sha256, file=METHOD_FILE):
-        self.values, self.open, self.sha256, self.file = values, open_slots, sha256, file
+    """sha256 is the whole note's; block_sha256 the numbers' alone, which a corrected sentence leaves as it is."""
+
+    def __init__(self, values, open_slots, sha256, file=METHOD_FILE, block_sha256=None):
+        self.values, self.open, self.sha256, self.file, self.block_sha256 = values, open_slots, sha256, file, block_sha256
 
     def scored(self):
         """Values for a scored run, which needs every slot closed; else None."""
@@ -100,7 +102,8 @@ def parse(text, file=METHOD_FILE, sha256=None):
     if set(values) | set(open_slots) != set(KEYS):
         missing = sorted(set(KEYS) - set(values) - set(open_slots))
         raise ValueError(f"{file} keys differ from method.py's list: missing {missing}")
-    return Method(values, open_slots, sha256 or hashlib.sha256(text.encode("utf-8")).hexdigest(), file)
+    return Method(values, open_slots, sha256 or hashlib.sha256(text.encode("utf-8")).hexdigest(), file,
+                  hashlib.sha256(blocks[0].encode("utf-8")).hexdigest())
 
 
 def load(path=None):

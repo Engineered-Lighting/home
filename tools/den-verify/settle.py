@@ -49,6 +49,7 @@ def decision_steps(decision, resolve, m):
     out = []
     policy = decision.get("policy", "")
     for channel, applied in (decision.get("applied_scene") or {}).items():
+        applied = applied or {}
         on = ((applied.get("readback") or {}).get("level") or 0) > 0
         for step in applied.get("steps") or []:
             sent = resolve(step.get("sent_at"))

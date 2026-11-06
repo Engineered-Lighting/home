@@ -10,7 +10,7 @@ from fractions import Fraction
 
 import method as method_mod
 import settle
-from records import light_state_id, person_state_anchor
+from records import BadFile, light_state_id, person_state_anchor
 
 TOLERANCE_STATUS = "relative, either way; target, to validate"
 SCORED_BASES = ("measured", "fallback_patch")
@@ -117,7 +117,10 @@ class Dec:
         anchor = (self.ref.ts if self.ref else None) or person_state_anchor(inputs.get("person_state")) \
             or run.first_ts
         self.resolve = lambda v: run.clock.resolve(v, anchor)
-        self.ts = self.resolve(rec.get("ts"))
+        try:
+            self.ts = self.resolve(rec.get("ts"))
+        except ValueError:
+            raise BadFile(f"decision {self.id}: its clock time {rec.get('ts')!r} has no date, and nothing in the record or the frames gives one") from None
         self.problem = self.stale_read = None
         try:
             self.steps = settle.decision_steps(rec, self.resolve, run.m)
@@ -250,7 +253,11 @@ class Run:
                        if i in self.frames_by_id), None) \
             or person_state_anchor(snap.get("person_state")) or self.first_ts
         resolve = lambda v: self.clock.resolve(v, anchor)
-        ts = resolve(c.get("ts"))
+        try:
+            ts = resolve(c.get("ts"))
+        except ValueError:
+            raise BadFile(f"correction {c.get('correction_id')}: its clock time {c.get('ts')!r} has no date, "
+                          "and nothing in the record or the frames gives one") from None
         self.windows.add_change(ts, (c.get("action") or {}).get("settle_s"),
                                 float(self.m["settle_margin_s"]), c.get("correction_id"))
         h = c.get("hold")

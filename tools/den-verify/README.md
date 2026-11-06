@@ -24,6 +24,19 @@ Stage 1's `predict()` over the session's `light-model.json`, so
 
 ## Commands (PowerShell 5.1)
 
+**Don't redirect with `>` in PowerShell 5.1.** It writes UTF-16, which `verify.py`
+refuses by name with exit 2 on every file it reads. Let a tool write its own output
+file, or repair a file with
+`Get-Content bad.jsonl | Set-Content -Encoding utf8 good.jsonl`. It reads the
+byte-order mark and CRLF that writes.
+
+**What it refuses.** Any input that is missing, not JSON or the wrong shape, down to
+what is inside a line, is one sentence naming the file and the line, and exit 2,
+never a traceback. So is a line of den-core's `log.jsonl` given as `--decisions`:
+pass the `decisions.jsonl` beside it. Anything no check named still ends in one
+sentence and exit 2: `verify.py stopped on an input of the wrong shape, or a bug of
+its own`, with the exception and where it happened.
+
 From the repo folder. The tests:
 
 ```powershell

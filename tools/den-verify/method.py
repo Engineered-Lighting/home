@@ -13,6 +13,8 @@ import math
 import re
 from pathlib import Path
 
+from records import read_text
+
 HERE = Path(__file__).resolve().parent
 METHOD_FILE = "VERIFY-V1.md"
 BLOCK = "verify-v1"
@@ -42,7 +44,7 @@ ANSWERED = {"promotion-margins": "two-sided-95"}
 
 
 def lf_text(path):
-    return Path(path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+    return read_text(path).replace("\r\n", "\n")
 
 
 def sha256_lf(path):

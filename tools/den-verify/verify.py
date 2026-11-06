@@ -12,7 +12,9 @@ writes only report-preview.json.
 """
 import argparse
 import hashlib
+import math
 import sys
+import traceback
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -20,11 +22,13 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import method as method_mod  # noqa: E402
+import records  # noqa: E402
 from light_model import LightModel  # noqa: E402
 from records import Clock, read_jsonl, write_json, write_jsonl  # noqa: E402
 from score import Run  # noqa: E402
 
 OUTPUTS = ("decisions.verified.jsonl", "light_states.verified.jsonl", "report.json")
+MOST_OFFSET_H = 14  # the world's clocks reach UTC-12 to UTC+14
 
 
 def _sha(path):
@@ -36,6 +40,13 @@ def _sha(path):
 def _say(text):
     # PowerShell 5.1 consoles are not UTF-8: keep what we print ASCII.
     print(text.encode("ascii", "replace").decode("ascii"))
+
+
+def _refuse(text):
+    """A refusal, its path as it was typed: what the console's code page can't write comes out as an escape."""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    print(text.encode(encoding, "backslashreplace").decode(encoding))
+    return 2
 
 
 def cmd_slots(args):
@@ -67,11 +78,15 @@ def cmd_run(args):
     if clash:
         _say(f"refused: {out} already holds {', '.join(clash)}; choose a new --out folder")
         return 2
+    offset = args.utc_offset_h
+    if offset is not None and not (math.isfinite(offset) and abs(offset) <= MOST_OFFSET_H):
+        return _refuse(f"refused: --utc-offset-h {offset} is no clock's: it takes hours, -{MOST_OFFSET_H} to {MOST_OFFSET_H}")
     model = LightModel.load(args.model)
-    clock = Clock(None if args.utc_offset_h is None else round(args.utc_offset_h * 3600))
-    run = Run(values, model, read_jsonl(args.decisions), read_jsonl(args.light_states),
-              corrections=read_jsonl(args.corrections), occupancy=read_jsonl(args.occupancy),
-              gold=read_jsonl(args.gold), clock=clock, scored=not args.preview)
+    clock = Clock(None if offset is None else round(offset * 3600))
+    run = Run(values, model, read_jsonl(args.decisions, records.decision_problem), records.read_frames(args.light_states),
+              corrections=read_jsonl(args.corrections, records.correction_problem),
+              occupancy=read_jsonl(args.occupancy, records.occupancy_problem),
+              gold=read_jsonl(args.gold, records.gold_problem), clock=clock, scored=not args.preview)
     decisions, states, report = run.run()
     report["method"] = {"file": m.file, "sha256": m.sha256, "open": m.describe_open(),
                         "values": values}
@@ -125,7 +140,19 @@ def main(argv=None):
     r.add_argument("--out", required=True, help="a new folder for the outputs")
     r.add_argument("--preview", action="store_true", help="use proposed values; write no records")
     args = p.parse_args(argv)
-    return cmd_slots(args) if args.cmd == "slots" else cmd_run(args)
+    try:
+        return cmd_slots(args) if args.cmd == "slots" else cmd_run(args)
+    except records.BadFile as e:
+        return _refuse(str(e))
+    except ValueError as e:  # the method file's own check
+        return _refuse(f"refused: {e}")
+    except OSError as e:
+        return _refuse(f"refused: {e.filename or args.__dict__.get('out')} cannot be written: {e.strerror or e}")
+    except Exception as e:  # what no check named: one sentence still, so a bug in the tool can be found with no stack
+        frames = traceback.extract_tb(e.__traceback__)
+        where = f" ({Path(frames[-1].filename).name} line {frames[-1].lineno})" if frames else ""
+        return _refuse(f"verify.py stopped on an input of the wrong shape, or a bug of its own: "
+                       f"{type(e).__name__}: {' '.join(str(e).split())}{where}")
 
 
 if __name__ == "__main__":

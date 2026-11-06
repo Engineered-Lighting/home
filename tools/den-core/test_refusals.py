@@ -798,11 +798,9 @@ class WrongInsideALogTest(Temp):
         self.refused(code, out, err, "events")
 
     def test_a_tick_that_never_passes_the_tail_is_not_an_endless_replay(self):
-        for tick in (1e-300,):
-            path = self.with_header(lambda h: h.update(tick_s=tick))
-            result = check.check(path)
-            self.assertFalse(result["ok"])
-            self.assertIn("a time in one of them is wrong", result["reason"])
+        code, out, err = tool("check.py", self.with_header(lambda h: h.update(tick_s=1e-300)), timeout=ENDLESS_S)
+        self.assertEqual(code, 1, out + err)
+        self.assertIn("a time in one of them is wrong", out)
 
     def test_a_source_that_is_not_text_is_its_line(self):
         path = self.with_event(lambda e: True, lambda e: e.update(source=[]))

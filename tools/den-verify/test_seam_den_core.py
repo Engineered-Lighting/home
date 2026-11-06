@@ -17,6 +17,7 @@ import copy
 import importlib.util
 import json
 import os
+import random
 import shutil
 import subprocess
 import sys
@@ -694,6 +695,43 @@ class Seam(unittest.TestCase):
         self.assertEqual(code, 2, printed)
         self.assertIn("tools/den-light/predict.py", printed)
         self.assertIsNone(report)
+
+    def test_any_value_anywhere_in_a_real_file_is_never_a_traceback(self):
+        rng = random.Random(20261106)
+        values = (None, 5, -1, 0, 1e300, 1.5, "x", "", "19:03", True, [], [5], [None], {}, {"level": "x"}, {"level": 1.5})
+
+        def mutate(value):
+            out = copy.deepcopy(value)
+            spots, stack = [], [(out, k) for k in out]
+            while stack:
+                holder, key = stack.pop()
+                spots.append((holder, key))
+                inner = holder[key]
+                stack += [(inner, k) for k in inner] if isinstance(inner, dict) else [(inner, k) for k in range(len(inner))] if isinstance(inner, list) else []
+            holder, key = rng.choice(spots)
+            holder[key] = rng.choice(values)
+            return out
+
+        frames = [f for f in self.frames_list if any(-4 < f["ts"] - d["ts"] < 12 for d in self.decisions)]
+        for n in range(120):
+            d, f, m, s = list(self.decisions), list(frames), self.model, self.surfaces
+            which = n % 4
+            if which == 0:
+                d[n % len(d)] = mutate(d[n % len(d)])
+            elif which == 1:
+                f[n % len(f)] = mutate(f[n % len(f)])
+            elif which == 2:
+                m = mutate(m)
+            else:
+                s = mutate(s)
+            folder = Path(tempfile.mkdtemp(dir=self.tmp))
+            (folder / "m.json").write_text(json.dumps(m), encoding="utf-8")
+            (folder / "s.json").write_text(json.dumps(s), encoding="utf-8")
+            with self.subTest(n=n, which=which):
+                code, printed, _, _ = self.verify(f, decisions=d, model=folder / "m.json", surfaces=folder / "s.json")
+                self.assertIn(code, (0, 2), printed)
+                self.assertNotIn("stopped on an input", printed)
+                self.assertNotIn("Traceback", printed)
 
     def shifted(self, record, by):
         """A real record a day later, every time verify.py reads moved: what a second evening's run would write."""

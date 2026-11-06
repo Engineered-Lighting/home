@@ -665,6 +665,21 @@ class SurfaceMapFile(Temp):
 
 
 class Docs(unittest.TestCase):
+    def test_the_release_fragment_says_what_is_now_true(self):
+        fragment = HERE.parents[1] / "changes" / "unreleased" / "den-verify-rung-10.md"
+        if not fragment.exists():  # a release moves it to the archive
+            return
+        said = " ".join(fragment.read_text("utf-8").split())
+        for words in ("`predict.py`", "`decisions.jsonl`", "`surfaces.json`", "--surfaces", "a scored run on a model marked fake is refused",
+                      "A decision counts as verified only when something was judged", "unknown, never 0", "UTF-16", "from before a person changed a light"):
+            self.assertIn(words, said)
+        self.assertNotIn("Stage 1 not built", said)
+
+    def test_the_note_says_where_a_surface_comes_from(self):
+        said = " ".join((HERE / "VERIFY-V1.md").read_text("utf-8").split())
+        self.assertIn("A surface's value is the mean over its blocks that have a value, with none if none do", said)
+        self.assertIn("through rung 8's own `predict.py`", said)
+
     def test_the_docstrings_say_what_is_called(self):
         said = " ".join(light_model.__doc__.split())
         self.assertIn("tools/den-light/predict.py", said)

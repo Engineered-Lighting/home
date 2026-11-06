@@ -61,14 +61,15 @@ def lines(rows):
 
 class Case(unittest.TestCase):
     """The walkthrough's evening with every optional input given, each file in plain UTF-8, one file changed at a time."""
-    FLAGS = ("decisions", "light-states", "corrections", "occupancy", "gold", "model")
+    FLAGS = ("decisions", "light-states", "corrections", "occupancy", "gold", "model", "surfaces")
 
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
         decisions, frames, corrections = syn.v11_evening()
         self.good = {"decisions": lines(decisions), "light-states": lines(frames), "corrections": lines(corrections),
-                     "occupancy": lines(OCCUPANCY), "gold": lines(GOLD), "model": json.dumps(syn.v11_model())}
+                     "occupancy": lines(OCCUPANCY), "gold": lines(GOLD), "model": json.dumps(syn.v11_model()),
+                     "surfaces": json.dumps({"counter-1": ["counter-1"], "armchair-book": ["armchair-book"]})}
         self.records = {"decisions": decisions, "light-states": frames, "corrections": corrections, "occupancy": OCCUPANCY, "gold": GOLD}
         self.paths = {flag: self.write(flag + ".txt", text) for flag, text in self.good.items()}
 
@@ -203,9 +204,9 @@ class UnreadableTest(Case):
             self.assert_refused(*self.main(argv), str(path))
 
     def test_a_method_file_with_no_block_or_a_bad_line(self):
-        for name, text in (("none", "no block here\n"), ("bad", "```verify-v1\ntolerance = high\n```\n")):
+        for name, text, words in (("none", "no block here\n", "must hold exactly one"), ("bad", "```verify-v1\ntolerance = high\n```\n", "bad method line")):
             path = self.write(name + ".md", text)
-            self.assert_refused(*self.main(["--method", str(path), "slots"]))
+            self.assert_refused(*self.main(["--method", str(path), "slots"]), words)
 
     def test_a_file_that_is_not_utf8(self):
         for flag in self.FLAGS:
@@ -526,6 +527,8 @@ class FuzzTest(Case):
             flag = rng.choice(self.FLAGS)
             if flag == "model":
                 path = self.write("fuzz.json", json.dumps(self.mutate(rng, model)))
+            elif flag == "surfaces":
+                path = self.write("fuzz.json", json.dumps(self.mutate(rng, json.loads(self.good["surfaces"]))))
             else:
                 rows = copy.deepcopy(self.records[flag])
                 rows[rng.randrange(len(rows))] = self.mutate(rng, rng.choice(rows))

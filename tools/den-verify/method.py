@@ -98,7 +98,10 @@ def parse(text, file=METHOD_FILE, sha256=None):
                 raise ValueError(f"open slot {name} needs '# open, proposed <value>'")
             open_slots[name] = _check(name, json.loads(match[1]), raw_line)
         else:
-            values[name] = _check(name, json.loads(raw), raw_line)
+            try:
+                values[name] = _check(name, json.loads(raw), raw_line)
+            except json.JSONDecodeError:
+                raise ValueError(f"bad method line: {raw_line!r}") from None
     if set(values) | set(open_slots) != set(KEYS):
         missing = sorted(set(KEYS) - set(values) - set(open_slots))
         raise ValueError(f"{file} keys differ from method.py's list: missing {missing}")

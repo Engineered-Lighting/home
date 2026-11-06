@@ -1,8 +1,8 @@
 # VERIFY-V1: rung 10, did the light land where the model said?
 
 Rung 10 checks, after each scene change on the den's four Hue bulbs, that the
-light landed where rung 8's light model predicted. It reads `decision`,
-`light_state` and `light_model` records and writes two things back:
+light landed where rung 8's light model predicted, through rung 8's own `predict.py`.
+It reads `decision`, `light_state` and `light_model` records and writes two things back:
 `Decision.verify` and `LightState.residual`. Field names are those of
 `docs/architecture/live-v1/schemas.json`; the few keys the contracts leave
 unnamed are listed under "Keys the contracts do not name" and sit behind an
@@ -58,9 +58,10 @@ For each point at the verify frame:
   - `prior_only` when the estimate's `basis` is `prior`;
   - `unverifiable` when the surface is missing from the frame, its usable share
     (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's,
-    nothing is lit there and nothing changed, or under `reference_frame` the
-    frame the decision read is stale (see "Read frames"). Its `residual` is then
-    null.
+    nothing is lit there and nothing changed, or there is no prediction for it: no
+    surface of that name in the map, a bulb of unknown state there, no block of it
+    with a value, or under `reference_frame` no read frame, or a stale one (see "Read
+    frames"). Its `residual` is then null.
 
 A `fallback_patch` estimate is scored here, because a fallback patch is a
 verify aid. It never counts as delivered service: the gold share below treats
@@ -358,6 +359,16 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   decision never reads the next evening's first frame.
 
 ## Inputs the contracts do not define
+
+**The surface map.** Rung 8's points are image blocks with no surface id, so a
+surface comes from `verify.py run --surfaces`, which takes rung 9's `surfaces.json`,
+`{surface_id: [point_id, ...]}`. A model's own `surfaces` is the default, and with
+neither the point ids are the surfaces. A surface's value is the mean over its blocks
+that have a value, with none if none do. A surface a Decision names that the map does
+not have, or whose blocks the model lacks, is not verified, with a reason naming
+`--surfaces`. So is one where a Stage 1 model and the map do not give a Decision's own
+`predicted.surfaces` to its rounding, on any Decision of the run: a Decision does not
+name its map, and an off gives 0 through any map.
 
 Tool-local JSON Lines, all synthetic in tests:
 

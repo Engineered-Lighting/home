@@ -15,12 +15,12 @@ Stage 1's `predict()` over the session's `light-model.json`, so
 |---|---|
 | `VERIFY-V1.md` | The design note and its one `verify-v1` block of numbers and open slots. |
 | `method.py` | Reads that block (CRLF or LF), lists open slots and the pending decisions. |
-| `records.py` | JSON Lines in and out, clock strings, LightState ids, schema field names. |
+| `records.py` | JSON Lines in and out, what the tool reads of each record, clock strings, LightState ids, schema field names. |
 | `settle.py` | The settle rule: den_lighting's 2 s fades (5 s on a restore), probes at 0 s; and when a read frame is stale. |
 | `light_model.py` | The one adapter to rung 8's model: every prediction goes through it, to rung 8 Stage 1's `predict()` in `tools/den-light/predict.py`, and `--surfaces` gives its map. |
 | `score.py` | `Decision.verify`, `LightState.residual` and the report. |
 | `verify.py` | The command line. |
-| `synthetic.py`, `test_verify.py` | Synthetic fixtures from `schemas.json` and the tests. |
+| `synthetic.py`, `test_*.py` | Synthetic fixtures from `schemas.json` and the tests. `test_seam_den_core.py` runs real den-core and real den-light. |
 
 ## Commands (PowerShell 5.1)
 
@@ -104,3 +104,11 @@ rungs that have not run yet (rung 7's metering frames, rung 8's model, rung 9's
 decisions). `test_seam_den_core.py` runs the real tools together on synthetic data;
 it needs den-core and den-light beside this folder, so it runs on the merged tree,
 or with `DEN_CORE_DIR` and `DEN_LIGHT_DIR` set, which only the tests read.
+
+The frame a decision read has to show what it read. In a den-core replay the plant
+echoes den_lighting and not the coordinator, so a coordinator Decision's
+`inputs.actuator_state` is not always where its previous Decision left the bulbs. A
+test's frames have to follow each Decision's own claims, as `test_seam_den_core.py`
+does: its read frame shows its `actuator_state`, and the frames after it settled its
+`applied_scene`. Frames that carry out each Decision and ignore what the next one read
+disagree with the read-backs in the records, and read as misses.

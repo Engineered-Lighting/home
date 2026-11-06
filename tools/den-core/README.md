@@ -672,7 +672,10 @@ Gated, exit 1 on a failure and 3 on too little evidence:
 - **hard constraints**: the seed Look's glare limit holds on free channels, and each held light that alone breaks it is
   in `hard_conflicts`. It stays as set (manual-vs-safety S0) and free channels may not raise their part of it. Rung 8
   writes `glare: null`, so on its model `hard_conflicts` stays empty and `G`, `G_hi` and `limit` are null, with
-  `eyes_note` saying why. The numbers appear when a model has a glare table, as the tests' fake does;
+  `eyes_note` saying why. The numbers appear when a model has a glare table, as the tests' fake does. Its row is
+  `{G, sd, model_status}`, per channel and per eye. With `sd` null, as canon writes it until the glare model is validated, the
+  limit is tested on `G` alone and `G_hi` stays null. Canon's example block, `{model_status, sd: null, sd_status}`, has no
+  channel, eye or `G`, so it reads as `glare: null` and nothing is tested at any eye;
 - **anticipation and stability**, the replay surrogates, each against its floor.
 
 Reported, never gated, each labelled `predicted, replay surrogate`: predicted service coverage and missed service per

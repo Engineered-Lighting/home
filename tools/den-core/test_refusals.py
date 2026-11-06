@@ -308,6 +308,7 @@ class WrongInsideAModelTest(Temp):
 
     KEY = "den_front_left.white"
     ROW = {"G": 0.1, "sd": 0.01, "model_status": "unvalidated"}
+    CANON_BLOCK = {"model_status": "unvalidated", "sd": None, "sd_status": "unknown until supervised glare-model validation"}  # canon's LightModel example
 
     def stage1_shaped(self):
         model = fake_light.build(surfaces=False)
@@ -361,6 +362,11 @@ class WrongInsideAModelTest(Temp):
             ("a glare row with no sd", "glare", edited(("glare",), {self.KEY: {"room": {"G": 0.1, "model_status": "unvalidated"}}})),
             ("a glare sd of text", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "sd": "x"}}})),
             ("a glare sd of a list", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "sd": []}}})),
+            ("canon's block with an sd of text", "glare", edited(("glare",), {**self.CANON_BLOCK, "sd": "x"})),
+            ("canon's block with a number for sd", "glare", edited(("glare",), {**self.CANON_BLOCK, "sd": 0.1})),
+            ("canon's block with no sd", "glare", edited(("glare",), {k: v for k, v in self.CANON_BLOCK.items() if k != "sd"})),
+            ("canon's block with no status", "glare", edited(("glare",), {**self.CANON_BLOCK, "model_status": None})),
+            ("canon's block with a G no eye can have", "glare", edited(("glare",), {**self.CANON_BLOCK, "G": 0.3})),
             ("spot_model zero", "spot_model", edited(("spot_model",), 0)), ("spot_model a list", "spot_model", edited(("spot_model",), [])),
             ("a spot channel a number", "spot_model", edited(("spot_model",), {self.KEY: 5})),
             ("a spot aim a number", "spot_model", edited(("spot_model",), {self.KEY: {"a": 5}})),
@@ -402,6 +408,7 @@ class WrongInsideAModelTest(Temp):
         canon_row = {"G": 0.3, "sd": None, "sd_status": "unknown until validated"}
         for model in (fake_light.build(), fake_light.build(glare=glare), fake_light.build(glare={events.LIGHTS[0]: {"room": canon_row}}),
                       fake_light.build(spot=spot), self.stage1_shaped(),
+                      {**fake_light.build(), "glare": self.CANON_BLOCK}, {**self.stage1_shaped(), "glare": self.CANON_BLOCK},
                       {**self.stage1_shaped(), "fake": False}, {**self.stage1_shaped(), "fake": None}, {**self.stage1_shaped(), "error": None},
                       {**self.stage1_shaped(), "error": {"median_pct": 1.5, "p90_pct": 9.0}}):
             light_adapter.check_shape(model, "model.json")
@@ -423,6 +430,28 @@ class WrongInsideAModelTest(Temp):
         for r in rows:
             self.assertIsNone(r["G_hi"])
             self.assertEqual(r["excluded"], r["G"] > r["limit"])
+
+    def test_a_real_run_on_canons_example_block_decides_as_on_glare_null(self):
+        # The block names no channel, eye or G, so no eye has a number to test. Its Decisions and their note say what glare null's say.
+        def decisions(name, glare):
+            path = self.write(name + ".json", json.dumps({**fake_light.build(), "glare": glare}))
+            code, out, err = tool("run.py", *COORDINATOR, "--touch", "--light-model", path, "--out", self.tmp / name)
+            self.assertEqual(code, 0, out + err)
+            self.assertEqual(tool("check.py", self.tmp / name / "log.jsonl")[0], 0)
+            lines = [json.loads(line) for line in (self.tmp / name / "decisions.jsonl").read_text("utf-8").splitlines()]
+            for d in lines:
+                del d["inputs"]["config_sha256"]  # it holds the model's own hash, the one thing these two runs should differ in
+            return lines
+        block = decisions("block", self.CANON_BLOCK)
+        self.assertEqual(block, decisions("null", None))
+        self.assertTrue(any(d["predicted"]["eyes"] for d in block))
+        for d in block:
+            self.assertIn("no numbers", d["predicted"]["eyes_note"])
+            self.assertEqual(d["hard_conflicts"], [])
+            for row in d["predicted"]["eyes"]:
+                self.assertEqual((row["G"], row["G_hi"], row["limit"], row["excluded"]), (None, None, None, False))
+        said = " ".join((HERE / "README.md").read_text("utf-8").split())
+        self.assertIn("`{model_status, sd: null, sd_status}`, has no channel, eye or `G`, so it reads as `glare: null`", said)
 
     def test_a_real_run_on_a_glare_table_still_logs(self):
         path = self.write("model.json", json.dumps(fake_light.build(glare={events.LIGHTS[0]: {"room": {"G": 0.3, "sd": 0.01}}})))

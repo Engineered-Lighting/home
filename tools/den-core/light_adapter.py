@@ -129,6 +129,14 @@ def _check_channel(key, model, ids):
             raise TypeError("its basis %s must name every sample point, with null for one the fit excluded" % basis_key)
 
 
+def _glare_rows(table):
+    """A model's glare rows, or None for canon's example block {model_status, sd: null, sd_status}. It names no channel, eye or
+    G, so no eye has a number to test, and it reads as `glare: null`."""
+    if table and set(table) == {"model_status", "sd", "sd_status"} and table["sd"] is None and _text(table["model_status"]):
+        return None
+    return table
+
+
 def _check_glare(table):
     """Canon's per channel, per eye position: {G, sd, model_status}, sd null until the glare model is validated. A solve trips
     on a bad row only at the eye it names."""
@@ -175,7 +183,7 @@ def check_shape(model, where):
         p90 = (model.get("error") or {}).get("p90_pct")
         if p90 is not None and not events.is_number(p90):
             raise TypeError("its error.p90_pct must be a number or null")
-        _check_glare(model.get("glare") or {})
+        _check_glare(_glare_rows(model.get("glare")) or {})
         _check_spots(model.get("spot_model") or {})
     except KeyError as error:
         raise events.BadFile("%s is not a light model: it has no %s" % (where, error)) from None
@@ -236,7 +244,7 @@ class LightModel:
         self._off = {name: 0.0 if any(p in index and p not in self.excluded for p in blocks) else None
                      for name, blocks in self.surfaces.items()}
         self.error = model.get("error") or {}
-        self.glare_table = model.get("glare")
+        self.glare_table = _glare_rows(model.get("glare"))
         self.spots = model.get("spot_model") or {}
         self._cache = {}
 

@@ -355,6 +355,10 @@ class LogsTest(Temp):
         self.refused(code, out, err, "line 1")
         code, out, err = tool("score.py", self.log, "--preview", "--marks", self.tmp / "absent.jsonl")
         self.refused(code, out, err, "absent.jsonl")
+        whole = test_score.mark(T0, T0 + 10)
+        for bad in ({**whole, "start": "soon", "end": "later"}, {**whole, "R_eval": {**whole["R_eval"], "placement_sd": "3"}}):
+            code, out, err = tool("score.py", self.log, "--preview", "--marks", self.write("marks-shape.jsonl", json.dumps(bad) + "\n"))
+            self.refused(code, out, err, "line 1")
 
     def test_truth_utf16_a_bom_and_malformed(self):
         truth = {"schema": "reading-shadow-truth-1", "blocks": []}
@@ -367,6 +371,12 @@ class LogsTest(Temp):
         path = self.write("truth-bad.json", "{not json")
         code, out, err = tool("validate.py", self.log, "--truth", path)
         self.refused(code, out, err, "%s is not JSON" % path)
+        for blocks in ([{}], [1], {"a": 1}, [{"start": "soon", "reading": True}]):
+            path = self.write("truth-shape.json", json.dumps({"schema": "reading-shadow-truth-1", "blocks": blocks}))
+            code, out, err = tool("validate.py", self.log, "--truth", path)
+            self.assertEqual(code, 0, out + err)
+            self.assertNotIn("Traceback", out + err)
+            self.assertIn("is not reading-shadow-truth-1", out)
 
 
 @unittest.skipUnless(POWERSHELL, "needs real powershell.exe, which is on the owner's PC")

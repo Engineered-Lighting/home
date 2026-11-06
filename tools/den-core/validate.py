@@ -323,7 +323,13 @@ def truth_lines(truth_path, header, log):
         return [title, "  n/a: %s is not reading-shadow-truth-1" % truth_path]
     if "need" not in policy_ids(header):
         return [title, "  n/a: need is not in this log"]
-    moves, first = need_moves(log), log[0]["t"]
+    try:
+        return _truth_blocks(truth, truth_path, title, need_moves(log), log[0]["t"])
+    except (KeyError, TypeError, AttributeError):
+        return [title, "  n/a: %s is not reading-shadow-truth-1" % truth_path]
+
+
+def _truth_blocks(truth, truth_path, title, moves, first):
     blocks = sorted(truth.get("blocks", []), key=lambda b: b["start"])
     reading = [n for n, b in enumerate(blocks) if b.get("reading")]
     if not reading:
@@ -382,7 +388,7 @@ def main(argv=None):
         print(error, file=sys.stderr)
         return 2
     except (OSError, ValueError) as error:
-        print("validate.py: unreadable log: %s" % error, file=sys.stderr)
+        print("validate.py: %s" % error, file=sys.stderr)
         return 2
     print("\n".join(lines))
     return 0 if passed else 1

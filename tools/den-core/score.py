@@ -322,9 +322,9 @@ def read_marks(path):
             continue
         try:
             mark = json.loads(line)
-            if mark["band"] not in ("fine", "casual") or mark["end"] <= mark["start"] or "surface_id" not in mark["R_eval"]:
-                raise ValueError("needs band fine or casual, end after start, R_eval.surface_id")
-            float(mark["R_eval"]["placement_sd"])
+            if (mark["band"] not in ("fine", "casual") or mark["end"] <= mark["start"] or "surface_id" not in mark["R_eval"]
+                    or not all(type(n) in (int, float) for n in (mark["start"], mark["end"], mark["R_eval"]["placement_sd"]))):
+                raise ValueError("needs band fine or casual, end after start, R_eval.surface_id and a placement_sd in cm")
         except (ValueError, KeyError, TypeError) as error:
             raise ValueError("%s line %d: %s" % (path, number, error)) from None
         marks.append(mark)

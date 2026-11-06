@@ -451,6 +451,14 @@ class NumbersNoFloatHoldsTest(Temp):
             with self.subTest(flag):
                 self.refuses(words, flag, path, *argv)
 
+    def test_a_kelvin_no_float_holds_is_its_line_and_not_the_first_comparison(self):
+        target = '{"on":true,"brightness":100,"kelvin":%s}' % HUGE
+        command = '{"time_fired_ts":%r,"event_data":{"entity_id":"%s","revision":1,"target":%s,"context_id":"c"}}\n' % (T0 + 1, events.LIGHTS[0], target)
+        self.refuses("line 1 is not a den_lighting_command export row", "--live-commands", self.write("commands.jsonl", command), "--synthetic", "evening", "--policies", "incumbent")
+        correction = json.dumps({"schema": "den-event-1", "t": T0 + 1, "seq": 0, "kind": "correction", "source": "correction_capture",
+                                 "data": {"correction_id": "c", "entity_id": events.LIGHTS[0], "after": "TARGET", "source": "t"}}).replace('"TARGET"', target)
+        self.refuses("line 1 is not a correction-capture correction line", "--corrections", self.write("corrections.jsonl", correction + "\n"), "--synthetic", "evening", "--policies", "incumbent")
+
     def test_a_status_row_and_a_step_list(self):
         self.refuses("line 1 is not a den_lighting status sensor export row", "--status", self.write("status.jsonl", status_at(HUGE)), "--policies", "incumbent")
         for text in (HUGE, "NaN", "Infinity", "1e999"):

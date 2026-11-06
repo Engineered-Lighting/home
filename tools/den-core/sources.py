@@ -191,7 +191,7 @@ def occupancy_journal(paths):
 def _scene(value):
     b, k = value.get("brightness"), value.get("kelvin")
     return (set(value) == {"on", "brightness", "kelvin"} and type(value["on"]) is bool
-            and (b is None or type(b) is int and 0 <= b <= 255) and (k is None or type(k) is int and k > 0))
+            and (b is None or type(b) is int and 0 <= b <= 255) and (k is None or type(k) is int and k > 0 and events.is_number(k)))
 
 
 def recorder_commands(paths):

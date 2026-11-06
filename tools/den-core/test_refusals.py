@@ -1136,7 +1136,7 @@ class ReadmeLineTest(unittest.TestCase):
                       "what is inside a light model, a mark or `--truth`", "a log's header, its logged config and its input lines",
                       "a time past any clock", "`--mqtt` with no `--mqtt-t0`", "whose replay comes out different", "a failed check, not a refusal, with exit 1",
                       "`validate.py` goes on check by check", "`score.py` fails its replay line", "unless its own report can't read the value",
-                      "The replay doesn't see an edit to a field it doesn't use", "a facts line's `latency_s` or `session_id`, a `live_command` line or the header's `sources`",
+                      "The replay doesn't see an edit to a field it doesn't use", "a facts line's `latency_s` or `session_id`, a `live_command` line's data or the header's `sources`",
                       "`OK` says the log replays, not that nothing in it was touched",
                       "stopped on an input of the wrong shape, or a bug of its own", "a name it can't write comes out as a `\\uXXXX` escape"):
             self.assertIn(words, said)
@@ -1166,6 +1166,23 @@ class ReadmeLineTest(unittest.TestCase):
             check_after(0, "sources", [{"name": "other", "params": {}}], 0)
             check_after(first["decision"], "why", "edited", 1)
 
+    def test_the_replay_does_not_see_a_live_command_lines_data_but_does_see_its_envelope(self):
+        with tempfile.TemporaryDirectory() as folder:
+            commands, out, edited = Path(folder) / "commands.jsonl", Path(folder) / "out", Path(folder) / "edited.jsonl"
+            commands.write_text(test_spine.command(T0 + 1, events.LIGHTS[0], test_spine.SCENE, "ctx-1") + "\n", encoding="utf-8", newline="\n")
+            self.assertEqual(tool("run.py", "--live-commands", commands, "--synthetic", "evening", "--policies", "incumbent", "--out", out)[0], 0)
+            lines = [json.loads(line) for line in (out / "log.jsonl").read_text("utf-8").splitlines()]
+            at = next(n for n, e in enumerate(lines) if e.get("kind") == "live_command")
+
+            def check_with(line, expected):
+                edited.write_text("".join(events.dumps(line if n == at else e) + "\n" for n, e in enumerate(lines)), encoding="utf-8", newline="\n")
+                code, printed, err = tool("check.py", edited)
+                self.assertEqual(code, expected, (line, printed, err))
+
+            for field, value in (("context_id", "edited"), ("revision", "x"), ("target", {}), ("entity_id", "light.other")):
+                check_with({**lines[at], "data": {**lines[at]["data"], field: value}}, 0)
+            check_with({**lines[at], "source": "edited"}, 1)
+
     def test_it_says_where_the_verify_line_is_run_and_no_longer_that_verify_py_needs_surfaces(self):
         said = " ".join((HERE / "README.md").read_text("utf-8").split())
         self.assertIn("den-core's tests don't run that line: they check only that it names these files. den-verify's seam test runs it as written, on a tree with both tools.", said)
@@ -1177,7 +1194,7 @@ class ReadmeLineTest(unittest.TestCase):
             return
         said = " ".join(fragment.read_text("utf-8").split())
         for words in ("is refused with one sentence and exit 2 when it is UTF-16 (what PowerShell 5.1's `>` writes), missing, malformed or the wrong shape",
-                      "`--truth`", "A log of the right shape whose replay comes out different, because a line was changed or is wrong inside, fails with exit 1", "`validate.py` says so check by check",
+                      "`--truth`", "A log of the right shape whose replay comes out different, because a line was changed or is wrong inside, fails with exit 1", "`validate.py` says so check by check", "unless `score.py`'s own report can't read the value, which is one sentence and exit 2",
                       "The replay doesn't see an edit to a field it doesn't use", "such a log still reads `OK`",
                       "a time no run could reach is refused"):
             self.assertIn(words, said)

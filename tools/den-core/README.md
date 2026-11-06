@@ -34,7 +34,7 @@ goes for what is inside a light model, a mark or `--truth`, for a log's header, 
 line was changed or is wrong inside, is a failed check, not a refusal, with exit 1: `check.py` prints the line, `validate.py` goes
 on check by check, the check that can't read the line failing and saying so, and `score.py` fails its replay line and says where
 it stopped reading, unless its own report can't read the value, which is one sentence and exit 2. The replay doesn't see an edit to
-a field it doesn't use, such as a facts line's `latency_s` or `session_id`, a `live_command` line or the header's `sources`: all
+a field it doesn't use, such as a facts line's `latency_s` or `session_id`, a `live_command` line's data or the header's `sources`: all
 three tools read such a log as `OK`, so `OK` says the log replays, not that nothing in it was touched. Anything no check
 named still ends in one sentence and exit 2: `<tool> stopped on an input of the wrong shape, or a bug of its own`, with the
 exception and where it happened, so a bug in the tool can still be found.

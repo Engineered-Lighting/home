@@ -262,8 +262,8 @@ RULE = {'sides': 'take', 'min_scored': 2, 'contact_reach_m': 1.6, 'unseen_s': 0.
 COAST_S = 6.0
 
 
-def walkers(spans, gap=1.0):
-    """spans: {person: [(from, to), ...]}, in seconds, one observation every 0.25 s. They stand gap m apart."""
+def walkers(spans, gap=1.0, step=0.25):
+    """spans: {person: [(from, to), ...]}, in seconds, one observation every `step` s. They stand gap m apart."""
     links, positions = [], {}
     tracks = {'A': 'trk-1', 'B': 'trk-2', 'C': 'trk-3'}
     for person, rows in spans.items():
@@ -273,7 +273,7 @@ def walkers(spans, gap=1.0):
                 oid = '%s-%.2f' % (person, t)
                 links.append((t, oid, person, tracks[person], False))
                 positions[oid] = (0.0 if person == 'A' else gap, 1.0)
-                t += 0.25
+                t += step
     return sorted(links), positions
 
 
@@ -533,6 +533,23 @@ class ReadPastWindowTest(unittest.TestCase):
         take, row = self.scored(tracks_from(links, 15.5, SWAPPED), positions)
         self.assertEqual(self.counts(row), (22, 0, 0), 'the swap comes at the third sighting back: a later matter, counted outside')
         self.assertEqual((row['switches'], take['outside']['switches']), (0, 2))
+
+    def test_a_take_back_swapped_reads_n_over_n_plus_m(self):
+        """METHOD's sum. n is the padded side and the mark before the stall, so no frame rate caps it, and a session of
+        such takes reaches the gate at n = 18 when m is min_scored."""
+        for step, stood, past, n, m in ((0.25, 0.0, 2.5, 8, 2), (0.25, 1.0, 2.5, 12, 2), (0.25, 2.0, 2.5, 16, 2), (0.25, 2.5, 2.5, 18, 2),
+                                        (0.25, 4.0, 2.5, 24, 2), (0.25, 4.0, 1.5, 24, 3), (0.25, 4.0, 0.0, 24, 9),
+                                        (0.125, 0.0, 2.5, 16, 2), (0.125, 0.25, 2.5, 18, 2)):
+            with self.subTest(step=step, stood=stood, past=past):
+                mark_end = 11.0 + stood
+                back = mark_end + past
+                seen = [(0, 10.0 + stood - step), (back, back + 5)]
+                links, positions = walkers({'A': seen, 'B': seen}, step=step)
+                take, row = self.scored(tracks_from(links, back, SWAPPED), positions, mark=(10.0, mark_end))
+                self.assertTrue(row['admitted'], row['excluded_because'])
+                self.assertEqual(self.counts(row), (2 * n, 2 * m, 2 * m))
+                self.assertAlmostEqual(row['idf1'], n / (n + m))
+                self.assertEqual(scorer_core.summarize([take], 0.9)['gate']['idf1_met'], 10 * n >= 9 * (n + m))
 
     def test_how_many_are_read_is_min_scored(self):
         links, positions = walkers({'A': [(0, 10), (15, 20)], 'B': [(0, 10), (15, 20)]})

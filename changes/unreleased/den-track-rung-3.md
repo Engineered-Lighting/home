@@ -23,7 +23,8 @@ through the owner's mark, unseen for no longer than a track coasts, and near eac
 rest are listed as excluded, and a scored run refuses when too few remain or a kind falls short
 of the plan. Someone followed through is read on both sides of the mark even past the padding, so
 a swap behind a detector stall that outlasts it costs IDF1 and does not go unread, though at less
-weight than inside a window, as `METHOD.md` measures. A take that has
+weight than inside a window, and a session of such swaps can still pass, as `METHOD.md` measures.
+A take that has
 been scored is used: a retune of the numbers or the code, new labels, or dropping or adding
 a take once results are known needs fresh takes, and so does the same footage come back
 with a frame less. The tool refuses the old ones, from a record of hashes and capture times

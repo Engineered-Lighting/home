@@ -186,9 +186,10 @@ person. A link joins an observation's person to the track that listed it in
   again within `tracker.max_coast_s`: the track is still coasting, and the tracker has to give
   it back to the right person, which is a real test, and the window reads its result. A flagged
   swap fails only through IDF1, and there it weighs less than one with a whole padded side to
-  show in, at some frame rates too little ("What this method is weak at"). So `take` and `window`
-  differ only for someone back after the window closes, or gone before it opens, and within the
-  coast: `take` counts them, at that weight, and `window` leaves them out.
+  show in, sometimes too little to fail a session of them ("What this method is weak at"). So
+  `take` and `window` differ only for someone back after the window closes, or gone before it
+  opens, and within the coast: `take` counts them, at that weight, and `window` leaves them out.
+  Someone back late in the padding weighs as little under both.
   Near a door a track ends sooner, after `exit_coast_s`, and the rule does not read that. What
   the rule cannot judge is the owner's intent: a mark typed where the two stand a metre apart
   and do nothing passes it. The marks stay the owner's.
@@ -292,7 +293,7 @@ tool has only those times to know it by. Frames of a recording that no look has 
     "min_people_per_crossing": 2,
     "window_pad_s": {"open": true, "proposed": 2.0, "why": "Padding on each side of the owner's mark, so a window holds frames before and after and a swap shows in its own IDF1. The contracts name none. Proposed 2.0: about what walkers need to come together and part. Staged crossings must be further apart than twice this."},
     "face_visible_score_min": {"open": true, "proposed": 0.4, "why": "E2 asks how often a face is even visible. Without reading frames, the stand-in is nose and both eyes above this keypoint score. Proposed 0.4, rung 2's proposed keypoint_score_min."},
-    "trial_rule": {"open": true, "proposed": {"sides": "take", "min_scored": 2, "contact_reach_m": 2.0, "unseen_s": 0.6}, "why": "What a marked crossing must show to count as a trial; see 'Which crossings count'. sides, take or window: where a person's sightings before and after the mark may come from. Under both, nobody may go unseen across the mark for longer than tracker.max_coast_s, since their track has ended by then and nothing is tested. take: anywhere in the take, so a far person hidden behind the near one past the padding counts if they are seen again within that time, while their track can still be given back. A window then also reads each followed person's nearest min_scored sightings on each side of the mark, so a swap out there costs IDF1 and is the crossing's switch. Those few sightings weigh less than a padded side: a take back swapped can read as high as 0.8 at 4 frames a second and 0.89 at 8, and at 15 a session of them passes ('What this method is weak at'). window: only inside the padded window, so nobody counts on sightings outside it. It is stricter and needs along-the-view crossings staged so both are seen again within window_pad_s (on synthetic close crossings it admits about half, and the README's script at typical noise falls a crossing or two short of its plan). min_scored: how many frames must see each person in the window and on each side, and so how many on each side are read; proposed 2 because 3 starts to refuse synthetic crossings behind the armchair, about 1 in 10, and at 1 a session of swaps read out there passes at 8 frames a second. contact_reach_m: how near the two must come inside the window. It is a check against a mistyped mark, not a definition of a crossing, so it is wider than arm's reach: depth error adds to what is read, and synthetic crossings marked at 1.6 read up to 1.7. unseen_s: how long someone must be unseen during an occlusion's mark; proposed from tracker.coasting_after_s."},
+    "trial_rule": {"open": true, "proposed": {"sides": "take", "min_scored": 2, "contact_reach_m": 2.0, "unseen_s": 0.6}, "why": "What a marked crossing must show to count as a trial; see 'Which crossings count'. sides, take or window: where a person's sightings before and after the mark may come from. Under both, nobody may go unseen across the mark for longer than tracker.max_coast_s, since their track has ended by then and nothing is tested. take: anywhere in the take, so a far person hidden behind the near one past the padding counts if they are seen again within that time, while their track can still be given back. A window then also reads each followed person's nearest min_scored sightings on each side of the mark, so a swap out there costs IDF1 and is the crossing's switch. Those few sightings can weigh little: a take back swapped reads about n / (n + min_scored), where n counts that person's sightings in the padded side and in the mark before the stall. A stall starting with the mark reads about 0.8 at 4 frames a second and 0.89 at 8, and at 15 a session of them passes. A stall starting later reads higher, and a session of them passes at 4 frames a second too once the two were seen about 2.5 s inside the mark first ('What this method is weak at'). window: only inside the padded window, so nobody counts on sightings outside it, and such a stall counts only if it leaves min_scored sightings in the padding, where it reads the same. It is stricter and needs along-the-view crossings staged so both are seen again within window_pad_s (on synthetic close crossings it admits about half, and the README's script at typical noise falls a crossing or two short of its plan). min_scored: how many frames must see each person in the window and on each side, and so how many on each side are read; proposed 2 because 3 starts to refuse synthetic crossings behind the armchair, about 1 in 10, and at 1 a session of swaps read out there passes at 8 frames a second. contact_reach_m: how near the two must come inside the window. It is a check against a mistyped mark, not a definition of a crossing, so it is wider than arm's reach: depth error adds to what is read, and synthetic crossings marked at 1.6 read up to 1.7. unseen_s: how long someone must be unseen during an occlusion's mark; proposed from tracker.coasting_after_s."},
     "unresolved_switch": {"open": true, "proposed": "flagged", "why": "A track changes person across cannot-tell labels, with the tracker confident for part of that span: the labels cannot say whether the change came while it was sure. flagged: it does not fail the gate, and its number is reported. A swap made while confident, then ambiguous before the labels resume, would pass; the review saw that only on constructed records, never on tracker output. silent: it fails the gate. A labeller who stays unsure about a second past the parting then fails a swap the tracker did report; the review saw 1 flip in 80 hard takes. flagged or silent."},
     "crossings_plan": {"open": true, "proposed": {"crossing": 12, "crossing_occluded": 5, "occlusion": 3, "near_pass": 3, "door": 2}, "why": "E2 says 20 to 30 staged crossings and occlusions, not how many of each. Fixed before recording, so the sample is set in advance: a scored run refuses when the crossings that count fall short of it for any kind, so the hard ones cannot quietly go missing. Proposed: the README's script, 25 crossings weighted toward what geometry finds hard (bound 11.3% at 0 failures). 30 would give 9.5%."}
   }
@@ -398,12 +399,19 @@ None of this is a score. It says the method works on the scenes it was written f
   their box, which for someone behind another person is often the front person's depth, so
   those two would agree too.
 - **A flagged swap with few sightings on one side of it.** Flagged switches have no limit, so
-  only IDF1 can fail one, and IDF1 counts sightings. A detector stall that ends late in the padding
-  or past it leaves `min_scored` sightings or so on that side of the mark, against up to a padded
-  side's worth on the other: at f frames a second, at the proposed values, a take back swapped can
-  read as high as f / (f + 1), where a stall ending with the mark reads about 0.5. Measured on 26 `near_pass` takes
-  at typical noise, seeds 0-25, both people lost from the start of the mark until 2 s past its end,
-  where nearly every stalled take came back swapped:
+  only IDF1 can fail one, and IDF1 counts sightings. A take back swapped reads about n / (n + m),
+  where n is a person's sightings that the window reads on the longer side of the swap and m those
+  on the shorter. A detector stall that ends late in the padding or past it leaves m at
+  `min_scored` or so, and n is the padded side and whatever of the mark came before the stall. So
+  the frame rate sets no ceiling on what such a take reads: the longer the two were seen inside the
+  mark first, the higher it reads. At f frames a second, at the proposed values, a stall starting
+  with the mark reads about f / (f + 1), and one that also ends with the mark about 0.5. A session
+  made only of takes back swapped reaches `idf1_gate` once n is 18: by that count, a stall starting
+  about 2.5 s inside the mark at 4 frames a second, 1.8 s at 4.75 and a quarter of a second at 8,
+  and at 15 the padded side alone is enough.
+
+  Measured on 26 `near_pass` takes at typical noise, seeds 0-25, both people lost from the start of
+  the mark until 2 s past its end, where nearly every stalled take came back swapped:
 
   | Frames a second | Flagged switches | IDF1 | Whole-take IDF1 | Gate |
   |---|---|---|---|---|
@@ -414,9 +422,24 @@ None of this is a score. It says the method works on the scenes it was written f
 
   With only some of the takes stalled, at 4 frames a second: a stall ending with the mark fails the
   gate from 6 of the 26 and one ending 1 s past it from 8, while one ending 1.5 s past it or later
-  still passes at 13 and fails at 20. So a session can pass with the detector stalling like this on
-  half its near passes, under `sides` `take` or `window`. The swaps then show only in the flagged
-  count and whole-take IDF1, which the gate does not read, so read them beside it.
+  still passes at 13 and fails at 20.
+
+  Measured on 20 takes built by hand at 4 frames a second with no noise, the two standing close
+  inside the mark and then changing sides under a stall ending 2.5 s past it, all 20 back swapped:
+
+  | Stood inside the mark | Flagged switches | IDF1 | Whole-take IDF1 | Gate |
+  |---|---|---|---|---|
+  | 2 s | 38 | 0.889 | 0.759 | fails |
+  | 2.5 s | 38 | 0.900 | 0.741 | passes |
+  | 3 s | 38 | 0.909 | 0.723 | passes |
+  | 4 s | 38 | 0.923 | 0.690 | passes |
+
+  `sides` `window` refuses the last of those, 0 of 20 counting, because the stall outlasts the
+  padding. With the stall ending 1.5 s past the mark it passes there too, at 0.923.
+
+  So a session can pass with half its near passes stalled from the start of the mark, and with every
+  take stalled from about 2.5 s into it, under `sides` `take` or `window`. The swaps then show only
+  in the flagged count and whole-take IDF1, which the gate does not read, so read them beside it.
 - **Noisy depth along the line of sight.** Stereo error grows with the square of the
   range, and a crossing along the camera's view leans on it. In the noisy profile,
   `near_pass`, `touching_crossing` and `crossing_behind_armchair` fall below 0.9.

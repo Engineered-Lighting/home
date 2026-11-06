@@ -136,17 +136,19 @@ class Base(unittest.TestCase):
         return [os.path.join(folder, 'observations.jsonl'), os.path.join(run_folder, 'tracks.jsonl'),
                 os.path.join(folder, 'truth.jsonl')]
 
-    def walked_take(self, seed, meth, lost=(), past=0.0, written=True, lead=0.3, ahead=0.0):
+    def walked_take(self, seed, meth, lost=(), past=0.0, written=True, lead=0.3, ahead=0.0, stood=0.0):
         """A and B stand for `lead` s, walk past each other 0.5 m apart, then stand for 16 s. Each of `lost` goes unseen
         from `ahead` seconds before the start of the mark until `past` seconds after its end: rejected, or with no row at
-        all unless `written`."""
+        all unless `written`. With `stood`, they first stop that long as they meet, inside the mark, and the unseen time
+        starts when they set off again."""
         folder = self.path('takes', 'walked-%d' % seed)
         os.makedirs(folder)
         t0 = 1793000000.0 + 1000.0 * seed
         y = 2.2 + 0.02 * seed
-        a = synth.Walker('A', [(-2.0, y, lead), (2.0, y, 16.0)], 1.0)
-        b = synth.Walker('B', [(2.0, y + 0.5, lead), (-2.0, y + 0.5, 16.0)], 1.0)
+        a = synth.Walker('A', [(-2.0, y, lead), (-0.3, y, stood), (2.0, y, 16.0)], 1.0)
+        b = synth.Walker('B', [(2.0, y + 0.5, lead), (0.3, y + 0.5, stood), (-2.0, y + 0.5, 16.0)], 1.0)
         start, end = synth._meet_window(a, b)
+        unseen_from = lead + 1.7 + stood if stood else start - ahead
         rows, lines = [], []
         for k in range(int(max(a.t_end, b.t_end) * 4)):
             local, labels = k / 4.0, {}
@@ -159,7 +161,7 @@ class Base(unittest.TestCase):
                        'room_position': {'x': x, 'y': y_now, 'z': 1.0, 'cov': [[0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01]]},
                        'image_box': [1, 1, 2, 2], 'transform_id': 'x', 'depth_ts': ts, 'score': 0.8,
                        'visibility': 'visible', 'validity': 'valid'}
-                if person in lost and start - ahead <= local <= end + past:
+                if person in lost and unseen_from <= local <= end + past:
                     if not written:
                         continue
                     row['validity'] = 'rejected:no_room_position:depth_absent'
@@ -562,6 +564,53 @@ class ScoredRunTest(Base):
             report = json.load(f)
         self.assertEqual(report['crossings'], 20)
         self.assertFalse(report['gate']['idf1_met'])
+
+    def assert_stood_session(self, stood, past, sides, code, n):
+        """20 takes where both stand close inside the mark for `stood` s, then change sides unseen until `past` s after it.
+        Every take must come back swapped and read n / (n + min_scored), and the session must end with this exit code."""
+        def close(block):
+            block['scoring']['trial_rule']['sides'] = sides
+        meth = self.closed_method('METHOD-stood.md', close)
+        takes = [self.walked_take(seed, meth, 'AB', past, lead=1.0, stood=stood) for seed in range(20)]
+        got, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(got, code, text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertEqual({round(row['idf1'], 3) for row in report['windows']}, {round(n / (n + 2), 3)})
+        self.assertGreaterEqual(report['flagged_switches'], 30)
+        self.assertEqual(report['switches_outside_crossings'], 0)
+        self.assertLess(report['whole_take']['idf1'], 0.8)
+
+    def test_a_session_all_back_swapped_fails_when_they_stood_2_s_inside_the_mark(self):
+        self.assert_stood_session(2.0, 2.5, 'take', 1, 16)
+
+    def test_a_session_all_back_swapped_passes_when_they_stood_2_5_s_inside_the_mark(self):
+        self.assert_stood_session(2.5, 2.5, 'take', 0, 18)
+
+    def test_sides_window_passes_that_session_too_when_the_stall_ends_in_the_padding(self):
+        self.assert_stood_session(4.0, 1.5, 'window', 0, 24)
+
+    def test_sides_window_refuses_that_session_when_the_stall_outlasts_the_padding(self):
+        def close(block):
+            block['scoring']['trial_rule']['sides'] = 'window'
+        meth = self.closed_method('METHOD-stood.md', close)
+        takes = [self.walked_take(seed, meth, 'AB', 2.5, lead=1.0, stood=4.0) for seed in range(20)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 2, text)
+        self.assertIn('0 of 20', text)
+
+    def test_the_text_gives_no_ceiling_on_what_a_take_back_swapped_reads(self):
+        """The owner chooses `sides` and answers the gate's question from these words, and the sessions above go past any
+        ceiling set by the frame rate alone."""
+        why = method.read_block()['scoring']['trial_rule']['why']
+        with open(method.METHOD_PATH, encoding='utf-8') as f:
+            written = f.read()
+        with open(os.path.join(method.HERE, 'README.md'), encoding='utf-8') as f:
+            readme = f.read()
+        self.assertFalse('as high as' in written, "METHOD.md still sets a ceiling with 'as high as'")
+        for text, words in ((why, 'n / (n + min_scored)'), (why, 'about 2.5 s inside the mark'), (written, 'n / (n + m)'),
+                            (readme, 'every take of a session'), (readme, 'should flagged switches have a limit')):
+            self.assertTrue(words in text, 'not written: %s' % words)
 
     def test_the_readmes_script_passes_on_fresh_takes_at_the_proposed_values(self):
         plan = {'crossing': 12, 'crossing_occluded': 5, 'occlusion': 3, 'near_pass': 3, 'door': 2}

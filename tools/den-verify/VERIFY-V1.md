@@ -385,7 +385,9 @@ that have a value, with none if none do. A surface a Decision names that the map
 not have, or whose blocks the model lacks, is not verified, with a reason naming
 `--surfaces`. So is one where a Stage 1 model and the map do not give a Decision's own
 `predicted.surfaces` to its rounding, on any Decision of the run: a Decision does not
-name its map, and an off gives 0 through any map.
+name its map, and an off gives 0 through any map. A null there where they give a number
+is the same, unless a bulb has no level or the model lacks it, and so is a surface of the
+map that a Decision does not list, unless it counts some as `surfaces_not_logged`.
 
 Tool-local JSON Lines, all synthetic in tests:
 

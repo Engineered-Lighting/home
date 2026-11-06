@@ -364,11 +364,16 @@ class Run:
         goes with one run, so one Decision showing it speaks for all: an off gives 0 through any map, and would pass through a
         wrong one. Holds past a copy move what is verified, not this. Nothing to compare on den-verify's own shape, whose
         fixtures hold placeholders; a Decision the model cannot predict is reported as that.
+
+        A logged null is the same wrong map where this gives a number, unless a bulb has no level or the model lacks it, which
+        rung 9 logs as null at every surface. So is a map's surface the Decision does not list: it lists its run's whole map, or
+        counts what its line left out.
         """
         if self.differs is None:
             self.differs = {}
             for d in self.decs if self.model.stage1 else ():
-                logged = (d.rec.get("predicted") or {}).get("surfaces") or {}
+                predicted = d.rec.get("predicted") or {}
+                logged = predicted.get("surfaces") or {}
                 listed = {d.canon(ch) for ch in d.rec.get("applied_scene") or {}}
                 try:
                     state = d.state_at(d.ts, ())[0]
@@ -377,10 +382,15 @@ class Run:
                     own = self.model.predict({ch: s for ch, s in state.items() if ch in listed})
                 except MODEL_ERRORS:
                     continue
-                for sid, value in logged.items():
-                    if is_number(value) and all(is_number(c.get(sid)) and abs(c[sid] - value) > OWN_ROUNDING for c in (computed, own)):
-                        self.differs.setdefault(sid, f"{sid}: this model and map give {computed[sid]:.3f} for {d.id}'s own read-backs and its "
-                                                     f"predicted.surfaces says {value}: check --surfaces, and that this is the model it ran on")
+                said = {sid: f"says {value}" for sid, value in logged.items()
+                        if is_number(value) and all(is_number(c.get(sid)) and abs(c[sid] - value) > OWN_ROUNDING for c in (computed, own))}
+                if all(s["level"] is not None and ch in self.model.keys for ch, s in state.items()):
+                    said.update({sid: "says null" for sid, value in logged.items() if value is None and is_number(computed.get(sid))})
+                    if logged and not predicted.get("surfaces_not_logged") and self.model.surfaces_source != "the model's point ids":
+                        said.update({sid: "does not list it" for sid, value in computed.items() if sid not in logged and is_number(value)})
+                for sid, what in said.items():
+                    self.differs.setdefault(sid, f"{sid}: this model and map give {computed[sid]:.3f} for {d.id}'s own read-backs and its "
+                                                 f"predicted.surfaces {what}: check --surfaces, and that this is the model it ran on")
         return self.differs
 
     def no_prediction(self, state, parts, sid, when):

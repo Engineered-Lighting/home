@@ -480,9 +480,62 @@ class Stage1Backend(Temp):
         report, _ = self.own_prediction(80.002, {"desk": ["p0"]})
         self.assertEqual(report["decisions"]["verified"], 0)
 
-    def test_a_null_prediction_in_the_decision_is_nothing_to_compare(self):
+    def test_a_null_in_the_decision_where_the_map_gives_a_number_is_that_wrong_map(self):
         report, _ = self.own_prediction(None, {"desk": ["p0"]})
+        self.assertEqual(report["decisions"]["verified"], 0)
+        self.assertEqual(report["model"]["surfaces"]["wrong"], ["desk"])
+        [entry] = report["decisions"]["not_verified"]
+        self.assertEqual(entry["kind"], "no surface map")
+        self.assertIn("--surfaces", entry["reason"])
+        self.assertIn("says null", entry["reason"])
+
+    def nulls_on_a_scene(self, extra):
+        """B0 lit, and `extra` beside it: rung 9 logs null at every surface, and p0 here is a number through any map."""
+        t = syn.T0
+        dec = decision("d", t + 0.5, t, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, ("p0",))
+        dec["applied_scene"].update(extra)
+        dec["predicted"]["surfaces"] = {"p0": None, "unit": "relative"}
+        frames = [syn.light_state(t, {"p0": 20.0}, anchored=False), syn.light_state(t + 5, {"p0": 80.0}, anchored=False)]
+        return Run(closed(), LightModel(stage1_model(FOUR)), [dec], frames, clock=Clock(syn.UTC_OFFSET_S)).run()[2]
+
+    def test_a_null_from_a_bulb_with_no_level_is_no_wrong_map_at_a_surface_that_bulb_cannot_reach(self):
+        self.assertFalse(FOUR["p0"].get(B2))
+        report = self.nulls_on_a_scene({B2: {"status": "sent", "readback": {"level": None, "cct_k": 2202}, "steps": []}})
+        self.assertEqual(report["model"]["surfaces"]["wrong"], [])
         self.assertEqual(report["decisions"]["verified"], 1)
+
+    def test_a_null_from_a_bulb_the_model_lacks_is_no_wrong_map(self):
+        report = self.nulls_on_a_scene({"light.not_in_this_model": {"status": "sent", "readback": {"level": 0.0, "cct_k": 2202}, "steps": []}})
+        self.assertEqual(report["model"]["surfaces"]["wrong"], [])
+
+    def not_listed(self, surfaces, target="p0", **predicted):
+        """Under a map of `surfaces` or none, a Decision listing p0 alone and aiming at `target`, on frames that land right."""
+        t = syn.T0
+        dec = decision("d", t + 0.5, t, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, (target,))
+        dec["predicted"].update(surfaces={"p0": 80.0, "unit": "relative"}, **predicted)
+        frames = [syn.light_state(t, {"p0": 20.0, "p1": 10.0}, anchored=False), syn.light_state(t + 5, {"p0": 80.0, "p1": 40.0}, anchored=False)]
+        return Run(closed(), LightModel(stage1_model(FOUR), surfaces=surfaces), [dec], frames, clock=Clock(syn.UTC_OFFSET_S)).run()
+
+    def test_a_map_surface_the_decision_does_not_list_is_that_wrong_map_and_what_it_lists_is_still_judged(self):
+        decisions, _, report = self.not_listed({"p0": ["p0"], "p1": ["p1"]}, target="p1")
+        self.assertEqual(report["model"]["surfaces"]["wrong"], ["p1"])
+        self.assertEqual(report["hit_rate"]["hits"], 1)  # p0 alone: p1 is a target here, and a target would be judged
+        self.assertEqual(point(decisions[0], "p1")["status"], "unverifiable")
+        self.assertIn("--surfaces", point(decisions[0], "p1")["why"])
+        self.assertIn("does not list it", point(decisions[0], "p1")["why"])
+
+    def test_a_surface_the_decisions_line_counts_as_not_logged_is_no_wrong_map(self):
+        report = self.not_listed({"p0": ["p0"], "p1": ["p1"]}, surfaces_not_logged=1)[2]
+        self.assertEqual(report["model"]["surfaces"]["wrong"], [])
+
+    def test_with_no_map_the_blocks_a_decision_does_not_list_are_not_called_wrong(self):
+        self.assertEqual(self.not_listed(None)[2]["model"]["surfaces"]["wrong"], [])
+
+    def test_a_decision_listing_no_surface_says_nothing_of_the_map(self):
+        argv, folder = self.landing(surfaces=("desk",), surfaces_file={"desk": ["p0"], "extra": ["p1"]})
+        code, printed = self.main(*argv, "--preview")
+        self.assertEqual(code, 0, printed)
+        self.assertEqual(json.loads((folder / "out" / "report-preview.json").read_text("utf-8"))["model"]["surfaces"]["wrong"], [])
 
     def test_a_later_hold_does_not_read_as_a_map_that_disagrees(self):
         # the decision's prediction is for its own read-backs; a person's hold past its copy moves the verify, not the comparison

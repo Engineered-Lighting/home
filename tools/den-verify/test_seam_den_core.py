@@ -668,6 +668,37 @@ class Seam(unittest.TestCase):
                             if e["kind"] == "no surface map"))
         self.assertGreater(report["decisions"]["not_verified_by_kind"]["no surface map"], 0)
 
+    def test_7_a_map_giving_lit_blocks_to_a_surface_the_decisions_logged_null_is_not_judged_on_it(self):
+        lit = blocks(range(4, 7), range(6, 10))
+        self.assertFalse(set(lit) & set(self.excluded))
+        whole, alone = self.tmp / "null-whole.json", self.tmp / "null-alone.json"
+        whole.write_text(json.dumps({**self.surfaces, "dead": lit}), encoding="utf-8")
+        alone.write_text(json.dumps({"dead": lit}), encoding="utf-8")
+        printed, report, written = self.scored(self.frames_list, surfaces=whole)
+        self.assertEqual(report["model"]["surfaces"]["wrong"], ["dead"])
+        self.assertGreater(report["hit_rate"]["hits"], 0)  # the rest of the map still judged
+        for d in written:
+            p = next(x for x in (d["verify"] or {"points": []})["points"] if x["point_id"] == "dead")
+            self.assertEqual(p["status"], "unverifiable")
+            self.assertIn("--surfaces", p["why"])
+            self.assertIn("says null", p["why"])
+        code, printed, report, _ = self.verify(self.frames_list, surfaces=alone)
+        self.assertEqual(code, 0, printed)
+        self.assertEqual(report["model"]["surfaces"]["wrong"], ["dead"])
+        self.assertEqual((report["decisions"]["verified"], report["hit_rate"]["verdict"]), (0, "insufficient"))
+        self.assertIn("--surfaces", printed)
+
+    def test_7_the_map_with_a_surface_no_decision_lists_is_named_and_judges_what_they_list(self):
+        wider = self.tmp / "wider.json"
+        wider.write_text(json.dumps({**self.surfaces, "elsewhere": blocks(range(4, 7), range(6, 10))}), encoding="utf-8")
+        code, printed, report, _ = self.verify(self.frames_list, surfaces=wider)
+        self.assertEqual(code, 0, printed)
+        self.assertEqual(report["model"]["surfaces"]["wrong"], ["elsewhere"])
+        self.assertEqual(report["hit_rate"]["misses"], 0)
+        right = self.verify(self.frames_list)[2]
+        self.assertEqual(right["model"]["surfaces"]["wrong"], [])
+        self.assertEqual(report["hit_rate"]["hits"], right["hit_rate"]["hits"])
+
     # -- what the reader of the real files gets ----------------------------------------------------------------------------------
 
     def test_a_surface_wholly_excluded_reads_no_prediction_not_0(self):

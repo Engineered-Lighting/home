@@ -51,6 +51,8 @@ def _real_predict():
             raise ValueError("%s cannot be loaded: %s" % (path, error)) from None
         finally:
             sys.dont_write_bytecode = saved
+        if not (hasattr(module, "predict") and hasattr(module, "prepare")):
+            raise ValueError("%s cannot be loaded: it needs predict() and prepare()" % path)
         _loaded[(path, sha)] = module
     return _loaded[(path, sha)], sha
 
@@ -74,8 +76,16 @@ def bad_surfaces(surfaces, points):
     return sorted(name for name, blocks in surfaces.items() if not blocks or not known.issuperset(blocks))
 
 
+def is_surface_map(value):
+    return isinstance(value, dict) and all(isinstance(blocks, list) and all(isinstance(p, str) for p in blocks) for blocks in value.values())
+
+
+def _number(value):
+    return type(value) in (int, float)
+
+
 def check_shape(model, where):
-    """A sentence for a file that is not a light model, here rather than as a KeyError in the first solve. A model is
+    """A sentence for a file that is not a light model, here rather than as a TypeError in the first solve. A model is
     Stage-1-shaped when it has a `channels` list, and each channel needs what predict.py reads for it."""
     try:
         if not isinstance(model, dict):
@@ -87,14 +97,24 @@ def check_shape(model, where):
         for channel in model["channels"]:
             key, cct, dimming = channel["channel_key"], model["cct"][channel["channel_key"]], model["dimming"][channel["channel_key"]]
             channel["entity_id"]
-            if len(cct["kelvin"]) != len(cct["basis_keys"]) or not cct["kelvin"] or len(dimming["levels"]) != len(dimming["g"]) or not dimming["g"]:
-                raise TypeError("channel %s has no temperatures or dimming table" % key)
+            if len(cct["kelvin"]) != len(cct["basis_keys"]) or not cct["kelvin"] or not all(_number(k) and k > 0 for k in cct["kelvin"]):
+                raise TypeError("channel %s needs one basis per temperature, each above 0 K" % key)
+            if len(dimming["levels"]) != len(dimming["g"]) or not dimming["g"] or not all(map(_number, dimming["levels"] + dimming["g"])):
+                raise TypeError("channel %s needs a dimming table of numbers" % key)
             for basis_key in cct["basis_keys"]:
-                if not isinstance(model["basis"][basis_key], dict):
-                    raise TypeError("its basis %s is not a row" % basis_key)
+                if not all(value is None or _number(value) for value in model["basis"][basis_key].values()):
+                    raise TypeError("its basis %s must be numbers or null" % basis_key)
+        if "surfaces" in model and not is_surface_map(model["surfaces"]):
+            raise TypeError("its surfaces must be {surface_id: [point_id, ...]}")
+        for key in ("error", "glare", "spot_model"):
+            if model.get(key) and not isinstance(model[key], dict):
+                raise TypeError("its %s must be an object or null" % key)
+        p90 = (model.get("error") or {}).get("p90_pct")
+        if p90 is not None and not _number(p90):
+            raise TypeError("its error.p90_pct must be a number or null")
     except KeyError as error:
         raise events.BadFile("%s is not a light model: it has no %s" % (where, error)) from None
-    except TypeError as error:
+    except (TypeError, AttributeError) as error:
         raise events.BadFile("%s is not a light model: %s" % (where, error)) from None
 
 

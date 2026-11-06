@@ -215,7 +215,17 @@ class MalformedInputTest(Temp):
         no_rows = {**whole, "basis": {}}
         no_points = {**whole, "sample_points": [{"kind": None}]}
         no_entity = {**whole, "channels": [{"channel_key": "den_front_left.white"}]}
-        for name, value in (("a list", [1, 2]), ("text", "model"), ("no version", {k: v for k, v in whole.items() if k != "version"}),
+        key = "den_front_left.white"
+        first = whole["cct"][key]["basis_keys"][0]
+        point = whole["sample_points"][0]["point_id"]
+        for name, value in (("kelvin zero", {**whole, "cct": {**whole["cct"], key: {**whole["cct"][key], "kelvin": [0, 2700, 6500]}}}),
+                            ("kelvin text", {**whole, "cct": {**whole["cct"], key: {**whole["cct"][key], "kelvin": ["warm", 2700, 6500]}}}),
+                            ("dimming text", {**whole, "dimming": {**whole["dimming"], key: {"levels": ["a"], "g": ["b"]}}}),
+                            ("basis text", {**whole, "basis": {**whole["basis"], first: {point: "bright"}}}),
+                            ("surfaces not a map", {**whole, "surfaces": 5}), ("surfaces of text", {**whole, "surfaces": {"desk": "counter-1/0"}}),
+                            ("error text", {**whole, "error": "low"}), ("p90 text", {**whole, "error": {"p90_pct": "low"}}),
+                            ("glare text", {**whole, "glare": "none"}), ("spot text", {**whole, "spot_model": "none"}),
+                            ("a list", [1, 2]), ("text", "model"), ("no version", {k: v for k, v in whole.items() if k != "version"}),
                             ("channels not a list", {**whole, "channels": {"a": 1}}), ("no channels", {**whole, "channels": []}),
                             ("no cct", no_cct), ("no basis rows", no_rows), ("no point id", no_points), ("no entity", no_entity),
                             ("no dimming", {**whole, "dimming": None})):
@@ -253,9 +263,17 @@ class MalformedInputTest(Temp):
             coordinator.load_gate(path)
         self.assertEqual(str(refused.exception), sentence(path))
         self.assertEqual(coordinator.load_gate(self.write("bom.json", out_file(whole))), coordinator.load_gate())
-        for raw, words in (("{not json", "is not JSON"), ("[1]", "is not a gate file"), ('{"slots": {"a": 1}}', "is not a gate file")):
+        for raw, words in (("{not json", "is not JSON"), ("[1]", "is not a gate file"), ('{"slots": {"a": 1}}', "is not a gate file"),
+                           ('{"gate": "g", "slots": {"surface_map": {"status": "open", "value": null, "proposed": {}}}}', "is not a gate file")):
             with self.subTest(raw), self.assertRaisesRegex(events.BadFile, words):
                 coordinator.load_gate(self.write("bad.json", raw))
+
+    def test_a_gate_with_a_slot_gone_is_a_sentence(self):
+        gate = coordinator.load_gate()
+        del gate["slots"]["look_brightness"]
+        path = self.write("short.json", json.dumps(gate))
+        with mock.patch.object(coordinator, "GATE_FILE", path), self.assertRaisesRegex(events.BadFile, "look_brightness"):
+            coordinator.make_policy()
 
 
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")

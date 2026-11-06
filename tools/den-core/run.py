@@ -261,8 +261,7 @@ def summary(header, log):
 
 def surface_map(path):
     surfaces = events.read_json(path)
-    if not (isinstance(surfaces, dict) and all(isinstance(blocks, list) and all(isinstance(p, str) for p in blocks)
-                                               for blocks in surfaces.values())):
+    if not light_adapter.is_surface_map(surfaces):
         raise events.BadFile("%s is not a surface map: it must be {surface_id: [point_id, ...]}" % path)
     return surfaces
 

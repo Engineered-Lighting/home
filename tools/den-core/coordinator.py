@@ -65,8 +65,9 @@ def load_gate(path=None):
             if slot["status"] not in ("open", "closed") or (slot["status"] == "closed" and slot["value"] is None):
                 raise ValueError("gate slot %s: closed needs a value, else status open" % name)
         chosen = gate["slots"]["surface_map"]["value"]
+        {name: item["value"] for name, item in gate["fixed"].items()}
     except (KeyError, TypeError, AttributeError):
-        raise events.BadFile("%s is not a gate file: it needs slots, each with a status and a value" % where) from None
+        raise events.BadFile("%s is not a gate file: it needs slots, each with a status and a value, and fixed values" % where) from None
     if chosen is not None and not (isinstance(chosen, dict) and all(
             isinstance(blocks, list) and all(isinstance(p, str) for p in blocks) for blocks in chosen.values())):
         raise ValueError("gate slot surface_map: its value must be {surface_id: [point_id, ...]}")
@@ -885,7 +886,11 @@ def make_policy(config=None):
     dependency or light model refuses, as den_lighting's changed policy.py does."""
     given = copy.deepcopy(config or {})
     gate = given.get("gate") or gate_config(load_gate())
-    effective = decide._merge(_defaults(gate), given)
+    try:
+        defaults = _defaults(gate)
+    except KeyError as error:
+        raise events.BadFile("the gate has no slot %s" % error) from None
+    effective = decide._merge(defaults, given)
     for name, module in PINS.items():
         if effective["code"][name] != events.sha256_file(module.__file__):
             raise ValueError("code changed: %s" % name)

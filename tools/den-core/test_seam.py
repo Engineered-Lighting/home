@@ -219,9 +219,11 @@ class BackendTest(Temp):
 
     def test_a_predict_py_that_will_not_load_is_a_sentence(self):
         broken = self.tmp / "predict.py"
-        broken.write_text("def broken(:\n", encoding="utf-8")
-        with mock.patch.object(light_adapter, "PREDICT_PATH", broken), self.assertRaisesRegex(ValueError, "cannot be loaded"):
-            light_adapter.LightModel(stage1_shaped())
+        for text in ("def broken(:\n", "raise KeyError('x')\n", "def predict(scene, model):\n    return {}\n"):
+            broken.write_text(text, encoding="utf-8")
+            with self.subTest(text), mock.patch.object(light_adapter, "PREDICT_PATH", broken), \
+                    self.assertRaisesRegex(ValueError, "cannot be loaded"):
+                light_adapter.LightModel(stage1_shaped())
 
 
 class SurfaceRuleTest(unittest.TestCase):
@@ -846,7 +848,7 @@ class ReadmeTest(Temp):
         given = {"C:/tmp/den-core/in/facts": facts, "C:/tmp/den-core/in/occupancy-edges.txt": journal,
                  "C:/den-light/SESSION/light-model.json": self.write_model(stage1_shaped()),
                  "C:/tmp/den-core/in/surfaces.json": self.write_model({"room": ["counter-1/0", "counter-1/1"]}, "surfaces.json"),
-                 "C:/den-photometry/SESSION/light_state.jsonl": frames, "C:/tmp/den-core-r9/real-1": self.tmp / "real-1"}
+                 "C:/tmp/den-core/in/light_state.jsonl": frames, "C:/tmp/den-core-r9/real-1": self.tmp / "real-1"}
         with real_backend():
             with mock.patch("builtins.print"):
                 run.main([str(given.get(word, word)) for word in self.block("den-core/run.py", "--light-states")])

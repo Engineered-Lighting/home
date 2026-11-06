@@ -562,12 +562,12 @@ time. Nothing is sent either way, and a synthetic run is only ever synthetic.
 
 ### From a real light model to rung 10
 
-Rung 8 Stage 1 writes `light-model.json` in its session folder, and rung 7 writes `light_state.jsonl` in its own. With the
-evening's copied files, in PowerShell 5.1, from the worktree root (`SESSION` is each tool's session folder, and
-`surfaces.json` here is your map over the model's `rRRcCC` blocks):
+Rung 8 Stage 1 writes `light-model.json` in its session folder (`SESSION` below), and rung 7 writes `light_state.jsonl`. With
+those and the evening's copied files, in PowerShell 5.1, from the worktree root. `surfaces.json` is your map over the model's
+`rRRcCC` blocks, to preview; a scored run takes it from the gate's `surface_map` slot instead, as below:
 
 ```powershell
-python -B tools/den-core/run.py --facts C:/tmp/den-core/in/facts --journal C:/tmp/den-core/in/occupancy-edges.txt --policies need incumbent coordinator --light-model C:/den-light/SESSION/light-model.json --surfaces C:/tmp/den-core/in/surfaces.json --light-states C:/den-photometry/SESSION/light_state.jsonl --out C:/tmp/den-core-r9/real-1
+python -B tools/den-core/run.py --facts C:/tmp/den-core/in/facts --journal C:/tmp/den-core/in/occupancy-edges.txt --policies need incumbent coordinator --light-model C:/den-light/SESSION/light-model.json --surfaces C:/tmp/den-core/in/surfaces.json --light-states C:/tmp/den-core/in/light_state.jsonl --out C:/tmp/den-core-r9/real-1
 ```
 
 ```powershell
@@ -581,7 +581,7 @@ python -B tools/den-core/score.py C:/tmp/den-core-r9/real-1/log.jsonl --preview
 Then rung 10 reads what that wrote:
 
 ```powershell
-python -B tools/den-verify/verify.py run --decisions C:/tmp/den-core-r9/real-1/decisions.jsonl --surfaces C:/tmp/den-core-r9/real-1/surfaces.json --light-states C:/den-photometry/SESSION/light_state.jsonl --model C:/den-light/SESSION/light-model.json --preview --out C:/tmp/den-verify/real-1
+python -B tools/den-verify/verify.py run --decisions C:/tmp/den-core-r9/real-1/decisions.jsonl --surfaces C:/tmp/den-core-r9/real-1/surfaces.json --light-states C:/tmp/den-core/in/light_state.jsonl --model C:/den-light/SESSION/light-model.json --preview --out C:/tmp/den-verify/real-1
 ```
 
 When the coordinator ran, and only after the log is complete, `run.py` writes two more files beside `log.jsonl`. A run
@@ -619,9 +619,9 @@ the header, prints no verdict and is never a gate.
 - a fake light model: one marked `fake: true`, which goes through `fake_light`, or any model on a checkout with no
   `tools/den-light/predict.py`, which the same fake then stands in for. `run.py` still works there and labels the run
   fake, and `score.py` says which of the two it was. Any other model goes through den-light's own `predict.py`, loaded by
-  file path under a private name and never through `sys.path`, and `prepare()`d once. `score.py` names the backend on its
-  second line, and the logged light model entry carries `backend`, `fake` and `predict_sha256`: `check.py` and `score.py`
-  refuse `code changed: den-light predict.py` when that file's hash moves. No environment variable can move the backend;
+  file path under a private name and never through `sys.path`, and `prepare()`d once. `score.py` names the backend, and the
+  logged light model entry carries `backend`, `fake` and `predict_sha256`: `check.py` and `score.py` refuse
+  `code changed: den-light predict.py` when that file's hash moves. No environment variable can move the backend;
   a test can, by patching `light_adapter.PREDICT_PATH`. `fake_light.predict` follows Stage 1's published call, and
   `test_seam.py` pins that the two agree exactly on the fake's own shape. den-light's model has no aim, so a real-path
   model with a `spot_model` is refused rather than having its aims ignored;
@@ -746,8 +746,8 @@ not. Surfaces go before any track does. `score.py` says when this happened, and 
 lists.
 
 A line also grows with the tracks: about 1.4 KB each with need v0's one field, 2 KB with every field the schema names, or
-3.3 KB in the worst shape the contracts allow, with a glare table and every bulb held. The coordinator never forgets a track, because an id is never reused and a PersonState says nothing
-when its track ends, so a long evening on rungs 5 and 6 would pass the limit. When a Decision would not fit, the rows of
+3.3 KB in the worst shape the contracts allow, with a glare table and every bulb held. The coordinator never forgets a track,
+because an id is never reused and a PersonState says nothing when its track ends, so a long evening on rungs 5 and 6 would pass the limit. When a Decision would not fit, the rows of
 the tracks longest unheard from go, then readers, and last any track a light is over the glare limit at.
 `inputs.tracks_not_logged` counts them. They go whole, from every list, so `predicted.eyes` still reproduces, and they stay
 in the plan: a track left off the line is still kept under the glare limit. `score.py` says when this happened. If so many
@@ -786,8 +786,8 @@ Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear 
 
 ### Left for later
 
-The simulated-spot execution cases V9a-V9h, V9k, V9l and V65(b), since den-light's `predict.py` has no aim; rung 9's loop check (non-inferiority, every delta
-open); per-person need and eye positions (rungs 5 and 6: today a track's surface is its `working_region.surface_id`, else
+The simulated-spot execution cases V9a-V9h, V9k, V9l and V65(b), since den-light's `predict.py` has no aim; rung 9's loop
+check (non-inferiority, every delta open); per-person need and eye positions (rungs 5 and 6: today a track's surface is its `working_region.surface_id`, else
 `room`, and an eye is named by its `track_id`); when a track has left (rungs 5 and 6: a PersonState says nothing when its
 track ends and need v0 has no heartbeat, so a track stays in the plan, a reader who left included); and the kept_current
 outcome, whose deadline is pending.

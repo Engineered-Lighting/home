@@ -30,7 +30,8 @@ first event. A synthetic log also prints "synthetic: plumbing only, never a gate
   sees that event, so there either occupancy value counts.
 --truth (reading-shadow-truth-1): information only; tools/reading-shadow's reading-shadow-v0 is the gate. Per
   reading block, the seconds from its cue (its start) to need's move into engaged, and from the next cue (the next
-  block's start) to the move to none. The truth file's clock offsets are not applied.
+  block's start) to the move to none. The truth file's clock offsets are not applied. A truth file that is missing or the
+  wrong shape is refused like any other file; one with no reading blocks, or a log with no need, reads n/a.
 
 Standard library only and offline: it reads LOG and TRUTH_JSON and re-runs the logged policies in memory. It
 contacts no host, Home Assistant, MQTT, Jetson or LA, and sends no light commands.
@@ -54,6 +55,7 @@ import need  # noqa: E402
 import run  # noqa: E402
 
 NAMES = ("replay", "need parity", "only the look", "holds", "quiet")
+TRUTH_SCHEMA = "reading-shadow-truth-1"
 TRUTH_LABEL = "information only; tools/reading-shadow's reading-shadow-v0 is the gate"
 NOT_A_GATE = "a consistency check of den-core's own code against den_lighting, not a lighting-quality gate"
 ROOTS = events.ADAPTER_SOURCES | {"runner", "plant"}  # events the runner queues; the rest derive from them
@@ -323,25 +325,36 @@ def quiet(header, log):
     return ok("no decide decision in %.1f s of game or %.1f s of unknown occupancy" % (game_s, unknown_s))
 
 
-def truth_lines(truth_path, header, log):
+def read_truth(path):
+    """A truth file, refused as any other file is, here before any check runs: a mistyped path is not a reason to read n/a."""
+    try:
+        truth = events.read_json(path)
+    except OSError as error:
+        raise events.BadFile("cannot read %s: %s" % (path, error)) from None
+    blocks = truth.get("blocks") if isinstance(truth, dict) else None
+    if (not isinstance(blocks, list) or truth.get("schema") != TRUTH_SCHEMA
+            or not all(isinstance(b, dict) and events.is_number(b.get("start")) and events.is_number(b.get("end")) for b in blocks)):
+        raise events.BadFile("%s is not %s: it needs blocks, each with a start and an end in seconds" % (path, TRUTH_SCHEMA))
+    return truth
+
+
+def truth_lines(truth, truth_path, header, log):
     """--truth: per reading block, seconds from its cue to need's engaged and from the next cue to none."""
     title = "truth: " + TRUTH_LABEL
-    try:
-        truth = events.read_json(truth_path)
-    except OSError as error:
-        return [title, "  n/a: cannot read %s: %s" % (truth_path, error)]
-    if not isinstance(truth, dict) or truth.get("schema") != "reading-shadow-truth-1":
-        return [title, "  n/a: %s is not reading-shadow-truth-1" % truth_path]
     if "need" not in policy_ids(header):
         return [title, "  n/a: need is not in this log"]
     try:
-        return _truth_blocks(truth, truth_path, title, need_moves(log), log[0]["t"])
-    except (KeyError, TypeError, AttributeError):
-        return [title, "  n/a: %s is not reading-shadow-truth-1" % truth_path]
+        moves = need_moves(log)
+    except events.SHAPE_ERRORS as error:  # need parity's line has already said so
+        return [title, "  n/a: a person state in this log is the wrong shape: %s" % events.named(error)]
+    try:
+        return _truth_blocks(truth, truth_path, title, moves, log[0]["t"])
+    except (ValueError, OSError, *events.SHAPE_ERRORS) as error:  # a time past any clock, which at() meets
+        raise events.BadFile("%s is not %s: %s" % (truth_path, TRUTH_SCHEMA, events.named(error))) from None
 
 
 def _truth_blocks(truth, truth_path, title, moves, first):
-    blocks = sorted(truth.get("blocks", []), key=lambda b: b["start"])
+    blocks = sorted(truth["blocks"], key=lambda b: b["start"])
     reading = [n for n, b in enumerate(blocks) if b.get("reading")]
     if not reading:
         return [title, "  n/a: no reading blocks in %s" % truth_path]
@@ -370,6 +383,7 @@ def report(log_path, truth_path=None):
         results = [fail("unreadable log: %s" % error)] + [na("unreadable log")] * (len(NAMES) - 1)
         header, log = None, None
     else:
+        truth = read_truth(truth_path) if truth_path is not None else None
         results = [checked(replay, log_path, log[0]["t"]), checked(need_parity, header, log, load_den_lighting()),
                    checked(only_the_look, header, log), checked(holds_respected, header, log), checked(quiet, header, log)]
     lines = ["%s: %s" % (name, "OK (%s)" % text if status == "OK" else "%s: %s" % (status, text))
@@ -381,7 +395,7 @@ def report(log_path, truth_path=None):
     else:
         lines.append("overall: FAIL: %d of %d checks failed; %s" % (counts["FAIL"], len(NAMES), NOT_A_GATE))
     if truth_path is not None:
-        lines += truth_lines(truth_path, header, log) if log else ["truth: %s" % TRUTH_LABEL, "  n/a: unreadable log"]
+        lines += truth_lines(truth, truth_path, header, log) if log else ["truth: %s" % TRUTH_LABEL, "  n/a: unreadable log"]
     if header and header.get("synthetic"):
         lines.append("synthetic: plumbing only, never a gate")
     return lines, passed

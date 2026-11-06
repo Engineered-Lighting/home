@@ -623,12 +623,43 @@ class LogsTest(Temp):
         path = self.write("truth-bad.json", "{not json")
         code, out, err = tool("validate.py", self.log, "--truth", path)
         self.refused(code, out, err, "%s is not JSON" % path)
-        for blocks in ([{}], [1], {"a": 1}, [{"start": "soon", "reading": True}]):
-            path = self.write("truth-shape.json", json.dumps({"schema": "reading-shadow-truth-1", "blocks": blocks}))
-            code, out, err = tool("validate.py", self.log, "--truth", path)
-            self.assertEqual(code, 0, out + err)
-            self.assertNotIn("Traceback", out + err)
-            self.assertIn("is not reading-shadow-truth-1", out)
+
+    def test_truth_of_the_wrong_shape_is_refused_as_any_other_file_is(self):
+        good = {"schema": "reading-shadow-truth-1", "blocks": [{"block": "b1", "reading": True, "start": T0, "end": T0 + 60}]}
+        for name, value in (("a list", []), ("a number", 5), ("null", None), ("another schema", {**good, "schema": "other"}), ("no schema", {"blocks": []}),
+                            ("no blocks", {"schema": good["schema"]}), ("blocks a number", {**good, "blocks": 5}), ("blocks an object", {**good, "blocks": {"a": 1}}),
+                            ("a block a number", {**good, "blocks": [1]}), ("a block with nothing", {**good, "blocks": [{}]}),
+                            ("start as text", {**good, "blocks": [{"start": "soon", "end": T0, "reading": True}]}),
+                            ("no end", {**good, "blocks": [{"start": T0, "reading": True}]}), ("end null", {**good, "blocks": [{"start": T0, "end": None, "reading": True}]}),
+                            ("a start past any clock", {**good, "blocks": [{"block": "b1", "reading": True, "start": 1e300, "end": 2e300}]})):
+            path = self.write("truth-shape.json", json.dumps(value))
+            with self.subTest(name):
+                code, out, err = tool("validate.py", self.log, "--truth", path)
+                self.refused(code, out, err, "%s is not reading-shadow-truth-1" % path)
+                self.assertEqual(out, "")  # no check line and no overall line: it stops as it does on a log it can't read
+
+    def test_truth_that_is_missing_or_a_folder_is_refused_too(self):
+        for path in (self.tmp / "absent.json", self.tmp):
+            with self.subTest(path.name):
+                code, out, err = tool("validate.py", self.log, "--truth", path)
+                self.refused(code, out, err, "cannot read %s" % path)
+                self.assertEqual(out, "")
+
+    def test_truth_of_the_right_shape_with_nothing_to_say_still_reads_n_a(self):
+        path = self.write("truth.json", json.dumps({"schema": "reading-shadow-truth-1", "blocks": [{"block": "b1", "reading": False, "start": T0, "end": T0 + 60}]}))
+        code, out, err = tool("validate.py", self.log, "--truth", path)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("n/a: no reading blocks", out)
+        with mock.patch("builtins.print"):
+            run.main(["--synthetic", "evening", "--policies", "incumbent", "--out", str(self.tmp / "no-need")])
+        code, out, err = tool("validate.py", self.tmp / "no-need" / "log.jsonl", "--truth", path)
+        self.assertEqual(code, 0, out + err)
+        self.assertIn("n/a: need is not in this log", out)
+
+    def test_a_truth_file_of_good_blocks_still_gives_its_lines_on_this_log(self):
+        code, out, err = tool("validate.py", self.log, "--truth", self.tmp / "run" / "truth.json")
+        self.assertEqual(code, 0, out + err)
+        self.assertRegex(out, r"  b2 \(cue ")
 
 
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")

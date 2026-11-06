@@ -672,11 +672,12 @@ option on the proposed grid.
 `predicted.surfaces` lists the whole map, because rung 10 takes its verify points from those keys: a surface nobody is at
 can only be scored as a miss if it is listed. That costs about 40 bytes a surface with a 30-character name, so with every
 bulb held and one reader on the proposed grid, about 400 surfaces with 10-character names or about 200 with 30 fit whole,
-and each more track or a finer grid's masks take some of that room. On a wider map `room` and each tracked person's surface stay, the rest go on by name for as long
-as they fit, and `predicted.surfaces_not_logged` counts the ones that did not. Surfaces go before any track does. `score.py`
-says when this happened, and rung 10 can verify only what a Decision lists.
+and each more track or a finer grid's masks take some of that room. On a wider map `room` and each tracked person's
+surface stay, the rest go on by name for as long as they fit, and `predicted.surfaces_not_logged` counts the ones that did
+not. Surfaces go before any track does. `score.py` says when this happened, and rung 10 can verify only what a Decision
+lists.
 
-A line does grow with the tracks: about 1.5 KB each, or 3.3 KB in the worst shape the contracts allow, with a glare table
+A line also grows with the tracks: about 1.5 KB each, or 3.3 KB in the worst shape the contracts allow, with a glare table
 and every bulb held. The coordinator never forgets a track, because an id is never reused and a PersonState says nothing
 when its track ends, so a long evening on rungs 5 and 6 would pass the limit. When a Decision would not fit, the rows of
 the tracks longest unheard from go, then readers, and last any track a light is over the glare limit at.

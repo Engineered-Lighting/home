@@ -989,6 +989,17 @@ class MountTests(Base):
                                 revisions=2)
         self.assertEqual(records.resolve(s.room_models(), fitted["transform_id"])["confirmed"]["take"], "clean")
 
+    def test_a_take_under_the_gate_is_not_a_first_take_for_one_over_it(self):
+        s, fitted = self.furnished()
+        along_wall = (math.cos(math.radians(40)), -math.sin(math.radians(40)), 0.0)
+        under = self.later_in_the_room(synthetic.moved(shift=tuple(0.04 * v for v in along_wall)), name="under")
+        under.click_all()
+        self.assertEqual(self.check(s, under.take)[1]["result"], "confirmed")
+        over = self.later_in_the_room(synthetic.moved(shift=tuple(0.06 * v for v in along_wall)), name="over",
+                                      ended=1_800_001_200.0)
+        over.click_all()
+        self.assert_looks_moved(s, fitted, *self.check(s, over.take), revisions=2)
+
     def test_the_same_take_clicked_again_or_copied_is_not_a_second_take(self):
         s, fitted = self.far_cross_registration()
         slipped = self.far_cross_take("slipped", 1_800_001_000.0, slip=(0, 6))
@@ -1050,11 +1061,11 @@ class MountTests(Base):
     def test_a_new_registration_owes_nothing_to_the_old_one_s_first_take(self):
         s, fitted = self.furnished()
         turned = self.turned_first_take(s, fitted)
-        refit = self.later_in_the_room(turned, name="refit", ended=1_800_001_200.0)
-        refit.click_all()
+        refit = self.later_in_the_room(name="refit", ended=1_800_001_200.0)  # put back, and registered again
+        refit.click_all(shift={"p1": (0.4, 0)})
         code, again = refit.fit()
         self.assertEqual(code, 0, refit.out)
-        third = self.later_in_the_room(synthetic.moved(pose=turned, yaw_deg=1.0), name="third", ended=1_800_001_500.0)
+        third = self.later_in_the_room(turned, name="third", ended=1_800_001_500.0)  # the same as the first take saw
         third.click_all()
         self.assert_looks_moved(s, again, *self.check(s, third.take), revisions=2)
 
@@ -1365,6 +1376,12 @@ class MountTests(Base):
         pose = synthetic.moved(yaw_deg=0.5)
         kept = self.movement_over_a_band(1200, 0, pose)
         self.assertAlmostEqual(kept, self.movement_over_a_band(1200, 1200, pose), delta=0.002)
+
+    def test_a_cell_the_registration_frame_has_no_depth_for_stays_at_the_reach(self):
+        pose = synthetic.moved(yaw_deg=0.5)
+        reached = self.movement_over_a_band(0, 1200, pose)
+        self.assertAlmostEqual(reached, self.movement_over_a_band(0, 0, pose), delta=0.002)
+        self.assertGreater(reached, self.movement_over_a_band(1200, 1200, pose) + 0.01)
 
     def test_leaving_a_far_cross_with_no_depth_out_of_the_fit_cannot_confirm_a_turn(self):
         # README step 5 lets the owner leave a point with no depth unclicked. A far end too dark for depth then

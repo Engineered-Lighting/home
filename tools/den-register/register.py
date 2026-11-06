@@ -706,7 +706,7 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
         if records.invalidation(room_models, camera_id, entry.get("version")):
             raise Refused("mount_changed", f"{tid} was invalidated already; register again")
         take, row, _, bundle = scene.load_frame(take_dir, frame_number(take_dir, frame, work))
-        report["frame"] = row["n"]
+        report.update(frame=row["n"], take_ended_unix=take["ended_unix"])
         if take["ended_unix"] > now():
             raise Refused("mount_take_in_future", f"{Path(take_dir).name} ended later than this PC's clock says it is "
                                                   "now, so it could vouch for takes not recorded yet. Check the PC's "
@@ -741,7 +741,7 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
             report["result"] = "not_confirmed"
             why_not = "no marks are clicked on this take yet"
         elif moved:
-            report.update(result="not_confirmed", looks_moved=True, take_ended_unix=take["ended_unix"])
+            report.update(result="not_confirmed", looks_moved=True)
             why_not = (f"the marks look moved together, {motion['farthest']} by {_cm(motion['moved_m'])} in the camera's "
                        f"view since the registration (gate {_cm(m['gate_m'])}), but one take's clicks never invalidate")
             next_step = ("Record a new take and click every mark on it, then run this again. If it shows the same "

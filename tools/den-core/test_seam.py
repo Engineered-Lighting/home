@@ -36,6 +36,7 @@ import sources  # noqa: E402
 import synthetic  # noqa: E402
 import test_coordinator as tc  # noqa: E402
 import test_score  # noqa: E402
+import test_spine  # noqa: E402
 from hold_fixtures import T0, SLOTS, scene  # noqa: E402
 from test_score import closed_gate, real_backend, real_model, replay_log  # noqa: E402
 
@@ -807,6 +808,75 @@ class OutputsTest(Temp):
         out, _ = self.run_it(*self.ARGV, "--light-states", str(frames))
         for line in (out / "decisions.jsonl").read_text("ascii").splitlines():
             self.assertEqual(json.loads(line)["inputs"]["light_state_ts"], synthetic.T0 - 700)
+
+
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class ReadmeTest(Temp):
+    """README's account of this seam, run as it says and measured."""
+
+    @staticmethod
+    def readme():
+        return (HERE / "README.md").read_text("utf-8")
+
+    def block(self, tool, words):
+        """The one command in README that runs this tool and has these words."""
+        found = [line for line in self.readme().splitlines() if line.startswith("python -B tools/" + tool) and words in line]
+        self.assertEqual(len(found), 1, found)
+        return found[0].split()[3:]
+
+    def test_its_commands_take_a_stage_1_model_to_decisions_and_surfaces(self):
+        with mock.patch("builtins.print"):
+            run.main(["--synthetic", "evening", "--touch", "--policies", "incumbent", "--out", str(self.tmp / "evening")])
+        facts = self.tmp / "facts"
+        facts.mkdir()
+        for path in (self.tmp / "evening").glob("la-fact-log-1-*.jsonl"):
+            shutil.copyfile(path, facts / path.name)
+        journal = self.tmp / "edges.txt"
+        journal.write_text("".join(test_spine.edge(synthetic.T0 + dt, a, b) + "\n" for dt, a, b in ((-600, "unknown", "on"), (1400, "on", "off"))),
+                           encoding="ascii")
+        frames = self.tmp / "light_state.jsonl"
+        frames.write_text("".join(json.dumps(light_state(synthetic.T0 + dt)) + "\n" for dt in range(-700, 2000, 7)), encoding="utf-8")
+        given = {"C:/tmp/den-core/in/facts": facts, "C:/tmp/den-core/in/occupancy-edges.txt": journal,
+                 "C:/den-light/SESSION/light-model.json": self.write_model(stage1_shaped()),
+                 "C:/tmp/den-core/in/surfaces.json": self.write_model({"room": ["counter-1/0", "counter-1/1"]}, "surfaces.json"),
+                 "C:/den-photometry/SESSION/light_state.jsonl": frames, "C:/tmp/den-core-r9/real-1": self.tmp / "real-1"}
+        with real_backend():
+            with mock.patch("builtins.print"):
+                run.main([str(given.get(word, word)) for word in self.block("den-core/run.py", "--light-states")])
+            log = str(self.tmp / "real-1" / "log.jsonl")
+            self.assertEqual(self.block("den-core/check.py", "den-core-r9/real-1"), ["C:/tmp/den-core-r9/real-1/log.jsonl"])
+            self.assertTrue(check.check(log)["ok"])
+            lines, _ = score.report(log, preview=True)
+        for words in ("backend den-light predict.py", "replay: OK", "records: OK", "verdict: none (preview)"):
+            self.assertIn(words, "\n".join(lines))
+        written = [json.loads(line) for line in (self.tmp / "real-1" / "decisions.jsonl").read_text("ascii").splitlines()]
+        self.assertTrue(written)
+        self.assertTrue(all(d["actuation"] == "replay" and d["version"] == "decision/v2" and d["inputs"]["light_state"] for d in written))
+        self.assertEqual(sorted(json.loads((self.tmp / "real-1" / "surfaces.json").read_text("utf-8"))), ["room"])
+        verify = self.block("den-verify/verify.py", "--decisions")
+        self.assertEqual(verify[verify.index("--decisions") + 1], "C:/tmp/den-core-r9/real-1/decisions.jsonl")
+        self.assertEqual(verify[verify.index("--surfaces") + 1], "C:/tmp/den-core-r9/real-1/surfaces.json")
+
+    def test_it_says_which_version_decisions_jsonl_adds(self):
+        said = " ".join(self.readme().split())
+        self.assertIn('plus one key, `version: "decision/v2"`', said)
+        self.assertIn("`--light-states FILE`", said)
+        self.assertNotIn("Today that is every run", said)
+        self.assertNotIn("replace the body of", said)
+
+    def test_the_sizes_it_gives_are_measured(self):
+        said = " ".join(self.readme().split())
+        at = {block_px: round(tc.longest_decision(tc.GridLimitLineTest.touched(block_px)) / 1000, 1) for block_px in (20, 10, 8)}
+        self.assertIn("about %.1f KB at the proposed 20 (576 blocks), %.1f KB at 10 and %.1f KB at 8 (3,600 blocks)" % (at[20], at[10], at[8]), said)
+
+    def test_the_release_fragment_says_what_is_now_true(self):
+        fragment = HERE.parents[1] / "changes" / "unreleased" / "den-core-rung-9-coordinator.md"
+        if not fragment.exists():  # a release moves it to the archive
+            return
+        said = " ".join(fragment.read_text("utf-8").split())
+        self.assertNotIn("until its `predict.py` is merged", said)
+        for words in ("`predict.py`", "`decisions.jsonl`", "`surfaces.json`", "--light-states", "UTF-16", "`cct_k`"):
+            self.assertIn(words, said)
 
 
 if __name__ == "__main__":

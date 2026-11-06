@@ -123,6 +123,7 @@ read that variable. On the merged tree they use the sibling.
 | `coordinator.py` | rung 9's coordinator v0: decide's rules behind the light model, as policy `decide` (below) |
 | `light_adapter.py` | the one adapter to rung 8's light model; every prediction goes through it, into den-light's `predict.py` |
 | `fake_light.py` | rung 8's prediction rule from its plan, for a model marked `fake: true` or a checkout with no `tools/den-light`; plumbing only |
+| `testdata/predict_stand_in.py` | `predict.py`'s call on the fake's rule, for the scoring tests on a branch without den-light; only a test reaches it |
 | `rung9-gate-v0.json` | rung 9's fixed numbers and its open slots |
 | `score.py` | rung 9's gate on a replayed log; refuses a scored run while a slot is open |
 | `hold_fixtures.py` | cases V6-V8 and V62-V64 under each compensation option; not admitted as pass or fail |
@@ -554,10 +555,58 @@ python -B tools/den-core/score.py --slots
 `run.py` takes `--policies need incumbent coordinator` in place of `decide`, and with it `--light-model PATH`
 (rung 8's `light-model.json`; the default is the fake), `--surfaces FILE` (JSON `{surface_id: [point_id, ...]}`, to
 preview a map; the default is the gate file's `surface_map` slot, and with neither the whole view is one surface, `room`),
-`--compensation P0|P1|P2|P3` and `--compensation-form strict|mode`. `--actuation shadow` labels a run shadow in place of
-replay, with or without the coordinator, and needs the real bulbs' reports (`--lights` or `--no-plant`). Until a live
-writer exists it labels a run of copied files from such a time. Nothing is sent either way, and a synthetic run is only
-ever synthetic.
+`--light-states FILE` (below), `--compensation P0|P1|P2|P3` and `--compensation-form strict|mode`. All of these need the
+coordinator. `--actuation shadow` labels a run shadow in place of replay, with or without the coordinator, and needs the
+real bulbs' reports (`--lights` or `--no-plant`). Until a live writer exists it labels a run of copied files from such a
+time. Nothing is sent either way, and a synthetic run is only ever synthetic.
+
+### From a real light model to rung 10
+
+Rung 8 Stage 1 writes `light-model.json` in its session folder, and rung 7 writes `light_state.jsonl` in its own. With the
+evening's copied files, in PowerShell 5.1, from the worktree root (`SESSION` is each tool's session folder, and
+`surfaces.json` here is your map over the model's `rRRcCC` blocks):
+
+```powershell
+python -B tools/den-core/run.py --facts C:/tmp/den-core/in/facts --journal C:/tmp/den-core/in/occupancy-edges.txt --policies need incumbent coordinator --light-model C:/den-light/SESSION/light-model.json --surfaces C:/tmp/den-core/in/surfaces.json --light-states C:/den-photometry/SESSION/light_state.jsonl --out C:/tmp/den-core-r9/real-1
+```
+
+```powershell
+python -B tools/den-core/check.py C:/tmp/den-core-r9/real-1/log.jsonl
+```
+
+```powershell
+python -B tools/den-core/score.py C:/tmp/den-core-r9/real-1/log.jsonl --preview
+```
+
+Then rung 10 reads what that wrote:
+
+```powershell
+python -B tools/den-verify/verify.py run --decisions C:/tmp/den-core-r9/real-1/decisions.jsonl --surfaces C:/tmp/den-core-r9/real-1/surfaces.json --light-states C:/den-photometry/SESSION/light_state.jsonl --model C:/den-light/SESSION/light-model.json --preview --out C:/tmp/den-verify/real-1
+```
+
+When the coordinator ran, and only after the log is complete, `run.py` writes two more files beside `log.jsonl`. A run
+without the coordinator writes neither, and every output it has stays byte-identical.
+
+- `decisions.jsonl`: the coordinator's Decisions only, one per line, UTF-8, LF, in log order. Each line is its `decision`
+  event's `data` from `log.jsonl`, plus one key, `version: "decision/v2"`, because `docs/architecture/live-v1/README.md`
+  asks a record in JSON Lines to carry its version, and v2 is the major `schemas.json` proposes for a Decision.
+- `surfaces.json`: `{surface_id: [point_id, ...]}`, the map the coordinator actually ran on, `room` spelled out. Giving it
+  back as `--surfaces` gives the same map.
+
+`--light-states FILE` takes canon LightState JSON Lines in the shape den-photometry writes: no `id`, `ts` present. A frame's id
+is its `id` key if it has one (64 characters at most), else `"ls-%.3f" % ts`. Frames may be in any order in the file; two
+within 0.0005 s, which rung 10 could not tell apart, are refused. Each Decision then names the newest frame at or before its
+`ts`, never a later one, in `inputs.light_state` and `inputs.light_state_ts`. With none at or before it, both are null and
+`inputs.light_state_status` says `no LightState at or before this decision`; with no file it says `no LightState given`. It is
+dropped when a frame is named.
+
+The frames are references, not inputs to the solve. Only each frame's id and ts reach the log, in the coordinator's logged
+`config.light_states`, so `check.py` replays them. No other policy sees them. A run with the file writes the same Decisions as
+one without, apart from the `light_state` fields, which go on a line after it is fitted, in room held for them. The config hash
+each Decision logs leaves the frames out, so it is the same either way; the header's own hash and `sources` do move.
+
+All of this has run on synthetic data only: `test_seam.py` runs it on a model in the shape Stage 1 writes, through den-light's
+own `predict.py` on the merged tree.
 
 ### What a scored run needs
 
@@ -682,7 +731,7 @@ digits on rung 8's proposed grid. A line cannot shed a mask, so with every bulb 
 no mask.
 
 That limits `block_px`, rung 8's open slot, which must divide 640 and 360. `block_px` 8 or coarser fits with every bulb
-held: about 8.3 KB at the proposed 20 (576 blocks), 9.7 KB at 10 and 11 KB at 8 (3,600 blocks), with one reader. `block_px`
+held: about 8.6 KB at the proposed 20 (576 blocks), 10.3 KB at 10 and 11.6 KB at 8 (3,600 blocks), with one reader. `block_px`
 5 (9,216 blocks) fits three held bulbs, and the fourth stops the run with `decision line over 16384 bytes` and no log.
 `block_px` 4 fits two, and at 2 or 1 the first hold stops it. Closing the slot finer than 8 would need a shorter mask first.
 `test_coordinator.py` pins these through `runner.run`, which validates each line, and runs every hold fixture under every
@@ -690,14 +739,14 @@ option on the proposed grid.
 
 `predicted.surfaces` lists the whole map, because rung 10 takes its verify points from those keys: a surface nobody is at
 can only be scored as a miss if it is listed. That costs about 40 bytes a surface with a 30-character name, so with every
-bulb held and one reader on the proposed grid, about 400 surfaces with 10-character names or about 200 with 30 fit whole,
+bulb held and one reader on the proposed grid, about 420 surfaces with 10-character names or about 200 with 30 fit whole,
 and each more track or a finer grid's masks take some of that room. On a wider map `room` and each tracked person's
 surface stay, the rest go on by name for as long as they fit, and `predicted.surfaces_not_logged` counts the ones that did
 not. Surfaces go before any track does. `score.py` says when this happened, and rung 10 can verify only what a Decision
 lists.
 
-A line also grows with the tracks: about 1.5 KB each, or 3.3 KB in the worst shape the contracts allow, with a glare table
-and every bulb held. The coordinator never forgets a track, because an id is never reused and a PersonState says nothing
+A line also grows with the tracks: about 1.4 KB each with need v0's one field, 2 KB with every field the schema names, or
+3.3 KB in the worst shape the contracts allow, with a glare table and every bulb held. The coordinator never forgets a track, because an id is never reused and a PersonState says nothing
 when its track ends, so a long evening on rungs 5 and 6 would pass the limit. When a Decision would not fit, the rows of
 the tracks longest unheard from go, then readers, and last any track a light is over the glare limit at.
 `inputs.tracks_not_logged` counts them. They go whole, from every list, so `predicted.eyes` still reproduces, and they stay
@@ -714,14 +763,19 @@ grid. Contract ids are far shorter.
 Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear only in the coordinator's Decisions:
 
 - `candidates[]`: `scene_id` (v0's) and the candidate's `scene`.
-- `requested_scene` keeps the hue-den-4 dialect `{on, brightness, kelvin}`, with `aim` when a spot model has one.
+- `requested_scene` and `inputs.actuator_state` keep the hue-den-4 dialect `{on, brightness, kelvin}`, with `aim` when a spot
+  model has one, beside the schema's `level` and `cct_k`. `level` is the command as a share of Hue's 254, 0.0 when off, and
+  null when a bulb is on with no brightness, because a recorded bulb has none. A bulb never seen is null in `actuator_state`.
+- `inputs.hold_set.held[].pinned` is the logged copy of a hold's pin: hue-den-4's keys beside the schema's `level_pct` (0 to
+  100, null when unknown), `cct_k` and `source: "read-back"`. The mode's own pin keeps only the three keys, for `decide`.
 - `applied_scene[]`: `readback` also holds `{on, brightness, kelvin}` beside the schema's `level` and `cct_k`;
   `readback_source`, and a `reason` when a step was dropped. A step adds `transition_s`, which rung 10's settle rule
   reads, and its `checks` is `{revision_current, fresh_check, not_held}`.
 - `targets[track]` and `recipients[].targets[]`: `value` and `unit` beside `lx`, because a relative model has no lux.
 - `recipients[]`: `light_model`, and each target's `interval` (null until the model has an error score).
 - `predicted.eyes[]`: `support_status` and `excluded`. `predicted.daylight` says electric only.
-- `inputs`: `preference`, `compensation`, `coordinator`, `recipient_rule`, `light_state_status`.
+- `inputs`: `preference`, `compensation`, `coordinator`, `recipient_rule`, `light_state_ts`, `light_state_status`.
+- The logged light model entry in the header: `backend`, `fake`, `predict_sha256` (null on a fake backend).
 - `inputs.hold_set.held[].footprint`: the contracts name it and give it no type. Here it is
   `{points, of, mask, surfaces}`: how many blocks of how many, the blocks as hex bits over the model's `sample_points`
   (bit 0 the first; `LightModel.unmask` reads it), and which of the tracked people's surfaces it touches.
@@ -732,7 +786,7 @@ Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear 
 
 ### Left for later
 
-The simulated-spot execution cases V9a-V9h, V9k, V9l and V65(b); rung 9's loop check (non-inferiority, every delta
+The simulated-spot execution cases V9a-V9h, V9k, V9l and V65(b), since den-light's `predict.py` has no aim; rung 9's loop check (non-inferiority, every delta
 open); per-person need and eye positions (rungs 5 and 6: today a track's surface is its `working_region.surface_id`, else
 `room`, and an eye is named by its `track_id`); when a track has left (rungs 5 and 6: a PersonState says nothing when its
 track ends and need v0 has no heartbeat, so a track stays in the plan, a reader who left included); and the kept_current

@@ -989,10 +989,12 @@ class StaleReadFrame(unittest.TestCase):
     def test_the_decisions_own_step_makes_a_frame_stale_only_if_the_frame_is_inside_it(self):
         t = self.t
         ref = self.frame(t, self.was, "ls-0")
-        for sent, status in ((t + 0.5, "within"), (t - 0.5, "unverifiable")):
-            dec = syn.hue_decision("d", t + 0.5, self.was, {B0: {"level": 0.8, "steps": send(sent)}}, "ls-0", targets=self.targets)
+        # logged a little before the decision's own time is still its own; the window's start is in it, as for a verify frame
+        for at, sent, status in ((t + 0.5, t + 0.5, "within"), (t + 1.0, t + 0.5, "within"),
+                                 (t + 0.5, t, "unverifiable"), (t + 0.5, t - 0.5, "unverifiable")):
+            dec = syn.hue_decision("d", at, self.was, {B0: {"level": 0.8, "steps": send(sent)}}, "ls-0", targets=self.targets)
             decisions, _, _ = score([dec], [ref, self.frame(t + 5, self.now)], self.model)
-            self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {status}, sent)
+            self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {status}, (at, sent))
 
     def test_the_zero_background_takes_nothing_from_the_frame_and_still_judges_the_level(self):
         zero = {"background": "zero"}
@@ -1331,6 +1333,20 @@ class DimsAndOffs(unittest.TestCase):
         decisions, _, _ = score([dec], [ref, syn.light_state(t + 5, {"desk-1": 310 * 1.16}, anchored=False)], model)
         self.assertEqual(point(decisions[0], "desk-1")["status"], "outside")
         self.assertNotIn("level_bound", point(decisions[0], "desk-1"))
+
+    def test_a_hit_past_the_allowance_stands_on_the_ladder_beside_a_steady_bulb(self):
+        # B1 stays at 900 and B0 goes 50 to 60 of 960: the allowance and the noise reach about 40, the ladder 144
+        model = syn.hue_model({"desk-1": {B0: 100.0, B1: 900.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 950.0}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-1", t + 0.5, {B0: 0.5, B1: 1.0}, {B0: {"level": 0.6, "steps": send(t + 0.5)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        for high, status in ((1.14, "within"), (0.86, "within"), (1.16, "outside"), (0.84, "outside")):
+            after = syn.light_state(t + 5, {"desk-1": 960.0 * high}, anchored=False)
+            decisions, _, report = score([dec], [ref, after], model)
+            self.assertEqual(point(decisions[0], "desk-1")["status"], status, high)
+            self.assertNotIn("level_bound", point(decisions[0], "desk-1"), high)
+            self.assertEqual(report["hits_beyond_level_tolerance"]["count"], 0, high)
 
     def off_with_a_wiggle(self, wiggle, cct_after=2700, kelvins=(2700,), levels=(0.4, 0.8)):
         """B0 goes off and sticks on; B1 to B3 stay put, their read-backs `wiggle` away. Read where B0 stuck."""

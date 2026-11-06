@@ -14,7 +14,7 @@ Python 3.8 or later, standard library only.
 | `VERIFY-V1.md` | The design note and its one `verify-v1` block of numbers and open slots. |
 | `method.py` | Reads that block (CRLF or LF), lists open slots and the pending decisions. |
 | `records.py` | JSON Lines in and out, clock strings, LightState ids, schema field names. |
-| `settle.py` | The settle rule: den_lighting's 2 s fades (5 s on a restore), probes at 0 s. |
+| `settle.py` | The settle rule: den_lighting's 2 s fades (5 s on a restore), probes at 0 s; and when a read frame is stale. |
 | `light_model.py` | The one adapter to rung 8's model; every prediction goes through it. |
 | `fake_model.py` | rung 8's prediction rule from its plan, until Stage 1's `predict()` exists. |
 | `score.py` | `Decision.verify`, `LightState.residual` and the report. |

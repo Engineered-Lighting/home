@@ -145,7 +145,7 @@ class Dec:
         except ValueError:
             raise BadFile(f"decision {self.id}: its clock time {ts!r} has no date, and nothing in the record or the frames gives one") from None
         self.ref, self.no_ref = run.read_frame(inputs, self.ts)
-        self.problem = self.stale_read = self.differs = None
+        self.problem = self.stale_read = None
         self.problem_kind = "no settle time"
         try:
             self.steps = settle.decision_steps(rec, self.resolve, run.m)
@@ -258,6 +258,7 @@ class Run:
                  clock=None, scored=True):
         from records import Clock
         self.m, self.model, self.clock, self.scored = m, model, clock or Clock(), scored
+        self.differs = None
         self.frames = sorted((Frame(r, self.clock) for r in light_states), key=lambda f: f.ts)
         self.frame_times = [f.ts for f in self.frames]
         self.frames_by_id = {}  # two frames on different days may share a derived name
@@ -345,23 +346,28 @@ class Run:
         extra = self.m["uncertainty_abs_lx"] if unit == "lx" else 0.0
         return self.m["uncertainty_rel"] * abs(value) + extra
 
-    def own_prediction_differs(self, d):
-        """{surface: why} where a Stage 1 model and map do not give what the Decision says they gave for its own read-backs.
+    def surfaces_that_differ(self):
+        """{surface: why} where a Stage 1 model and map do not give what a Decision says they gave for its own read-backs.
 
-        A Decision does not name its map, and its model's version says nothing of the blocks, so this is what can tell a map
-        that is not the one it ran on: a surface read through it would be judged against someone else's numbers. Holds past
-        its copy move what is verified, not this. Nothing to compare on den-verify's own shape, whose fixtures hold placeholders.
+        A Decision does not name its map, and its model's version says nothing of the blocks, so this is what can tell a map that
+        is not the one the run was made on: a surface read through it would be judged against someone else's numbers. One map
+        goes with one run, so one Decision showing it speaks for all: an off gives 0 through any map, and would pass through a
+        wrong one. Holds past a copy move what is verified, not this. Nothing to compare on den-verify's own shape, whose
+        fixtures hold placeholders; a Decision the model cannot predict is reported as that.
         """
-        if d.differs is None:
-            d.differs = {}
-            if self.model.stage1:
+        if self.differs is None:
+            self.differs = {}
+            for d in self.decs if self.model.stage1 else ():
                 logged = (d.rec.get("predicted") or {}).get("surfaces") or {}
-                computed = self.model.predict(d.state_at(d.ts, ())[0])
+                try:
+                    computed = self.model.predict(d.state_at(d.ts, ())[0])
+                except MODEL_ERRORS:
+                    continue
                 for sid, value in logged.items():
                     if is_number(value) and is_number(computed.get(sid)) and abs(computed[sid] - value) > OWN_ROUNDING:
-                        d.differs[sid] = (f"{sid}: this model and map give {computed[sid]:.3f} for the decision's own read-backs and its "
-                                          f"predicted.surfaces says {value}: check --surfaces, and that this is the model it ran on")
-        return d.differs
+                        self.differs.setdefault(sid, f"{sid}: this model and map give {computed[sid]:.3f} for {d.id}'s own read-backs and its "
+                                                     f"predicted.surfaces says {value}: check --surfaces, and that this is the model it ran on")
+        return self.differs
 
     def no_prediction(self, state, parts, sid, when):
         """Why a surface has no predicted light: a bulb of unknown state there, or no block of it with a value."""
@@ -382,7 +388,7 @@ class Run:
         ref = d.ref
         out = {}
         unit_ok = frame.unit == model.basis_unit
-        differs = self.own_prediction_differs(d)
+        differs = self.surfaces_that_differ()
         for sid in model.surfaces:
             row = {"point_id": sid, "unit": frame.unit}
             measured, why = frame.usable(sid, m) if unit_ok else (None, "unit mismatch")
@@ -879,10 +885,12 @@ class Run:
         # hits the meter could not tell from a bulb that never moved lift nothing: the rest must pass too
         if rate["verdict"] != "fail":
             rate["verdict"] = judged[1]
+        described = self.model.describe()
+        described["surfaces"]["wrong"] = sorted({*described["surfaces"]["wrong"], *self.surfaces_that_differ()})
         report = {
             "tool": "den-verify", "rung": 10, "scored": self.scored,
             "backend": self.model.backend, "predict_sha256": self.model.predict_sha256,
-            "model": self.model.describe(),
+            "model": described,
             "decisions": {"total": len(self.decs), "verified": len(self.decs) - len(not_verified),
                           "not_verified": not_verified,
                           "not_verified_by_kind": dict(Counter(e["kind"] for e in not_verified)),

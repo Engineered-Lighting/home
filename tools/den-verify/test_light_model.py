@@ -368,6 +368,40 @@ class Stage1Backend(Temp):
         self.assertIn("--surfaces", entry["reason"])
         self.assertIn("predicted.surfaces", entry["reason"])
 
+    def test_one_decision_showing_the_map_wrong_speaks_for_the_run_since_an_off_passes_through_any_map(self):
+        t = syn.T0
+        data = stage1_model(FOUR)
+        on = decision("d-on", t + 0.5, t, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, ("desk",))
+        on["predicted"]["surfaces"] = {"desk": 40.0, "unit": "relative"}  # p1's: the map below gives p0's 80
+        off = decision("d-off", t + 100.5, t + 100, {B0: 0.8}, {B0: {"level": 0.0, "steps": send(t + 100.5)}}, ("desk",))
+        off["predicted"]["surfaces"] = {"desk": 0.0, "unit": "relative"}
+        frames = [syn.light_state(t, {"desk": 10.0}, anchored=False), syn.light_state(t + 5, {"desk": 40.0}, anchored=False),
+                  syn.light_state(t + 100, {"desk": 40.0}, anchored=False), syn.light_state(t + 105, {"desk": 0.5}, anchored=False)]
+        argv, folder = self.case(data, [on, off], frames, surfaces={"desk": ["p0"]})
+        code, printed = self.main(*argv, "--preview")
+        self.assertEqual(code, 0, printed)
+        report = json.loads((folder / "out" / "report-preview.json").read_text("utf-8"))
+        self.assertEqual(report["decisions"]["verified"], 0)
+        self.assertEqual(report["hit_rate"]["verdict"], "insufficient")
+        self.assertEqual(report["decisions"]["not_verified_by_kind"], {"no surface map": 2})
+        self.assertEqual(report["model"]["surfaces"]["wrong"], ["desk"])
+        self.assertIn("d-on", by_id(report["decisions"]["not_verified"], "decision_id", "d-off")["reason"])
+
+    def test_a_decision_the_model_cannot_predict_is_not_held_against_the_map(self):
+        t = syn.T0
+        data = stage1_model(FOUR)
+        bad = decision("d-bad", t + 0.5, t, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, ("p0",))
+        bad["applied_scene"][B0]["readback"]["cct_k"] = None
+        bad["predicted"]["surfaces"] = {"p0": 1.0, "unit": "relative"}
+        good = decision("d-good", t + 100.5, t + 100, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(t + 100.5)}}, ("p0",))
+        good["predicted"]["surfaces"] = {"p0": 80.0, "unit": "relative"}
+        frames = [syn.light_state(t, {"p0": 20.0}, anchored=False), syn.light_state(t + 5, {"p0": 80.0}, anchored=False),
+                  syn.light_state(t + 100, {"p0": 20.0}, anchored=False), syn.light_state(t + 105, {"p0": 80.0}, anchored=False)]
+        _, _, report = Run(closed(), LightModel(data), [bad, good], frames, clock=Clock(syn.UTC_OFFSET_S)).run()
+        self.assertEqual(report["decisions"]["verified"], 1)
+        self.assertEqual(by_id(report["decisions"]["not_verified"], "decision_id", "d-bad")["kind"], "model error")
+        self.assertIn("cct_k", by_id(report["decisions"]["not_verified"], "decision_id", "d-bad")["reason"])
+
     def test_the_decisions_own_prediction_agrees_to_its_rounding(self):
         for logged in (80.0, 80.0004, 79.9996, 80.0):
             report, _ = self.own_prediction(logged, {"desk": ["p0"]})

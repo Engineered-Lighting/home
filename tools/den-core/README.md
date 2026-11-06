@@ -657,15 +657,22 @@ four synthetic evenings' whole logs, header included.
 
 ### A Decision's size
 
-`events.validate` refuses a line over 16,384 bytes, and the run then stops with no log. A Decision never lists blocks, so
-rung 8's 576 blocks cost nothing: a hold's footprint is the same length for any blocks (144 hex digits on the grid).
-`test_coordinator.py` runs every hold fixture under every option on the full grid through `runner.run`, which validates
-each line.
+`events.validate` refuses a line over 16,384 bytes, and the run then stops with no log. A Decision never lists blocks, but
+under P1 to P3 each held bulb's footprint carries a mask of one hex digit per 4 blocks, whichever blocks it covers: 144
+digits on rung 8's proposed grid. A line cannot shed a mask, so with every bulb held it grows by a byte a block. P0 writes
+no mask.
+
+That limits `block_px`, rung 8's open slot, which must divide 640 and 360. `block_px` 8 or coarser fits with every bulb
+held: about 8.3 KB at the proposed 20 (576 blocks), 9.7 KB at 10 and 11 KB at 8 (3,600 blocks), with one reader. `block_px`
+5 (9,216 blocks) fits three held bulbs, and the fourth stops the run with `decision line over 16384 bytes` and no log.
+`block_px` 4 fits two, and at 2 or 1 the first hold stops it. Closing the slot finer than 8 would need a shorter mask first.
+`test_coordinator.py` pins these through `runner.run`, which validates each line, and runs every hold fixture under every
+option on the proposed grid.
 
 `predicted.surfaces` lists the whole map, because rung 10 takes its verify points from those keys: a surface nobody is at
 can only be scored as a miss if it is listed. That costs about 40 bytes a surface with a 30-character name, so with every
-bulb held and one reader, about 400 surfaces with 10-character names or about 200 with 30 fit whole, and each more track
-takes some of that room. On a wider map `room` and each tracked person's surface stay, the rest go on by name for as long
+bulb held and one reader on the proposed grid, about 400 surfaces with 10-character names or about 200 with 30 fit whole,
+and each more track or a finer grid's masks take some of that room. On a wider map `room` and each tracked person's surface stay, the rest go on by name for as long
 as they fit, and `predicted.surfaces_not_logged` counts the ones that did not. Surfaces go before any track does. `score.py`
 says when this happened, and rung 10 can verify only what a Decision lists.
 
@@ -678,8 +685,9 @@ in the plan: a track left off the line is still kept under the glare limit. `sco
 tracks are over the limit that a row saying so has to go too, `inputs.over_limit_not_logged` counts it and **hard
 constraints** fails, because the log can no longer show every conflict. need v0 has one track, so none of this happens today.
 
-The last track always stays, so one line can still break: a lone track whose id runs to a couple of hundred characters, in
-that worst shape. Contract ids are far shorter.
+The last track always stays and a mask never goes, so one line can still break in two ways: on a grid finer than `block_px`
+8, as above, or with a lone track whose id runs to a couple of hundred characters, in that worst shape, fewer on a finer
+grid. Contract ids are far shorter.
 
 ### Keys the contracts do not name
 

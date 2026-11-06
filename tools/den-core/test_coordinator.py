@@ -863,6 +863,70 @@ class FullGridLineTest(unittest.TestCase):
         self.assertGreaterEqual(made, 3)
 
 
+class GridLimitLineTest(unittest.TestCase):
+    """How fine a grid a Decision's line can carry. Rung 8's block_px is an open slot, proposed 20, and must divide 640 and
+    360. Under P1 to P3 each held bulb's footprint is a mask of one hex digit per 4 blocks, and a line cannot shed one, so
+    with every bulb held it grows by a byte a block. These pin where README's "A Decision's size" says that stops."""
+
+    REFUSED = r"^decision line over %d bytes$" % events.MAX_LINE_BYTES
+
+    @staticmethod
+    def touched(block_px, bulbs=4, option="P1-mode"):
+        """One reader and a person's touch on each of these bulbs, through runner.run beside the real den_lighting."""
+        case = {"script": [(T0 + 10, "A", "engaged", "counter-1")],
+                "touches": [(30 + 10 * n, b, scene(60 + 20 * n)) for n, b in enumerate(events.LIGHTS[:bulbs])], "inputs": []}
+        blocks = (640 // block_px) * (360 // block_px)
+        with mock.patch.dict(hold_fixtures.CASES, {"touched": case}):
+            return hold_fixtures.run_case("touched", option, light_model={"source": "fake", "params": {"filler": blocks - 12}})[1]
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_the_proposed_grid_and_block_px_10_and_8_fit_with_every_bulb_held(self):
+        for block_px, blocks in ((20, 576), (10, 2304), (8, 3600)):
+            with self.subTest(block_px=block_px):
+                log = self.touched(block_px)
+                mine = hold_fixtures.decisions(log)
+                held = max((d["inputs"]["hold_set"]["held"] for d in mine), key=len)
+                self.assertEqual(len(held), 4)
+                self.assertEqual({row["footprint"]["of"] for row in held}, {blocks})
+                self.assertEqual({len(row["footprint"]["mask"]) for row in held}, {blocks // 4})
+                self.assertLess(longest_decision(log), events.MAX_LINE_BYTES)
+                self.assertFalse([d for d in mine if "surfaces_not_logged" in d["predicted"]])  # the map stays whole
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_block_px_5_fits_three_held_bulbs_and_refuses_the_fourth_by_name(self):
+        self.assertLess(longest_decision(self.touched(5, bulbs=3)), events.MAX_LINE_BYTES)
+        with self.assertRaisesRegex(ValueError, self.REFUSED):
+            self.touched(5)
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_a_finer_grid_refuses_sooner(self):
+        self.assertLess(longest_decision(self.touched(4, bulbs=2)), events.MAX_LINE_BYTES)
+        with self.assertRaisesRegex(ValueError, self.REFUSED):
+            self.touched(4, bulbs=3)
+        with self.assertRaisesRegex(ValueError, self.REFUSED):
+            self.touched(2, bulbs=1)
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_p0_writes_no_mask_so_it_has_no_such_limit(self):
+        log = self.touched(5, option="P0")
+        self.assertEqual(max(len(d["inputs"]["hold_set"]["held"]) for d in hold_fixtures.decisions(log)), 4)
+        self.assertFalse([d for d in hold_fixtures.decisions(log) if "footprint" in events.dumps(d["inputs"]["hold_set"])])
+
+    def test_readme_and_the_fragment_state_the_limit_in_block_px(self):
+        # Both once said a Decision's size did not depend on the grid, which held only on the grid they were measured on.
+        said = (HERE / "README.md").read_text("utf-8").split("### A Decision's size")[1].split("\n### ")[0]
+        said = " ".join(said.split())
+        self.assertNotIn("the same length for any blocks", said)
+        for words in ("one hex digit per 4 blocks", "`block_px` 8 or coarser", "`block_px` 5", "decision line over 16384 bytes"):
+            self.assertIn(words, said)
+        fragment = HERE.parents[1] / "changes" / "unreleased" / "den-core-rung-9-coordinator.md"
+        if fragment.exists():  # a release moves it to the archive
+            said = " ".join(fragment.read_text("utf-8").split())
+            self.assertNotIn("whatever the grid", said)
+            for words in ("one hex digit per 4 blocks", "`block_px` 8", "`block_px` 5", "decision line over 16384 bytes"):
+                self.assertIn(words, said)
+
+
 class WideMapLineTest(unittest.TestCase):
     """A surface map's width is the owner's. With every bulb held, a map once broke the line at 120 to 180 surfaces with
     10-character names and 40 to 60 with 30-character ones, and the run wrote no log."""

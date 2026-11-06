@@ -323,7 +323,14 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   keeps `residual: []` with a sibling `residual_status`.
 - A LightState is named by an `id` key when its line has one, else
   `ls-HHMMSS` in local time, with hundredths for a frame off the whole second
-  (the contracts cite `ls-190409` but give LightState no id field).
+  (the contracts cite `ls-190409` but give LightState no id field). Rung 9 derives
+  `ls-<ts to the millisecond>` instead, and either reads. Two frames may share an
+  `ls-HHMMSS` id on different days, so frames are keyed by `ts`.
+- `Decision.inputs.light_state_ts`, when it is a number, says which frame the
+  decision read: the one at that `ts`, within 0.0005 s. Else `inputs.light_state`
+  does: the frame of that id within 12 hours of the decision. A verify frame, and a
+  decision in force for a residual, stay within 12 hours too, so one evening's
+  decision never reads the next evening's first frame.
 
 ## Inputs the contracts do not define
 

@@ -8,6 +8,7 @@ test_seam_den_core.py the real tools. Everything here is synthetic.
 import hashlib
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -21,7 +22,7 @@ import method  # noqa: E402
 import synthetic as syn  # noqa: E402
 import verify as cli  # noqa: E402
 from light_model import LightModel  # noqa: E402
-from records import Clock, write_jsonl  # noqa: E402
+from records import BadFile, Clock, write_jsonl  # noqa: E402
 from score import Run  # noqa: E402
 from test_verify import Quiet, by_id, closed, point, residual, send  # noqa: E402
 
@@ -266,6 +267,181 @@ class WhatTheConsoleSays(Cli):
     def test_it_says_what_the_model_ran_on(self):
         out, _ = self.preview([landed()], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
         self.assertIn("light model lm-hue-test: predict.py (rung 8 Stage 1, tools/den-light)", out)
+
+
+class TwoEvenings(unittest.TestCase):
+    """Frames are keyed by ts. Two may share a derived ls-HHMMSS id on different days, and each decision reads its own."""
+    DAY = 86400.0
+
+    def evening(self, at, ambient, did):
+        """Frames with no id at the same clock times each day, and a decision naming its read frame by the derived id."""
+        ref = frame(at, 20.0 + ambient)
+        dec = landed(did, at=at, read="ls-190329")
+        return [dec], [ref, frame(at + 5, 80.0 + ambient)]
+
+    def two(self, ambient=(0.0, 300.0)):
+        a, b = self.evening(T, ambient[0], "d-1"), self.evening(T + self.DAY, ambient[1], "d-2")
+        return a[0] + b[0], a[1] + b[1]
+
+    def test_no_crash_each_reads_its_own_days_frame_and_the_interval_comes(self):
+        decisions, frames = self.two()
+        out, _, report = run(decisions, frames)
+        for d in out:
+            self.assertEqual(point(d, "p0")["status"], "within", d["decision_id"])  # the other day's frame reads 300 away
+        self.assertEqual(by_id(out, "decision_id", "d-1")["verify"]["ts"], T + 5)
+        self.assertEqual(by_id(out, "decision_id", "d-2")["verify"]["ts"], T + self.DAY + 5)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["sessions"], hr["days_with_nothing_counted"]), (4, 0, 2, 0))
+        self.assertEqual(hr["interval"], [1.0, 1.0])
+        self.assertIn("session-bootstrap", hr["interval_status"])
+        self.assertEqual(report["decisions"]["verified"], 2)
+
+    def test_the_interval_reads_the_days_apart(self):
+        a, b = self.evening(T, 0.0, "d-1"), self.evening(T + self.DAY, 0.0, "d-2")
+        b[1][1] = frame(T + self.DAY + 5, 20.0)  # stuck on the second evening
+        hr = run(a[0] + b[0], a[1] + b[1])[2]["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["sessions"]), (2, 2, 2))
+        self.assertEqual(hr["interval"], [0.0, 1.0])
+
+    def test_two_frames_sharing_a_derived_id_are_not_an_error_nor_one_ids_own_id_twice(self):
+        run([], [frame(T, 1.0), frame(T + self.DAY, 1.0)])
+        run([], [frame(T, 1.0, "same"), frame(T + 100, 1.0, "same")])
+
+    def read(self, inputs, frames):
+        """The decision's own read frame by the value it reads: frames hold 20 at p0 if chosen right."""
+        dec = landed(read=None)
+        dec["inputs"].update(inputs)
+        decisions, _, report = run([dec], frames + [frame(T + 5, 80.0)])
+        return point(decisions[0], "p0"), report
+
+    def test_the_ts_names_the_frame_whatever_the_id_says(self):
+        p, _ = self.read({"light_state_ts": T, "light_state": "ls-other"}, [frame(T, 20.0), frame(T - 2, 70.0, "ls-other")])
+        self.assertEqual(p["status"], "within")
+
+    def test_within_half_a_millisecond_of_the_ts(self):
+        p, _ = self.read({"light_state_ts": T + 0.0004}, [frame(T, 20.0)])
+        self.assertEqual(p["status"], "within")
+        p, report = self.read({"light_state_ts": T + 0.0006}, [frame(T, 20.0)])
+        self.assertEqual((p["status"], report["decisions"]["verified"]), ("unverifiable", 0))
+        self.assertIn("no read frame", not_verified(report)["reason"])
+
+    def test_a_ts_that_names_no_frame_does_not_fall_back_on_the_id(self):
+        p, report = self.read({"light_state_ts": T - 1.0, "light_state": "ls-r"}, [frame(T, 20.0, "ls-r")])
+        self.assertEqual(p["status"], "unverifiable")
+        self.assertIn(repr(T - 1.0), not_verified(report)["reason"])
+
+    def test_a_reference_by_id_more_than_12_hours_away_is_not_taken(self):
+        decision_at = T + 0.5
+        for away, status in ((12 * 3600 + 1, "unverifiable"), (-12 * 3600 - 1, "unverifiable"), (12 * 3600, "within"), (-12 * 3600, "within")):
+            at = decision_at + away
+            p, report = self.read({"light_state": "ls-r"}, [frame(at, 20.0, "ls-r")])
+            self.assertEqual(p["status"], status, away)
+            if status == "unverifiable":
+                self.assertIn("12 hours", not_verified(report)["reason"])
+
+    def test_the_nearest_of_two_frames_of_one_id(self):
+        p, _ = self.read({"light_state": "ls-r"}, [frame(T - 5, 70.0, "ls-r"), frame(T - 1, 20.0, "ls-r"), frame(T + 3, 70.0, "ls-r")])
+        self.assertEqual(p["status"], "within")
+
+    def test_den_cores_derived_id_reads_with_no_ts_too(self):
+        p, _ = self.read({"light_state": "ls-%.3f" % T}, [frame(T, 20.0)])
+        self.assertEqual(p["status"], "within")
+
+    def test_den_verifys_own_derived_id_still_reads(self):
+        p, _ = self.read({"light_state": "ls-190329"}, [frame(T, 20.0)])
+        self.assertEqual(p["status"], "within")
+
+    def dated_by_clock(self, did, at, **inputs):
+        dec = landed(did, at=at, read="ls-190329")
+        dec["ts"] = "19:03:29.5"
+        dec["applied_scene"][B0]["steps"][0]["sent_at"] = "19:03:30"
+        dec["inputs"]["person_state"] = []
+        dec["inputs"].update(inputs)
+        return dec
+
+    def test_a_clock_time_is_dated_by_a_number_in_its_own_record(self):
+        decisions = [self.dated_by_clock("d-1", T, person_state=[f"A@{T + 1}"]),
+                     self.dated_by_clock("d-2", T + self.DAY, light_state_ts=T + self.DAY)]
+        _, frames = self.two()
+        out, _, report = run(decisions, frames)
+        self.assertEqual(by_id(out, "decision_id", "d-2")["verify"]["ts"], T + self.DAY + 5)
+        self.assertEqual(by_id(out, "decision_id", "d-1")["verify"]["ts"], T + 5)
+        self.assertEqual(report["hit_rate"]["hits"], 4)
+
+    def test_a_clock_time_with_only_an_id_two_days_share_cannot_be_dated_and_is_refused(self):
+        _, frames = self.two()
+        with self.assertRaisesRegex(BadFile, "d-1.*no date"):
+            run([self.dated_by_clock("d-1", T)], frames)
+
+    def test_a_clock_time_with_an_id_only_one_frame_has_takes_that_frames_day(self):
+        _, frames = self.two()
+        frames[2]["id"] = "ls-day2"
+        dec = self.dated_by_clock("d-2", T + self.DAY, light_state="ls-day2")
+        out, _, _ = run([dec], frames)
+        self.assertEqual(out[0]["verify"]["ts"], T + self.DAY + 5)
+
+    def test_a_clock_time_with_frames_of_one_evening_still_takes_that_evening(self):
+        dec = self.dated_by_clock("d-1", T, light_state=None)
+        out, _, _ = run([dec], self.evening(T, 0.0, "x")[1], overrides={"background": "zero"})
+        self.assertEqual(out[0]["verify"]["ts"], T + 5)
+
+    def test_a_corrections_clock_time_is_dated_the_same_way_on_its_own_evening(self):
+        decisions, frames = self.two()
+        c = {"correction_id": "c", "ts": "19:03:40", "action": {"settle_s": 1.0}, "snapshot": {"light_state": ["ls-190329"], "person_state": [f"A@{T + self.DAY}"]},
+             "hold": {"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 50, "cct_k": 2700}, "since": "19:03:40", "hold_set_revision": 9, "ended": None}}
+        at = T + self.DAY + 11  # 19:03:40 on the second evening: T is 19:03:29
+        _, states, _ = run(decisions, frames + [frame(at, 80.0), frame(T + 11, 80.0)], corrections=[c])
+        self.assertEqual(next(s for s in states if s["ts"] == at)["residual_status"], "not a verify frame: mid_change")
+        self.assertNotIn("residual_status", next(s for s in states if s["ts"] == T + 11))  # the first evening has no such change
+        for undated in ({"snapshot": {"light_state": ["ls-190329"]}}, {"snapshot": {}}):
+            with self.assertRaisesRegex(BadFile, "correction c.*no date"):
+                run(decisions, frames, corrections=[{**c, **undated}])
+
+    @unittest.skipUnless(shutil.which("powershell.exe"), "no powershell.exe here")
+    def test_the_join_the_readme_gives_reads_as_one_run_with_its_interval(self):
+        a, b = self.evening(T, 0.0, "d-1"), self.evening(T + self.DAY, 300.0, "d-2")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            for name, rows in (("d1.jsonl", a[0]), ("d2.jsonl", b[0]), ("f1.jsonl", a[1]), ("f2.jsonl", b[1])):
+                write_jsonl(tmp / name, rows)
+            (tmp / "m.json").write_text(json.dumps(model()), encoding="utf-8")
+            script = tmp / "join.ps1"
+            script.write_text(f"Set-Location -LiteralPath '{tmp}'\r\n"
+                              "Get-Content d1.jsonl, d2.jsonl | Set-Content -Encoding utf8 decisions.jsonl\r\n"
+                              "Get-Content f1.jsonl, f2.jsonl | Set-Content -Encoding utf8 frames.jsonl\r\n", encoding="utf-8")
+            subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(script)], check=True, timeout=120, capture_output=True)
+            with Quiet():
+                self.assertEqual(cli.main(["run", "--decisions", str(tmp / "decisions.jsonl"), "--light-states", str(tmp / "frames.jsonl"), "--model", str(tmp / "m.json"),
+                                           "--utc-offset-h", "-7", "--out", str(tmp / "o"), "--preview"]), 0)
+            report = json.loads((tmp / "o" / "report-preview.json").read_text("utf-8"))
+        self.assertEqual(report["hit_rate"]["sessions"], 2)
+        self.assertEqual(report["hit_rate"]["interval"], [1.0, 1.0])
+        self.assertIn("Get-Content C:\\den-verify\\s1\\decisions.jsonl, C:\\den-verify\\s2\\decisions.jsonl | Set-Content -Encoding utf8 C:\\den-verify\\decisions.jsonl",
+                      (HERE / "README.md").read_text("utf-8"))
+
+    def test_the_first_frame_of_the_next_evening_is_not_a_verify_frame_for_last_night(self):
+        dec = landed("d-1")
+        out, _, report = run([dec], [frame(T, 20.0, "ls-r"), frame(T + self.DAY, 80.0)])
+        self.assertIsNone(out[0]["verify"])
+        self.assertEqual(not_verified(report, "d-1")["kind"], "no frame after settling")
+
+    def test_a_verify_frame_12_hours_on_is_still_its_own(self):
+        out, _, _ = run([landed("d-1")], [frame(T, 20.0, "ls-r"), frame(T + 3.5 + 12 * 3600, 80.0)])
+        self.assertEqual(out[0]["verify"]["ts"], T + 3.5 + 12 * 3600)
+
+    def test_last_nights_decision_is_not_in_force_for_the_next_evenings_first_frame(self):
+        decisions, frames = self.two()
+        _, states, _ = run(decisions, frames)
+        first = next(s for s in states if s["ts"] == T + self.DAY)
+        self.assertEqual(first["residual"], [])
+        self.assertEqual(first["residual_status"], "no decision in force")
+        self.assertTrue(next(s for s in states if s["ts"] == T + 5)["residual"])
+
+    def test_the_readme_says_one_run_gets_the_interval(self):
+        said = " ".join((HERE / "README.md").read_text("utf-8").split())
+        self.assertIn("Several evenings in one run give the session-bootstrap interval", said)
+        self.assertIn("Get-Content", said.split("Several evenings in one run")[1][:600])
+        self.assertNotIn(r"C:\den-verify\s1\decisions.jsonl --light-states C:\den-verify\s1", said)
 
 
 class TheWordInTheMethod(unittest.TestCase):

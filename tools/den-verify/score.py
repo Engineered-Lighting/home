@@ -3,6 +3,7 @@
 Pure rules over records already read; no I/O and no network. VERIFY-V1.md
 says what is scored and why; this file follows it section by section.
 """
+import bisect
 import copy
 import math
 import random
@@ -11,7 +12,7 @@ from fractions import Fraction
 
 import method as method_mod
 import settle
-from records import BadFile, light_state_id, person_state_anchor
+from records import FRAME_APART_S, SAME_EVENING_S, BadFile, is_number, light_state_id, light_state_names, person_state_anchor
 
 TOLERANCE_STATUS = "relative, either way; target, to validate"
 SCORED_BASES = ("measured", "fallback_patch")
@@ -60,7 +61,7 @@ def percentile(sorted_values, q):
 class Frame:
     def __init__(self, rec, clock):
         self.rec = rec
-        self.id = light_state_id(rec, clock)
+        self.id, self.names = light_state_id(rec, clock), light_state_names(rec, clock)
         self.ts = float(rec["ts"])
         self.anchored = rec.get("anchored") is True
         self.unit = "lx" if self.anchored else "relative"
@@ -115,18 +116,15 @@ class Dec:
         self.id = rec.get("decision_id")
         inputs = rec.get("inputs") or {}
         self.inputs = inputs
-        ref_id = inputs.get("light_state")
-        self.ref = run.frames_by_id.get(ref_id) if ref_id else None
-        self.no_ref = None
-        if self.ref is None:
-            self.no_ref = f"{ref_id} names no frame here" if ref_id else inputs.get("light_state_status") or "the decision names none"
-        anchor = (self.ref.ts if self.ref else None) or person_state_anchor(inputs.get("person_state")) \
-            or run.first_ts
+        ts, read_ts = rec.get("ts"), inputs.get("light_state_ts")
+        anchor = ts if is_number(ts) else read_ts if is_number(read_ts) else run.date_anchor(
+            [inputs.get("light_state")], inputs.get("person_state"))
         self.resolve = lambda v: run.clock.resolve(v, anchor)
         try:
-            self.ts = self.resolve(rec.get("ts"))
+            self.ts = self.resolve(ts)
         except ValueError:
-            raise BadFile(f"decision {self.id}: its clock time {rec.get('ts')!r} has no date, and nothing in the record or the frames gives one") from None
+            raise BadFile(f"decision {self.id}: its clock time {ts!r} has no date, and nothing in the record or the frames gives one") from None
+        self.ref, self.no_ref = run.read_frame(inputs, self.ts)
         self.problem = self.stale_read = None
         self.problem_kind = "no settle time"
         try:
@@ -237,11 +235,11 @@ class Run:
         from records import Clock
         self.m, self.model, self.clock, self.scored = m, model, clock or Clock(), scored
         self.frames = sorted((Frame(r, self.clock) for r in light_states), key=lambda f: f.ts)
-        self.frames_by_id = {}
+        self.frame_times = [f.ts for f in self.frames]
+        self.frames_by_id = {}  # two frames on different days may share a derived name
         for f in self.frames:
-            if f.id in self.frames_by_id:
-                raise ValueError(f"two LightStates share the id {f.id}")
-            self.frames_by_id[f.id] = f
+            for name in f.names:
+                self.frames_by_id.setdefault(name, []).append(f)
         self.first_ts = self.frames[0].ts if self.frames else None
         self.decs = sorted((Dec(r, self) for r in decisions), key=lambda d: d.ts)
         self.holds, self.windows = [], settle.Windows()
@@ -256,11 +254,41 @@ class Run:
         self.occupancy = [(float(o["start"]), float(o["end"]), o.get("people") or []) for o in occupancy]
         self.gold = list(gold)
 
+    def date_anchor(self, names, person_state):
+        """A number to date a record's clock strings by: a frame only it names, a person's state id, or the one evening the
+        frames span. With frames over several evenings and nothing else, None: nothing says which day a clock time is on."""
+        for name in names:
+            named = self.frames_by_id.get(name) or ()
+            if len(named) == 1:
+                return named[0].ts
+        anchor = person_state_anchor(person_state)
+        if anchor is None and self.frames and self.frame_times[-1] - self.first_ts <= SAME_EVENING_S:
+            return self.first_ts
+        return anchor
+
+    def frame_at(self, ts):
+        """The frame at this time, to within half a millisecond, or None."""
+        i = bisect.bisect_left(self.frame_times, ts)
+        best = min(self.frames[max(i - 1, 0):i + 1], key=lambda f: abs(f.ts - ts), default=None)
+        return best if best is not None and abs(best.ts - ts) <= FRAME_APART_S else None
+
+    def read_frame(self, inputs, ts):
+        """(the frame a decision read, None), or (None, why not). Its ts names it, else its id does, within 12 hours: frames
+        are keyed by time, and a derived id comes round again the next day."""
+        at, name = inputs.get("light_state_ts"), inputs.get("light_state")
+        if is_number(at):
+            found = self.frame_at(at)
+            return found, None if found else f"no LightState at ts {at!r}"
+        if name:
+            near = [f for f in self.frames_by_id.get(name) or () if abs(f.ts - ts) <= SAME_EVENING_S]
+            if near:
+                return min(near, key=lambda f: abs(f.ts - ts)), None
+            return None, f"{name} names no LightState within 12 hours of this decision"
+        return None, inputs.get("light_state_status") or "the decision names none"
+
     def _add_correction(self, c):
         snap = c.get("snapshot") or {}
-        anchor = next((self.frames_by_id[i].ts for i in snap.get("light_state") or []
-                       if i in self.frames_by_id), None) \
-            or person_state_anchor(snap.get("person_state")) or self.first_ts
+        anchor = c["ts"] if is_number(c.get("ts")) else self.date_anchor(snap.get("light_state") or [], snap.get("person_state"))
         resolve = lambda v: self.clock.resolve(v, anchor)
         try:
             ts = resolve(c.get("ts"))
@@ -437,7 +465,7 @@ class Run:
         for f in self.frames:
             if f.ts < d.settled:
                 continue
-            if f.ts >= t_next:
+            if f.ts >= t_next or f.ts - d.settled > SAME_EVENING_S:
                 break
             reason = self.windows.busy(f.ts)
             if reason:
@@ -536,7 +564,7 @@ class Run:
         for d in self.decs:
             if d.ts <= t and (d.first_sent is None or d.first_sent <= t):
                 best = d
-        return best
+        return best if best is not None and t - best.settled <= SAME_EVENING_S else None
 
     def residual(self, frame):
         reason = self.windows.busy(frame.ts)

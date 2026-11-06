@@ -21,6 +21,7 @@ CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$")
 DAY = 86400.0
 LATEST_S = 32503680000.0  # the year 3000, as far as Windows' clock goes; before 1970 it stops too
 FRAME_APART_S = 0.0005  # how near inputs.light_state_ts must be to a frame's ts to name it
+SAME_EVENING_S = 12 * 3600.0  # how near a frame must be to a decision to be its frame, whatever names it
 DEN_LOG_SCHEMAS = ("den-event-1", "den-replay-log-1")
 
 
@@ -330,7 +331,8 @@ class Clock:
 def light_state_id(rec, clock):
     """A LightState's id: its `id` key if the line has one, else ls-HHMMSS local.
 
-    A frame off the whole second gets its hundredths too (ls-190332.70).
+    A frame off the whole second gets its hundredths too (ls-190332.70). Two frames on
+    different days may share such an id, so frames are keyed by ts, not by this.
     """
     if rec.get("id"):
         return rec["id"]
@@ -339,9 +341,14 @@ def light_state_id(rec, clock):
     return "ls-" + clock.hhmmss(ts) + (("%.2f" % frac)[1:] if 0 < frac < 1 else "")
 
 
+def light_state_names(rec, clock):
+    """Every name a Decision may give this frame: its `id` key, else the id above and den-core's, ls-<ts to the millisecond>."""
+    return [rec["id"]] if rec.get("id") else [light_state_id(rec, clock), "ls-%.3f" % float(rec["ts"])]
+
+
 def person_state_anchor(ids):
     for sid in ids or []:
         m = re.search(r"@(\d+(?:\.\d+)?)$", str(sid))
-        if m:
+        if m and _is_time(float(m[1])):
             return float(m[1])
     return None

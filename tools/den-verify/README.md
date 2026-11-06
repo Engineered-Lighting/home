@@ -52,7 +52,7 @@ python tools\den-verify\verify.py slots
 A preview on the proposed values, which writes only `report-preview.json`:
 
 ```powershell
-python tools\den-verify\verify.py run --decisions C:\den-verify\s1\decisions.jsonl --light-states C:\den-verify\s1\light_states.jsonl --corrections C:\den-verify\s1\corrections.jsonl --model C:\den-light\light-model.json --out C:\den-verify\s1\preview --preview
+python tools\den-verify\verify.py run --decisions C:\den-verify\decisions.jsonl --light-states C:\den-verify\light_states.jsonl --corrections C:\den-verify\corrections.jsonl --model C:\den-light\light-model.json --out C:\den-verify\run-1\preview --preview
 ```
 
 A scored run is the same command without `--preview`, into a new `--out`
@@ -60,6 +60,17 @@ folder; it refuses while `VERIFY-V1.md` has an open slot. Optional inputs:
 `--occupancy` and `--gold` (formats in `VERIFY-V1.md`), and `--utc-offset-h -7`
 when the records' clock strings are not in this PC's time zone. Run folders
 stay on the PC: no records, frames or reports go into git.
+
+Several evenings in one run give the session-bootstrap interval; one evening alone
+says `one session`. Join each input across the evenings first, here the decisions,
+then the same for the frames and any corrections:
+
+```powershell
+Get-Content C:\den-verify\s1\decisions.jsonl, C:\den-verify\s2\decisions.jsonl | Set-Content -Encoding utf8 C:\den-verify\decisions.jsonl
+```
+
+Frames are found by time, so two that share an `ls-HHMMSS` id on different days are
+no trouble, and each decision reads its own evening's.
 
 The console's first line gives how many decisions were verified and how many not,
 then the hit rate and the verdict. A decision counts as verified only when something

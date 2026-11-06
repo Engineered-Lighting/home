@@ -628,6 +628,36 @@ class Rung1FileTests(Rung1FileChecks, unittest.TestCase):
                     case.run()
                 self.assertFalse(case.out.exists())
 
+    def edited_lines(self, change, *, on_line):
+        """Rung 1's first two lines, one camera entry hand-edited."""
+        lines = [json.loads(self.lines[0]), json.loads(self.lines[1])]
+        change(lines[on_line]["cameras"][0])
+        return "".join(json.dumps(line) + "\n" for line in lines).encode("utf-8")
+
+    def test_a_version_or_camera_id_that_is_not_text_is_refused_by_name_with_the_refusal_code(self):
+        # Hand-edited files: a list there crashed on hashing with exit 1, the code replay.py documents for a failed gate.
+        for name, change in (("list version", lambda e: e.update(version=["2027-01-15.2"])),
+                             ("object version", lambda e: e.update(version={"n": 2})),
+                             ("list camera", lambda e: e.update(camera_id=["den-oak"])),
+                             ("object camera", lambda e: e.update(camera_id={"id": "den-oak"}))):
+            with self.subTest(name):
+                case = self.case(f"rung1-{name.replace(' ', '-')}", 2, room_bytes=self.edited_lines(change, on_line=1))
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = replay.main(["--take", str(case.take), "--room-model", str(case.room), "--detections",
+                                        str(case.rows_path), "--out", str(case.out)])
+                self.assertEqual(code, 2, err.getvalue())
+                self.assertIn("missing registration: no camera entry for den-oak", err.getvalue())
+                self.assertFalse(case.out.exists())
+
+    def test_an_invalidation_on_an_earlier_line_with_a_version_that_is_not_text_stops_nothing(self):
+        def change(entry):
+            entry.update(version=["2027-01-15.1"], invalidated={"reason": "mount_changed"})
+
+        case = self.case("rung1-odd-invalidation", 2, room_bytes=self.edited_lines(change, on_line=0))
+        run, records = case.run()
+        self.assert_lifted(case, run, records, self.transform_id(self.lines[1]))
+
 
 @unittest.skipUnless((DEN_REGISTER / "register.py").exists(),
                      "den-register is on its own branch until they merge; set DEN_REGISTER_DIR to run this")

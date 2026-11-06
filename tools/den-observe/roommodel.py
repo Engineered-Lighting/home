@@ -43,7 +43,7 @@ def _last_with_invalidations(revisions):
         return [c for c in cameras if type(c) is dict] if type(cameras) is list else []
 
     def key(entry):
-        return entry.get("camera_id"), entry.get("version")
+        return json.dumps([entry.get("camera_id"), entry.get("version")])  # a hand-edited file can hold a list here
 
     gone = {key(entry): entry["invalidated"] for revision in revisions for entry in entries(revision)
             if entry.get("invalidated")}

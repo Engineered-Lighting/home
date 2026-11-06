@@ -779,6 +779,18 @@ class TransformIdTests(Base):
                 records.resolve(models, bad)
             self.assertEqual(caught.exception.reason, reason, bad)
 
+    def test_an_invalidation_on_an_earlier_line_still_resolves_as_invalidated(self):
+        s = Scene(self)
+        s.click_all()
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        first = s.room_models()[0]
+        gone = records.invalidated_revision(first, "den-oak", {"reason": "mount_changed", "take": "knocked"})
+        held = records.confirmed_revision(first, "den-oak", {"take": "later"})
+        found = records.resolve([first, gone, held], fitted["transform_id"])
+        self.assertEqual(found["invalidated"]["take"], "knocked")
+        self.assertEqual(found["confirmed"]["take"], "later")
+
     def test_two_different_entries_under_one_id_are_ambiguous(self):
         s = Scene(self)
         s.click_all()
@@ -1175,6 +1187,17 @@ class MountTests(Base):
             knocked = self.later_in_the_room(pose, name=name, ended=when)
             knocked.click_all()
             self.assertEqual(self.check(s, knocked.take)[1]["result"], expected, name)
+        return knocked
+
+    def test_a_refit_from_the_take_that_invalidated_is_refused_and_from_a_later_one_is_not(self):
+        s, fitted = self.furnished()
+        turned = synthetic.moved(yaw_deg=5.0)
+        last = self.knock_twice(s, turned, 1_800_001_500.0)
+        code, report = last.fit()
+        self.assertEqual((code, reasons(report)), (1, ["mount_changed"]), last.out)
+        newer = self.later_in_the_room(turned, name="newer", ended=1_800_001_501.0)
+        newer.click_all()
+        self.assertEqual(newer.fit()[0], 0, newer.out)
 
     def test_too_few_marks_confirm_nothing(self):
         s, fitted = self.furnished()
@@ -1519,6 +1542,24 @@ class MountTests(Base):
                 again.click_all()
                 self.assertEqual(self.check(s, again.take)[1]["result"], then)
                 self.assertEqual(len(s.room_models()), revisions)
+
+    def test_what_the_marks_disagree_by_counts_once_against_their_movement(self):
+        m = closed_method()
+        self.assertTrue(register.camera_moved({"moved_m": 0.2, "off_m": 0.1}, m))
+        self.assertFalse(register.camera_moved({"moved_m": 0.2, "off_m": 0.16}, m))
+
+    def test_the_movement_in_view_counts_the_marks_themselves(self):
+        # Marks past every surface the frame saw: only they show how far the movement carries anything.
+        before = [[1.0, 0.0, 5.0], [-1.0, 0.5, 4.5], [0.0, -0.5, 5.0], [0.5, 1.0, 4.0], [-0.5, -1.0, 4.5], [1.5, 0.5, 5.0]]
+        c, s = math.cos(math.radians(0.5)), math.sin(math.radians(0.5))
+        mount = {"marks": [{"id": f"m{i}", "camera_xyz_m": p} for i, p in enumerate(before)],
+                 "signature": {"grid": [8, 8], "shape": [400, 640], "cells": [[1000.0] * 8 for _ in range(8)]}}
+        marks = [{"id": f"m{i}", "camera_xyz_m": [c * x + s * z, y, c * z - s * x], "error_m": 0.0}
+                 for i, (x, y, z) in enumerate(before)]
+        entry = {"intrinsics": {"rectified_left": {"fx": 450.0, "fy": 450.0, "cx": 320.0, "cy": 200.0}}}
+        facts = register.why_not_confirmed(entry, mount, marks, closed_method())[2]
+        self.assertAlmostEqual(facts["view_movement_m"], register.marks_motion(mount, marks)["moved_m"], places=4)
+        self.assertGreater(facts["view_movement_m"], 0.03, "the frame's own surfaces, 1 m away, move about 1 cm")
 
     def test_the_motion_of_the_marks_is_measured_against_the_gate_after_their_disagreement(self):
         before = [[1.0, 0.0, 3.0], [-1.0, 0.5, 2.0], [0.0, -0.5, 4.0], [0.5, 1.0, 2.5], [-0.5, -1.0, 3.5], [1.5, 0.5, 5.0]]

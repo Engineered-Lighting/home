@@ -5,8 +5,8 @@
 LOG is a den-core run log (run.py's log.jsonl), from copied real files or a synthetic evening. This is a
 consistency check of den-core's own code against den_lighting. It is not a lighting-quality gate. It prints one
 line per check (OK, FAIL: <first reason, with times> or n/a: <why>), then an overall line, and exits 0 when no
-check fails, 1 otherwise. A file it can't read at all is one sentence and exit 2. Times are UTC, with seconds from the log's
-first event. A synthetic log also prints "synthetic: plumbing only, never a gate".
+check fails, 1 otherwise. A line wrong inside fails the check that reads it. A file it can't read at all is one sentence and
+exit 2. Times are UTC, with seconds from the log's first event. A synthetic log also prints "synthetic: plumbing only, never a gate".
 
 1 replay: check.check() replays LOG byte for byte.
 2 need parity: the log's facts, mapped by need.sample(), go through den_lighting's own

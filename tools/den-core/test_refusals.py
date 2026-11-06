@@ -481,6 +481,12 @@ class TimesNoRunCanReachTest(Temp):
             with self.subTest(flag):
                 self.refuses("a time in one of them is wrong", flag, self.write(name, text), "--policies", "incumbent")
 
+    def test_a_time_no_clock_here_can_print_leaves_no_log_behind(self):
+        # Past the year 3000 or before 1970 Windows' gmtime stops, and run.py used to write the log and then stop on [Errno 22].
+        for text in ("1e11", "-5"):
+            with self.subTest(text):
+                self.refuses("a time in one of them is wrong", "--status", self.write("status.jsonl", status_at(text)), "--policies", "incumbent")
+
     def test_good_times_too_far_apart_to_tick_through(self):
         # --mqtt with no --mqtt-t0 sits in 1970: beside real facts that is 56 years of 2 s ticks.
         self.refuses("a time in one of them is wrong", "--mqtt", self.write("steps.json", steps_at("0", "1793764800")), "--policies", "incumbent")
@@ -499,6 +505,12 @@ class TimesNoRunCanReachTest(Temp):
         # A week of ticks. The refusal is about times no run reaches, and a real replay never comes near it.
         one = (T0, "occupancy", {"value": "on", "via": "t"}, "synthetic")
         self.assertEqual(runner.check_span([one, (T0 + 7 * 86400, "occupancy", {"value": "off", "via": "t"}, "synthetic")], 2.0, runner.TAIL_S), None)
+
+    def test_about_a_year_of_ticks_is_where_it_stops_as_readme_says(self):
+        one = (T0, "occupancy", {"value": "on", "via": "t"}, "synthetic")
+        self.assertEqual(runner.check_span([one, (T0 + 360 * 86400, "occupancy", {"value": "off", "via": "t"}, "synthetic")], 2.0, runner.TAIL_S), None)
+        with self.assertRaisesRegex(ValueError, "a time in one of them is wrong"):
+            runner.check_span([one, (T0 + 380 * 86400, "occupancy", {"value": "off", "via": "t"}, "synthetic")], 2.0, runner.TAIL_S)
 
 
 def run_cut_short(inputs, **kwargs):
@@ -851,6 +863,19 @@ class WrongInsideALogTest(Temp):
                 said = out.splitlines()
                 self.assertEqual([line.split(":")[0] for line in said[:6]], [*validate.NAMES, "overall"], out)
                 self.assertTrue(said[5].startswith("overall: FAIL"), out)
+
+    def test_a_checkout_with_no_den_lighting_is_not_called_a_wrong_shape(self):
+        log = self.tmp / "run" / "log.jsonl"
+        err = io.StringIO()
+        with mock.patch.object(incumbent, "find_policy", return_value=None):
+            with mock.patch("sys.stderr", err):
+                self.assertEqual(check.main([str(log)]), 2)
+            lines, passed = validate.report(log)
+        self.assertEqual(err.getvalue().count("\n"), 1)
+        self.assertIn("den_lighting policy.py not found", err.getvalue())
+        self.assertNotIn("wrong shape", err.getvalue())
+        self.assertFalse(passed)
+        self.assertTrue(lines[0].startswith("replay: FAIL: replay refused: den_lighting policy.py not found"), lines[0])
 
     def test_a_coordinator_log_with_no_incumbent_is_refused_by_name(self):
         with mock.patch("builtins.print"):

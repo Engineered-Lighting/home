@@ -17,7 +17,7 @@ HERE = Path(__file__).resolve().parent
 ORDER = ("need", "incumbent", "decide")
 TAIL_S = 150.0  # seconds of ticks after the last input, so a vacancy OFF can still happen
 MAX_TICKS = 16_000_000  # a year of 2 s ticks, each a line of the log; no replay comes near it
-LATEST_S = 253402300799.0  # 9999-12-31, as far as a datetime goes; far past it, adding a tick to a time stops moving it
+LATEST_S = 32503680000.0  # the year 3000, as far as Windows' gmtime goes, and run.py's summary prints each time; before 1970 it stops too
 
 
 def tagged(items, source):
@@ -49,7 +49,7 @@ def check_span(inputs, tick_s, tail_s):
     isn't a number, one past any clock, or two good ones a lifetime apart, which is --mqtt with no --mqtt-t0 beside real facts."""
     times = [item[0] for item in inputs]
     read = [item[0] for item in inputs if item[1] not in events.REFERENCE_KINDS]
-    if not (all(events.is_number(t) and abs(t) <= LATEST_S for t in times) and events.is_number(tick_s) and events.is_number(tail_s)
+    if not (all(events.is_number(t) and 0 <= t <= LATEST_S for t in times) and events.is_number(tick_s) and events.is_number(tail_s)
             and tick_s > 0 and (not read or (max(read) + tail_s - min(read)) / tick_s <= MAX_TICKS)):
         raise ValueError("no run can tick through these inputs, from %r to %r at tick_s %r and tail_s %r: a time in one of them is wrong"
                          % (min(times, default=None), max(times, default=None), tick_s, tail_s))

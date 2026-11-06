@@ -45,7 +45,7 @@ def check(log_path, resolve=None, on_policy=None):
             return _refuse(str(error), unreadable=True)
         except ValueError as error:
             return _refuse("%s refused its logged config: %s" % (name, error))
-        except (OSError, *events.SHAPE_ERRORS) as error:
+        except events.SHAPE_ERRORS as error:
             return _refuse("%s can't be rebuilt from its logged config, which is the wrong shape: %s" % (name, events.named(error)), unreadable=True)
         if config_changed(entry, policy):
             return _refuse("config changed: %s" % name)
@@ -76,6 +76,9 @@ def main(argv=None):
         sys.exit("usage: python -B tools/den-core/check.py LOG")
     try:
         result = check(argv[0])
+    except OSError as error:  # a checkout with no den_lighting, say
+        print("check.py: %s" % error, file=sys.stderr)
+        return 2
     except Exception as error:
         print(events.stopped("check.py", error), file=sys.stderr)
         return 2

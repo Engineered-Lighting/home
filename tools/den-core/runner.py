@@ -49,7 +49,7 @@ def check_span(inputs, tick_s, tail_s):
     isn't a number, one past any clock, or two good ones a lifetime apart, which is --mqtt with no --mqtt-t0 beside real facts."""
     times = [item[0] for item in inputs]
     read = [item[0] for item in inputs if item[1] not in events.REFERENCE_KINDS]
-    if not (all(events.is_number(t) and 0 <= t <= LATEST_S for t in times) and events.is_number(tick_s) and events.is_number(tail_s)
+    if not (all(map(events.is_number, times)) and all(0 <= t <= LATEST_S for t in read) and events.is_number(tick_s) and events.is_number(tail_s)
             and tick_s > 0 and (not read or (max(read) + tail_s - min(read)) / tick_s <= MAX_TICKS)):
         raise ValueError("no run can tick through these inputs, from %r to %r at tick_s %r and tail_s %r: a time in one of them is wrong"
                          % (min(times, default=None), max(times, default=None), tick_s, tail_s))

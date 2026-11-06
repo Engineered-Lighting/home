@@ -7,6 +7,7 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 Everything is synthetic, and nothing reaches a host or a light.
 """
 import copy
+import io
 import json
 import shutil
 import subprocess
@@ -20,6 +21,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
+import check  # noqa: E402
 import coordinator  # noqa: E402
 import events  # noqa: E402
 import fake_light  # noqa: E402
@@ -627,6 +629,233 @@ class LogsTest(Temp):
             self.assertEqual(code, 0, out + err)
             self.assertNotIn("Traceback", out + err)
             self.assertIn("is not reading-shadow-truth-1", out)
+
+
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class WrongInsideALogTest(Temp):
+    """A log can be good JSON, canonical and in order, and the wrong shape inside. check.py, score.py and validate.py replay it
+    and read its lines, so a wrong value used to meet them as a TypeError or KeyError traceback, exit 1."""
+
+    TOOLS = (("check.py",), ("score.py",), ("score.py", "--preview"), ("validate.py",))
+
+    def setUp(self):
+        super().setUp()
+        with mock.patch("builtins.print"):
+            run.main([*COORDINATOR, "--touch", "--out", str(self.tmp / "run")])
+        self.lines = (self.tmp / "run" / "log.jsonl").read_text("ascii").split("\n")[:-1]
+        self.header = json.loads(self.lines[0])
+        self.at = next(n for n, p in enumerate(self.header["policies"]) if p["module"] == "coordinator")
+
+    def with_header(self, change, name="log.jsonl"):
+        header = copy.deepcopy(self.header)
+        change(header)
+        return self.write(name, "\n".join([events.dumps(header), *self.lines[1:]]) + "\n")
+
+    def with_config(self, key, value, name="log.jsonl"):
+        def change(header):
+            if value is KeyError:
+                del header["policies"][self.at]["config"][key]
+            else:
+                header["policies"][self.at]["config"][key] = value
+        return self.with_header(change, name)
+
+    def with_event(self, wanted, change, name="log.jsonl"):
+        """The log with the first event wanted() picks changed; the line stays canonical, so only what reads it can tell."""
+        lines = list(self.lines)
+        for n, line in enumerate(lines[1:], 1):
+            event = json.loads(line)
+            if wanted(event):
+                change(event)
+                lines[n] = events.dumps(event)
+                return self.write(name, "\n".join(lines) + "\n")
+        self.fail("no such event in the log")
+
+    def test_a_header_of_the_wrong_shape_is_refused_where_it_is_read(self):
+        entry = self.header["policies"][self.at]
+        cases = [("policies", value) for value in (None, 5, "x", {}, [5], ["x"], [None], [{}], [{"module": 5}], [{"module": "coordinator"}],
+                                                   [{**entry, "config": 5}], [{**entry, "config": None}], [{**entry, "code_sha256": None}],
+                                                   [{**entry, "module": ["coordinator"]}], [{**entry, "id": 5}], [{**entry, "config_sha256": []}])]
+        cases += [("sources", value) for value in (None, 5, "x", {})]
+        cases += [(key, value) for key in ("tick_s", "tail_s") for value in (None, "x", [], {}, True, -1, 10 ** 400)]
+        cases += [("tick_s", 0)]
+        cases += [(key, value) for key in ("plant", "synthetic", "assume_occupied") for value in (None, 5, "x", [])]
+        cases += [(key, value) for key in ("shown", "actuation") for value in (None, 5, [], {})]
+        for key, value in cases:
+            path = self.write("header.jsonl", "\n".join([json.dumps({**self.header, key: value}, sort_keys=True, separators=(",", ":")), *self.lines[1:]]) + "\n")
+            with self.subTest(key=key, value=str(value)[:60]), self.assertRaisesRegex(ValueError, "its header") as refused:
+                events.read_run(path)
+            self.assertIn(key if key != "policies" else "polic", str(refused.exception))
+
+    def test_a_right_header_of_any_run_still_reads(self):
+        self.assertEqual(events.read_run(self.tmp / "run" / "log.jsonl")[0], self.header)
+
+    def test_each_tool_says_so_in_one_sentence(self):
+        for label, path in (("policies 5", self.with_header(lambda h: h.update(policies=5), "a.jsonl")),
+                            ("tick_s text", self.with_header(lambda h: h.update(tick_s="x"), "b.jsonl")),
+                            ("a policy of no shape", self.with_header(lambda h: h.update(policies=[5]), "c.jsonl"))):
+            for tool_name, *extra in self.TOOLS:
+                with self.subTest(label, tool=tool_name, extra=extra):
+                    code, out, err = tool(tool_name, path, *extra)
+                    self.refused(code, out, err, "its header")
+
+    def test_a_logged_config_of_the_wrong_shape_is_a_sentence(self):
+        cases = {"compensation": 5, "gate": 5, "light_model": 5, "code": 5, "looks": 5, "preference": None, "light_states": [{}]}
+        for key, value in cases.items():
+            path = self.with_config(key, value)
+            with self.subTest(key):
+                result = check.check(path)
+                self.assertFalse(result["ok"])
+                self.assertTrue(result.get("unreadable"), result)
+                self.assertIn("coordinator", result["reason"])
+                lines, code = score.report(path, preview=True)
+                self.assertEqual(code, 2, lines)
+                self.assertIn("refused", lines[0])
+        for name, value, words in (("compensation", 5, "wrong shape"), ("light_states", [{}], "wrong shape"), ("light_states", 5, "wrong shape")):
+            path = self.with_config(name, value)
+            for tool_name, *extra in self.TOOLS:
+                with self.subTest(name, value=value, tool=tool_name, extra=extra):
+                    code, out, err = tool(tool_name, path, *extra)
+                    self.refused(code, out, err, words)
+
+    def test_a_config_with_a_key_gone_is_refused_by_score_as_it_is_by_check(self):
+        for key in ("compensation", "gate", "light_model"):
+            path = self.with_config(key, KeyError)
+            with self.subTest(key):
+                code, out, err = tool("check.py", path)
+                self.assertNotIn("Traceback", out + err)
+                self.assertIn(code, (1, 2), out + err)
+                code, out, err = tool("score.py", path, "--preview")
+                self.refused(code, out, err, "config changed")
+
+    def test_a_policy_this_tool_does_not_have(self):
+        code, out, err = tool("check.py", self.with_header(lambda h: h["policies"][self.at].update(module="nope")))
+        self.refused(code, out, err, "nope")
+        real = {"module": "events", "code_sha256": events.sha256_file(HERE / "events.py")}
+        path = self.with_header(lambda h: h["policies"][self.at].update(real))
+        code, out, err = tool("check.py", path)
+        self.refused(code, out, err, "events")
+
+    def test_a_tick_that_never_passes_the_tail_is_not_an_endless_replay(self):
+        for tick in (1e-300,):
+            path = self.with_header(lambda h: h.update(tick_s=tick))
+            result = check.check(path)
+            self.assertFalse(result["ok"])
+            self.assertIn("a time in one of them is wrong", result["reason"])
+
+    def test_a_source_that_is_not_text_is_its_line(self):
+        path = self.with_event(lambda e: True, lambda e: e.update(source=[]))
+        for tool_name, *extra in self.TOOLS:
+            with self.subTest(tool=tool_name, extra=extra):
+                code, out, err = tool(tool_name, path, *extra)
+                self.refused(code, out, err, "line 2")
+
+    def test_an_input_line_of_the_wrong_shape_has_no_traceback(self):
+        for label, wanted, change in (("occupancy value a list", lambda e: e["kind"] == "occupancy", lambda e: e["data"].update(value=[])),
+                                      ("light on as text", lambda e: e["kind"] == "light_observed", lambda e: e["data"].update(on="x", brightness="y", kelvin=[])),
+                                      ("entity_id a list", lambda e: e["kind"] == "light_observed", lambda e: e["data"].update(entity_id=["light.den_front_left"])),
+                                      ("a fact's inside", lambda e: e["kind"] == "facts", lambda e: e["data"].update(observation=5, observed_at=[]))):
+            path = self.with_event(wanted, change)
+            for tool_name, *extra in self.TOOLS:
+                with self.subTest(label, tool=tool_name, extra=extra):
+                    code, out, err = tool(tool_name, path, *extra)
+                    self.assertNotIn("Traceback", out + err)
+                    self.assertIn(code, (1, 2), out + err)
+                    self.assertTrue((out + err).strip())
+
+    def test_a_derived_line_wrong_inside_fails_replay_with_no_traceback(self):
+        def decision(e):
+            return e["kind"] == "decision" and e["source"] == "decide"
+
+        def mode(e):
+            return e["kind"] == "mode" and e["data"]["holds"]
+
+        for label, wanted, change in (("no skipped", decision, lambda e: e["data"].pop("skipped")),
+                                      ("no applied_scene", decision, lambda e: e["data"].pop("applied_scene")),
+                                      ("no requested_scene", decision, lambda e: e["data"].pop("requested_scene")),
+                                      ("no predicted", decision, lambda e: e["data"].pop("predicted")),
+                                      ("no inputs", decision, lambda e: e["data"].pop("inputs")),
+                                      ("a mode's holds a number", mode, lambda e: e["data"].update(holds=5)),
+                                      ("a hold with no since", mode, lambda e: e["data"]["holds"][0].pop("since")),
+                                      ("no person fields", lambda e: e["kind"] == "person_state", lambda e: e["data"].pop("focused_engagement"))):
+            path = self.with_event(wanted, change)
+            for tool_name, *extra in self.TOOLS:
+                with self.subTest(label, tool=tool_name, extra=extra):
+                    code, out, err = tool(tool_name, path, *extra)
+                    self.assertNotIn("Traceback", out + err)
+                    self.assertIn(code, (1, 2), out + err)
+                    self.assertTrue((out + err).strip())
+            code, out, _ = tool("check.py", path)
+            self.assertEqual(code, 1, label)
+            self.assertIn("differs", out)
+
+    def test_validate_reports_such_a_line_check_by_check(self):
+        # The review's probe: every check prints a line and the overall line follows, on a decide log and a coordinator log.
+        with mock.patch("builtins.print"):
+            run.main(["--synthetic", "evening", "--touch", "--policies", "need", "incumbent", "decide", "--out", str(self.tmp / "decide")])
+        decide_lines = (self.tmp / "decide" / "log.jsonl").read_text("ascii").split("\n")[:-1]
+        cases = []
+        for lines in (decide_lines, self.lines):
+            self.lines = lines
+            cases += [self.with_event(lambda e: e["kind"] == "decision" and e["source"] == "decide", lambda e: e["data"].update(requested=e["data"].pop("requested_scene")), "a%d.jsonl" % len(cases)),
+                      self.with_event(lambda e: e["kind"] == "decision" and e["source"] == "decide" and e["data"]["skipped"],
+                                      lambda e: [s.update(entity_id=s.pop("channel")) for s in e["data"]["skipped"]], "b%d.jsonl" % len(cases)),
+                      self.with_event(lambda e: e["kind"] == "mode" and e["data"]["holds"], lambda e: [h.update(opened=h.pop("since")) for h in e["data"]["holds"]], "c%d.jsonl" % len(cases)),
+                      self.with_event(lambda e: e["kind"] == "decision" and e["source"] == "decide", lambda e: e["data"].pop("skipped"), "d%d.jsonl" % len(cases))]
+        for path in cases:
+            with self.subTest(path.name):
+                code, out, err = tool("validate.py", path)
+                self.assertEqual(code, 1, out + err)
+                self.assertNotIn("Traceback", out + err)
+                said = out.splitlines()
+                self.assertEqual([line.split(":")[0] for line in said[:6]], [*validate.NAMES, "overall"], out)
+                self.assertTrue(said[5].startswith("overall: FAIL"), out)
+
+    def test_a_coordinator_log_with_no_incumbent_is_refused_by_name(self):
+        with mock.patch("builtins.print"):
+            run.main(["--synthetic", "evening", "--touch", "--policies", "need", "coordinator", "--out", str(self.tmp / "alone")])
+        for extra in ((), ("--preview",)):
+            code, out, err = tool("score.py", self.tmp / "alone" / "log.jsonl", *extra)
+            self.refused(code, out, err, "no incumbent in this log")
+        self.assertEqual(tool("check.py", self.tmp / "alone" / "log.jsonl")[0], 0)
+
+
+class LastResortTest(Temp):
+    """What no check before it named. A tool still says one sentence and exits 2, and the sentence says where, so a bug in the
+    tool itself isn't lost for want of a traceback."""
+
+    def said(self, call):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err):
+            code = call()
+        return code, err.getvalue()
+
+    def stops(self, tool_name, call):
+        code, err = self.said(call)
+        self.assertEqual(code, 2)
+        self.assertEqual(len(err.strip().splitlines()), 1, err)
+        self.assertTrue(err.startswith("%s stopped on an input of the wrong shape, or a bug of its own: KeyError: 'surprise'" % tool_name), err)
+        self.assertRegex(err.strip(), r"\(\S+\.py line \d+\)$")
+
+    def test_each_tool_on_what_it_did_not_expect(self):
+        surprise = KeyError("surprise")
+        with mock.patch.object(run, "main", side_effect=surprise):
+            self.stops("run.py", run.cli)
+        with mock.patch.object(check, "check", side_effect=surprise):
+            self.stops("check.py", lambda: check.main(["log"]))
+        with mock.patch.object(score, "report", side_effect=surprise):
+            self.stops("score.py", lambda: score.main(["log"]))
+        with mock.patch.object(coordinator, "load_gate", side_effect=surprise):
+            self.stops("score.py", lambda: score.main(["--slots"]))
+        with mock.patch.object(events, "read_run", side_effect=surprise):
+            self.stops("validate.py", lambda: validate.main(["log"]))
+
+    def test_it_gets_there_from_the_command_line(self):
+        code, out, err = tool("run.py", "--synthetic", "evening", "--policies", "events", "--out", self.tmp / "out")
+        self.refused(code, out, err, "run.py stopped on an input of the wrong shape, or a bug of its own: AttributeError")
+
+    def test_a_keyboard_interrupt_is_not_caught(self):
+        with mock.patch.object(run, "main", side_effect=KeyboardInterrupt), self.assertRaises(KeyboardInterrupt):
+            run.cli()
 
 
 @unittest.skipUnless(POWERSHELL, "needs real powershell.exe, which is on the owner's PC")

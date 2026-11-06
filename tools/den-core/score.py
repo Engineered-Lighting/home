@@ -343,6 +343,9 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
     entry = coordinator_entry(header)
     if entry is None:
         return ["refused: no coordinator in this log: run it with --policies need incumbent coordinator"], 2
+    if not any(p["id"] == incumbent.Incumbent.id for p in header["policies"]):
+        return ["refused: no incumbent in this log, and the comparator is den_lighting re-run beside it: "
+                "run it with --policies need incumbent coordinator"], 2
     gate = coordinator.load_gate(gate_path)
     gate_now = coordinator.gate_config(gate)
     try:
@@ -351,6 +354,10 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
         raise
     except ValueError as error:
         return ["refused: the coordinator refused its logged config: %s" % error], 2
+    except events.SHAPE_ERRORS as error:
+        return ["refused: the coordinator's logged config is the wrong shape: %s" % events.named(error)], 2
+    if check.config_changed(entry, policy):  # what follows reads the logged config, which only that says is whole
+        return ["refused: config changed: coordinator"], 2
     light, config = policy.light, entry["config"]
     reasons = refusals(header, entry, gate_now, light)
     if reasons and not preview:
@@ -463,6 +470,9 @@ def main(argv=None):
         except (OSError, ValueError) as error:
             print(error, file=sys.stderr)
             return 2
+        except Exception as error:
+            print(events.stopped("score.py", error), file=sys.stderr)
+            return 2
         return 0
     if not args.log:
         parser.error("give a LOG, or --slots")
@@ -473,6 +483,9 @@ def main(argv=None):
         return 2
     except (OSError, ValueError) as error:
         print("score.py: %s" % error, file=sys.stderr)
+        return 2
+    except Exception as error:
+        print(events.stopped("score.py", error), file=sys.stderr)
         return 2
     print("\n".join(lines))
     return code

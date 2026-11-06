@@ -105,6 +105,17 @@ def load_den_lighting():
     return module
 
 
+def checked(one_check, *args):
+    """One check's line. Past a line's envelope a log can hold anything, and only the check that reads it finds out, so a line of
+    the wrong shape fails that check. A file it can't read at all stays one sentence and exit 2."""
+    try:
+        return one_check(*args)
+    except events.BadFile:
+        raise
+    except (OSError, ValueError, *events.SHAPE_ERRORS) as error:
+        return fail("a line of this log is the wrong shape for this check: %s" % events.named(error))
+
+
 def replay(log_path, first):
     """1: check.check(), with the time of the first mismatching line."""
     try:
@@ -359,8 +370,8 @@ def report(log_path, truth_path=None):
         results = [fail("unreadable log: %s" % error)] + [na("unreadable log")] * (len(NAMES) - 1)
         header, log = None, None
     else:
-        results = [replay(log_path, log[0]["t"]), need_parity(header, log, load_den_lighting()),
-                   only_the_look(header, log), holds_respected(header, log), quiet(header, log)]
+        results = [checked(replay, log_path, log[0]["t"]), checked(need_parity, header, log, load_den_lighting()),
+                   checked(only_the_look, header, log), checked(holds_respected, header, log), checked(quiet, header, log)]
     lines = ["%s: %s" % (name, "OK (%s)" % text if status == "OK" else "%s: %s" % (status, text))
              for name, (status, text) in zip(NAMES, results)]
     counts = {status: sum(r[0] == status for r in results) for status in ("OK", "FAIL", "n/a")}
@@ -389,6 +400,9 @@ def main(argv=None):
         return 2
     except (OSError, ValueError) as error:
         print("validate.py: %s" % error, file=sys.stderr)
+        return 2
+    except Exception as error:
+        print(events.stopped("validate.py", error), file=sys.stderr)
         return 2
     print("\n".join(lines))
     return 0 if passed else 1

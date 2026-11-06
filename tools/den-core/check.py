@@ -2,7 +2,7 @@
 inputs, code and config to the same bytes, header included.
 
 python -B tools/den-core/check.py LOG  prints OK or the first mismatch; exits 0 or 1. A file it can't read at all, the log or a
-logged light model, is one sentence and exit 2.
+logged light model, or one whose header, config or input lines are the wrong shape to replay, is one sentence and exit 2.
 """
 import sys
 
@@ -12,6 +12,11 @@ import runner
 
 def _refuse(reason, unreadable=False):
     return {"ok": False, "reason": reason, "first_mismatch": None, **({"unreadable": True} if unreadable else {})}
+
+
+def config_changed(entry, policy):
+    """True unless a header's config, its hash and what the policy rebuilt from it all agree."""
+    return len({entry["config_sha256"], events.sha256_json(entry["config"]), events.sha256_json(policy.config)}) > 1
 
 
 def check(log_path, resolve=None, on_policy=None):
@@ -28,7 +33,10 @@ def check(log_path, resolve=None, on_policy=None):
     policies = []
     for entry in header["policies"]:
         name = entry["module"]
-        module = (resolve or {}).get(name) or runner.import_module(name)
+        try:
+            module = (resolve or {}).get(name) or runner.import_module(name)
+        except (ValueError, ImportError) as error:
+            return _refuse("the log names a policy this tool does not have: %s" % error, unreadable=True)
         if events.sha256_file(module.__file__) != entry["code_sha256"]:
             return _refuse("code changed: %s" % name)
         try:
@@ -37,7 +45,9 @@ def check(log_path, resolve=None, on_policy=None):
             return _refuse(str(error), unreadable=True)
         except ValueError as error:
             return _refuse("%s refused its logged config: %s" % (name, error))
-        if len({entry["config_sha256"], events.sha256_json(entry["config"]), events.sha256_json(policy.config)}) > 1:
+        except (OSError, *events.SHAPE_ERRORS) as error:
+            return _refuse("%s can't be rebuilt from its logged config, which is the wrong shape: %s" % (name, events.named(error)), unreadable=True)
+        if config_changed(entry, policy):
             return _refuse("config changed: %s" % name)
         if on_policy:
             on_policy(policy)
@@ -47,6 +57,8 @@ def check(log_path, resolve=None, on_policy=None):
         replay_header, replayed = runner.run(inputs, policies, sources=header["sources"], **params)
     except ValueError as error:
         return _refuse("the log's header does not replay: %s" % error)
+    except events.SHAPE_ERRORS as error:
+        return _refuse("the log does not replay: an input line or a logged config is the wrong shape: %s" % events.named(error), unreadable=True)
     want = events.log_lines(log_path)
     got = [events.dumps(value) for value in [replay_header, *replayed]]
     for index in range(max(len(want), len(got))):
@@ -62,7 +74,11 @@ def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) != 1:
         sys.exit("usage: python -B tools/den-core/check.py LOG")
-    result = check(argv[0])
+    try:
+        result = check(argv[0])
+    except Exception as error:
+        print(events.stopped("check.py", error), file=sys.stderr)
+        return 2
     if result.get("unreadable"):
         print(result["reason"], file=sys.stderr)
         return 2

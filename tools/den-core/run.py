@@ -501,6 +501,9 @@ def cli(argv=None):
     except (OSError, ValueError) as error:
         print("run.py: %s" % error, file=sys.stderr)
         return 2
+    except Exception as error:
+        print(events.stopped("run.py", error), file=sys.stderr)
+        return 2
     return 0
 
 

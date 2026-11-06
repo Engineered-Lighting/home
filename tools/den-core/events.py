@@ -5,6 +5,7 @@ See README.md (SHARED INTERFACE). Standard library only; no clock, no network.
 import hashlib
 import json
 import math
+import traceback
 from pathlib import Path
 
 SCHEMA = "den-event-1"
@@ -37,6 +38,10 @@ KINDS = INPUT_KINDS + DERIVED_KINDS
 # a replay does; rung 9's ladder entry runs one after the replays. 'shown' is rung 11's and no den-core run sets it.
 ACTUATIONS = ("synthetic", "replay", "shadow")
 HEADER_KEYS = ("schema", "sources", "policies", "tick_s", "tail_s", "plant", "shown", "synthetic", "assume_occupied", "actuation")
+HEADER_TYPES = {"sources": list, "plant": bool, "synthetic": bool, "assume_occupied": bool, "shown": str, "actuation": str}
+POLICY_TEXT = ("id", "module", "version", "code_sha256", "config_sha256")
+# What a value of the wrong shape raises in code that reads it as the right one, where a line's own check can't see that far.
+SHAPE_ERRORS = (LookupError, TypeError, AttributeError, ArithmeticError, StopIteration, RecursionError)
 MEDIA_KEYS = frozenset({"image", "images", "jpeg", "jpg", "png", "b64", "base64", "pixels", "bytes"})
 MAX_LINE_BYTES = 16384
 MAX_FRAME_ID = 64  # a LightState's own id, as it goes on a Decision's line; coordinator.LIGHT_STATE_ROOM holds room for it
@@ -55,6 +60,18 @@ def is_number(value):
         return math.isfinite(value)
     except OverflowError:
         return False
+
+
+def named(error):
+    """An exception in words, for a refusal: its type says more than its text for a KeyError or a TypeError."""
+    return "%s: %s" % (type(error).__name__, " ".join(str(error).split()))
+
+
+def stopped(tool, error):
+    """A tool's last resort, for what no check before it named: one sentence, and where, so a bug of its own can still be found."""
+    frames = traceback.extract_tb(error.__traceback__)
+    where = " (%s line %d)" % (Path(frames[-1].filename).name, frames[-1].lineno) if frames else ""
+    return "%s stopped on an input of the wrong shape, or a bug of its own: %s%s" % (tool, named(error), where)
 
 
 def _utf16(head, path):
@@ -133,6 +150,8 @@ def validate(event):
     if type(seq) is not int:
         raise ValueError("seq must be an int")
     kind, data = event["kind"], event["data"]
+    if not isinstance(event["source"], str):
+        raise ValueError("source must be text")
     if kind not in KINDS:
         raise ValueError("unknown kind %r" % (kind,))
     if not isinstance(data, dict):
@@ -159,12 +178,32 @@ def log_lines(path):
     return [line[:-1] if line.endswith("\r") else line for line in lines[:-1]]
 
 
+def _header_problem(header):
+    """What is wrong with a header's values, or None. Each is read as this shape before any replay could say so."""
+    for key, kind in HEADER_TYPES.items():
+        if not isinstance(header[key], kind):
+            return "%s must be %s" % (key, {list: "a list", bool: "true or false", str: "text"}[kind])
+    if not isinstance(header["policies"], list) or not all(
+            isinstance(entry, dict) and isinstance(entry.get("config"), dict) and all(isinstance(entry.get(key), str) for key in POLICY_TEXT)
+            for entry in header["policies"]):
+        return "policies must be a list, each with %s as text and its config an object" % ", ".join(POLICY_TEXT)
+    if not is_number(header["tick_s"]) or header["tick_s"] <= 0:
+        return "tick_s must be a number above 0"
+    if not is_number(header["tail_s"]) or header["tail_s"] < 0:
+        return "tail_s must be a number, 0 or more"
+    return None
+
+
 def read_run(path):
-    """read, for a tool that goes on to use the header: one that lacks a run's keys is refused here, not as a KeyError there."""
+    """read, for a tool that goes on to use the header: one that lacks a run's keys or holds them in the wrong shape is refused
+    here, not as a KeyError or a TypeError there."""
     header, events = read(path)
     missing = [key for key in HEADER_KEYS if key not in header]
     if missing:
         raise ValueError("%s: its header lacks %s" % (path, ", ".join(missing)))
+    problem = _header_problem(header)
+    if problem:
+        raise ValueError("%s: its header is the wrong shape: %s" % (path, problem))
     return header, events
 
 

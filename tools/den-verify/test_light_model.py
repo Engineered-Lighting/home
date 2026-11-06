@@ -206,6 +206,10 @@ class Stage1Backend(Temp):
         self.assertIsNone(got["p3"])
         self.assertEqual((got["p1"], got["p2"]), (0.0, 0.0))
 
+    def test_the_error_for_a_channel_the_model_lacks_says_so(self):
+        with self.assertRaisesRegex(KeyError, "no channel 'light.other'"):
+            LightModel(stage1_model(FOUR)).reaches("light.other", "p0")
+
     def test_a_lit_channel_with_no_kelvin_is_a_key_error_as_predict_py_says(self):
         model = LightModel(stage1_model(FOUR))
         with self.assertRaisesRegex(KeyError, "cct_k"):
@@ -510,6 +514,10 @@ class Stage1Backend(Temp):
 class Walkthrough(Temp):
     """The walkthrough's model, in Stage 1's shape: its numbers, and a copy marked fake, which plumbing never gates on."""
 
+    def test_a_channel_it_lacks_at_an_unknown_level_says_so_too(self):
+        with self.assertRaisesRegex(KeyError, "no channel 'F9'"):
+            LightModel(syn.v11_model()).predict({"F9": {"level": None, "cct_k": None}})
+
     def evening(self, closed_method=True, fake=True):
         d, f, c = syn.v11_evening()
         return self.case({**syn.v11_model(), "fake": fake}, d, f, closed_method=closed_method)
@@ -668,9 +676,11 @@ class WrongStage1Model(Temp):
     def test_inside_a_channels_tables(self):
         for name, key, value in (("kelvin text", "kelvin", ["warm", 3294, 6535]), ("kelvin 0", "kelvin", [0, 3294, 6535]), ("a kelvin twice", "kelvin", [2202, 2202, 6535]),
                                  ("no kelvin", "kelvin", []), ("keys not a list", "basis_keys", 5), ("keys too few", "basis_keys", ["x"]),
-                                 ("levels not rising", "levels", [254, 0]), ("levels that stop rising", "levels", [0, 100, 50]), ("a level twice", "levels", [0, 100, 100]),
-                                 ("levels text", "levels", ["a", "b"]), ("no levels", "levels", []), ("g text", "g", ["a", "b"]), ("g too short", "g", [0.0])):
+                                 ("levels not rising", "levels", [254, 0]), ("levels text", "levels", ["a", "b"]), ("no levels", "levels", []),
+                                 ("g text", "g", ["a", "b"]), ("g too short", "g", [0.0])):
             self.assert_refused(self.change_channel(stage1_model(FOUR), key, value), name)
+        for name, levels in (("levels that stop rising", [0, 100, 50]), ("a level twice", [0, 100, 100])):
+            self.assert_refused(self.change_channel(self.change_channel(stage1_model(FOUR), "levels", levels), "g", [0.0, 0.5, 1.0]), name)
 
     def test_too_few_basis_keys_of_real_rows(self):
         model = stage1_model(FOUR)

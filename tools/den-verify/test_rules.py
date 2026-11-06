@@ -287,6 +287,9 @@ class ReasonsNamedInFull(unittest.TestCase):
         reason = not_verified(report)["reason"]
         self.assertEqual(sum(f"nowhere-{i} " in reason for i in range(5)), 3)
         self.assertTrue(reason.endswith("; and 2 more"), reason)
+        targets = {f"T{i}": {"surface_id": f"nowhere-{i}"} for i in range(4)}
+        _, _, report = run([landed(targets=targets)], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        self.assertTrue(not_verified(report)["reason"].endswith("; and 1 more"))
         targets = {f"T{i}": {"surface_id": f"nowhere-{i}"} for i in range(3)}
         _, _, report = run([landed(targets=targets)], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
         self.assertNotIn("more", not_verified(report)["reason"])
@@ -591,8 +594,9 @@ class UnknownIsNeverZero(Cli):
     def test_a_pin_of_off_is_level_0(self):
         copy = self.held_copy(None)
         copy["held"][0]["pinned"]["on"] = False
-        decisions, _, _ = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, {"status": "held", "readback": None, "steps": []}, copy), self.frames(b1=0.0))
+        decisions, states, _ = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, {"status": "held", "readback": None, "steps": []}, copy), self.frames(b1=0.0))
         self.assertEqual(point(decisions[0], "p1")["status"], "within")
+        self.assertEqual(residual(states, T + 5, "p2")["predicted"], 0.0)
 
     def test_a_person_setting_a_bulb_to_no_known_level_makes_it_unknown_from_then_on(self):
         correction = {"correction_id": "c", "ts": T + 20, "action": {"settle_s": 0.0}, "snapshot": {"light_state": ["ls-r"]},
@@ -865,7 +869,7 @@ class UnknownCauses(Cli):
 
     def test_window_daylight_the_other_way_or_too_small_to_say_is_no_daylight(self):
         low = 20.0 + 60 * 0.6  # below the prediction, so daylight would have to have fallen
-        for windows, cause in (((0.2, 0.6), "drift"), ((0.5, 0.52), "drift"), ((0.6, 0.2), "daylight")):
+        for windows, cause in (((0.2, 0.6), "drift"), ((0.5, 0.52), "drift"), ((0.6, 0.2), "daylight"), ((0.05, 0.0), "daylight")):  # the slot's own 0.05 counts
             self.assertEqual(self.cause(windows, [], after=low)[0]["cause"], cause, windows)
 
     def test_the_report_counts_the_misses_with_an_unknown_input(self):

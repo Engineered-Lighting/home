@@ -451,6 +451,13 @@ def kelvin_twice():
     model["cct"]["F1.spot"]["basis_keys"] = ["F1.spot@3500K", "F1.spot@3500K"]
     return model
 
+
+class NumbersTest(unittest.TestCase):
+    def test_a_number_is_one_a_float_can_hold(self):
+        for value, good in ((1, True), (1.5, True), (0, True), (True, False), ("1", False), (None, False), (float("nan"), False), (float("inf"), False), (10 ** 400, False)):
+            self.assertIs(records.is_number(value), good, repr(value)[:20])
+
+
 class WrongModelTest(Case):
     """rung 8 Stage 1's light-model.json, the one shape den-verify reads."""
     CASES = (
@@ -478,6 +485,7 @@ class WrongModelTest(Case):
         ("levels not rising", channel_table("levels", [254, 177.8, 127, 0])), ("levels text", channel_table("levels", ["a", "b", "c", "d"])), ("no levels", channel_table("levels", [])),
         ("a level twice", channel_table("levels", [0, 127, 127, 254])), ("g text", channel_table("g", ["a", "b", "c", "d"])), ("g too short", channel_table("g", [0.0])),
         ("a row not an object", basis_row(5)), ("a value not a number", basis_row({"counter-1": "x", "armchair-book": 1.0})),
+        ("one value of two not a number", basis_row({"counter-1": 686.0, "armchair-book": "x"})),
         ("a block left out", basis_row({"counter-1": 686.0})), ("a basis key that names nothing", basis_row(None)),
     )
 

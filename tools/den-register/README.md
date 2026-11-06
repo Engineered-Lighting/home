@@ -65,9 +65,11 @@ wall is `x = 0` and which is `y = 0` under `references`.
    the room: some on the floor, one or two on a table or counter top, one on a
    wall, and at least one at the far end from the camera. Not all on one line:
    the mount check below cannot confirm crosses that stay close to one line
-   (`mount_min_spread_m`, proposed 40 cm), and `fit` says so. Not on edges or
-   corners, where depth jumps. Leave them in place after the fit: the mount check
-   clicks them again.
+   (`mount_min_spread_m`, proposed 40 cm), and `fit` says so. Not all near the
+   camera: it cannot confirm them unless the farthest is `mount_min_reach_m`
+   (proposed 3 m) from the camera, and `fit` says that too. Not on edges or corners,
+   where depth jumps. Leave them in place after the fit: the mount check clicks them
+   again.
 2. Measure each cross's centre: `x` from the `x = 0` wall, `y` from the
    `y = 0` wall, `z` from the floor, with a tape or a laser. Write it as
    `"room_xyz_m": [x, y, z]` in metres, for example `[2.31, 1.07, 0.0]`.
@@ -117,8 +119,10 @@ the left camera image. Each click shows the depth found there; "depth_missing"
 means too little depth around it, so click a little to the side. If that does
 not help, you can leave the point unclicked, but keep a cross at the far end: a
 turn shows most there, and a dark end of the room with no cross on it is hard to
-confirm later, because the mount check has to count it as far away. More light
-helps. The Brightness button helps in a dark room; the Colour view is for
+confirm later, because the mount check has to count it as far away. If no cross
+you clicked is `mount_min_reach_m` (proposed 3 m) from the camera, `fit` says so
+and the mount check will not confirm that registration. More light helps. The
+Brightness button helps in a dark room; the Colour view is for
 finding your way only. Every click is saved at once in
 `C:\den-register\clicks-reg-1.json`. Press Done when finished. Running the
 command again reopens the same frame with your clicks; add `--frame 40` to use
@@ -189,7 +193,7 @@ works out how far that movement would carry anything else in view:
 | Line | Means | What to do |
 |---|---|---|
 | `MOUNT CONFIRMED` | Every cross is within 5 cm, and so is everything in view, at the deeper of what the registration frame and this frame saw there. Any part of the view the registration frame had no depth for counts as `mount_view_reach_m` away (proposed 6 m). The registration holds. | Nothing. |
-| `MOUNT NOT CONFIRMED` | A cross is not clicked, or the crosses look moved together on this one take, or one cross does not move with the others, or one is more than 5 cm from your tape position, or the crosses show a movement that puts something else in view further off, or they are too close to one line to show a turn about it. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same: a cross on furniture that moved, measure it again; otherwise treat the camera as moved. Then steps 4, 5 and 7. |
+| `MOUNT NOT CONFIRMED` | A cross is not clicked, or the crosses look moved together on this one take, or one cross does not move with the others, or one is more than 5 cm from your tape position, or the crosses show a movement that puts something else in view further off, or they are too close to one line to show a turn about it, or all too close to the camera to show one. Nothing changed. | Do what the line says: click the crosses it names, on a take with a clearer view if something is in the way, or record a new take and click them all again. If it says the same: a cross on furniture that moved, measure it again; otherwise treat the camera as moved. Then steps 4, 5 and 7. |
 | `MOUNT CHANGED` | The depth moved a lot, or two separately clicked takes agree that the crosses moved together by more than 5 cm. The registration is now invalidated, for good, and takes it had vouched for can no longer be replayed. | The line lists what to re-check. Then steps 4, 5 and 7. |
 | `mount_take_not_later` | That take is not newer than the registration's own. | Record a new take. |
 | `mount_take_in_future` | That take ended later than this PC's clock says it is now, so it could vouch for takes not recorded yet. | Check the PC's clock, then record a new take. |

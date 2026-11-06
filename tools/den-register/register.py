@@ -471,6 +471,11 @@ def run_fit(work, take_dir, frame=None, *, m=None, now=time.time, out=sys.stdout
         if spread < m["mount_min_spread_m"]:
             print(f"  But the mount check could not confirm it: these marks spread {_cm(spread)} off their best line, "
                   f"and it needs {_cm(m['mount_min_spread_m'])}. Add a cross away from that line and fit again.", file=out)
+        reach = marks_reach([p["camera_xyz_m"] for p in verdict["pairs"]])
+        if reach < m["mount_min_reach_m"]:
+            print(f"  But the mount check could not confirm it: the farthest of these marks is {reach:.2f} m from the "
+                  f"camera, and it needs {m['mount_min_reach_m']:g} m, because a turn shows most far away. Click or add "
+                  "a cross further off and fit again.", file=out)
     else:
         print("REFUSED", file=out)
         for r in report["reasons"]:
@@ -557,6 +562,11 @@ def marks_motion(mount, marks):
     farthest, worst = moved.index(max(moved)), off.index(max(off))
     return {"moved_m": records.rounded(moved[farthest]), "farthest": mount["marks"][farthest]["id"],
             "off_m": records.rounded(off[worst]), "worst": mount["marks"][worst]["id"]}
+
+
+def marks_reach(points):
+    """How far the farthest of these camera-frame points is from the camera, in metres."""
+    return max(math.hypot(*point) for point in points)
 
 
 def camera_moved(motion, m):
@@ -653,6 +663,11 @@ def why_not_confirmed(entry, mount, marks, m, later=None):
     if spread < m["mount_min_spread_m"]:
         return (f"the marks are too close to one line to show a turn about it (they spread {_cm(spread)} off it, and "
                 f"{_cm(m['mount_min_spread_m'])} is needed)"), "Register again with a cross away from that line.", facts
+    reach = marks_reach(start)
+    facts["marks_reach_m"] = records.rounded(reach)
+    if reach < m["mount_min_reach_m"]:
+        return (f"the marks are too close to the camera to show a turn (the farthest is {reach:.2f} m from it, and "
+                f"{m['mount_min_reach_m']:g} m is needed)"), "Register again with a cross further from the camera.", facts
     return None, None, facts
 
 

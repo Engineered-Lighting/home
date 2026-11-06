@@ -150,17 +150,22 @@ looks at a frame of a later take in three steps.
    something near on one frame can be gone from the other. A cell the registration
    frame has no depth for counts at `mount_view_reach_m`: a dark far floor or a bare
    wall has no depth and is still room. One only the later frame has no depth for
-   keeps the registration frame's depth. How far a rigid motion
-   moves a point is convex in the point, so nothing between the camera and those
-   surfaces moves further.
-   At most `gate_m`: `confirmed`, with one more condition. Over it:
+   keeps the registration frame's depth. How far a rigid motion moves a point is
+   convex in the point, so nothing between the camera and those surfaces moves
+   further.
+   At most `gate_m`: `confirmed`, with two more conditions. Over it:
    `not_confirmed`. So is a registration frame with under `mount_min_cells` cells
    of depth, which cannot say what the view holds, and so are marks whose second
    principal RMS spread is under `mount_min_spread_m`: a turn about the line
    through them hardly moves them, so noise can hide it. (On synthetic noise of
    1 px and 0.5% depth, a 1.5° turn about that line, 7.6 cm off across the room,
-   confirmed 20% of the time at a spread of 0.29 m and 9% at 0.47 m.) `fit` says
-   so when it registers such marks.
+   confirmed 20% of the time at a spread of 0.29 m and 9% at 0.47 m.) So too are
+   marks whose farthest is under `mount_min_reach_m` from the camera: a turn hardly
+   moves any of them, and noise on them then decides what the far end of the view
+   is said to do. (On the same noise, six marks all within 2 m of the camera, with
+   a spread of 0.49 m, confirmed a 0.75° pitch, 7.4 cm off across the view, 25% of
+   the time and a 1° pitch, 9.8 cm off, 7%.) `fit` says so when it registers marks
+   that either condition would stop.
 
 **Two takes that agree.** The marks invalidate only when two separately clicked
 takes agree that they moved together. The second must be recorded later than the
@@ -184,8 +189,9 @@ invalidated, and a fit from a take recorded before that check is refused.
 `confirmed` appends a revision whose entry carries `confirmed`: the take, its
 `take_ended_unix`, the frame, `worst_mark_m` and `view_movement_m`. Only a later
 take than the one already there moves it on. `not_confirmed` writes nothing to
-`room-model.jsonl` and confirms nothing. A take not recorded after the registration's own take is
-refused (`mount_take_not_later`), so a registration never confirms itself. So is
+`room-model.jsonl` and confirms nothing. A take not recorded after the
+registration's own take is refused (`mount_take_not_later`), so a registration
+never confirms itself. So is
 a take that ended later than the check's own clock says it is now
 (`mount_take_in_future`): `take.py` and this tool run on one PC, and a clock
 running ahead would vouch for takes not recorded yet.
@@ -222,4 +228,5 @@ mount_changed_fraction = open     # open, proposed 0.5 of compared cells
 mount_min_cells = open            # open, proposed 16 comparable cells
 mount_view_reach_m = open         # open, proposed 6.0 (past the room's far corner: a window or a doorway)
 mount_min_spread_m = open         # open, proposed 0.4 (all the marks, off their best line; a confirmation needs it)
+mount_min_reach_m = open          # open, proposed 3.0 (the farthest mark from the camera; a confirmation needs it)
 ```

@@ -17,6 +17,7 @@ the entry on a large depth change, or when two separately clicked takes agree th
 the re-clicked marks moved together by more than 5 cm. One take, or one mark off on
 its own, confirms nothing and invalidates nothing.
 Only every mark re-clicked on a later take can confirm a registration,
-with the movement they show held to 5 cm across the whole view, because depth
-alone cannot see a small turn or slide. A confirmation is saved in the RoomModel
+with the movement they show held to 5 cm across the whole view and the farthest
+mark far enough from the camera to show a turn, because depth alone cannot see a
+small turn or slide. A confirmation is saved in the RoomModel
 for rung 2 to read. Nothing is recorded, run or deployed by this change.

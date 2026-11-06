@@ -60,6 +60,10 @@ FAR_AND_NEAR = {"far": synthetic.in_view(0.7, 0.0, 5.2), "n1": synthetic.in_view
 CLUSTER = {"a": synthetic.in_view(0.4, 0.3, 3.0), "b": synthetic.in_view(-0.4, 0.3, 3.2),
            "c": synthetic.in_view(0.4, -0.3, 2.8), "d": synthetic.in_view(-0.4, -0.3, 3.0),
            "e": synthetic.in_view(0.0, 0.35, 3.0), "f": synthetic.in_view(0.1, -0.35, 3.2)}
+# Every mark 1.5 to 1.8 m away and spread enough to pass the spread slot, so a turn hardly moves any of them.
+ALL_NEAR = {"a": synthetic.in_view(-0.9, -0.5, 1.6), "b": synthetic.in_view(0.9, -0.5, 1.6),
+            "c": synthetic.in_view(-0.9, 0.5, 1.7), "d": synthetic.in_view(0.9, 0.5, 1.7),
+            "e": synthetic.in_view(0.0, 0.5, 1.8), "f": synthetic.in_view(0.3, -0.4, 1.5)}
 # Every mark on one table 1.8 m away, the only surface with depth in near_table_plane.
 NEAR_TABLE = {"a": synthetic.in_view(-0.8, 0.1, 1.8), "b": synthetic.in_view(0.8, 0.1, 1.8),
               "c": synthetic.in_view(0.0, 0.6, 1.8), "d": synthetic.in_view(-0.7, 0.7, 1.8),
@@ -212,12 +216,13 @@ class MethodTests(unittest.TestCase):
         self.assertEqual(set(m.open), {"min_spread_m", "depth_window_px", "min_depth_valid_fraction",
                                        "mount_tolerance_mm", "mount_tolerance_fraction",
                                        "mount_changed_fraction", "mount_min_cells", "mount_view_reach_m",
-                                       "mount_min_spread_m"})
+                                       "mount_min_spread_m", "mount_min_reach_m"})
         self.assertIsNone(m.scored())
         with self.assertRaises(KeyError):
             m["min_spread_m"]
         self.assertEqual(m.get("min_spread_m"), 0.25)
         self.assertEqual(m.get("mount_min_spread_m"), 0.4)
+        self.assertEqual(m.get("mount_min_reach_m"), 3.0)
 
     def test_ladder_still_states_the_gate_this_method_closes(self):
         rung = next(r for r in json.loads(LADDER.read_text(encoding="utf-8"))["rungs"] if r.get("n") == 1)
@@ -1373,7 +1378,7 @@ class MountTests(Base):
     def test_an_unmoved_camera_with_holes_in_its_view_is_still_confirmed(self):
         plane = near_table_plane()
         s, later = self.holed_registration(NEAR_TABLE, ("a", "b", "c", "d"), ("e", "f"), plane, None, plane,
-                                           m=closed_method(mount_min_spread_m=0.2))
+                                           m=closed_method(mount_min_spread_m=0.2, mount_min_reach_m=1.0))
         code, report, text = self.check(s, later.take)
         self.assertEqual((code, report["result"]), (0, "confirmed"), text)
         self.assertLess(report["view_movement_m"], 0.05)
@@ -1626,6 +1631,60 @@ class MountTests(Base):
                                                   now=lambda: 1_800_002_000.0, out=out)[1]
                 self.assertEqual(report["result"], expected, out.getvalue())
                 self.assertAlmostEqual(report["marks_spread_m"], spread, places=4)
+
+    NEAR_ROLES = ("a", "b", "c", "d"), ("e", "f")
+
+    def test_marks_all_near_the_camera_are_told_so_at_the_fit_and_cannot_confirm(self):
+        s = Scene(self, points=ALL_NEAR, fit=self.NEAR_ROLES[0], checks=self.NEAR_ROLES[1], ended=1_800_000_100.0,
+                  background=synthetic.room_depth())
+        s.click_all()
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        self.assertIn("could not confirm", s.out)
+        self.assertIn("from the camera", s.out)
+        later = Scene(self, points=ALL_NEAR, fit=self.NEAR_ROLES[0], checks=self.NEAR_ROLES[1], name="later",
+                      ended=1_800_001_000.0, background=synthetic.room_depth())
+        later.click_all()
+        code, report, text = self.check(s, later.take)
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertGreater(report["marks_spread_m"], 0.4, "the spread slot passes them")
+        self.assertLess(report["marks_reach_m"], 3.0)
+        self.assertIn("too close to the camera", text)
+        self.assertIn("Register again", text)
+        self.assertNotIn("register.py click", text)
+        self.assertEqual(len(s.room_models()), 1)
+
+    def test_a_far_cross_left_unclicked_is_told_so_at_the_fit(self):
+        # README step 5 lets the owner leave a cross with no depth unclicked. The fit passes without it, and says so.
+        points = dict(ALL_NEAR, far=synthetic.in_view(0.7, 0.0, 5.2))
+        s = Scene(self, points=points, fit=("far",) + self.NEAR_ROLES[0], checks=self.NEAR_ROLES[1], holes=("far",),
+                  ended=1_800_000_100.0, background=synthetic.room_depth())
+        s.click_all(list(ALL_NEAR))
+        code, fitted = s.fit()
+        self.assertEqual(code, 0, s.out)
+        self.assertIn("from the camera", s.out)
+
+    def test_the_reach_the_marks_need_is_the_slot_and_a_far_layout_is_told_nothing(self):
+        s, fitted = self.furnished()
+        self.assertNotIn("from the camera", s.out)
+        later = self.later_in_the_room()
+        later.click_all()
+        reach = max(math.hypot(*mark["camera_xyz_m"]) for mark in s.room_models()[0]["cameras"][0]["mount"]["marks"])
+        self.assertGreater(reach, 3.0)
+        for needed, expected in ((reach + 0.001, "not_confirmed"), (reach - 0.001, "confirmed")):
+            with self.subTest(needed=needed):
+                out = io.StringIO()
+                report = register.run_check_mount(s.work, later.take, m=closed_method(mount_min_reach_m=needed),
+                                                  now=lambda: 1_800_002_000.0, out=out)[1]
+                self.assertEqual(report["result"], expected, out.getvalue())
+                self.assertAlmostEqual(report["marks_reach_m"], reach, places=4)
+
+    def test_noise_cannot_confirm_a_turn_on_marks_all_near_the_camera(self):
+        # The 2026-11-05 verifier's sweep: at 1 px and 0.5% depth these confirmed a 0.75 degree pitch 25% of the time
+        # and a 1 degree pitch 7%.
+        for knock in ({"pitch_deg": 0.75}, {"pitch_deg": 1.0}, {"yaw_deg": 0.75}):
+            tally = self.noisy_checks(ALL_NEAR, *self.NEAR_ROLES, synthetic.moved(**knock), trials=60)
+            self.assertEqual(tally["confirmed"], 0, (knock, tally))
 
     def test_noise_on_an_unmoved_camera_does_not_invalidate_it(self):
         # Half a percent of depth noise, per mark: comparing each mark with its tape position said CHANGED on 27% of

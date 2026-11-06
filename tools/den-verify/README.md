@@ -63,7 +63,9 @@ and pins `predict.py`'s sha256 (`predict_sha256`). The model needs den-light's
 Its block ids are not surfaces, so give den-core's `surfaces.json` with
 `--surfaces`: with no map, a Decision's `room` is not verified. Optional inputs:
 `--occupancy` and `--gold` (formats in `VERIFY-V1.md`), and `--utc-offset-h -7`
-when the records' clock strings are not in this PC's time zone. Run folders
+when the records' clock strings are not in this PC's time zone. `--corrections` reads
+canon Correction records; correction-capture's `corrections.jsonl` is den-core's input
+and is refused by name. Run folders
 stay on the PC: no records, frames or reports go into git.
 
 Several evenings in one run give the session-bootstrap interval; one evening alone

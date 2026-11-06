@@ -451,7 +451,10 @@ class NumbersNoFloatHoldsTest(Temp):
         self.refuses("line 1 is not a LightState", "--light-states", self.write("far.jsonl", '{"ts":-1e300}\n'), *COORDINATOR)
 
     def test_a_poll_row_at_a_time_no_clock_has(self):
-        self.refuses("line 1 is not a poll row", "--poll", self.write("poll.jsonl", '{"t":"0001-01-01T00:00:00","lights":{},"occ":"on"}\n'), "--policies", "incumbent")
+        # On Windows the date itself raises; elsewhere it is a large negative epoch, which the runner refuses.
+        path = self.write("poll.jsonl", '{"t":"0001-01-01T00:00:00","lights":{},"occ":"on"}\n')
+        code, out, err = tool("run.py", "--poll", path, "--policies", "incumbent", "--out", self.tmp / "out")
+        self.refused(code, out, err, "line 1 is not a poll row" if sys.platform == "win32" else "a time in one of them is wrong")
 
     def test_a_journal_edge_that_is_no_number_names_its_file(self):
         path = self.write("edges.txt", edge_at("1.2.3"))

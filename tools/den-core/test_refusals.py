@@ -667,6 +667,7 @@ class LogsTest(Temp):
                             ("a block a number", {**good, "blocks": [1]}), ("a block with nothing", {**good, "blocks": [{}]}),
                             ("start as text", {**good, "blocks": [{"start": "soon", "end": T0, "reading": True}]}),
                             ("no end", {**good, "blocks": [{"start": T0, "reading": True}]}), ("end null", {**good, "blocks": [{"start": T0, "end": None, "reading": True}]}),
+                            ("a block not reading with no end", {**good, "blocks": [{"start": T0, "reading": False}]}),
                             ("a start past any clock", {**good, "blocks": [{"block": "b1", "reading": True, "start": 1e300, "end": 2e300}]})):
             path = self.write("truth-shape.json", json.dumps(value))
             with self.subTest(name):
@@ -800,7 +801,7 @@ class WrongInsideALogTest(Temp):
 
     def test_a_policy_this_tool_does_not_have(self):
         code, out, err = tool("check.py", self.with_header(lambda h: h["policies"][self.at].update(module="nope")))
-        self.refused(code, out, err, "nope")
+        self.refused(code, out, err, "the log names a policy this tool does not have: nope.py")
         real = {"module": "events", "code_sha256": events.sha256_file(HERE / "events.py")}
         path = self.with_header(lambda h: h["policies"][self.at].update(real))
         code, out, err = tool("check.py", path)

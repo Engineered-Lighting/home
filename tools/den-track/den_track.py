@@ -324,7 +324,12 @@ def check_scored(method, takes, report):
         if not os.path.exists(run_path):
             problems.append('%s: no %s beside its tracks' % (take['name'], TRACK_RUN_FILE))
             continue
-        run = json.loads(records.read_text(run_path))
+        try:
+            run = json.loads(records.read_text(run_path))
+        except ValueError:
+            run = None
+        if not isinstance(run, dict):
+            raise Refused('%s does not read as JSON: run track again' % run_path)
         if run.get('method', {}).get('fingerprint') != method.fingerprint:
             problems.append('%s: its tracks were made under another method; run track again' % take['name'])
         if run.get('method', {}).get('code_fingerprint') != method.code_fingerprint:

@@ -32,8 +32,11 @@ def read_block(path=METHOD_PATH):
         with open(path, encoding='utf-8-sig', newline=None) as f:   # universal newlines: CRLF == LF
             lines = f.read().split('\n')
     except UnicodeDecodeError:
-        raise MethodError('%s is not UTF-8 (PowerShell 5.1 can write UTF-16 or ANSI): save it as UTF-8' % path)
-    starts = [i for i, line in enumerate(lines) if line.strip() == FENCE]
+        with open(path, 'rb') as f:
+            if f.read(2) in (b'\xff\xfe', b'\xfe\xff'):
+                raise MethodError("%s is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8" % path)
+        raise MethodError("%s is not UTF-8 (PowerShell 5.1's Set-Content writes ANSI): save it as UTF-8" % path)
+    starts =[i for i, line in enumerate(lines) if line.strip() == FENCE]
     if len(starts) != 1:
         raise MethodError('%s must hold exactly one "%s" block, found %d' % (path, FENCE, len(starts)))
     body = []

@@ -1541,7 +1541,45 @@ class OutputFolderTest(Base):
             f.write(text)
         code, out = cli('--method', path, 'slots')
         self.assertEqual(code, 2, out)
-        self.assertIn('UTF-16', out)
+        self.assertIn("REFUSED: %s is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8" % path, out)
+
+    def test_a_method_file_in_ansi_says_it_is_not_utf8(self):
+        path = self.path('METHOD-ansi.md')
+        with open(path, 'wb') as f:
+            f.write(b'caf\xe9\n')
+        code, out = cli('--method', path, 'slots')
+        self.assertEqual(code, 2, out)
+        self.assertIn('%s is not UTF-8' % path, out)
+        self.assertNotIn('UTF-16', out)
+
+    def test_a_track_run_file_powershell_wrote_is_refused_by_name(self):
+        meth = self.closed_method()
+        take = self.make_take(meth=meth)
+        run_path = os.path.join(os.path.dirname(take[1]), den_track.TRACK_RUN_FILE)
+        with open(run_path, encoding='utf-8') as f:
+            text = f.read()
+        with open(run_path, 'wb') as f:
+            f.write(b'\xff\xfe' + text.replace('\n', '\r\n').encode('utf-16-le'))
+        code, out = cli(*self.score_args([take], scored=True, meth=meth))
+        self.assertEqual(code, 2, out)
+        self.assertIn("REFUSED: %s is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8" % run_path, out)
+
+    def test_a_track_run_file_that_is_not_json_is_a_sentence_not_a_traceback(self):
+        meth = self.closed_method()
+        for n, broken in enumerate(('{"method": ', '[1, 2]')):
+            with self.subTest(broken):
+                take = self.make_take(seed=n, meth=meth)
+                run_path = os.path.join(os.path.dirname(take[1]), den_track.TRACK_RUN_FILE)
+                with open(run_path, 'w', encoding='utf-8') as f:
+                    f.write(broken)
+                code, out = cli(*self.score_args([take], out='score-%d' % n, scored=True, meth=meth))
+                self.assertEqual(code, 2, out)
+                self.assertNotIn('Traceback', out)
+                self.assertIn('%s does not read as JSON' % run_path, out)
+
+    def test_the_readme_says_how_to_repair_a_file(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(den_track.__file__)), 'README.md'), encoding='utf-8') as f:
+            self.assertIn('Get-Content x.jsonl | Set-Content -Encoding utf8 x-utf8.jsonl', f.read())
 
     def test_an_unexpected_error_never_reads_as_the_gate_failing(self):
         take = self.make_take()

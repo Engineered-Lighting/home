@@ -110,8 +110,9 @@ How the command line behaves:
 
 - **Exit codes.** 0 written or passed, 1 the gate failed, 2 refused (nothing written).
 - **Output.** The tool writes its own files, as UTF-8 with LF, so no `>` is needed;
-  PowerShell 5.1's `>` would write UTF-16, which the tool refuses to read. Files with
-  CRLF or a BOM read the same.
+  PowerShell 5.1's `>` would write UTF-16, which the tool refuses to read. To repair a
+  file: `Get-Content x.jsonl | Set-Content -Encoding utf8 x-utf8.jsonl`. Files with CRLF
+  or a BOM read the same, and hash the same.
 - **Folders.** `--out` is refused inside a git checkout or OneDrive, and nothing is
   overwritten: a new run needs a new folder.
 - **The record of what has been scored.** `score` adds a line of hashes and capture times to

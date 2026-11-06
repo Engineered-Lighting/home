@@ -132,8 +132,8 @@ another frame of the take (and click again).
 
 `fit` refuses while any number in REGISTER-V1.md is `open`. Before your first
 fit, tell the agent which proposed values to accept (or other values). The
-agent commits them; then run `git pull`. Do this before you see any fit
-result.
+owner questions below say what they cost. The agent commits them; then run
+`git pull`. Do this before you see any fit result.
 
 ## Step 7: fit and read the verdict
 
@@ -222,6 +222,23 @@ measure it again and register again instead of recording the second take. The fi
 take's crosses are read back from its `mount-N.json`, so leave those files in the
 folder; without them it only asks for one more take.
 
+Noisy clicks change those two takes, as far as synthetic noise can say. These are
+for one cross at 5.2 m and five at 2 to 2.5 m, 300 trials each:
+
+- An unmoved camera. With every click at 1 px and depth noise of 0.5% or 1%, no first
+  take looked moved. With the far cross clicked at 3 px and stereo depth noise of
+  0.05 px, 10.0% looked moved and 0.7% ended invalidated on the second take. At 4 px
+  and 0.02 to 0.05 px, 21 to 29% looked moved and 1.3 to 2.3% ended invalidated.
+- A knock. At 1 px and 0.5% depth a 5° turn was invalidated on the second take every
+  time, and a 1° turn, 9.5 cm off across the view, 46% of the time and 76% within six
+  takes. Two noisy takes can differ by more than 5 cm and then do not agree: with the
+  far cross at 3 px, a 5° turn was invalidated on the second take 50% of the time and
+  96% within six.
+- So do not keep recording takes until one confirms. Each take gives noise another
+  chance: over six takes, with the far cross at 3 px, a 1° turn got one confirmation
+  in 6.0% of trials (0.3% at 1 px). If two or three takes say the crosses look moved,
+  treat the camera as moved and register again.
+
 A person standing close to the camera during the check take can invalidate on one
 take, because no click is involved: filling over half of the frame moves the depth
 enough to give `MOUNT CHANGED`. This is why the room stays clear for that take.
@@ -235,6 +252,43 @@ Exit codes: 0 = registered, confirmed or valid; 1 = refused, changed, not
 confirmed or invalidated, with the reason printed and saved in `fit-N.json` or
 `mount-N.json`; 2 = refused before anything was saved, with the reason
 printed.
+
+## Owner questions
+
+1. **How often a correct registration gets through.** Real click and depth noise is
+   not measured yet, so these rates are on synthetic noise: each click 1 px, tape
+   5 mm, a camera that never moved, 2000 trials a row.
+
+   | Crosses | Depth noise | `fit` passes | Of those, a later check confirms | Both |
+   |---|---|---|---|---|
+   | Six, 3.1 to 4.2 m from the camera | 0.5% | 57.2% | 44.4% | about 25% |
+   | Six, 3.1 to 4.2 m from the camera | 1% | 13.2% | 6.7% | about 1% |
+   | One at 5.2 m, five at 2 to 2.5 m (step 3) | 0.5% | 39.7% | 80.9% | about 32% |
+   | One at 5.2 m, five at 2 to 2.5 m (step 3) | 1% | 8.8% | 33.5% | about 3% |
+
+   So `REFUSED` or `MOUNT NOT CONFIRMED` on a correct registration is usual, and a
+   re-click or a new take is the normal answer. In the layout step 3 asks for, the
+   leave-one-out gate alone refuses 58.5% of correct registrations at 0.5% depth
+   (29.2% in the other layout). It stays because rung 2 refuses a bound over the
+   gate. Do you accept the proposed values on these rates, or do you want a real
+   take's noise measured first?
+2. **How far the farthest cross must be.** `mount_min_reach_m` is proposed at 3 m.
+   Under it the mount check confirms nothing. The same noise at 0.5% depth, among
+   fits that pass, 400 of them a row: how often a turn is confirmed that puts
+   something in view about 7 cm off (a 0.75° pitch or turn).
+
+   | Crosses | 0.75° pitch | 0.75° turn |
+   |---|---|---|
+   | All within 2 m, without the slot | 25% | 7.5% |
+   | All within 2 m, with the slot | 0% | 0% |
+   | One at 3.1 m, five within 2 m | 13.2% | 6.5% |
+   | One at 5.2 m, five within 2 m | 4.0% | 3.0% |
+   | One at 5.2 m, five at 2 to 2.5 m (step 3) | 2.5% | 3.5% |
+   | Six, 3.1 to 4.2 m from the camera | 0.2% | 0.8% |
+
+   The slot stops the first row. It does not cure the rows after it: one far cross
+   with the rest near still leaves this, and a larger value would only refuse more
+   layouts. Is 3 m what you want?
 
 ## Tests
 

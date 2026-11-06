@@ -179,7 +179,9 @@ clicked that shows something else clears it too, and only costs one more take. A
 check with marks unclicked, or a refused one, leaves it standing, and a report that
 does not read counts as no take. A real knock ends `changed` after two takes, and
 because nothing is confirmed on the way, a scored replay of a take after the last
-confirmation stays refused throughout. Two takes cannot tell a camera that moved
+confirmation stays refused throughout. Noise can make two takes of a real knock
+differ by more than `gate_m`; then it takes another (the README gives rates on
+synthetic noise). Two takes cannot tell a camera that moved
 from a far mark on furniture that moved and stays moved, or from the same slip made
 twice: those end `changed` too, at the price of a new take and fit.
 

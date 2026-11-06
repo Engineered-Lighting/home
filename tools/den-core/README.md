@@ -30,9 +30,12 @@ print to a pipe goes out in the console's code page, so a name it can't write co
 **What they refuse.** Any input that is missing, not JSON or the wrong shape is one sentence and exit 2, never a traceback. That
 goes for what is inside a light model, a mark or `--truth`, for a log's header, its logged config and its input lines, as far as
 `check.py` can't replay them, and for a time past any clock or inputs more than about a year of 2 s ticks apart, which is what
-`--mqtt` with no `--mqtt-t0` beside real facts would be. A log of the right shape with a line changed or wrong inside is a
-failed check, not a refusal, with exit 1: `check.py` prints the line, `validate.py` goes on check by check, the check that can't
-read the line failing and saying so, and `score.py` fails its replay line and says where it stopped reading. Anything no check
+`--mqtt` with no `--mqtt-t0` beside real facts would be. A log of the right shape whose replay comes out different, because a
+line was changed or is wrong inside, is a failed check, not a refusal, with exit 1: `check.py` prints the line, `validate.py` goes
+on check by check, the check that can't read the line failing and saying so, and `score.py` fails its replay line and says where
+it stopped reading, unless its own report can't read the value, which is one sentence and exit 2. The replay doesn't see an edit to
+a field it doesn't use, such as a facts line's `latency_s` or `session_id`, a `live_command` line or the header's `sources`: all
+three tools read such a log as `OK`, so `OK` says the log replays, not that nothing in it was touched. Anything no check
 named still ends in one sentence and exit 2: `<tool> stopped on an input of the wrong shape, or a bug of its own`, with the
 exception and where it happened, so a bug in the tool can still be found.
 
@@ -596,7 +599,7 @@ Then rung 10 reads what that wrote:
 python -B tools/den-verify/verify.py run --decisions C:/tmp/den-core-r9/real-1/decisions.jsonl --surfaces C:/tmp/den-core-r9/real-1/surfaces.json --light-states C:/tmp/den-core/in/light_state.jsonl --model C:/den-light/SESSION/light-model.json --preview --out C:/tmp/den-verify/real-1
 ```
 
-den-core's tests don't run that line: they check only that it names these files, and it needs a `verify.py` with `--surfaces`.
+den-core's tests don't run that line: they check only that it names these files. den-verify's seam test runs it as written, on a tree with both tools.
 
 When the coordinator ran, and only after the log is complete, `run.py` writes two more files beside `log.jsonl`. A run
 without the coordinator writes neither, and every output it has stays byte-identical.

@@ -1102,10 +1102,13 @@ class ReadmeLineTest(unittest.TestCase):
         # Each clause is run above: WrongInsideAModelTest, WrongInsideALogTest, LogsTest's marks and truth, TimesNoRunCanReachTest
         # and LastResortTest. The sentence once said never a traceback and they did not all hold.
         said = " ".join((HERE / "README.md").read_text("utf-8").split())
+        self.assertNotIn("with a line changed or wrong inside is a failed check", said)
         for words in ("Any input that is missing, not JSON or the wrong shape is one sentence and exit 2, never a traceback",
                       "what is inside a light model, a mark or `--truth`", "a log's header, its logged config and its input lines",
-                      "a time past any clock", "`--mqtt` with no `--mqtt-t0`", "a failed check, not a refusal, with exit 1", "`validate.py` goes on check by check",
-                      "`score.py` fails its replay line",
+                      "a time past any clock", "`--mqtt` with no `--mqtt-t0`", "whose replay comes out different", "a failed check, not a refusal, with exit 1",
+                      "`validate.py` goes on check by check", "`score.py` fails its replay line", "unless its own report can't read the value",
+                      "The replay doesn't see an edit to a field it doesn't use", "a facts line's `latency_s` or `session_id`, a `live_command` line or the header's `sources`",
+                      "`OK` says the log replays, not that nothing in it was touched",
                       "stopped on an input of the wrong shape, or a bug of its own", "a name it can't write comes out as a `\\uXXXX` escape"):
             self.assertIn(words, said)
         check_says = said.split("`check.py LOG` re-imports")[1].split("```")[0]
@@ -1114,9 +1117,30 @@ class ReadmeLineTest(unittest.TestCase):
         self.assertIn("missing or the wrong shape is refused like any other file", truth_says)
         self.assertIn("A log with no `incumbent` in it", said.split("### What a scored run needs")[1].split("### What it gates")[0])
 
-    def test_it_says_nothing_has_run_the_verify_line_here(self):
+    def test_what_it_says_the_replay_does_not_see_reads_ok_and_a_line_the_replay_writes_fails(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "out"
+            self.assertEqual(tool("run.py", *COORDINATOR, "--out", out)[0], 0)
+            lines = [json.loads(line) for line in (out / "log.jsonl").read_text("utf-8").splitlines()]
+            first = {kind: next(n for n, e in enumerate(lines) if e.get("kind") == kind) for kind in ("facts", "decision")}
+
+            def check_after(where, field, value, expected):
+                edited = copy.deepcopy(lines)
+                (edited[where]["data"] if where else edited[0])[field] = value
+                path = Path(folder) / "edited.jsonl"
+                path.write_text("".join(events.dumps(e) + "\n" for e in edited), encoding="utf-8", newline="\n")
+                code, printed, err = tool("check.py", path)
+                self.assertEqual(code, expected, (field, printed, err))
+
+            check_after(first["facts"], "latency_s", "x", 0)
+            check_after(first["facts"], "session_id", 5, 0)
+            check_after(0, "sources", [{"name": "other", "params": {}}], 0)
+            check_after(first["decision"], "why", "edited", 1)
+
+    def test_it_says_where_the_verify_line_is_run_and_no_longer_that_verify_py_needs_surfaces(self):
         said = " ".join((HERE / "README.md").read_text("utf-8").split())
-        self.assertIn("den-core's tests don't run that line: they check only that it names these files, and it needs a `verify.py` with `--surfaces`", said)
+        self.assertIn("den-core's tests don't run that line: they check only that it names these files. den-verify's seam test runs it as written, on a tree with both tools.", said)
+        self.assertNotIn("it needs a `verify.py` with `--surfaces`", said)
 
     def test_the_release_fragment_says_the_same(self):
         fragment = HERE.parents[1] / "changes" / "unreleased" / "den-core-rung-9-coordinator.md"
@@ -1124,7 +1148,8 @@ class ReadmeLineTest(unittest.TestCase):
             return
         said = " ".join(fragment.read_text("utf-8").split())
         for words in ("is refused with one sentence and exit 2 when it is UTF-16 (what PowerShell 5.1's `>` writes), missing, malformed or the wrong shape",
-                      "`--truth`", "A log of the right shape with a line changed or wrong inside fails its replay with exit 1", "`validate.py` says so check by check",
+                      "`--truth`", "A log of the right shape whose replay comes out different, because a line was changed or is wrong inside, fails with exit 1", "`validate.py` says so check by check",
+                      "The replay doesn't see an edit to a field it doesn't use", "such a log still reads `OK`",
                       "a time no run could reach is refused"):
             self.assertIn(words, said)
 

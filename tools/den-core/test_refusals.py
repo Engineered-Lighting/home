@@ -973,6 +973,12 @@ class NamesACodePageCantWriteTest(Temp):
         code, said, err = tool("validate.py", out / "log.jsonl", "--truth", self.write("truth.json", json.dumps(truth)), env=self.ENV)
         self.assertEqual((code, err), (0, ""), said + err)
         self.assertIn("\\u043a", said)  # a block is named on its line
+        head, *rest = (out / "log.jsonl").read_text("ascii").split("\n")
+        header = json.loads(head)
+        next(p for p in header["policies"] if p["module"] == "incumbent")["config"][self.NAME] = 1
+        code, said, err = tool("check.py", self.write("log.jsonl", "\n".join([events.dumps(header), *rest])), env=self.ENV)
+        self.assertEqual((code, err), (1, ""), said + err)
+        self.assertIn("\\u043a", said)  # what the incumbent refused is named on the FAIL line
 
 
 class LastResortTest(Temp):

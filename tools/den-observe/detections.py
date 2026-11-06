@@ -33,8 +33,11 @@ them) to a row without running any model; the caller supplies the frame's
 capture time, and the completion time if it has one, which those results do
 not carry.
 """
+import io
 import json
 import math
+
+import textfile
 
 SCHEMA = "den-detections-1"
 CLOCKS = ("host_monotonic", "unix")
@@ -107,7 +110,7 @@ def validate(row):
 def read_rows(path):
     """Validated rows of a .jsonl file, in file order; blank lines are skipped."""
     rows = []
-    with open(path, encoding="utf-8-sig") as source:
+    with io.StringIO(textfile.read_text(path), newline=None) as source:  # newline=None: as a text-mode open reads
         for number, line in enumerate(source, 1):
             if not line.strip():
                 continue

@@ -31,6 +31,7 @@ import observe  # noqa: E402
 import roommodel  # noqa: E402
 import take as den_take  # noqa: E402  (tools/den-take/take.py, unchanged: checkout and OneDrive guards)
 import takes  # noqa: E402
+import textfile  # noqa: E402
 
 RUN_SCHEMA = "den-observe-run-1"
 R5_BASELINE = {"expired": 115, "results": 228, "fraction": round(115 / 228, 3),
@@ -142,6 +143,8 @@ def replay(take_folder, room_model_path, out, *, detections_path=None, fake=Fals
     else:
         try:
             rows = detections.read_rows(detections_path)
+        except textfile.NotUtf8 as exc:
+            raise Refused(str(exc)) from None
         except (OSError, detections.RowError) as exc:
             raise Refused(f"detector rows: {exc}") from None
         detector = Path(detections_path).name
@@ -248,7 +251,7 @@ def main(argv=None):
             run = replay(args.take, args.room_model, args.out, detections_path=args.detections, fake=args.fake,
                          camera_id=args.camera, transform_id=args.transform_id, scored=args.scored,
                          method_path=args.method)
-    except Refused as exc:
+    except (Refused, OSError) as exc:  # a bundle gone or a leftover partial file is no failed gate either
         print(f"refused: {exc}", file=sys.stderr)
         return 2
     return 1 if run["scored"] and not run["gate"]["pass"] else 0

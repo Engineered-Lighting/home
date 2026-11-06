@@ -10,10 +10,10 @@ current room.
 """
 import json
 import math
-from pathlib import Path
 
 import camgeom as g
 import lift
+import textfile
 
 ROOM_FRAME = "z_up_metric_floor0"
 INTRINSICS_TOLERANCE_PX = 1.0  # depth_association.camera_model's intrinsics_tolerance_px
@@ -60,8 +60,10 @@ def load(path):
     must not bring back the revision before it.
     """
     try:
-        text = Path(path).read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
-    except (OSError, UnicodeDecodeError):
+        text = textfile.read_text(path).replace("\r\n", "\n")
+    except textfile.NotUtf8 as exc:
+        raise RegistrationRefused(str(exc)) from None
+    except OSError:
         raise RegistrationRefused(f"no readable RoomModel at {path}") from None
     try:
         return json.loads(text)

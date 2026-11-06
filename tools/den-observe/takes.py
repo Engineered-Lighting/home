@@ -24,6 +24,8 @@ import zipfile
 import zlib
 from pathlib import Path
 
+import textfile
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "den-take"))
 import check  # noqa: E402  (tools/den-take/check.py, unchanged)
@@ -104,7 +106,9 @@ def newest_check(folder):
     path = max(numbered)[1]
     out = {"file": path.name, "verdict": None, "c_s": None, "period_s": None}
     try:
-        report = json.loads(path.read_text(encoding="utf-8-sig"))
+        report = json.loads(textfile.read_text(path))
+    except textfile.NotUtf8 as exc:  # never a quiet fall back to the arrival clock
+        raise TakeRefused(str(exc)) from None
     except (OSError, ValueError):
         return out
     if type(report) is not dict:
@@ -123,9 +127,11 @@ class Take:
     def __init__(self, folder):
         self.folder = Path(folder).resolve()
         try:
-            self.record = json.loads((self.folder / "take.json").read_text(encoding="utf-8"))
-            with open(self.folder / "frames.csv", newline="", encoding="utf-8") as source:
+            self.record = json.loads(textfile.read_text(self.folder / "take.json"))
+            with io.StringIO(textfile.read_text(self.folder / "frames.csv"), newline="") as source:
                 rows = list(csv.DictReader(source))
+        except textfile.NotUtf8 as exc:
+            raise TakeRefused(str(exc)) from None
         except (OSError, ValueError):
             raise TakeRefused("take.json or frames.csv is missing or malformed") from None
         if type(self.record) is not dict or self.record.get("schema") != TAKE_SCHEMA:

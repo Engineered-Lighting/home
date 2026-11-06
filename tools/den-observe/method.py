@@ -13,6 +13,8 @@ import math
 import re
 from pathlib import Path
 
+import textfile
+
 HERE = Path(__file__).resolve().parent
 METHOD_FILE = "METHOD.md"
 BLOCK = "observe-v1"
@@ -33,7 +35,7 @@ class MethodError(ValueError):
 
 
 def lf_text(path):
-    return Path(path).read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
+    return textfile.read_text(path).replace("\r\n", "\n")
 
 
 class Method:
@@ -101,6 +103,8 @@ def load(path=None):
     path = Path(path or HERE / METHOD_FILE)
     try:
         text = lf_text(path)
-    except (OSError, UnicodeDecodeError):
+    except textfile.NotUtf8 as exc:
+        raise MethodError(str(exc)) from None
+    except OSError:
         raise MethodError(f"cannot read {path}") from None
     return parse(text, path.name)

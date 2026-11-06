@@ -16,6 +16,7 @@ including the slots the contracts leave open.
 | `takes.py` | Reads an R take's depth plane, frame times and clock (through den-take's reader). |
 | `lift.py`, `camgeom.py` | Depth lifting and camera math, following perception-lab without numpy. |
 | `method.py` | Reads METHOD.md's block and refuses a scored run while a slot is open. |
+| `textfile.py` | Reads a text file as UTF-8, with or without a BOM, and refuses UTF-16 or anything else by name. |
 | `synth.py` | Synthetic rooms, takes and camera entries with known geometry, for the tests and the demo. |
 | `testdata/` | A copy of the file den-register writes on synthetic data, and the script that makes it. |
 
@@ -87,6 +88,10 @@ use `--detections <rows file>` instead of `--fake`.
 
 Exit codes: 0 written, 1 scored and the gate failed, 2 refused (nothing
 written).
+
+In PowerShell 5.1, don't make a file this tool reads with `>`: that writes
+UTF-16, which is refused (`--out` writes the tool's own output). To repair one:
+`Get-Content rows.jsonl | Set-Content -Encoding utf8 rows-utf8.jsonl`.
 
 ## Closing a slot, then a scored run
 

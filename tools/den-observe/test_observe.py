@@ -840,5 +840,130 @@ class ReplayTests(unittest.TestCase):
             unix.run()
 
 
+def powershell_utf16(text):
+    """The bytes PowerShell 5.1's `>` and Out-File write: a BOM, UTF-16LE and CRLF."""
+    return b"\xff\xfe" + text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-16-le")
+
+
+def powershell_utf8(text):
+    """The bytes `Out-File -Encoding utf8` and `Set-Content -Encoding utf8` write: a BOM, UTF-8 and CRLF."""
+    return b"\xef\xbb\xbf" + text.replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+
+
+def utf16_sentence(path):
+    return f"{path} is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8"
+
+
+class PowerShellFileTests(unittest.TestCase):
+    """Every file a command line reads, as PowerShell 5.1 saves it. Exit 1 is kept for a failed gate."""
+
+    def command(self, case, **paths):
+        given = {"take": case.take, "room": case.room, "rows": case.rows_path, **paths}
+        command = ["--take", str(given["take"]), "--room-model", str(given["room"]), "--detections",
+                   str(given["rows"]), "--out", str(case.out)]
+        if "method" in given:
+            command += ["--method", str(given["method"])]
+        return command
+
+    def main(self, command):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = replay.main(command)
+        return code, err.getvalue()
+
+    def assert_refused_utf16(self, case, path, **paths):
+        code, err = self.main(self.command(case, **paths))
+        self.assertEqual(code, 2, err)
+        self.assertEqual(err.strip(), f"refused: {utf16_sentence(path)}")
+        self.assertFalse(case.out.exists())
+
+    def saved_as_utf16(self, path):
+        path.write_bytes(powershell_utf16(path.read_bytes().decode("utf-8")))
+        return path
+
+    def test_detector_rows(self):
+        case = Case("ps-rows", frames(1))
+        self.assert_refused_utf16(case, self.saved_as_utf16(case.rows_path))
+
+    def test_any_undecodable_rows_file_is_a_refusal_not_a_crash(self):
+        case = Case("ps-rows-ansi", frames(1))
+        case.rows_path.write_bytes(case.rows_path.read_bytes() + b'{"note": "caf\xe9"}\n')
+        code, err = self.main(self.command(case))
+        self.assertEqual(code, 2, err)
+        self.assertNotIn("Traceback", err)
+        self.assertIn(f"{case.rows_path} is not UTF-8", err)
+        self.assertFalse(case.out.exists())
+
+    def test_room_model(self):
+        case = Case("ps-room", frames(1))
+        self.assert_refused_utf16(case, self.saved_as_utf16(case.room))
+
+    def test_room_model_not_utf8_says_why(self):
+        case = Case("ps-room-ansi", frames(1))
+        case.room.write_bytes(case.room.read_bytes() + b'\n{"note": "caf\xe9"}\n')
+        code, err = self.main(self.command(case))
+        self.assertEqual(code, 2, err)
+        self.assertIn(f"{case.room} is not UTF-8", err)
+
+    def test_method_file(self):
+        case = Case("ps-method", frames(1))
+        wide = case.work / "METHOD.md"
+        wide.write_bytes(powershell_utf16((HERE / "METHOD.md").read_text(encoding="utf-8")))
+        self.assert_refused_utf16(case, wide, method=wide)
+
+    def test_the_takes_own_files(self):
+        for name in ("take.json", "frames.csv"):
+            with self.subTest(name):
+                case = Case("ps-" + name, frames(1))
+                self.assert_refused_utf16(case, self.saved_as_utf16(case.take.resolve() / name))
+
+    def test_a_utf16_check_does_not_quietly_become_no_check(self):
+        # A check that does not read used to fall back to the arrival clock: exit 0, with other capture times.
+        case = Case("ps-check", frames(1))
+        self.assert_refused_utf16(case, self.saved_as_utf16(case.take.resolve() / "check-1.json"))
+
+    def test_powershell_utf8_reads_the_same_as_the_tool_wrote_it(self):
+        plain = Case("ps-utf8-plain", frames(1))
+        _, baseline = plain.run()
+        saved = {"rows": lambda c: c.rows_path, "room": lambda c: c.room, "take": lambda c: c.take / "take.json",
+                 "frames": lambda c: c.take / "frames.csv", "check": lambda c: c.take / "check-1.json"}
+        for name, path_of in saved.items():
+            with self.subTest(name):
+                case = Case("ps-utf8-" + name, frames(1))
+                path = path_of(case)
+                path.write_bytes(powershell_utf8(path.read_bytes().decode("utf-8")))
+                _, records = case.run()
+                self.assertEqual(records, baseline)
+        case = Case("ps-utf8-method", frames(1))
+        wide = case.work / "METHOD.md"
+        wide.write_bytes(powershell_utf8((HERE / "METHOD.md").read_text(encoding="utf-8")))
+        run, records = case.run(method_path=wide)
+        self.assertEqual(records, baseline)
+        self.assertEqual(run["method"]["sha256_lf"], method_file.load().sha256)
+
+    def test_a_missing_bundle_is_a_refusal_not_a_crash(self):
+        case = Case("ps-missing-bundle", frames(1))
+        next((case.take / "frames").iterdir()).unlink()
+        code, err = self.main(self.command(case))
+        self.assertEqual(code, 2, err)
+        self.assertNotIn("Traceback", err)
+        self.assertFalse((case.out / "observations.jsonl").exists())
+
+    def test_a_leftover_partial_file_is_a_refusal_not_a_crash(self):
+        case = Case("ps-partial", frames(1))
+        case.out.mkdir(parents=True)
+        (case.out / "observations.jsonl.partial").write_text("", encoding="utf-8")
+        code, err = self.main(self.command(case))
+        self.assertEqual(code, 2, err)
+        self.assertNotIn("Traceback", err)
+        self.assertIn("observations.jsonl.partial", err)
+        self.assertFalse((case.out / "observations.jsonl").exists())
+
+    def test_the_readme_says_how_to_repair_a_file(self):
+        readme = (HERE / "README.md").read_text(encoding="utf-8")
+        self.assertIn("Get-Content", readme)
+        self.assertIn("Set-Content -Encoding utf8", readme)
+
+
 if __name__ == "__main__":
     unittest.main()

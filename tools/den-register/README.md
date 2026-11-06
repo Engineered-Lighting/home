@@ -254,6 +254,11 @@ confirmed or invalidated, with the reason printed and saved in `fit-N.json` or
 `mount-N.json`; 2 = refused before anything was saved, with the reason
 printed.
 
+In PowerShell 5.1, don't make a file this tool reads with `>`: that writes
+UTF-16, which is refused with exit 2, and the tool writes its own output. To
+repair one where it lies:
+`(Get-Content worksheet.json) | Set-Content -Encoding utf8 worksheet.json`.
+
 ## Owner questions
 
 1. **How often a correct registration gets through.** Real click and depth noise is

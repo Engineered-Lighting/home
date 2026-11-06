@@ -41,6 +41,21 @@ class Refused(Exception):
         return f"{self.reason}: {self.detail}" if self.detail else self.reason
 
 
+class NotUtf8(Refused):
+    """A file saved in an encoding this tool does not read: the command stops with exit 2 and saves no report."""
+
+
+def utf8_text(raw, path):
+    """A file's text, from UTF-8 with or without a BOM. UTF-16, which PowerShell 5.1's > writes, is refused by name."""
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        raise NotUtf8("not_utf8", f"{path} is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8")
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise NotUtf8("not_utf8", f"{path} is not UTF-8 (PowerShell 5.1's Set-Content writes ANSI): "
+                                  "save it as UTF-8") from None
+
+
 def sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
@@ -51,10 +66,10 @@ def read_take(folder):
     """take.json (finished, schema den-take-1) and frames.csv rows."""
     folder = Path(folder)
     try:
-        take = json.loads((folder / "take.json").read_text(encoding="utf-8"))
-        with open(folder / "frames.csv", newline="", encoding="utf-8") as source:
-            rows = list(csv.DictReader(source))
-        frames = [{"n": int(r["n"]), "file": r["file"], "sha256": r["npz_sha256"],
+        take = json.loads(utf8_text((folder / "take.json").read_bytes(), folder / "take.json"))
+        rows = list(csv.DictReader(io.StringIO(utf8_text((folder / "frames.csv").read_bytes(), folder / "frames.csv"),
+                                               newline="")))
+        frames =[{"n": int(r["n"]), "file": r["file"], "sha256": r["npz_sha256"],
                    "recv": float(r["recv_pc_mono_s"])} for r in rows]
     except (OSError, ValueError, KeyError, TypeError):
         raise Refused("take_unreadable", "take.json or frames.csv is missing or malformed") from None

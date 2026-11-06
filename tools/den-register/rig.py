@@ -96,8 +96,8 @@ def read_calibration(path):
         raise Refused("camera_calibration_missing", f"no {path.name}; save the camera's /calibration reply there "
                                                     "(README, step 4b)")
     try:
-        reply = json.loads(path.read_bytes().decode("utf-8-sig"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        reply = json.loads(scene.utf8_text(path.read_bytes(), path))
+    except (OSError, json.JSONDecodeError):
         _bad(f"{path.name} does not read as JSON; save the /calibration reply again")
     if type(reply) is not dict or type(reply.get("eeprom")) is not dict:
         _bad(f"{path.name} has no eeprom object; save the /calibration reply again")

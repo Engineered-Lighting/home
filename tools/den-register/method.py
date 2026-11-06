@@ -12,6 +12,8 @@ import math
 import re
 from pathlib import Path
 
+from scene import utf8_text
+
 HERE = Path(__file__).resolve().parent
 METHOD_FILE = "REGISTER-V1.md"
 BLOCK = "register-v1"
@@ -23,7 +25,9 @@ PROPOSED = re.compile(r"\bproposed\s+(-?[0-9]+(?:\.[0-9]+)?)\b")
 
 
 def lf_text(path):
-    return Path(path).read_bytes().decode("utf-8").replace("\r\n", "\n")
+    raw = Path(path).read_bytes()
+    utf8_text(raw, path)  # UTF-16 is refused by name; the hash stays over what this has always read
+    return raw.decode("utf-8").replace("\r\n", "\n")
 
 
 def sha256_lf(path):

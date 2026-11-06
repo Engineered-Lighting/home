@@ -18,6 +18,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -1974,6 +1975,144 @@ class CommandTests(Base):
             self.assertEqual(register.main(["worksheet", path], out=out), 2)
             self.assertIn("work_folder_refused", out.getvalue())
         self.assertFalse((HERE / "work").exists())
+
+
+# ---- files PowerShell 5.1 saved --------------------------------------------------------------------------
+
+def powershell_utf16(raw):
+    """A UTF-8 file as PowerShell 5.1's `>` and Out-File write it: a BOM, UTF-16LE and CRLF."""
+    return b"\xff\xfe" + raw.decode("utf-8").replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-16-le")
+
+
+def powershell_utf8(raw):
+    """A UTF-8 file as `Out-File -Encoding utf8` writes it: a BOM, UTF-8 and CRLF."""
+    return b"\xef\xbb\xbf" + raw.decode("utf-8").replace("\r\n", "\n").replace("\n", "\r\n").encode("utf-8")
+
+
+def utf16_sentence(path):
+    return f"{path} is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8"
+
+
+class PowerShellFileTests(Base):
+    """Every file a command line reads. A UTF-16 file stops the command with exit 2, and no report is saved."""
+
+    def setUp(self):
+        super().setUp()
+        self.s = Scene(self)
+        self.s.click_all()
+        self.real_load = method.load
+        patcher = mock.patch.object(register.method_file, "load", lambda path=None: self.s.m)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def main(self, *argv):
+        out = io.StringIO()
+        code = register.main(list(argv), out=out)
+        return code, out.getvalue()
+
+    def fit(self):
+        return self.main("fit", str(self.s.work), "--take", str(self.s.take))
+
+    def saved(self):
+        return sorted(p.name for p in self.s.work.glob("*-[0-9]*.json"))
+
+    def assert_refused(self, result, path):
+        code, out = result
+        self.assertEqual(code, 2, out)
+        self.assertEqual(out.strip(), f"REFUSED not_utf8: {utf16_sentence(path)}")
+        self.assertEqual(self.saved(), [])
+
+    def widen(self, path):
+        path.write_bytes(powershell_utf16(path.read_bytes()))
+        return path
+
+    def test_the_worksheet(self):
+        path = self.widen(self.s.work / "worksheet.json")
+        self.assert_refused(self.fit(), path)
+        self.assert_refused(self.main("click", str(self.s.work), "--take", str(self.s.take), "--no-browser"), path)
+
+    def test_the_saved_calibration_reply(self):
+        path = self.widen(self.s.work / "camera-calibration.json")
+        self.assert_refused(self.fit(), path)
+
+    def test_the_clicks(self):
+        path = self.widen(self.s.work / f"clicks-{self.s.take.name}.json")
+        self.assert_refused(self.fit(), path)
+
+    def test_the_takes_own_files(self):
+        for name in ("take.json", "frames.csv"):
+            with self.subTest(name):
+                path = self.s.take / name
+                keep = path.read_bytes()
+                self.widen(path)
+                self.assert_refused(self.fit(), path)
+                path.write_bytes(keep)
+
+    def registered(self):
+        code, out = self.fit()
+        self.assertEqual(code, 0, out)
+        for path in self.s.work.glob("fit-*.json"):
+            path.unlink()
+
+    def test_the_room_model_and_calibration_records(self):
+        self.registered()
+        tid = self.s.room_models()[-1]["cameras"][0]
+        for name in ("room-model.jsonl", "calibration-records.jsonl"):
+            with self.subTest(name):
+                path = self.s.work / name
+                keep = path.read_bytes()
+                self.widen(path)
+                self.assert_refused(self.fit(), path)
+                path.write_bytes(keep)
+        path = self.widen(self.s.work / "room-model.jsonl")
+        self.assert_refused(self.main("resolve", str(self.s.work), f"{tid['camera_id']}@{tid['version']}"), path)
+        self.assert_refused(self.main("check-mount", str(self.s.work), "--take", str(self.s.take)), path)
+
+    def test_a_saved_mount_report_is_not_quietly_no_take(self):
+        path = self.s.work / "mount-1.json"
+        path.write_bytes(powershell_utf16(b'{"transform_id": "den-oak@1", "marks_motion": {}}\n'))
+        with self.assertRaises(scene.NotUtf8) as caught:
+            register.agreeing_take(self.s.work, "den-oak@1", {"marks": []}, {"ended_unix": 1.0}, [], self.s.m)
+        self.assertEqual(caught.exception.detail, utf16_sentence(path))
+
+    def test_the_method_file(self):
+        folder = Path(self.tmp.name) / "method"
+        folder.mkdir()
+        wide = folder / method.METHOD_FILE
+        wide.write_bytes(powershell_utf16(METHOD_TEXT.encode("utf-8")))
+        with mock.patch.object(method, "HERE", folder), \
+                mock.patch.object(register.method_file, "load", self.real_load):
+            self.assert_refused(self.fit(), wide)
+
+    def test_a_file_in_ansi_says_it_is_not_utf8(self):
+        path = self.s.work / "worksheet.json"
+        path.write_bytes(path.read_bytes() + b'\n{"note": "caf\xe9"}\n')
+        code, out = self.fit()
+        self.assertEqual(code, 2, out)
+        self.assertIn(f"{path} is not UTF-8", out)
+        self.assertEqual(self.saved(), [])
+
+    def test_a_bom_and_crlf_read_and_hash_the_same(self):
+        names = ("worksheet.json", "camera-calibration.json", f"clicks-{self.s.take.name}.json")
+        for path in [self.s.work / name for name in names] + [self.s.take / "take.json", self.s.take / "frames.csv"]:
+            path.write_bytes(powershell_utf8(path.read_bytes()))
+        code, report = self.s.fit()
+        self.assertEqual(code, 0, self.s.out)
+        self.assertEqual(report["worksheet_sha256"], worksheet.load(self.s.work / "worksheet.json")["sha256"])
+        plain = Scene(self, name="take2")
+        plain.work = Path(self.tmp.name) / "plain-work"
+        plain.work.mkdir()
+        (plain.work / "worksheet.json").write_text(json.dumps(plain.sheet), encoding="utf-8")
+        self.assertEqual(report["worksheet_sha256"], worksheet.load(plain.work / "worksheet.json")["sha256"])
+        for name in ("room-model.jsonl", "calibration-records.jsonl"):
+            path = self.s.work / name
+            path.write_bytes(powershell_utf8(path.read_bytes()))
+        self.assertEqual(len(self.s.room_models()), 1)
+        self.assertEqual(len(self.s.calibrations()), 1)
+
+    def test_the_readme_says_how_to_repair_a_file(self):
+        readme = (HERE / "README.md").read_text(encoding="utf-8")
+        self.assertIn("(Get-Content worksheet.json) | Set-Content -Encoding utf8 worksheet.json", readme)
 
 
 # ---- the click page ------------------------------------------------------------------------------------

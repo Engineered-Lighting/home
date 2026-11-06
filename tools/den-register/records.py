@@ -15,6 +15,7 @@ from pathlib import Path
 
 from scene import Refused
 import rigid
+import scene
 
 FRAME = {"name": "z_up_metric_floor0", "unit": "m", "origin": "the minimum corner of the scan, on the floor",
          "axes": "x along the room's long axis, z up from the floor, y completing a right-handed frame"}
@@ -35,9 +36,9 @@ def read_jsonl(path, reason):
     if not path.exists():
         return []
     try:
-        text = path.read_bytes().decode("utf-8-sig").replace("\r\n", "\n")
+        text = scene.utf8_text(path.read_bytes(), path).replace("\r\n", "\n")
         records = [json.loads(line) for line in text.split("\n") if line.strip()]
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError) as exc:
         raise Refused(reason, f"{path.name} does not read as JSON Lines ({exc})") from None
     if not all(type(r) is dict for r in records):
         raise Refused(reason, f"{path.name} holds a line that is not a JSON object")

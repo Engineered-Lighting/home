@@ -181,8 +181,8 @@ class ClickSession:
 
 def read_clicks(path):
     try:
-        clicks = json.loads(Path(path).read_bytes().decode("utf-8-sig"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        clicks = json.loads(scene.utf8_text(Path(path).read_bytes(), path))
+    except (OSError, json.JSONDecodeError):
         raise Refused("clicks_stale", f"{Path(path).name} does not read; click again") from None
     if (type(clicks) is not dict or clicks.get("schema") != SCHEMA_CLICKS or type(clicks.get("clicks")) is not dict
             or type(clicks.get("frame")) is not dict):
@@ -451,6 +451,8 @@ def run_fit(work, take_dir, frame=None, *, m=None, now=time.time, out=sys.stdout
         calibrations = records.read_jsonl(work / CALIBRATIONS, "calibration_records_unreadable")
         records.current(room_models, sheet["room_id"])
         verdict = evaluate(sheet, clicks, take, row, bundle, intrinsics, m, room_models, calibrations, now=now())
+    except scene.NotUtf8:
+        raise  # exit 2 with nothing saved: this is no verdict on the fit
     except Refused as exc:
         verdict["reasons"] = [{"reason": exc.reason, "detail": exc.detail}]
     write = verdict.pop("write", None)
@@ -592,8 +594,8 @@ def agreeing_take(work, tid, mount, take, marks, m):
                 if (found := re.fullmatch(r"mount-([0-9]+)\.json", path.name))]
     for _, path in sorted(numbered, reverse=True):
         try:
-            report = json.loads(path.read_bytes().decode("utf-8-sig"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            report = json.loads(scene.utf8_text(path.read_bytes(), path))
+        except (OSError, json.JSONDecodeError):
             continue
         if type(report) is dict and report.get("transform_id") == tid and report.get("marks_motion"):
             break
@@ -759,6 +761,8 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
                     "view_movement_m": facts["view_movement_m"]}))
         if marks is not None:
             report["marks"] = marks
+    except scene.NotUtf8:
+        raise  # exit 2 with nothing saved: this is no verdict on the mount
     except Refused as exc:
         report.update(result="refused", reason=exc.reason, detail=exc.detail)
     path = next_numbered(work, "mount")

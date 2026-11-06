@@ -12,7 +12,7 @@ import math
 import re
 from pathlib import Path
 
-from scene import Refused
+from scene import Refused, utf8_text
 
 SCHEMA = "den-register-worksheet-1"
 FRAME = "z_up_metric_floor0"
@@ -118,6 +118,7 @@ def load(path, *, need_positions=True):
         data = Path(path).read_bytes()
     except OSError:
         raise Refused("worksheet_invalid", f"{path} cannot be read") from None
+    utf8_text(data, path)  # UTF-16 is refused by name; parse takes the bytes, so the hash stays over its own reading
     return parse(data, need_positions=need_positions)
 
 

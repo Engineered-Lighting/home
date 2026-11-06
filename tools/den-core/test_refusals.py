@@ -661,6 +661,10 @@ class LogsTest(Temp):
                 self.refused(code, out, err, "%s is not reading-shadow-truth-1" % path)
                 self.assertEqual(out, "")  # no check line and no overall line: it stops as it does on a log it can't read
 
+    def test_truth_is_read_before_any_check_runs(self):
+        with mock.patch.object(check, "check", side_effect=AssertionError("a check ran first")), self.assertRaises(events.BadFile):
+            validate.report(self.log, self.tmp / "absent.json")
+
     def test_truth_that_is_missing_or_a_folder_is_refused_too(self):
         for path in (self.tmp / "absent.json", self.tmp):
             with self.subTest(path.name):

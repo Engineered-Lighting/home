@@ -618,8 +618,8 @@ The frames are references, not inputs to the solve. Only each frame's id and ts 
 one without, apart from the `light_state` fields, which go on a line after it is fitted, in room held for them. The config hash
 each Decision logs leaves the frames out, so it is the same either way; the header's own hash and `sources` do move.
 
-All of this has run on synthetic data only: `test_seam.py` runs it on a model in the shape Stage 1 writes, through den-light's
-own `predict.py` on the merged tree.
+All of this but rung 10's line has run, on synthetic data only: `test_seam.py` runs it on a model in the shape Stage 1 writes,
+through den-light's own `predict.py` on the merged tree.
 
 ### What a scored run needs
 

@@ -280,7 +280,7 @@ class DecisionRecordTest(unittest.TestCase):
         [d] = feed(p, *touch(T0 + 30, FL, 80))
         self.assertEqual(d["applied_scene"][FL]["status"], "held")
         self.assertEqual(d["applied_scene"][FL]["readback"], {**scene(80), "level": 80 / 254, "cct_k": 2700})
-        self.assertEqual(d["requested_scene"][FL], scene(80))
+        self.assertEqual(d["requested_scene"][FL], {**scene(80), "level": 80 / 254, "cct_k": 2700})
         self.assertEqual(d["skipped"][0]["channel"], FL)
         self.assertEqual(d["trigger"], "hold change")
         held = d["inputs"]["hold_set"]["held"][0]
@@ -392,7 +392,7 @@ class RecordedLevelsTest(unittest.TestCase):
             p.handle(ev(T0, "light_observed", {"entity_id": b, **blank, "context": "unknown"}))
         p.handle(ev(T0, "mode", {**mode()["data"], "normal": {b: blank for b in events.LIGHTS}}, "incumbent"))
         [base] = feed(p, ev(T0 + 1, "occupancy", {"value": "on", "via": "t"}))
-        self.assertEqual(base["requested_scene"][FL], blank)
+        self.assertEqual(base["requested_scene"][FL], {**blank, "level": None, "cct_k": None})
         self.assertEqual(base["predicted"]["surfaces"]["room"], None)
         [read] = feed(p, ps(T0 + 10))  # the look has levels, so reading is still solved
         self.assertEqual(read["requested_scene"][FR]["brightness"], 200)
@@ -450,7 +450,7 @@ class GlareTest(unittest.TestCase):
         [first] = feed(p, ps(T0 + 10))
         self.assertEqual(first["hard_conflicts"], [])
         [d] = feed(p, *touch(T0 + 30, FL, 254))
-        self.assertEqual(d["requested_scene"][FL], scene(254))
+        self.assertEqual(d["requested_scene"][FL], {**scene(254), "level": 1.0, "cct_k": 2700})
         [conflict] = d["hard_conflicts"]
         self.assertEqual(conflict, {"constraint": "glare_at_eyes", "held_channel": FL, "track": "A", "eye_or_envelope": "eye-A",
                                     "G_hi": 2.0, "limit": 1.0, "model_status": "unvalidated"})
@@ -465,7 +465,7 @@ class GlareTest(unittest.TestCase):
         feed(p, ps(T0 + 5, state="none"), *touch(T0 + 10, FL, 120))
         [d] = feed(p, ps(T0 + 20))
         self.assertEqual([c["held_channel"] for c in d["hard_conflicts"]], [FL])
-        self.assertEqual(d["requested_scene"][FL], scene(120))
+        self.assertEqual(d["requested_scene"][FL], {**scene(120), "level": 120 / 254, "cct_k": 2700})
         self.assertLessEqual(d["requested_scene"][FR]["brightness"], 180)
         self.assertGreater(d["requested_scene"][RR]["brightness"], 180)
         self.assertEqual(p.config["manual_vs_safety"], "S0")
@@ -1399,7 +1399,8 @@ class ReplayTest(unittest.TestCase):
         for name, config in (("decide", look), ("coordinator", {})):
             _, log = runner.run(runner.tagged(items, "synthetic"), runner.load_policies(["need", "incumbent", name], {name: config}),
                                 synthetic=True, sources=[])
-            runs[name] = [(e["t"], e["data"]["requested_scene"]) for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+            runs[name] = [(e["t"], {b: {key: s[key] for key in ("on", "brightness", "kelvin")} for b, s in e["data"]["requested_scene"].items()})
+                          for e in log if e["kind"] == "decision" and e["source"] == "decide"]
         self.assertTrue(runs["decide"])
         self.assertEqual(runs["coordinator"], runs["decide"])
 

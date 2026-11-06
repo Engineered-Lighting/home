@@ -129,6 +129,18 @@ def _level(scene):
     return min(light_adapter.HUE_FULL, scene["brightness"]) / light_adapter.HUE_FULL
 
 
+def with_canon(scene):
+    """A Hue scene as a Decision logs it: the schema's level and cct_k beside hue-den-4's keys, for rung 10 and K20, which read
+    them. None for a bulb never seen; level is None, never 0, for a bulb that is on with no brightness."""
+    return None if scene is None else {**scene, "level": _level(scene), "cct_k": scene.get("kelvin")}
+
+
+def logged_pin(pinned):
+    """The logged copy of a hold's pin, in the schema's terms. The mode's own record, which decide reads, stays as it is."""
+    level = _level(pinned)
+    return {**pinned, "level_pct": None if level is None else 100 * level, "cct_k": pinned.get("kelvin"), "source": "read-back"}
+
+
 def surface_of(person, light):
     """A person's task surface: their working region's, else 'room'."""
     surface = ((person or {}).get("working_region") or {}).get("surface_id")
@@ -632,7 +644,7 @@ class Coordinator:
         people = [self.people[track] for track in sorted(self.people)]
         held = []
         for hold in mode["holds"]:
-            entry = copy.deepcopy(hold)
+            entry = {**copy.deepcopy(hold), "pinned": logged_pin(hold["pinned"])}
             if comp["option"] != "P0" and hold["entity_id"] in self.refs:  # the fields only P1 to P3 carry
                 ref = self.refs[hold["entity_id"]]
                 entry.update(direction=ref["direction"], footprint=self._footprint(ref))
@@ -645,7 +657,7 @@ class Coordinator:
                                               for name, support in (p.get("field_support") or {}).items()} for p in people},
             "hold_set": {"revision": mode["revision"], "held": held},
             "revisions": {"hold_set": mode["revision"], "mode": mode["revision"]},
-            "actuator_state": copy.deepcopy(self.state["actuator_state"]),
+            "actuator_state": {bulb: with_canon(scene) for bulb, scene in self.state["actuator_state"].items()},
             "config_sha256": self.config_sha256,
             "look": decide.LOOK,
             "base": decide.BASE_LABEL,
@@ -670,7 +682,8 @@ class Coordinator:
                    for track, surface in plan["readers"].items() if surface in plan["targets"]}
         return {"decision_id": "decide-%d-%d" % (round(t * 1000), self.made), "ts": t, "trigger": trigger, "policy": POLICY,
                 "actuator_domain": "hue-den-4", "inputs": self._inputs(), "targets": targets,
-                "requested_scene": plan["requested"], "candidates": plan["candidates"], "skipped": plan["skipped"],
+                "requested_scene": {bulb: with_canon(scene) for bulb, scene in plan["requested"].items()},
+                "candidates": plan["candidates"], "skipped": plan["skipped"],
                 "hard_conflicts": plan["hard_conflicts"], "why": "%s: chose %s at cost %s; %d held, %d skipped." % (
                     plan["rule"], plan["chosen"], plan["cost"],
                     sum(s["reason"] == "held" for s in plan["skipped"]), len(plan["skipped"]))}
@@ -710,8 +723,7 @@ class Coordinator:
                     "checks": {"revision_current": not superseded, "fresh_check": superseded, "not_held": True}})
                 final, transitions[bulb], t_exec[bulb] = scene, fade, t_send + fade
                 moved[bulb] = scene
-            # The schema's level and cct_k beside hue-den-4's three keys, for rung 10 and K20, which read them.
-            entry["readback"] = None if final is None else {**final, "level": _level(final), "cct_k": final.get("kelvin")}
+            entry["readback"] = with_canon(final)
             entry["readback_source"] = "simulated: nothing is sent"
             applied[bulb] = entry
             if final is not None:

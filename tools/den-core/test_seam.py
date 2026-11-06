@@ -6,6 +6,8 @@ A class that needs den-light's own predict.py skips on a branch without it, sayi
 or run on the merged tree, where it is the sibling. Everything here is synthetic. Nothing reaches a host or a light.
 """
 import ast
+import copy
+import hashlib
 import json
 import os
 import random
@@ -25,8 +27,10 @@ import check  # noqa: E402
 import coordinator  # noqa: E402
 import events  # noqa: E402
 import fake_light  # noqa: E402
+import hold_fixtures  # noqa: E402
 import incumbent  # noqa: E402
 import light_adapter  # noqa: E402
+import run  # noqa: E402
 import score  # noqa: E402
 import test_coordinator as tc  # noqa: E402
 import test_score  # noqa: E402
@@ -330,6 +334,152 @@ class RealPredictTest(Temp):
         self.assertEqual(code, 0, text)
         self.assertIn("verdict: PASS", text)
         self.assertTrue(check.check(path)["ok"])
+
+
+class CanonFieldsTest(unittest.TestCase):
+    """A canon reader reads level and cct_k. Before these fields it saw every lit bulb at level 0."""
+    NO_LEVEL = {"on": True, "brightness": None, "kelvin": None}
+    OFF = {"on": False, "brightness": None, "kelvin": None}
+
+    def decided(self, seen):
+        """A Decision after bulbs seen as {bulb: scene}, the rest never seen."""
+        p = tc.policy()
+        for b, one in seen.items():
+            p.handle(tc.ev(T0, "light_observed", {"entity_id": b, **one, "context": "unknown"}))
+        p.handle(tc.mode())
+        p.handle(tc.ev(T0 + 1, "occupancy", {"value": "on", "via": "t"}))
+        return p, tc.feed(p, tc.ps(T0 + 10))[-1]
+
+    def test_every_lit_bulb_reads_its_real_level_through_canon_names(self):
+        _, d = self.decided({b: scene(60 + 40 * n, 2700 + 100 * n) for n, b in enumerate(events.LIGHTS)})
+        for n, b in enumerate(events.LIGHTS):
+            self.assertEqual(d["inputs"]["actuator_state"][b],
+                             {**scene(60 + 40 * n, 2700 + 100 * n), "level": (60 + 40 * n) / 254, "cct_k": 2700 + 100 * n})
+
+    def test_a_never_seen_bulb_stays_null(self):
+        _, d = self.decided({FL: scene(180)})
+        self.assertEqual({b: d["inputs"]["actuator_state"][b] for b in (FR, RL, RR)}, {FR: None, RL: None, RR: None})
+        self.assertEqual(d["inputs"]["actuator_state"][FL]["level"], 180 / 254)
+
+    def test_an_on_bulb_with_no_brightness_has_level_null_not_0(self):
+        _, d = self.decided({FL: self.NO_LEVEL, FR: {"on": True, "brightness": None, "kelvin": 3000}})
+        self.assertEqual(d["inputs"]["actuator_state"][FL], {**self.NO_LEVEL, "level": None, "cct_k": None})
+        self.assertEqual(d["inputs"]["actuator_state"][FR], {"on": True, "brightness": None, "kelvin": 3000, "level": None, "cct_k": 3000})
+
+    def test_an_off_bulb_is_level_0(self):
+        _, d = self.decided({FL: self.OFF})
+        self.assertEqual(d["inputs"]["actuator_state"][FL], {**self.OFF, "level": 0.0, "cct_k": None})
+
+    def test_full_is_a_share_of_hues_254(self):
+        _, d = self.decided({FL: scene(255)})
+        self.assertEqual(d["inputs"]["actuator_state"][FL]["level"], 1.0)
+
+    def test_requested_scene_carries_level_and_cct_k_beside_the_hue_keys(self):
+        _, d = self.decided({b: scene(180) for b in events.LIGHTS})
+        for b, one in d["requested_scene"].items():
+            self.assertEqual(one, {**scene(200), "level": 200 / 254, "cct_k": 2700}, b)
+
+    def test_a_requested_off_is_level_0_and_a_requested_aim_stays(self):
+        p = tc.policy()
+        tc.start(p)
+        tc.feed(p, tc.ps(T0 + 10))
+        off = tc.feed(p, tc.ev(T0 + 20, "occupancy", {"value": "off", "via": "t"}), tc.ev(T0 + 200, "tick", {}, "runner"))[-1]
+        self.assertEqual(off["requested_scene"][FL], {**self.OFF, "level": 0.0, "cct_k": None})
+        spot = {FR: {"near": {"counter-1": 900.0, "armchair-book": 0.0, "wall-west": 0.0},
+                     "far": {"counter-1": 0.0, "armchair-book": 0.0, "wall-west": 900.0}}}
+        p = tc.policy(light_model={"source": "fake", "params": {"spot": spot}}, compensation={"option": "P0"})
+        tc.start(p)
+        tc.feed(p, tc.ps(T0 + 10))
+        [d] = tc.feed(p, *tc.touch(T0 + 30, FL, 10))
+        self.assertEqual(d["requested_scene"][FR]["aim"], "near")
+        self.assertEqual(d["requested_scene"][FR]["level"], d["requested_scene"][FR]["brightness"] / 254)
+
+    def held(self, pinned):
+        p = tc.policy()
+        tc.start(p)
+        tc.feed(p, tc.ps(T0 + 10))
+        hold = {"entity_id": FL, "pinned": pinned, "since": T0 + 30, "lifetime": "room_vacant_2_minutes"}
+        out = tc.feed(p, tc.ev(T0 + 30, "mode", tc.mode(2, [hold])["data"], "incumbent"),
+                      tc.ev(T0 + 30, "correction", {"correction_id": "c", "entity_id": FL, "after": pinned, "source": "t"}))
+        return p, out[-1], hold
+
+    def test_the_logged_pin_carries_level_pct_cct_k_and_its_source(self):
+        _, d, _ = self.held(scene(80))
+        [entry] = d["inputs"]["hold_set"]["held"]
+        self.assertEqual(entry["pinned"], {**scene(80), "level_pct": 100 * 80 / 254, "cct_k": 2700, "source": "read-back"})
+        self.assertEqual(d["requested_scene"][FL], {**scene(80), "level": 80 / 254, "cct_k": 2700})
+
+    def test_a_pin_with_no_level_is_null_and_an_off_pin_is_0(self):
+        _, d, _ = self.held(self.NO_LEVEL)
+        self.assertEqual(d["inputs"]["hold_set"]["held"][0]["pinned"], {**self.NO_LEVEL, "level_pct": None, "cct_k": None, "source": "read-back"})
+        _, d, _ = self.held(self.OFF)
+        self.assertEqual(d["inputs"]["hold_set"]["held"][0]["pinned"], {**self.OFF, "level_pct": 0.0, "cct_k": None, "source": "read-back"})
+
+    def test_the_modes_own_pin_does_not_change(self):
+        p, _, hold = self.held(scene(80))
+        self.assertEqual(p.state["mode"]["holds"][0]["pinned"], scene(80))
+        self.assertEqual(hold["pinned"], scene(80))
+        self.assertEqual(p.refs[FL]["pinned"], scene(80))
+
+    @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+    def test_only_the_coordinators_records_carry_them(self):
+        header, log = hold_fixtures.run_case("V6", "P1-mode")
+        modes = [e["data"] for e in log if e["kind"] == "mode" and e["data"]["holds"]]
+        self.assertTrue(modes)
+        for data in modes:
+            for hold in data["holds"]:
+                self.assertEqual(set(hold["pinned"]), {"on", "brightness", "kelvin"})
+        for e in log:
+            if e["kind"] == "decision" and e["source"] == "incumbent":
+                self.assertNotIn("level", events.dumps(e["data"]["requested_scene"]))
+
+
+def before_this_seam(data):
+    """A coordinator Decision without what this round added, and without its config hash, which moves with the code."""
+    out = copy.deepcopy(data)
+    inputs = out["inputs"]
+    for key in ("config_sha256", "light_state", "light_state_ts", "light_state_status"):
+        inputs.pop(key, None)
+    for one in [*inputs["actuator_state"].values(), *out["requested_scene"].values()]:
+        if one:
+            del one["level"], one["cct_k"]
+    for hold in inputs["hold_set"]["held"]:
+        del hold["pinned"]["level_pct"], hold["pinned"]["cct_k"], hold["pinned"]["source"]
+    return out
+
+
+def choice_digest(rows):
+    return hashlib.sha256("\n".join(events.dumps(before_this_seam(d)) for d in rows).encode("ascii")).hexdigest()
+
+
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class ChoiceOfSceneTest(Temp):
+    """No hold, solve or glare behaviour moved: everything a Decision said at 19502c47, the head before these fields, it still
+    says. Measured there on the fake model, with these same fields left out."""
+    BEFORE = {
+        (): "e1b3fef68dc7b34bdccb1dc9f5798245595c1d84f1e12f2534aea353548f7d53",
+        ("--touch",): "fdf33de10583339d6ed3f1783d70613101e71dd0b615492b2f54ad51138b13e1",
+        ("--touch", "--compensation", "P0"): "2b0760df649d78ccaf861294d08d598410c79784b753d1bcc85265f9934cc845",
+        ("--touch", "--compensation", "P2", "--compensation-form", "strict"): "73481faaadd19a92803d882f29bb274ce5e59da051b11ec9b1b79b5735f99d65",
+        ("--touch", "--compensation", "P3", "--compensation-form", "mode"): "242509b6cd83b55970048c784c287dd7c6a4adcd8fcf7dd7b88f0654965e4148",
+        ("--game",): "062ecf93a5006ef1bc388254087866213fbad3d67d160a53a3a93607fd25475c",
+        ("--touch", "--game"): "b6a811ce4e802a618dedc8eb84a29fd3fe35ebc4a8f2ab2d52f0f35fe6e03825",
+    }
+    FIXTURES = "ada76d0ccd4e1fdeff435da244e9d95b9136614661a9a1b3431376e4f98d957e"
+
+    def test_the_evenings_decide_what_they_decided(self):
+        for n, (flags, sha) in enumerate(self.BEFORE.items()):
+            with self.subTest(flags=flags), mock.patch("builtins.print"):
+                run.main(["--synthetic", "evening", *flags, "--policies", "need", "incumbent", "coordinator", "--out", str(self.tmp / str(n))])
+                _, log = events.read(self.tmp / str(n) / "log.jsonl")
+                self.assertEqual(choice_digest([e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]), sha)
+
+    def test_every_hold_fixture_under_every_option_decides_what_it_decided(self):
+        rows = []
+        for case in sorted(hold_fixtures.CASES):
+            for option in sorted(hold_fixtures.OPTIONS):
+                rows += hold_fixtures.decisions(hold_fixtures.run_case(case, option)[1])
+        self.assertEqual(choice_digest(rows), self.FIXTURES)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ Everything is synthetic, and nothing reaches a host or a light.
 import copy
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -57,9 +58,9 @@ def out_file(text):
     return b"\xef\xbb\xbf" + text.replace("\n", "\r\n").encode("utf-8")
 
 
-def tool(name, *argv, timeout=300, cwd=None):
+def tool(name, *argv, timeout=300, cwd=None, env=None):
     """A tool as the owner runs it: (exit code, stdout, stderr)."""
-    done = subprocess.run([sys.executable, "-B", str(HERE / name), *map(str, argv)], capture_output=True, text=True, timeout=timeout, cwd=cwd)
+    done = subprocess.run([sys.executable, "-B", str(HERE / name), *map(str, argv)], capture_output=True, text=True, timeout=timeout, cwd=cwd, env=env)
     return done.returncode, done.stdout, done.stderr
 
 
@@ -940,6 +941,33 @@ class WrongInsideALogTest(Temp):
         self.assertEqual(tool("check.py", self.tmp / "alone" / "log.jsonl")[0], 0)
 
 
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class NamesACodePageCantWriteTest(Temp):
+    """PowerShell 5.1's | Set-Content makes stdout a pipe in the console's code page, strict, and a surface or block can be named
+    anything. score.py stopped on a traceback at its last print, and run.py with the log written and neither of the files after it."""
+
+    ENV = {**os.environ, "PYTHONIOENCODING": "cp1252"}
+    NAME = "\u043a\u0440\u0435\u0441\u043b\u043e"
+
+    def test_each_tool_writes_such_a_name_as_an_escape_and_goes_on(self):
+        surfaces = self.write("surfaces.json", json.dumps({self.NAME: ["counter-1/0"], self.NAME + "-gone": [], "room": ["counter-1/0", "counter-1/1"]}))
+        out = self.tmp / "run"
+        code, said, err = tool("run.py", *COORDINATOR, "--touch", "--surfaces", surfaces, "--out", out, env=self.ENV)
+        self.assertEqual((code, err), (0, ""), said + err)
+        self.assertIn("\\u043a", said)  # a surface with no block is named in the summary
+        self.assertTrue((out / "decisions.jsonl").exists() and (out / "surfaces.json").exists())
+        code, said, err = tool("score.py", out / "log.jsonl", "--preview", env=self.ENV)
+        self.assertNotIn("Traceback", said + err)
+        self.assertEqual(err, "")
+        self.assertIn("\\u043a", said)  # every surface is listed
+        code, said, err = tool("check.py", out / "log.jsonl", env=self.ENV)
+        self.assertEqual((code, err), (0, ""), said + err)
+        truth = {"schema": "reading-shadow-truth-1", "blocks": [{"block": self.NAME, "reading": True, "start": T0, "end": T0 + 60}]}
+        code, said, err = tool("validate.py", out / "log.jsonl", "--truth", self.write("truth.json", json.dumps(truth)), env=self.ENV)
+        self.assertEqual((code, err), (0, ""), said + err)
+        self.assertIn("\\u043a", said)  # a block is named on its line
+
+
 class LastResortTest(Temp):
     """What no check before it named. A tool still says one sentence and exits 2, and the sentence says where, so a bug in the
     tool itself isn't lost for want of a traceback."""
@@ -1033,7 +1061,7 @@ class ReadmeLineTest(unittest.TestCase):
                       "what is inside a light model, a mark or `--truth`", "a log's header, its logged config and its input lines",
                       "a time past any clock", "`--mqtt` with no `--mqtt-t0`", "a failed check, not a refusal, with exit 1", "`validate.py` goes on check by check",
                       "`score.py` fails its replay line",
-                      "stopped on an input of the wrong shape, or a bug of its own"):
+                      "stopped on an input of the wrong shape, or a bug of its own", "a name it can't write comes out as a `\\uXXXX` escape"):
             self.assertIn(words, said)
         check_says = said.split("`check.py LOG` re-imports")[1].split("```")[0]
         self.assertIn("wrong shape to replay", check_says)

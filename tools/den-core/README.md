@@ -24,7 +24,8 @@ does.
 
 **PowerShell 5.1:** don't redirect with `>`. It writes UTF-16, which `run.py`, `check.py`, `score.py` and `validate.py`
 refuse by name with exit 2, on every file they read. Pipe to `Set-Content` as the commands below do, or repair a file with
-`Get-Content bad.jsonl | Set-Content -Encoding utf8 good.jsonl`. They read the byte-order mark and CRLF that writes.
+`Get-Content bad.jsonl | Set-Content -Encoding utf8 good.jsonl`. They read the byte-order mark and CRLF that writes. What they
+print to a pipe goes out in the console's code page, so a name it can't write comes out as a `\uXXXX` escape.
 
 **What they refuse.** Any input that is missing, not JSON or the wrong shape is one sentence and exit 2, never a traceback. That
 goes for what is inside a light model, a mark or `--truth`, for a log's header, its logged config and its input lines, as far as

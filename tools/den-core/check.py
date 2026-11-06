@@ -97,4 +97,5 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
+    sys.stdout.reconfigure(errors="backslashreplace")  # a name a piped console's code page can't write is no reason to stop
     sys.exit(main())

@@ -80,7 +80,8 @@ def refusals(header, entry, gate, light):
     if header["synthetic"]:
         reasons.append("synthetic: plumbing only, never a gate")
     if light.fake:
-        reasons.append("fake light model: plumbing only, never a gate")
+        reasons.append("fake light model: %splumbing only, never a gate" % (
+            "" if light.backend == light_adapter.MARKED_FAKE else light.backend + ": "))
     logged = entry["config"]["gate"]
     if logged["sha256"] != gate["sha256"]:
         reasons.append("the log was run under another gate file: rerun it")
@@ -90,7 +91,7 @@ def refusals(header, entry, gate, light):
                        % (coordinator.option_name(comp), slots["compensation_option"], slots["compensation_form"]))
     if slots["surrogate_definitions"] != DEFINITIONS:
         reasons.append("this tool only computes the %s definitions of the surrogates" % DEFINITIONS)
-    if "surface_map" not in gate["open"] and not light.fake:  # the map is over rung 8's blocks; a fake keeps its own
+    if "surface_map" not in gate["open"] and not light.model.get("fake"):  # the map is over rung 8's blocks; a fake keeps its own
         reasons += surface_map_refusals(slots["surface_map"], entry["config"]["light_model"].get("surfaces"), light)
     return reasons
 
@@ -355,7 +356,7 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
     if preview:
         lines.append("preview: logged proposals, not the owner's numbers, so no verdict and never a gate")
     lines.append("both arms through light model %s (%s, unit %s; backend %s)" % (
-        light.version, "fake: plumbing only, never a gate" if light.fake else "real", light.unit, light_adapter.BACKEND))
+        light.version, "fake: plumbing only, never a gate" if light.fake else "real", light.unit, light.backend))
     lines.append("comparator: frozen %s re-run beside the log; candidate %s, compensation %s" % (
         next(p["version"] for p in header["policies"] if p["id"] == "incumbent"), coordinator.POLICY,
         coordinator.option_name(config["compensation"])))

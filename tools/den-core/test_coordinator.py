@@ -140,7 +140,7 @@ class AdapterTest(unittest.TestCase):
     def test_hue_scenes_become_rung_8_scenes(self):
         with mock.patch.object(light_adapter, "_predict", wraps=light_adapter._predict) as call:
             self.light.predict({FL: scene(127, 2700)})
-        (rung8_scene, _), _ = call.call_args
+        rung8_scene = call.call_args.args[0]
         self.assertEqual(rung8_scene, {"den_front_left.white": {"level": 0.5, "cct_k": 2700}})
 
     def test_255_is_full_and_off_gives_no_light(self):
@@ -580,7 +580,7 @@ class PurityTest(unittest.TestCase):
         boom.assert_not_called()
 
     def test_imports_are_offline(self):
-        allowed = {"copy", "json", "pathlib", "decide", "events", "fake_light", "light_adapter"}
+        allowed = {"bisect", "copy", "importlib.util", "json", "pathlib", "sys", "decide", "events", "fake_light", "light_adapter"}
         for name in ("coordinator", "light_adapter", "fake_light"):
             tree = ast.parse((HERE / (name + ".py")).read_text(encoding="utf-8"))
             names = {a.name for n in ast.walk(tree) if isinstance(n, ast.Import) for a in n.names}
@@ -1247,7 +1247,7 @@ class ManyTracksLineTest(unittest.TestCase):
         self.assertEqual(d["inputs"]["over_limit_not_logged"], 30 - shown)
 
     def scored(self, glare):
-        """Rung 9's gate, closed, on 30 tracks with a touch that puts front left over the limit. Plumbing, behind a patched BACKEND."""
+        """Rung 9's gate, closed, on 30 tracks with a touch that puts front left over the limit. Plumbing, behind real_backend()."""
         names = ["T%d" % k for k in range(30)]
         script = [[T0 + 2 + k, name, "none", "counter-1"] for k, name in enumerate(names[:-1])] + [[T0 + 300, names[-1], "engaged", "counter-1"]]
         inputs = [(T0, "light_observed", {"entity_id": e, **scene(180), "context": "unknown"}) for e in events.LIGHTS]
@@ -1256,7 +1256,7 @@ class ManyTracksLineTest(unittest.TestCase):
         gate = test_score.closed_gate(self.tmp)
         config = {"gate": coordinator.gate_config(coordinator.load_gate(gate)),
                   "light_model": {"source": "file", "path": str(test_score.real_model(self.tmp, surfaces=False, glare=glare(names)))}}
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"), mock.patch.object(coordinator, "GATE_FILE", gate):
+        with test_score.real_backend(), mock.patch.object(coordinator, "GATE_FILE", gate):
             header, log = runner.run(runner.tagged(sorted(inputs, key=lambda row: row[0]), "poll_log"),
                                      [hold_fixtures.ScriptedNeed({"script": script}), incumbent.make_policy(), coordinator.make_policy(config)],
                                      tail_s=10.0, sources=[{"name": "test"}])

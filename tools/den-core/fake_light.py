@@ -1,7 +1,7 @@
 """A fake of rung 8's light model, built from its plan (docs/plans/rung-8-light-model/PLAN.md).
 
-Stage 1's own predict() is being built in another session, so this stands in for it until it lands. Only
-light_adapter.py imports this module, and swapping the fake for the real one changes that one file.
+It is plumbing: light_adapter.py sends a model here only when the model is marked `fake: true`, or when a checkout has
+no tools/den-light/predict.py. Every other model goes through that real file. Only light_adapter.py calls this module.
 
     Ê(p) = Σ_c g_c(u_c) · B_c(p, k_c), over the channels that are on
 

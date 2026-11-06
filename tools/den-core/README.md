@@ -95,6 +95,10 @@ Tests:
 python -B -m unittest discover -s tools/den-core -p "test_*.py"
 ```
 
+On a branch without den-light, `test_seam.py`'s `RealPredictTest` skips and the scoring tests stand on
+`testdata/predict_stand_in.py`. Set `DEN_LIGHT_DIR` to a den-light folder to run them on the real `predict.py`. Only tests
+read that variable. On the merged tree they use the sibling.
+
 ## Files
 
 | File | What it is |
@@ -110,8 +114,8 @@ python -B -m unittest discover -s tools/den-core -p "test_*.py"
 | `run.py` | the CLI and its summary/diff |
 | `need.py`, `decide.py` | written on their own branches against the interface below; the runner loads them by name |
 | `coordinator.py` | rung 9's coordinator v0: decide's rules behind the light model, as policy `decide` (below) |
-| `light_adapter.py` | the one adapter to rung 8's light model; every prediction goes through it |
-| `fake_light.py` | rung 8's prediction rule from its plan, until Stage 1's `predict.py` is merged; plumbing only |
+| `light_adapter.py` | the one adapter to rung 8's light model; every prediction goes through it, into den-light's `predict.py` |
+| `fake_light.py` | rung 8's prediction rule from its plan, for a model marked `fake: true` or a checkout with no `tools/den-light`; plumbing only |
 | `rung9-gate-v0.json` | rung 9's fixed numbers and its open slots |
 | `score.py` | rung 9's gate on a replayed log; refuses a scored run while a slot is open |
 | `hold_fixtures.py` | cases V6-V8 and V62-V64 under each compensation option; not admitted as pass or fail |
@@ -514,8 +518,9 @@ This was tested in a Home Assistant 2026.2.3 core with the real recorder:
 ## Rung 9: coordinator v0, scored on replay
 
 `coordinator.py` is decide v0's rules with rung 8's light model behind them. It runs beside the frozen den_lighting
-and sends nothing. Nothing has run on real data: the light model is still a fake, built from rung 8's plan and marked
-`fake: true`, so every result today is plumbing and never evidence.
+and sends nothing. Nothing has run on real data. A model file goes through den-light's own `predict.py`. With no
+`--light-model` the coordinator uses a fake built from rung 8's plan and marked `fake: true`, so the commands below are
+plumbing and never evidence.
 
 From the worktree root, in PowerShell 5.1:
 
@@ -555,9 +560,15 @@ the header, prints no verdict and is never a gate.
 - an open slot in `rung9-gate-v0.json`. `score.py --slots` lists them with their proposals. To close one, set its
   `status` to `closed` and its `value`, then rerun the evening: a log run under another gate file refuses;
 - a synthetic log;
-- a fake light model. **Today that is every run.** When Stage 1's `predict.py` is merged, replace the body of
-  `light_adapter._predict` with `predict.predict(scene, model)` and set `BACKEND`. `fake_light.predict` follows Stage
-  1's published call and gave the same numbers as `origin/claude/rung-8-stage1`'s `predict.py` over 400 random scenes;
+- a fake light model: one marked `fake: true`, which goes through `fake_light`, or any model on a checkout with no
+  `tools/den-light/predict.py`, which the same fake then stands in for. `run.py` still works there and labels the run
+  fake, and `score.py` says which of the two it was. Any other model goes through den-light's own `predict.py`, loaded by
+  file path under a private name and never through `sys.path`, and `prepare()`d once. `score.py` names the backend on its
+  second line, and the logged light model entry carries `backend`, `fake` and `predict_sha256`: `check.py` and `score.py`
+  refuse `code changed: den-light predict.py` when that file's hash moves. No environment variable can move the backend;
+  a test can, by patching `light_adapter.PREDICT_PATH`. `fake_light.predict` follows Stage 1's published call, and
+  `test_seam.py` pins that the two agree exactly on the fake's own shape. den-light's model has no aim, so a real-path
+  model with a `spot_model` is refused rather than having its aims ignored;
 - a log run under a compensation option other than the gate's. Those are the counterfactual scenes the register
   suggests: preview them;
 - a surface map that can't stand behind a score. Rung 8 v1's blocks have no surface id, so which blocks form each surface
@@ -650,7 +661,8 @@ entry and ladder rung 11's V63 text say. That tests the code and admits nothing.
 `check.py` refuses a log whose policy file hash has changed. Editing `decide.py` would make every existing log refuse
 with `code changed: decide`, so the coordinator imports it and adds to it instead, as policy id `decide`, so the
 runner's order, `run.py`'s diff and `validate.py` read it as they read decide. `make_policy` pins `decide.py`,
-`light_adapter.py` and `fake_light.py` by hash in its config, as the incumbent pins `policy.py`.
+`light_adapter.py` and `fake_light.py` by hash in its config, as the incumbent pins `policy.py`, and the light model entry
+pins den-light's `predict.py`.
 
 `--policies need incumbent decide` is byte-identical to before rung 9: `test_coordinator.py` pins the sha256 of the
 four synthetic evenings' whole logs, header included.

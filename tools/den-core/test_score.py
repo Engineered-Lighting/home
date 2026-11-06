@@ -1,11 +1,13 @@
 """Tests for score.py, rung 9's gate on a replayed log. Every log and light model here is synthetic.
 
-The scored path needs what no real run has yet: closed slots and rung 8's own predict. So these tests close a copy of
-the gate file in a temp folder and stand a model file behind a patched BACKEND, which proves the plumbing and nothing else.
+The scored path needs closed slots and a model that is not marked fake, read through rung 8's own predict.py. So these tests
+close a copy of the gate file in a temp folder and stand a model file behind real_backend(): den-light's predict.py where it
+can be found, else a stand-in with its call. On the fake's numbers either way, which proves the plumbing and nothing else.
 """
 import copy
 import io
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -32,6 +34,20 @@ FL, FR, RL, RR = events.LIGHTS
 T0 = synthetic.T0
 HAVE_POLICY = incumbent.find_policy() is not None
 FIXED = {name: item["value"] for name, item in coordinator.load_gate()["fixed"].items()}
+STAND_IN = HERE / "testdata" / "predict_stand_in.py"
+
+
+def real_predict():
+    """den-light's predict.py, from DEN_LIGHT_DIR or as the sibling on a merged tree; None on a branch without it. Only a test
+    reads that variable: nothing in production can redirect the backend."""
+    folder = os.environ.get("DEN_LIGHT_DIR")
+    path = Path(folder) / "predict.py" if folder else light_adapter.PREDICT_PATH
+    return path if path.is_file() else None
+
+
+def real_backend():
+    """Patch the module attribute the adapter finds predict.py by: the real one where there is one, else the stand-in."""
+    return mock.patch.object(light_adapter, "PREDICT_PATH", real_predict() or STAND_IN)
 
 
 def fake_map():
@@ -63,7 +79,7 @@ def all_open(tmp):
 
 
 def real_model(tmp, **params):
-    """A model file that does not call itself fake. Only a test, with BACKEND patched, can treat it as rung 8's."""
+    """A model file that does not call itself fake, read as rung 8's under real_backend()."""
     model = fake_light.build(**params)
     del model["fake"]
     path = Path(tmp) / "light-model.json"
@@ -134,7 +150,7 @@ class RefusalTest(Base):
         gate["slots"]["stability_floor"].update(status="open", value=None)
         open_gate = self.tmp / "open.json"
         open_gate.write_text(json.dumps(gate), encoding="utf-8")
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             path, _, _ = replay_log(self.tmp, open_gate, real_model(self.tmp))
             lines, code = score.report(path, gate_path=open_gate)
         self.assertEqual(code, 2)
@@ -142,7 +158,7 @@ class RefusalTest(Base):
 
     def test_refuses_a_log_run_under_another_gate_or_a_counterfactual_option(self):
         gate, model = closed_gate(self.tmp), real_model(self.tmp)
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             path, _, _ = replay_log(self.tmp, gate, model)
             other = self.tmp / "other"
             other.mkdir()
@@ -207,7 +223,7 @@ class SurfaceMapTest(Base):
 
     def scored(self, gate, surfaces=None, name="log.jsonl", **options):
         """The model is as rung 8 writes it, with no surfaces of its own, so a map can only come from the run."""
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             path, _, log = replay_log(self.tmp, gate, real_model(self.tmp, surfaces=False), name=name, surfaces=surfaces, touch=True, **options)
             lines, code = score.report(path, gate_path=gate)
         return self.text(lines), code, path, log
@@ -221,7 +237,7 @@ class SurfaceMapTest(Base):
         self.assertEqual(code, 2, text)
         self.assertIn("1 open slot(s) in the gate file: surface_map", text)
         self.assertNotIn("verdict", text)
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):  # a preview still runs, at the whole view
+        with real_backend():  # a preview still runs, at the whole view
             lines, code = score.report(log_path, preview=True, gate_path=path)
         self.assertEqual(code, 0, self.text(lines))
         self.assertIn("surfaces: room 12, of 12 blocks", self.text(lines))
@@ -287,7 +303,7 @@ class SurfaceMapTest(Base):
         # a 458 KB line, so there was nothing to score. The owner must see a verdict on the log.
         blocks = self.COUNTER + ["other/%d" % n for n in range(140)]
         gate = closed_gate(self.tmp, surface_map={"room": blocks})
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             path, _, log = replay_log(self.tmp, gate, real_model(self.tmp, surfaces=False, filler=576 - 12), touch=True)
             lines, code = score.report(path, gate_path=gate)
         self.assertEqual(code, 0, self.text(lines))
@@ -303,7 +319,7 @@ class SurfaceMapTest(Base):
 class ScoredRunTest(Base):
     def run_it(self, marks=None, floors=None, **options):
         gate = closed_gate(self.tmp, **(floors or {}))
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             path, header, log = replay_log(self.tmp, gate, real_model(self.tmp), **options)
             marks_path = None
             if marks:
@@ -342,7 +358,7 @@ class ScoredRunTest(Base):
         inputs = [(T0, "light_observed", {"entity_id": e, **fixtures.scene(180), "context": "unknown"}) for e in events.LIGHTS]
         inputs += [(T0 + 1, "occupancy", {"value": "on", "via": "t"})]
         config = {"gate": coordinator.gate_config(coordinator.load_gate(gate)), "light_model": {"source": "file", "path": str(model)}}
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             header, log = runner.run(runner.tagged(inputs, "poll_log"), runner.load_policies(["incumbent", "coordinator"], {"coordinator": config}),
                                      sources=[], tail_s=10.0)
             path = self.tmp / "log.jsonl"
@@ -354,7 +370,7 @@ class ScoredRunTest(Base):
 
     def test_a_slow_decision_fails_the_gate(self):
         gate = closed_gate(self.tmp)
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             path, _, _ = replay_log(self.tmp, gate, real_model(self.tmp))
             with mock.patch.object(score, "replay_and_time", return_value=(check.check(path), 140.0, 5)):
                 lines, code = score.report(path, gate_path=gate)
@@ -363,7 +379,7 @@ class ScoredRunTest(Base):
 
     def test_a_tampered_log_fails_replay(self):
         gate = closed_gate(self.tmp)
-        with mock.patch.object(light_adapter, "BACKEND", "den-light predict"):
+        with real_backend():
             path, _, _ = replay_log(self.tmp, gate, real_model(self.tmp))
             text = path.read_text("ascii").replace('"status":"applied"', '"status":"partial"', 1)
             path.write_bytes(text.encode("ascii"))

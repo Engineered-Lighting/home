@@ -277,8 +277,9 @@ def _coordinator_lines(header):
     if entry is None:
         return []
     config, model = entry["config"], entry["config"]["light_model"]
-    lines = ["coordinator: light model %s%s; compensation %s (pending: named option, not a choice); actuation %s"
-             % (model["version"], " (fake: plumbing only, never a gate)" if model["fake"] else "",
+    lines = ["coordinator: light model %s (%s); compensation %s (pending: named option, not a choice); actuation %s"
+             % (model["version"], "fake: plumbing only, never a gate" if model["backend"] == light_adapter.MARKED_FAKE
+                else "fake: %s: plumbing only, never a gate" % model["backend"] if model["fake"] else model["backend"],
                 coordinator.option_name(config["compensation"]), header["actuation"])]
     if config["gate"]["open"]:
         lines.append("coordinator: %d open slot(s) at their proposals; score.py --slots lists them" % len(config["gate"]["open"]))

@@ -867,7 +867,7 @@ def make_policy(config=None):
         raise ValueError("unknown gaming option: %s" % effective["gaming"])
     model, logged = light_adapter.describe(effective["light_model"])
     chosen = effective["gate"]["slots"].get("surface_map")
-    if chosen and not logged.get("surfaces") and not logged["fake"]:  # a run may name another, which score.py refuses
-        logged["surfaces"] = chosen  # the owner's map is over rung 8's blocks: a fake has its own, and is never a gate
+    if chosen and not logged.get("surfaces") and not model.get("fake"):  # a run may name another, which score.py refuses
+        logged["surfaces"] = chosen  # the owner's map is over rung 8's blocks: a fake model has its own, and is never a gate
     effective["light_model"] = logged
     return Coordinator(effective, light_adapter.LightModel(model, surfaces=logged.get("surfaces")))

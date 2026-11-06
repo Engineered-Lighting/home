@@ -27,13 +27,15 @@ For each point at the verify frame:
   surface, in the frame's `unit`.
 - The prediction is the light model's, for the **actual resulting state**: the
   read-back of every channel in `Decision.applied_scene`, the channels it does
-  not list taken from `Decision.inputs.actuator_state`, and then every hold in
-  force at the frame pinned over them: the decision's own copy
-  (`Decision.inputs.hold_set`), then each `Correction.hold` past that copy's
-  revision, in revision order. A Correction at or below the copy's revision is
-  already in it, or has lapsed; nothing writes `ended` after capture, so the copy
-  is what says so. With no revision on either side, a hold counts only if it began
-  after the decision. Requested values are never used.
+  not list taken from `Decision.inputs.actuator_state`. The decision's own copy
+  of the holds (`Decision.inputs.hold_set`) marks its channels held and pins only
+  a channel `applied_scene` gives no read-back for: a read-back is this decision's
+  own and comes after its copy, and a game's vacancy turns a held bulb off and
+  keeps the hold. Each `Correction.hold` past that copy's revision and in force at
+  the frame then pins over them, in revision order. A Correction at or below the
+  copy's revision is already in it, or has lapsed; nothing writes `ended` after
+  capture, so the copy is what says so. With no revision on either side, a hold
+  counts only if it began after the decision. Requested values are never used.
 - `residual` = (measured − predicted) / predicted, null when the prediction is
   not positive.
 - `status`:
@@ -133,7 +135,7 @@ none of this changes their result.
 **Held and superseded channels.** The ladder says a held or superseded channel
 is excluded from misses. Here that means the channel, not the point: a person or
 an earlier decision set it, so its light must not make a miss, and a free bulb's
-fault must still show beside it. The prediction pins these channels where they
+fault must still show beside it. The prediction takes these channels where they
 are. Under `reference_frame` one that stayed put is in both frames, so its light
 and the model's error on it cancel; one that moved since the read frame adds its
 brighter level to the allowance above, like any bulb that changed. Under `zero`
@@ -141,8 +143,8 @@ its error stays in the point's error, like every channel's, so a model far off o
 a held bulb can still make a miss there.
 
 Let H be a point's light from channels whose applied status is `held` or
-`superseded`, or that a hold pinned, each at its brighter level between the read
-frame's state and the verify frame's, so a bulb held off still counts as held. A
+`superseded`, or that a hold in force lists, each at its brighter level between the
+read frame's state and the verify frame's, so a bulb held off still counts as held. A
 point with H below `held_share_min` of its predicted light counts like any other.
 At or above it, the slot `held_rule` says:
 
@@ -154,7 +156,9 @@ At or above it, the slot `held_rule` says:
   With one bulb of four held at 17% of the light, a stuck free bulb reads 21% low
   and is a miss, and one point in A's shadow costs one point of twenty, as they do
   with no hold. A bulb A turned off by hand, on a decision that changed nothing at
-  that point, leaves the point out.
+  that point, leaves the point out. A game's vacancy off, with free bulbs going off
+  beside the held one, counts: landed it is a hit, and with any bulb left on it is a
+  miss once that bulb's light is past the bound.
 - `exclude_both`: every such point is left out both ways. This is simpler and is
   the plainer reading of the ladder's words, but during a hold a free bulb's fault
   goes uncounted: one free decision at 20 of 20 and one held decision with two free

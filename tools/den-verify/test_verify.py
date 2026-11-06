@@ -470,6 +470,54 @@ class HeldPointsCount(unittest.TestCase):
             self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), expected, reading)
             self.assertEqual(report["excluded_held_or_superseded"], 0, reading)
 
+    def vacancy_off(self, pin, reading, at=syn.T0, did="d"):
+        """A game's vacancy turns all four off and keeps B3's hold: free bulbs at 38/254, every read-back 0."""
+        free = 38 / 254
+        before = {B0: free, B1: free, B2: free, B3: pin / 100}
+        ref = syn.light_state(at, {n: self.K * sum(before.values()) for n in self.names}, anchored=False, ident=f"ls-{did}")
+        dec = syn.hue_decision(did, at + 0.5, before, {b: {"level": 0.0, "steps": send(at + 0.5)} for b in syn.HUE},
+                               f"ls-{did}", targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)},
+                               hold_set={"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
+                                                                  "pinned": {"level_pct": pin, "cct_k": 2700}}]})
+        return [dec], [ref, syn.light_state(at + 5, {n: reading for n in self.names}, anchored=False, ident=f"ls-{did}-a")]
+
+    def test_a_vacancy_off_that_landed_is_a_hit_though_the_copy_still_holds_the_bulb(self):
+        # the read-back says off, and it comes after the copy: pinning B3 back at its hold read 0 of 20 here
+        for pin in (5, 10, 20, 50):
+            decisions, _, report = self.run_cases([self.vacancy_off(pin, 0.0)])
+            hr = report["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (20, 0, "pass"), pin)
+            self.assertEqual(report["excluded_held_or_superseded"], 0, pin)
+            self.assertIs(decisions[0]["verify"]["within_tolerance"], True, pin)
+            self.assertIsNone(decisions[0]["verify"]["explanation"], pin)
+
+    def test_a_held_bulb_left_on_after_a_vacancy_off_is_a_miss(self):
+        # pinned back at its hold, this reading was a hit: what lands wrong has to read wrong
+        for pin in (10, 20, 50):
+            decisions, _, report = self.run_cases([self.vacancy_off(pin, self.K * pin / 100)])
+            hr = report["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 20, "fail"), pin)
+            self.assertEqual(report["excluded_held_or_superseded"], 0, pin)
+            self.assertEqual({e["cause"] for e in decisions[0]["verify"]["explanation"]}, {"unexplained"}, pin)
+
+    def test_a_free_bulb_left_on_after_a_vacancy_off_is_a_miss(self):
+        for pin in (5, 10, 20, 50):
+            hr = self.run_cases([self.vacancy_off(pin, self.K * 38 / 254)])[2]["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 20, "fail"), pin)
+
+    def test_a_vacancy_off_costs_a_session_of_landed_scenes_nothing(self):
+        t = syn.T0
+        cases = [self.case(f"d-{i}", t + 100 * i, False, self.landing(20)) for i in range(3)]
+        cases.append(self.vacancy_off(50, 0.0, at=t + 400, did="d-off"))
+        self.assertEqual(self.hit_rate(cases), (80, 0, 1.0, "pass"))
+
+    def test_the_copy_still_marks_a_bulb_it_no_longer_pins(self):
+        # the other named rule leaves out every point a held bulb lights, whatever this decision read back
+        for pin, reading in ((50, 0.0), (50, 150.0)):
+            hr = self.run_cases([self.vacancy_off(pin, reading)], {"held_rule": "exclude_both"})[2]
+            self.assertEqual((hr["hit_rate"]["hits"], hr["hit_rate"]["misses"]), (0, 0), reading)
+            self.assertEqual(hr["excluded_held_or_superseded"], 20, reading)
+
     def test_a_held_bulb_nudged_inside_the_bound_counts_like_a_steady_one(self):
         decisions, _, report = self.steady_beside_a_hold(True, 135.0, level_after=0.52)
         self.assertEqual(point(decisions[0], "pt")["status"], "outside")
@@ -539,15 +587,19 @@ class HeldPointsCount(unittest.TestCase):
             hr = score([dec], [ref, after], self.model, corrections=[correction])[2]["hit_rate"]
             self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), expected)
 
-    def stuck_at_any_hue_level(self, level, pin, held, step=0):
-        """Three free bulbs go 0.8 -> 0.4 and B0 sticks; B3 stays at a Hue level, pinned at `pin` if held."""
+    def stuck_at_any_hue_level(self, level, pin, held, step=0, listed=True):
+        """Three free bulbs go 0.8 -> 0.4 and B0 sticks; B3 stays at a Hue level, pinned at `pin` if held.
+
+        Unlisted, the decision gives no read-back for B3, so the copy's pin is what stands.
+        """
         pts = self.names[:2]
         model = syn.hue_model({n: {b: self.K for b in syn.HUE} for n in pts}, kelvins=(2700,))
         t = syn.T0
         before = {B0: 0.8, B1: 0.8, B2: 0.8, B3: level}
         ref = syn.light_state(t, {n: self.K * sum(before.values()) for n in pts}, anchored=False, ident="ls-r")
         applied = {b: {"level": 0.4, "steps": send(t + 0.5)} for b in (B0, B1, B2)}
-        applied[B3] = {"status": "held" if held else "sent", "level": level + step}
+        if listed:
+            applied[B3] = {"status": "held" if held else "sent", "level": level + step}
         hold_set = {"revision": 4, "held": [{"entity_id": B3, "channels": [B3],
                                              "pinned": {"level_pct": pin, "cct_k": 2700}}]} if held else None
         dec = syn.hue_decision("d", t + 0.5, before, applied, "ls-r", hold_set=hold_set,
@@ -562,8 +614,9 @@ class HeldPointsCount(unittest.TestCase):
             level = n / 254
             free = self.stuck_at_any_hue_level(level, None, False)
             self.assertEqual(free, (0, 2, "fail"), n)
-            self.assertEqual(self.stuck_at_any_hue_level(level, level * 100, True), free, n)
-            self.assertEqual(self.stuck_at_any_hue_level(level, round(level * 100), True), free, n)
+            for listed in (True, False):
+                self.assertEqual(self.stuck_at_any_hue_level(level, level * 100, True, listed=listed), free, n)
+                self.assertEqual(self.stuck_at_any_hue_level(level, round(level * 100), True, listed=listed), free, n)
 
     def test_the_other_named_rule_leaves_every_held_lit_point_out(self):
         t = syn.T0
@@ -658,6 +711,31 @@ class HoldRevision(unittest.TestCase):
         self.assertEqual(result, (20, 0, "pass"))
         self.assertEqual(r["against"]["hold_set_revision"], 9)
         self.assertIn("held", r["flags"])
+
+    def test_the_copy_pins_a_channel_the_decision_gives_no_read_back_for(self):
+        # B3 is not in the applied scene and read 0.8 before: the copy's 30% is what the prediction takes
+        pin = {"revision": 9, "held": [{"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 30, "cct_k": 2700}}]}
+        result, r = self.landed([], pin)
+        self.assertEqual(result, (0, 20, "fail"))
+        self.assertAlmostEqual(r["predicted"], self.K * (0.8 + 0.2 + 0.2 + 0.3), places=6)
+        self.assertIn("held", r["flags"])
+
+    def test_a_hold_past_the_copy_pins_over_this_decisions_read_back(self):
+        # a person turned B3 back on after the vacancy off: the read-back is older than that
+        t = self.t
+        before = {B0: 0.2, B1: 0.2, B2: 0.2, B3: 0.5}
+        ref = syn.light_state(t, {n: self.K * sum(before.values()) for n in self.names}, anchored=False, ident="ls-r")
+        copy = {"revision": 9, "held": [{"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 50, "cct_k": 2700}}]}
+        dec = syn.hue_decision("d", t + 0.5, before, {b: {"level": 0.0, "steps": send(t + 0.5)} for b in syn.HUE}, "ls-r",
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}, hold_set=copy)
+        after = syn.light_state(t + 9, {n: self.K * 0.5 for n in self.names}, anchored=False)
+        decisions, states, report = score([dec], [ref, after], self.model,
+                                          corrections=[self.correction("c-10", 10, 50, t + 5)])
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (20, 0, "pass"))
+        r = residual(states, t + 9, "p00")
+        self.assertEqual(r["against"]["hold_set_revision"], 10)
+        self.assertAlmostEqual(r["predicted"], self.K * 0.5, places=6)
 
     def test_later_holds_pin_in_revision_order_whatever_the_file_order(self):
         first = self.correction("c-9", 9, 20, self.t + 1)

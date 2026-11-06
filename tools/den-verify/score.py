@@ -140,12 +140,14 @@ class Dec:
     def state_at(self, t, holds):
         """The actual resulting state at t, and the channels held or superseded."""
         state = self.before_state()
-        held = set()
+        held, read_back = set(), set()
         for ch, a in (self.rec.get("applied_scene") or {}).items():
             rb = a.get("readback") or {}
             prev = state.get(ch, {})
             state[ch] = {"level": float(rb.get("level") or 0),
                          "cct_k": rb.get("cct_k", prev.get("cct_k"))}
+            if rb.get("level") is not None:
+                read_back.add(ch)
             if a.get("status") in ("held", "superseded"):
                 held.add(ch)
         hold_set = self.inputs.get("hold_set") or {}
@@ -158,11 +160,14 @@ class Dec:
         pins += sorted((h for h in holds if h.active(t) and h.after_copy(revision, self.ts)), key=Hold.order)
         for h in pins:
             for ch in h.keys(state):
+                held.add(ch)
+                # this decision's read-back comes after its own copy: a game's vacancy turns a held bulb off and keeps the hold
+                if h.ref == self.id and ch in read_back:
+                    continue
                 if h.level is not None:
                     state[ch]["level"] = float(h.level) / 100.0
                 if h.cct_k is not None:
                     state[ch]["cct_k"] = h.cct_k
-                held.add(ch)
             if h.revision is not None and (revision is None or h.revision > revision):
                 revision = h.revision
         return state, held, revision

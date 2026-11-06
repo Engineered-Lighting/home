@@ -358,6 +358,9 @@ class WrongInsideAModelTest(Temp):
             ("a glare row of text", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "G": "x"}}})),
             ("a glare row of nulls", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "G": None, "sd": None}}})),
             ("a glare row with no status", "glare", edited(("glare",), {self.KEY: {"room": {"G": 0.1, "sd": 0.01}}})),
+            ("a glare row with no sd", "glare", edited(("glare",), {self.KEY: {"room": {"G": 0.1, "model_status": "unvalidated"}}})),
+            ("a glare sd of text", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "sd": "x"}}})),
+            ("a glare sd of a list", "glare", edited(("glare",), {self.KEY: {"room": {**self.ROW, "sd": []}}})),
             ("spot_model zero", "spot_model", edited(("spot_model",), 0)), ("spot_model a list", "spot_model", edited(("spot_model",), [])),
             ("a spot channel a number", "spot_model", edited(("spot_model",), {self.KEY: 5})),
             ("a spot aim a number", "spot_model", edited(("spot_model",), {self.KEY: {"a": 5}})),
@@ -396,10 +399,30 @@ class WrongInsideAModelTest(Temp):
     def test_a_right_model_still_passes_with_every_table_it_may_carry(self):
         glare = {events.LIGHTS[0]: {"room": {"G": 0.3, "sd": 0.01}}}
         spot = {events.LIGHTS[0]: {"a": dict.fromkeys(("counter-1", "armchair-book", "wall-west"), 100.0)}}
-        for model in (fake_light.build(), fake_light.build(glare=glare), fake_light.build(spot=spot), self.stage1_shaped(),
+        canon_row = {"G": 0.3, "sd": None, "sd_status": "unknown until validated"}
+        for model in (fake_light.build(), fake_light.build(glare=glare), fake_light.build(glare={events.LIGHTS[0]: {"room": canon_row}}),
+                      fake_light.build(spot=spot), self.stage1_shaped(),
                       {**self.stage1_shaped(), "fake": False}, {**self.stage1_shaped(), "fake": None}, {**self.stage1_shaped(), "error": None},
                       {**self.stage1_shaped(), "error": {"median_pct": 1.5, "p90_pct": 9.0}}):
             light_adapter.check_shape(model, "model.json")
+
+    def test_a_real_run_on_canons_null_sd_logs_replays_and_tests_the_limit_on_g(self):
+        # canon's LightModel writes sd null with an sd_status until the glare model is validated
+        def decisions(folder):
+            return [json.loads(line) for line in (folder / "decisions.jsonl").read_text("utf-8").splitlines()]
+        self.assertEqual(tool("run.py", *COORDINATOR, "--touch", "--out", self.tmp / "plain")[0], 0)
+        tracks = {state.split("@")[0] for d in decisions(self.tmp / "plain") for state in d["inputs"]["person_state"]}
+        row = {"G": 3.0, "sd": None, "sd_status": "unknown until supervised glare-model validation", "model_status": "unvalidated"}
+        path = self.write("canon-glare.json", json.dumps({**fake_light.build(), "glare": {self.KEY: dict.fromkeys(tracks, row)}}))
+        code, out, err = tool("run.py", *COORDINATOR, "--touch", "--light-model", path, "--out", self.tmp / "out")
+        self.assertEqual(code, 0, out + err)
+        self.assertNotIn("Traceback", out + err)
+        self.assertEqual(tool("check.py", self.tmp / "out" / "log.jsonl")[0], 0)
+        rows = [r for d in decisions(self.tmp / "out") for r in d["predicted"]["eyes"] if r["channel"] == events.LIGHTS[0] and r["G"] is not None]
+        self.assertTrue(rows)
+        for r in rows:
+            self.assertIsNone(r["G_hi"])
+            self.assertEqual(r["excluded"], r["G"] > r["limit"])
 
     def test_a_real_run_on_a_glare_table_still_logs(self):
         path = self.write("model.json", json.dumps(fake_light.build(glare={events.LIGHTS[0]: {"room": {"G": 0.3, "sd": 0.01}}})))

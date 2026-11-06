@@ -161,6 +161,12 @@ def surface_of(person, light):
     return surface if surface in light.surfaces else light_adapter.ROOM
 
 
+def glare_tested(row, level, slots):
+    """What the glare limit is tested on: G + k x sd. Canon writes sd null until the glare model is validated, and then G alone
+    is the test: a spread only adds to it. A record's G_hi stays null then, since G alone is no upper bound."""
+    return row["G"] * level + slots["glare_sd_k"] * (row["sd"] or 0.0)
+
+
 def eye_rows(inputs, scene, light, slots):
     """predicted.eyes, from what a Decision logs and nothing else: the state ids and their field_support, the envelope
     version and t_exec, for an actual resulting scene. A row is `excluded` when its channel breaks the glare limit at
@@ -181,13 +187,13 @@ def eye_rows(inputs, scene, light, slots):
             row, level = light.glare(channel, track), _level(one)
             known = row is not None and level is not None
             g = round(row["G"] * level, 6) if known else None
-            g_hi = round(row["G"] * level + slots["glare_sd_k"] * row["sd"], 6) if known else None
+            tested = round(glare_tested(row, level, slots), 6) if known else None
             limit = slots["glare_limit"] if known else None
             age = round(t_exec - last, 3) if t_exec is not None and last is not None else None
-            rows.append({"track_id": track, "channel": channel, "G": g, "G_hi": g_hi, "limit": limit,
+            rows.append({"track_id": track, "channel": channel, "G": g, "G_hi": tested if known and row["sd"] is not None else None, "limit": limit,
                          "model_status": row["model_status"] if row else "unvalidated", "t_exec": t_exec,
                          "support_age": age, "support_status": field.get("support_status"),
-                         "excluded": bool(known and g_hi > limit)})
+                         "excluded": bool(known and tested > limit)})
     return rows
 
 
@@ -453,10 +459,10 @@ class Coordinator:
                 row = self.light.glare(bulb, track)
                 if not row or not level:
                     continue
-                g_hi = row["G"] * level + self.slots["glare_sd_k"] * row["sd"]
-                if g_hi > self.slots["glare_limit"]:
+                tested = glare_tested(row, level, self.slots)
+                if tested > self.slots["glare_limit"]:
                     out.append({"constraint": "glare_at_eyes", "held_channel": bulb, "track": track,
-                                "eye_or_envelope": "eye-" + track, "G_hi": round(g_hi, 6),
+                                "eye_or_envelope": "eye-" + track, "G_hi": None if row["sd"] is None else round(tested, 6),
                                 "limit": self.slots["glare_limit"], "model_status": row["model_status"]})
         return out
 
@@ -471,7 +477,7 @@ class Coordinator:
             row = self.light.glare(channel, track)
             if not row:
                 continue
-            if row["G"] * level + self.slots["glare_sd_k"] * row["sd"] > self.slots["glare_limit"]:
+            if glare_tested(row, level, self.slots) > self.slots["glare_limit"]:
                 return False
             if row["G"] > 0 and level > now and any(c["track"] == track for c in conflicts):
                 return False

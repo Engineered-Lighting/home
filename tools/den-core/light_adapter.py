@@ -130,13 +130,15 @@ def _check_channel(key, model, ids):
 
 
 def _check_glare(table):
-    """Canon's per channel, per eye position: {G, sd, model_status}. A solve trips on a bad row only at the eye it names."""
+    """Canon's per channel, per eye position: {G, sd, model_status}, sd null until the glare model is validated. A solve trips
+    on a bad row only at the eye it names."""
     for key, rows in table.items():
         if not isinstance(rows, dict):
             raise TypeError("its glare for channel %s must be {eye: {G, sd, model_status}}" % key)
         for eye, row in rows.items():
-            if not (isinstance(row, dict) and events.is_number(row.get("G")) and events.is_number(row.get("sd")) and _text(row.get("model_status"))):
-                raise TypeError("its glare for channel %s at eye %s needs G and sd as numbers, and a model_status" % (key, eye))
+            if not (isinstance(row, dict) and events.is_number(row.get("G")) and "sd" in row and (row["sd"] is None or events.is_number(row["sd"]))
+                    and _text(row.get("model_status"))):
+                raise TypeError("its glare for channel %s at eye %s needs G as a number, sd as a number or null, and a model_status" % (key, eye))
 
 
 def _check_spots(table):

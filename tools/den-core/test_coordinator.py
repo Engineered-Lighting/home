@@ -438,6 +438,29 @@ class GlareTest(unittest.TestCase):
         self.assertEqual(d["hard_conflicts"], [])
         self.assertFalse(any(r["excluded"] for r in d["predicted"]["eyes"]))
 
+    def test_a_null_sd_tests_the_limit_on_g_alone_and_logs_no_upper_bound(self):
+        # Canon's row, a spread not validated yet. G 2: 2 * level is the test with nothing added, so a rule's scene caps at 127 of 254.
+        p = policy(light_model={"source": "fake", "params": {"glare": {FR: {"A": {"G": 2.0, "sd": None}}}}})
+        start(p)
+        [d] = feed(p, ps(T0 + 10, state="none"))
+        self.assertEqual(d["requested_scene"][FR]["brightness"], 127)
+        [row] = [r for r in d["predicted"]["eyes"] if r["channel"] == FR]
+        self.assertIsNone(row["G_hi"])
+        self.assertIs(row["excluded"], False)
+        self.assertEqual(row["limit"], 1.0)
+        self.assertIn("A", d["recipients"][FR]["exposed"])  # an unknown bound counts as exposed
+
+    def test_a_held_light_over_the_limit_on_g_alone_is_a_conflict_with_a_null_sd(self):
+        glare = {FL: {"A": {"G": 2.0, "sd": None}}}
+        p = policy(compensation={"option": "P0"}, light_model={"source": "fake", "params": {"glare": glare}})
+        start(p)
+        feed(p, ps(T0 + 10))
+        [d] = feed(p, *touch(T0 + 30, FL, 254))
+        [conflict] = d["hard_conflicts"]
+        self.assertEqual(conflict["G_hi"], None)
+        self.assertEqual((conflict["held_channel"], conflict["limit"]), (FL, 1.0))
+        self.assertEqual({r["channel"]: r["excluded"] for r in d["predicted"]["eyes"]}[FL], True)
+
     def test_a_rule_scene_is_capped_too(self):
         p = policy(light_model={"source": "fake", "params": {"glare": {FR: {"A": {"G": 2.0, "sd": 0.0}}}}})
         start(p)

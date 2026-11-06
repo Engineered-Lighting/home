@@ -269,6 +269,15 @@ class MalformedInputTest(Temp):
         path = self.write("frames.jsonl", "{}\n")
         self.refuses("line 1 is not a LightState", "--light-states", path, *COORDINATOR)
 
+    def test_a_fact_line_with_its_keys_right_and_its_values_wrong_has_its_number(self):
+        lines = good_inputs(self.tmp)["facts"].splitlines()
+        row = json.loads(lines[2])
+        for key, value in (("observed_at", "soon"), ("observed_at", []), ("observed_at", None), ("observed_at", 5), ("request_id", []), ("request_id", {"a": 1}), ("request_id", 5)):
+            lines[2] = json.dumps({**row, key: value}, separators=(",", ":"))
+            path = self.write("la-fact-log-1-2026-11-04.jsonl", "\n".join(lines) + "\n")
+            with self.subTest(key=key, value=value):
+                self.refuses("%s line 3 is not a la-fact-log-1 line" % path, "--facts", path, "--assume-occupied", "--policies", "need", "incumbent")
+
     def test_a_file_that_is_not_utf8(self):
         path = self.write("ansi.json", b'{"room": ["caf\xe9"]}')
         self.refuses("%s is not UTF-8" % path, "--surfaces", path, *COORDINATOR)

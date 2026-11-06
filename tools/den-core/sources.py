@@ -56,11 +56,12 @@ def _fact(log, raw):
     try:
         value = json.loads(raw.decode("ascii"))
         if (not isinstance(value, dict) or set(value) != set(log.KEYS) or value["schema"] != log.SCHEMA
-                or value["source_id"] != log.SOURCE_ID):
+                or value["source_id"] != log.SOURCE_ID or not isinstance(value["request_id"], str)):
             return None
         observation = value["observation"]
         if observation is not None and (not isinstance(observation, dict) or set(observation) != log.RECEIPT_KEYS):
             return None
+        fact_time(value["observed_at"])  # need reads it the same way, where a bad one would have no line number
         return fact_time(value["available_at"]), value
     except (ValueError, TypeError):
         return None

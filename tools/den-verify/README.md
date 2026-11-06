@@ -84,8 +84,12 @@ line counts the rest by reason, and the report lists each with why
 (`decisions.not_verified`). A lit bulb with no level, or a null entry for a bulb never
 seen, is unknown, never 0, and what depends on it is not judged. One decision the
 model cannot predict, for a bulb with no colour temperature say, gets `verify: null`
-with the reason, and the run goes on. The console then says what the light model ran
-on, how many points were left out of the hit
+with the reason, and the run goes on. With no window data on the frames, as
+`den-photometry` writes them, or no `--occupancy` file, a miss that would read as drift
+reads unexplained, naming the unknown input, and `report.frames` says occupancy is
+unknown. The console then says what the light model ran
+on, how many surfaces a Decision too long for its line left unlogged and so unverified,
+how many points were left out of the hit
 rate (lit by held or superseded bulbs where the decision's own bulbs could not
 show), how many decisions read a frame from before a step landed or a person
 changed a light, so nothing taken

@@ -254,7 +254,7 @@ class Dec:
 
 
 class Run:
-    def __init__(self, m, model, decisions, light_states, corrections=(), occupancy=(), gold=(),
+    def __init__(self, m, model, decisions, light_states, corrections=(), occupancy=None, gold=(),
                  clock=None, scored=True):
         from records import Clock
         self.m, self.model, self.clock, self.scored = m, model, clock or Clock(), scored
@@ -275,7 +275,8 @@ class Run:
         for d in self.decs:
             if d.ref is not None:
                 d.stale_read = settle.stale_read(d.id, d.ts, d.ref.ts, all_steps, self.windows.changes())
-        self.occupancy = [(float(o["start"]), float(o["end"]), o.get("people") or []) for o in occupancy]
+        self.occupancy_known = occupancy is not None  # no file says nothing of who was there; an empty one says nobody was
+        self.occupancy = [(float(o["start"]), float(o["end"]), o.get("people") or []) for o in occupancy or ()]
         self.gold = list(gold)
 
     def date_anchor(self, names, person_state):
@@ -496,15 +497,20 @@ class Run:
                 if pxy and math.hypot(pxy[0] - xy[0], pxy[1] - xy[1]) <= self.m["shadow_radius_m"]:
                     return {"cause": "shadow", "admitted": False, "pending": "envelope-parameters",
                             "basis": f"{p.get('track_id')} within {self.m['shadow_radius_m']} m, occupied"}
-        if d.ref is not None:
-            common = set(frame.windows) & set(d.ref.windows)
+        common = set(frame.windows) & set(d.ref.windows) if d.ref is not None else ()
+        if common:
             change = sum(frame.windows[w] - d.ref.windows[w] for w in common)
-            if common and abs(change) >= self.m["daylight_change_min"] and _sign(change) == _sign(res):
+            if abs(change) >= self.m["daylight_change_min"] and _sign(change) == _sign(res):
                 return {"cause": "daylight", "basis": f"window daylight changed by {change:+.3f}"}
+        unknown = [name for name, known in (("window daylight", common), ("occupancy", self.occupancy_known)) if not known]
         inc = row["increment"]
-        if (inc["status"] == "outside" and not occ and row["held_share"] == 0
-                and _sign(inc["measured_change"] - inc["predicted_change"]) == _sign(res)):
+        drift = (inc["status"] == "outside" and not occ and row["held_share"] == 0
+                 and _sign(inc["measured_change"] - inc["predicted_change"]) == _sign(res))
+        if drift and not unknown:
             return {"cause": "drift", "basis": "the change itself landed off in the same direction"}
+        if unknown:
+            what = "the change itself landed off in the same direction, as drift would" if drift else "no shadow or drift"
+            return {"cause": "unexplained", "basis": f"{what}, but nothing rules the rest out: unknown {' and '.join(unknown)}", "unknown": unknown}
         return {"cause": "unexplained", "basis": "no daylight change, shadow or drift"}
 
     # -- Decision.verify ------------------------------------------------------
@@ -758,6 +764,8 @@ class Run:
         status_counts = {"within": 0, "outside": 0, "unverifiable": 0, "prior_only": 0}
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
+        unknown_inputs = {"window daylight": 0, "occupancy": 0}
+        unknown_misses = 0
         excluded_held = fallback_scored = eyes_total = 0
         below_noise = {"count": 0, "hits": 0}
         wide_by_day = {}
@@ -824,12 +832,15 @@ class Run:
                 for e in verify["explanation"] or []:
                     if e["cause"] in causes:
                         causes[e["cause"]] += 1
+                    unknown_misses += bool(e.get("unknown"))
+                    for name in e.get("unknown", ()):
+                        unknown_inputs[name] += 1
                 day = self.clock.day(frame.ts)
                 h0, n0 = counted_by_day.get(day, (0, 0))
                 counted_by_day[day] = (h0 + hits, n0 + n)
                 wide_by_day[day] = wide_by_day.get(day, 0) + wide
             rows_out.append({"decision_id": d.id, "light_state": frame.id, "ts": frame.ts,
-                             "settled_at": d.settled, "occupied": occ, "admitted": admitted,
+                             "settled_at": d.settled, "occupied": occ if self.occupancy_known else "unknown", "admitted": admitted,
                              "within_tolerance": verify["within_tolerance"],
                              "points": {p["point_id"]: p["status"] for p in verify["points"]}})
 
@@ -852,6 +863,10 @@ class Run:
                 frame_counts["residual_written"] += 1
             states_out.append(rec)
 
+        if not self.occupancy_known:
+            frame_counts["occupied"] = "unknown"
+            frame_counts["occupancy_status"] = "unknown: no --occupancy file was given"
+        not_logged = [(d.rec.get("predicted") or {}).get("surfaces_not_logged") or 0 for d in self.decs]
         wide_hits = sum(wide_by_day.values())
         all_hits = sum(h for h, _ in counted_by_day.values())
         all_counted = sum(k for _, k in counted_by_day.values())
@@ -875,6 +890,7 @@ class Run:
                           "unknown_state": unknown_state},
             "frames": frame_counts,
             "hit_rate": rate,
+            "surfaces_not_logged": {"surfaces": sum(not_logged), "decisions": sum(1 for n in not_logged if n)},
             "excluded_held_or_superseded": excluded_held,
             "excluded_held_by_status": excluded_by_status,
             "below_meter_noise": {**below_noise, "misses": below_noise["count"] - below_noise["hits"],
@@ -883,7 +899,7 @@ class Run:
                                             "verdict_if_missed": narrow[1]},
             "fallback_patch_points_scored": fallback_scored,
             "misses_explained": {
-                **causes, "misses": misses,
+                **causes, "misses": misses, "unknown_inputs": unknown_inputs, "misses_with_an_unknown_input": unknown_misses,
                 "share_explained": _r((misses - causes["unexplained"]) / misses, 4) if misses else None,
                 "share_explained_admitted": (_r((causes["daylight"] + causes["drift"]) / misses, 4)
                                              if misses else None),

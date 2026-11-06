@@ -31,6 +31,8 @@ def closed(overrides=None):
 
 
 def score(decisions, frames, model, overrides=None, **kw):
+    """A run as if an occupancy file was given, with nobody in it unless a test says: no file at all is test_rules.py's."""
+    kw.setdefault("occupancy", [])
     run = Run(closed(overrides), LightModel(model), decisions, frames, clock=Clock(syn.UTC_OFFSET_S), **kw)
     return run.run()
 

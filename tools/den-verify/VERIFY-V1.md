@@ -22,7 +22,10 @@ Running needs the owner's go-ahead; building does not.
 
 **Points.** A verify point is a surface: every key of `Decision.predicted.surfaces`,
 every `Decision.targets[].surface_id`, and every `Decision.recipients[].targets[]`
-of kind `task` or `layer`. Eyes are never points (see "Eyes").
+of kind `task` or `layer`. Eyes are never points (see "Eyes"). A Decision too long for
+its log line may leave surfaces off `predicted.surfaces`, counted in
+`predicted.surfaces_not_logged`: those are not verified, and the report and console
+say how many, across how many decisions (`surfaces_not_logged`).
 
 For each point at the verify frame:
 
@@ -221,8 +224,16 @@ many days had none) and the margin `delta_hit_rate`, which the owner has not set
    frame is not occupied, and no held or superseded channel gave any light there.
 4. `unexplained`.
 
+With no window data on the two frames, or no occupancy file, nothing can rule out what
+they would have shown, so the test for `drift` cannot be met: a miss that would read
+as drift reads `unexplained`, and any `unexplained` then names the unknown input in
+its `basis` and its `unknown` (`den-photometry` writes `window_daylight: []`). An empty
+occupancy file says nobody was there, which is known. `report.frames.occupied` reads
+`unknown` with no file, rather than 0. This changes causes, not whether a point is a
+hit or a miss.
+
 The report gives the share explained (daylight, shadow, drift) and the count
-of each.
+of each, and how many misses had an unknown input.
 
 **Eyes.** No eye point is ever written as verified. Every eye in
 `Decision.predicted.eyes` and every recipients target of kind `eye` goes to
@@ -328,7 +339,8 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   point is judged to more than `tolerance` × predicted, and `why`, only where the
   point is `unverifiable`.
 - `explanation` is null when nothing missed, else a list of
-  `{point_id, cause, basis}`.
+  `{point_id, cause, basis}`, with `unknown` where a cause could not be ruled out for
+  want of an input.
 - `verify` is null with a sibling `verify_status` when no verify frame exists; a
   decision with a frame and nothing judged keeps `verify` and has `verify_status`
   too. A frame with no residual (mid-fade, before any decision, under a decision
@@ -350,7 +362,7 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
 Tool-local JSON Lines, all synthetic in tests:
 
 - **occupancy**: `{start, end, people: [{track_id, xy}]}`, Unix seconds and
-  room-frame metres;
+  room-frame metres. With no file, occupancy is unknown;
 - **gold**: `{episode_id, track_id, start, end, R_eval: {surface_id,
   placement_sd, source}}`, following `EvalRecord.gold_set.R_eval`.
 

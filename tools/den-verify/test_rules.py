@@ -652,6 +652,174 @@ class PersonBeforeDecision(Cli):
         self.assertIn("A person's change whose window starts at or before the decision and ends after the read frame makes that frame stale too", note)
 
 
+class UnknownCauses(Cli):
+    """With no window data or no occupancy file, what would read as drift cannot be told from daylight or a person."""
+
+    def scene(self, windows=None, after=None, did="d", at=T):
+        """B0 goes 0.2 to 0.8 and lands 30% short of its change: the increment misses too, the way a drift would."""
+        ref = syn.light_state(at, {"p0": 20.0}, anchored=False, ident=f"ls-{did}")
+        low = syn.light_state(at + 5, {"p0": after if after is not None else 20.0 + 60 * 0.6}, anchored=False)
+        ref["window_daylight"], low["window_daylight"] = ([{"window_id": "w", "level": lv, "unit": "fraction of noon"}] if lv is not None else [] for lv in windows or (None, None))
+        dec = syn.hue_decision(did, at + 0.5, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(at + 0.5)}}, f"ls-{did}", targets={"A": {"surface_id": "p0"}})
+        return [dec], [ref, low], model({"p0": {B0: 100.0}})
+
+    def cause(self, windows=None, occupancy=None, after=None):
+        decisions, frames, data = self.scene(windows, after)
+        out, states, report = run(decisions, frames, data=data, occupancy=occupancy)
+        [e] = out[0]["verify"]["explanation"]
+        return e, states[1]["residual"][0]["flags"], report
+
+    STEADY = (0.5, 0.5)
+
+    def test_real_drift_evidence_still_reads_drift_when_both_inputs_were_given(self):
+        e, flags, report = self.cause(self.STEADY, [])
+        self.assertEqual(e["cause"], "drift")
+        self.assertIn("drift", flags)
+        self.assertNotIn("unknown", e)
+        self.assertEqual(report["misses_explained"]["drift"], 1)
+        self.assertEqual(report["frames"]["occupied"], 0)
+
+    def test_no_window_data_reads_unexplained_naming_it(self):
+        e, flags, report = self.cause((None, None), [])
+        self.assertEqual(e["cause"], "unexplained")
+        self.assertEqual(e["unknown"], ["window daylight"])
+        self.assertIn("window daylight", e["basis"])
+        self.assertIn("unexplained", flags)
+        self.assertNotIn("drift", flags)
+        self.assertEqual((report["misses_explained"]["drift"], report["misses_explained"]["unexplained"]), (0, 1))
+        self.assertEqual(report["misses_explained"]["unknown_inputs"], {"window daylight": 1, "occupancy": 0})
+
+    def test_window_data_on_one_frame_only_is_no_comparison(self):
+        for windows in ((0.5, None), (None, 0.5)):
+            self.assertEqual(self.cause(windows, [])[0]["unknown"], ["window daylight"])
+
+    def test_a_window_level_of_null_is_no_data(self):
+        decisions, frames, data = self.scene(self.STEADY)
+        frames[1]["window_daylight"][0]["level"] = None
+        out, _, _ = run(decisions, frames, data=data, occupancy=[])
+        self.assertEqual(out[0]["verify"]["explanation"][0]["unknown"], ["window daylight"])
+
+    def test_no_occupancy_file_reads_unexplained_naming_it(self):
+        e, flags, report = self.cause(self.STEADY, None)
+        self.assertEqual(e["cause"], "unexplained")
+        self.assertEqual(e["unknown"], ["occupancy"])
+        self.assertIn("occupancy", e["basis"])
+        self.assertNotIn("drift", flags)
+        self.assertEqual(report["misses_explained"]["unknown_inputs"], {"window daylight": 0, "occupancy": 1})
+
+    def test_neither_names_both(self):
+        e, _, report = self.cause((None, None), None)
+        self.assertEqual((e["cause"], e["unknown"]), ("unexplained", ["window daylight", "occupancy"]))
+        self.assertEqual(report["misses_explained"]["share_explained"], 0.0)
+
+    def test_an_empty_occupancy_file_is_nobody_there_and_not_unknown(self):
+        e, _, report = self.cause(self.STEADY, [])
+        self.assertEqual(e["cause"], "drift")
+        self.assertEqual(report["frames"]["occupied"], 0)
+        self.assertNotIn("occupancy_status", report["frames"])
+
+    def test_a_miss_with_real_window_data_still_reads_daylight_whatever_else_is_unknown(self):
+        for occupancy in (None, []):
+            e, flags, _ = self.cause((0.2, 0.6), occupancy, after=20.0 + 60 * 1.5)
+            self.assertEqual(e["cause"], "daylight", occupancy)
+            self.assertIn("daylight", flags)
+            self.assertNotIn("unknown", e)
+
+    def test_a_shadow_needs_an_occupancy_file_and_with_one_still_reads(self):
+        people = [{"start": T + 4, "end": T + 6, "people": [{"track_id": "A", "xy": [0.0, 0.0]}]}]
+        self.assertEqual(self.cause(self.STEADY, people)[0]["cause"], "shadow")
+        self.assertEqual(self.cause(self.STEADY, None)[0]["cause"], "unexplained")
+
+    def test_an_occupied_frame_is_not_drift_and_says_nothing_of_occupancy_being_unknown(self):
+        people = [{"start": T + 4, "end": T + 6, "people": []}]
+        e, flags, report = self.cause(self.STEADY, people)
+        self.assertEqual((e["cause"], e.get("unknown")), ("unexplained", None))
+        self.assertIn("occupied", flags)
+        self.assertEqual(report["frames"]["occupied"], 1)
+
+    def test_a_miss_that_would_not_read_as_drift_names_what_is_unknown_too(self):
+        # the increment is within, since the read frame sits far above: only the level misses
+        decisions, frames, data = self.scene((None, None), after=30.0)
+        out, _, _ = run(decisions, frames, data=data, occupancy=None)
+        [e] = out[0]["verify"]["explanation"]
+        self.assertEqual((e["cause"], e["unknown"]), ("unexplained", ["window daylight", "occupancy"]))
+
+    def test_the_old_words_stand_where_nothing_is_unknown(self):
+        decisions, frames, data = self.scene(self.STEADY, after=20.0 + 60 * 1.5)
+        out, _, _ = run(decisions, frames, data=data, occupancy=[{"start": T + 4, "end": T + 6, "people": []}])
+        [e] = out[0]["verify"]["explanation"]
+        self.assertEqual(e, {"point_id": "p0", "cause": "unexplained", "basis": "no daylight change, shadow or drift"})
+
+    def test_it_changes_no_hit_or_miss(self):
+        seen = set()
+        for windows in ((None, None), self.STEADY, (0.5, None)):
+            for occupancy in (None, [], [{"start": T + 4, "end": T + 6, "people": []}]):
+                for after in (20.0 + 60 * 0.6, 80.0, 20.0 + 60 * 1.5):
+                    decisions, frames, data = self.scene(windows, after)
+                    hr = run(decisions, frames, data=data, occupancy=occupancy)[2]["hit_rate"]
+                    seen.add((after, hr["hits"], hr["misses"], hr["value"], hr["verdict"]))
+        self.assertEqual(len(seen), 3, seen)
+
+    def test_report_frames_says_occupancy_is_unknown_rather_than_0(self):
+        decisions, frames, data = self.scene(self.STEADY)
+        _, _, report = run(decisions, frames, data=data, occupancy=None)
+        self.assertEqual(report["frames"]["occupied"], "unknown")
+        self.assertIn("--occupancy", report["frames"]["occupancy_status"])
+        self.assertEqual(report["rows"][0]["occupied"], "unknown")
+
+    def test_through_the_command_line(self):
+        decisions, frames, data = self.scene((None, None))
+        out, report = self.preview(decisions, frames, data)
+        self.assertEqual(report["frames"]["occupied"], "unknown")
+        self.assertEqual(report["misses_explained"]["unexplained"], 1)
+        self.assertIn("1 miss(es) can't be told from drift or the rest: unknown window daylight 1, occupancy 1", out)
+        empty = self.tmp / "occupancy.jsonl"
+        empty.write_text("", encoding="utf-8")
+        _, report = self.preview(decisions, frames, data, "--occupancy", str(empty))
+        self.assertEqual(report["frames"]["occupied"], 0)
+        self.assertEqual(report["misses_explained"]["unknown_inputs"]["occupancy"], 0)
+
+    def test_the_note_says_so(self):
+        note = " ".join((HERE / "VERIFY-V1.md").read_text("utf-8").split())
+        self.assertIn("With no window data on the two frames, or no occupancy file, nothing can rule out what they would have shown", note)
+
+
+class SurfacesNotLogged(Cli):
+    def test_the_report_and_console_count_them(self):
+        one, two, three = landed("d-1"), landed("d-2", at=T + 100), landed("d-3", at=T + 200)
+        one["predicted"]["surfaces_not_logged"] = 5
+        two["predicted"]["surfaces_not_logged"] = 3
+        frames = [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0), frame(T + 105, 80.0), frame(T + 205, 80.0)]
+        decisions = [one, two, three]
+        self.assertEqual(run(decisions, frames)[2]["surfaces_not_logged"], {"surfaces": 8, "decisions": 2})
+        out, report = self.preview(decisions, frames)
+        self.assertEqual(report["surfaces_not_logged"], {"surfaces": 8, "decisions": 2})
+        self.assertIn("8 surface(s) across 2 decision(s) were not logged, so not verified", out)
+        out.encode("ascii")
+
+    def test_with_none_there_is_no_line_and_the_count_is_0(self):
+        out, report = self.preview([landed()], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        self.assertEqual(report["surfaces_not_logged"], {"surfaces": 0, "decisions": 0})
+        self.assertNotIn("not logged", out)
+
+    def test_a_count_of_0_is_no_decision(self):
+        dec = landed()
+        dec["predicted"]["surfaces_not_logged"] = 0
+        self.assertEqual(run([dec], [])[2]["surfaces_not_logged"], {"surfaces": 0, "decisions": 0})
+
+    def test_a_decision_that_could_not_be_verified_is_counted_too(self):
+        dec = landed()
+        dec["predicted"]["surfaces_not_logged"] = 4
+        self.assertEqual(run([dec], [])[2]["surfaces_not_logged"], {"surfaces": 4, "decisions": 1})
+
+    def test_it_moves_no_hit_or_miss(self):
+        dec = landed()
+        frames = [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)]
+        before = run([dec], frames)[2]["hit_rate"]
+        dec["predicted"]["surfaces_not_logged"] = 4
+        self.assertEqual(run([dec], frames)[2]["hit_rate"], before)
+
+
 class TwoEvenings(unittest.TestCase):
     """Frames are keyed by ts. Two may share a derived ls-HHMMSS id on different days, and each decision reads its own."""
     DAY = 86400.0

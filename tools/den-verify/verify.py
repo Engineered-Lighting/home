@@ -98,7 +98,7 @@ def cmd_run(args):
     clock = Clock(None if offset is None else round(offset * 3600))
     run = Run(values, model, read_jsonl(args.decisions, records.decision_problem), records.read_frames(args.light_states),
               corrections=read_jsonl(args.corrections, records.correction_problem),
-              occupancy=read_jsonl(args.occupancy, records.occupancy_problem),
+              occupancy=None if args.occupancy is None else read_jsonl(args.occupancy, records.occupancy_problem),
               gold=read_jsonl(args.gold, records.gold_problem), clock=clock, scored=not args.preview)
     decisions, states, report = run.run()
     report["method"] = {"file": m.file, "sha256": m.sha256, "block_sha256": m.block_sha256,
@@ -137,6 +137,13 @@ def cmd_run(args):
         _say(f"{noise['count']} counted point(s) have a change below the meter's noise "
              f"({noise['hits']} hit(s), {noise['misses']} miss(es)); "
              f"without them the hit rate would be {noise['value_without']}: {noise['verdict_without']}; a pass needs both")
+    causes = report["misses_explained"]
+    if causes["misses_with_an_unknown_input"]:
+        _say(f"{causes['misses_with_an_unknown_input']} miss(es) can't be told from drift or the rest: "
+             f"unknown window daylight {causes['unknown_inputs']['window daylight']}, occupancy {causes['unknown_inputs']['occupancy']}")
+    logged = report["surfaces_not_logged"]
+    if logged["surfaces"]:
+        _say(f"{logged['surfaces']} surface(s) across {logged['decisions']} decision(s) were not logged, so not verified")
     wide = report["hits_beyond_level_tolerance"]
     if wide["count"]:
         _say(f"{wide['count']} hit(s) are beyond {values['tolerance']:.0%} of the level; if they had missed, "

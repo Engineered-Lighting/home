@@ -996,7 +996,8 @@ class ReadmeLineTest(unittest.TestCase):
             return
         said = " ".join(fragment.read_text("utf-8").split())
         for words in ("is refused with one sentence and exit 2 when it is UTF-16 (what PowerShell 5.1's `>` writes), missing, malformed or the wrong shape",
-                      "`--truth`", "A log of the right shape with a line changed or wrong inside fails its replay with exit 1", "`validate.py` says so check by check",
+                      "`--truth`", "In `check.py` and `validate.py` a log of the right shape with a line changed or wrong inside fails its replay with exit 1",
+                      "`validate.py` says so check by check",
                       "a time no run could reach is refused"):
             self.assertIn(words, said)
 

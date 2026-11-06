@@ -30,7 +30,10 @@ the rest are listed with why (no read frame, no frame after settling, no surface
 no `applied_scene`, unknown state), and the first console line gives both counts. A lit
 bulb with no level is unknown, never 0. A miss with no window data or no occupancy file
 is not called drift, and no hit or miss moves for it. Several evenings in one run give
-the session-bootstrap interval. Every file it reads is refused with one sentence and
+the session-bootstrap interval. A frame further from a decision than the open slot
+`max_frame_gap_s` (proposed 5 s) is not what it read, and one later than that after it
+settled does not judge it, so a right decision is never judged on last night's frame or
+tomorrow morning's light: it is not verified, and says why. Every file it reads is refused with one sentence and
 exit 2 when it is UTF-16 (what PowerShell 5.1's `>` writes), missing, malformed or the
 wrong shape, down to what is inside a line, and a model error on one decision writes
 `verify` null with the reason and the run goes on. It reads records

@@ -1345,11 +1345,33 @@ class AVerifyFrameIsNearItsDecision(unittest.TestCase):
 
 
 class TheWordInTheMethod(unittest.TestCase):
-    AT_START ="b68d7cb647cfc7aef803544771c5e84783936837abc9bfe1fb3e14a1eb065376"  # the verify-v1 block at c188f7fe, before this round
+    AT_START = "aeda58163f3b4133cf9af74530a1a23cc345783fdd500951199b90e7f780cff4"  # the verify-v1 block now
+    AT_C188F7FE = "b68d7cb647cfc7aef803544771c5e84783936837abc9bfe1fb3e14a1eb065376"  # the block before this round
+    OLD_NOTE = "max_frame_gap_s = open              # open, proposed 5; metering frames come every few seconds"
 
     def test_no_rule_or_number_moved(self):
         m = method.load()
         self.assertEqual(m.block_sha256, self.AT_START)
+
+    def test_since_c188f7fe_only_one_note_has_moved_saying_what_its_slot_now_bounds(self):
+        text = method.lf_text(HERE / "VERIFY-V1.md")
+        line = next(n for n in text.split("\n") if n.startswith("max_frame_gap_s = "))
+        self.assertTrue(line.startswith(self.OLD_NOTE), line)
+        for words in ("gold second", "read frame", "verify frame"):
+            self.assertIn(words, line)
+        self.assertEqual(method.parse(text.replace(line, self.OLD_NOTE)).block_sha256, self.AT_C188F7FE)
+
+    def test_the_number_is_still_the_owners_to_close(self):
+        self.assertEqual(method.load().open["max_frame_gap_s"], 5)
+
+    def test_the_note_and_the_readme_say_how_far_a_frame_speaks(self):
+        note = " ".join((HERE / "VERIFY-V1.md").read_text("utf-8").split())
+        self.assertIn("is at most `max_frame_gap_s` after that settle time", note)
+        self.assertIn("A frame further from the decision's `ts` than `max_frame_gap_s`, either way and whichever way it is named, is not its read frame", note)
+        self.assertNotIn("stay within 12 hours too", note)
+        readme = " ".join((HERE / "README.md").read_text("utf-8").split())
+        self.assertIn("a frame further from a decision than the slot `max_frame_gap_s` (proposed 5 s) is not its read frame", readme)
+        self.assertIn("one later than that after the decision settled does not judge it", readme)
 
     def test_the_report_gives_both_hashes(self):
         with tempfile.TemporaryDirectory() as tmp:

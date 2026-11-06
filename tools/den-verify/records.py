@@ -21,7 +21,7 @@ CLOCK = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$")
 DAY = 86400.0
 LATEST_S = 32503680000.0  # the year 3000, as far as Windows' clock goes; before 1970 it stops too
 FRAME_APART_S = 0.0005  # how near inputs.light_state_ts must be to a frame's ts to name it
-SAME_EVENING_S = 12 * 3600.0  # how near a frame must be to a decision to be its frame, whatever names it
+SAME_EVENING_S = 12 * 3600.0  # one evening: which day a derived id or a clock string means, and how long a decision stays in force for a residual
 DEN_LOG_SCHEMAS = ("den-event-1", "den-replay-log-1")
 
 

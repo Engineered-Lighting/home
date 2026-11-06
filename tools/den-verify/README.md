@@ -77,7 +77,13 @@ Get-Content C:\den-verify\s1\decisions.jsonl, C:\den-verify\s2\decisions.jsonl |
 ```
 
 Frames are found by time, so two that share an `ls-HHMMSS` id on different days are
-no trouble, and each decision reads its own evening's.
+no trouble. Each decision reads its own evening's: a frame further from a decision than
+the slot `max_frame_gap_s` (proposed 5 s) is not its read frame, whatever names it, and
+one later than that after the decision settled does not judge it. That decision is not
+verified, with why, rather than judged on another hour's light. `den-core` names the
+newest frame at or before a decision however old, so a camera that starts late costs
+that decision its verdict and no more. The number is the owner's, and metering slower
+than it leaves decisions not verified.
 
 The console's first line gives how many decisions were verified and how many not,
 then the hit rate and the verdict. A decision counts as verified only when something

@@ -15,7 +15,9 @@ frames can be used. Which points count now comes from predictions and times alon
 never from a reading. Revised again on 2026-11-06 to read rung 8's and rung 9's real
 records, with the numbers below as they were: what "verified" means, unknown state, a
 person's change before a decision, several evenings in one run and unknown causes.
-Nothing here has run on real light.
+Revised once more that day after an end-to-end run: `max_frame_gap_s`, at its proposed
+value as it was, now also bounds how far a read frame and a verify frame are from their
+decision. Nothing here has run on real light.
 Running needs the owner's go-ahead; building does not.
 
 ## What is scored
@@ -73,8 +75,8 @@ D(p) + Ê(p; state), and the background D comes from the slot `background`:
 
 - `reference_frame` (proposed): D(p) = measured − Ê(p; state before), on the
   frame the decision read (`Decision.inputs.light_state`) with the state it read
-  (`Decision.inputs.actuator_state`), unless that frame is stale (see "Read
-  frames");
+  (`Decision.inputs.actuator_state`), unless that frame is stale or too far from the
+  decision (see "Read frames");
 - `zero`: D(p) = 0, for runs after dark.
 
 Under `reference_frame` the prediction works out as the read frame's measurement
@@ -272,26 +274,40 @@ when none did). A person's change (a Correction) is busy from `ts` −
 **Verify frames.** A frame is excluded as **mid-fade** or **mid-move** when it
 falls between a step's `sent_at` and its end, for any decision, or inside a
 person's change. A decision's verify frame is the first frame at or after its
-settle time that is not excluded and comes before the next decision's first
-step. If the next decision sends a step before this one has settled, it was
+settle time that is not excluded, comes before the next decision's first step and
+is at most `max_frame_gap_s` after that settle time, under either background. What
+the room shows later says nothing of how this decision landed: metering that stopped
+at a decision and came back 9 hours later on daylight read a right landing as five
+misses of five. If the next decision sends a step before this one has settled, it was
 superseded before it settled; if no frame qualifies, likewise `verify` is null
 with `verify_status` giving the reason.
 
 **Read frames.** The background and the increments take the frame the decision
-read, so it has to show the state the decision read. It is stale when it falls
-inside a step's window, or is older than a step another decision sent before this
-one: a Hue bulb reports its target at once, so `actuator_state` already shows that
-step and the frame does not, and D would take up the difference. With frames 5 s
-apart and a perfect model, a perfect landing read 0 of 6 on such a frame and a bulb
-that stayed stuck read 6 of 6. A person's change whose window starts at or before the
-decision and ends after the read frame makes that frame stale too, for the same
-reason: a Correction at t+2, a decision at t+4.7 and a read frame at t read 0 of 6 on a
-perfect landing. One whose window starts after the decision, or ends by the read frame,
-does not. A stale frame gives no reference, whatever is read later. Under
-`reference_frame` the decision's points are `unverifiable` and a LightState under it
-has no residual. Under `zero` the level check stands and only its increments are
-`unverifiable`. The report lists these decisions (`decisions.read_frame_stale`) and the
-console says how many.
+read, so it has to show the state the decision read. A frame further from the
+decision's `ts` than `max_frame_gap_s`, either way and whichever way it is named, is
+not its read frame: rung 9 names the newest frame at or before a decision however old,
+and on a second evening whose camera started late, a first decision that named the last
+evening's last frame, 23.4 hours old, read a right landing as five misses of five. Such
+a decision has no read frame: under `reference_frame` its points are `unverifiable`, and
+under `zero` the level check stands and only its increments are `unverifiable`, as when
+it names none. `max_frame_gap_s` is the owner's number, and one number for the three
+places a frame speaks for a moment it was not taken at: a gold second, a read frame and
+a verify frame. Frames further apart than it leave decisions not verified, each saying
+so, and never judged on another hour's light.
+
+A read frame near enough is stale when it falls inside a step's window, or is older
+than a step another decision sent before this one: a Hue bulb reports its target at
+once, so `actuator_state` already shows that step and the frame does not, and D
+would take up the difference. With frames 5 s apart and a perfect model, a perfect
+landing read 0 of 6 on such a frame and a bulb that stayed stuck read 6 of 6. A
+person's change whose window starts at or before the decision and ends after the
+read frame makes that frame stale too, for the same reason: a Correction at t+2, a
+decision at t+4.7 and a read frame at t read 0 of 6 on a perfect landing. One whose
+window starts after the decision, or ends by the read frame, does not. A stale frame
+gives no reference, whatever is read later. Under `reference_frame` the decision's
+points are `unverifiable` and a LightState under it has no residual. Under `zero`
+the level check stands and only its increments are `unverifiable`. The report lists
+these decisions (`decisions.read_frame_stale`) and the console says how many.
 
 **Occupied seconds** are flagged: a frame inside an occupancy interval is
 marked occupied in the report and in its residual `flags`. Occupied frames are
@@ -353,10 +369,11 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
   `ls-<ts to the millisecond>` instead, and either reads. Two frames may share an
   `ls-HHMMSS` id on different days, so frames are keyed by `ts`.
 - `Decision.inputs.light_state_ts`, when it is a number, says which frame the
-  decision read: the one at that `ts`, within 0.0005 s. Else `inputs.light_state`
-  does: the frame of that id within 12 hours of the decision. A verify frame, and a
-  decision in force for a residual, stay within 12 hours too, so one evening's
-  decision never reads the next evening's first frame.
+  decision names: the one at that `ts`, within 0.0005 s. Else `inputs.light_state`
+  does: the frame of that id within 12 hours of the decision, which says which day's
+  an id means. Either way it is the read frame only within `max_frame_gap_s` of the
+  decision (see "Read frames"). A decision stays in force for a residual for 12 hours,
+  so one evening's decision is never set against the next evening's first frame.
 
 ## Inputs the contracts do not define
 
@@ -412,7 +429,7 @@ spill_band_top = open               # open, proposed "target_lx"; T_hi is Decisi
 spill_allowance_lx = open           # open, proposed 30; the walkthrough's illustrative allowance
 daylight_change_min = open          # open, proposed 0.05; summed window level, in the window unit
 shadow_radius_m = open              # open, proposed 0.5; nominal body envelope, pending envelope-parameters
-max_frame_gap_s = open              # open, proposed 5; metering frames come every few seconds
+max_frame_gap_s = open              # open, proposed 5; metering frames come every few seconds; how far from a moment a frame speaks for it: a gold second, a decision's read frame, its verify frame after settling
 delta_hit_rate = open               # open, proposed 0.05; promotion-margins leaves every delta open
 record_extensions = open            # open, proposed "verify-ext/v1"; the keys listed above
 ```

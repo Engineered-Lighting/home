@@ -136,15 +136,16 @@ class Base(unittest.TestCase):
         return [os.path.join(folder, 'observations.jsonl'), os.path.join(run_folder, 'tracks.jsonl'),
                 os.path.join(folder, 'truth.jsonl')]
 
-    def walked_take(self, seed, meth, lost=(), past=0.0, written=True):
-        """A and B walk past each other 0.5 m apart, then stand for 16 s. Each of `lost` goes unseen from the start of
-        the mark until `past` seconds after its end: rejected, or with no row at all unless `written`."""
+    def walked_take(self, seed, meth, lost=(), past=0.0, written=True, lead=0.3, ahead=0.0):
+        """A and B stand for `lead` s, walk past each other 0.5 m apart, then stand for 16 s. Each of `lost` goes unseen
+        from `ahead` seconds before the start of the mark until `past` seconds after its end: rejected, or with no row at
+        all unless `written`."""
         folder = self.path('takes', 'walked-%d' % seed)
         os.makedirs(folder)
         t0 = 1793000000.0 + 1000.0 * seed
         y = 2.2 + 0.02 * seed
-        a = synth.Walker('A', [(-2.0, y, 0.3), (2.0, y, 16.0)], 1.0)
-        b = synth.Walker('B', [(2.0, y + 0.5, 0.3), (-2.0, y + 0.5, 16.0)], 1.0)
+        a = synth.Walker('A', [(-2.0, y, lead), (2.0, y, 16.0)], 1.0)
+        b = synth.Walker('B', [(2.0, y + 0.5, lead), (-2.0, y + 0.5, 16.0)], 1.0)
         start, end = synth._meet_window(a, b)
         rows, lines = [], []
         for k in range(int(max(a.t_end, b.t_end) * 4)):
@@ -158,7 +159,7 @@ class Base(unittest.TestCase):
                        'room_position': {'x': x, 'y': y_now, 'z': 1.0, 'cov': [[0.01, 0, 0], [0, 0.01, 0], [0, 0, 0.01]]},
                        'image_box': [1, 1, 2, 2], 'transform_id': 'x', 'depth_ts': ts, 'score': 0.8,
                        'visibility': 'visible', 'validity': 'valid'}
-                if person in lost and start <= local <= end + past:
+                if person in lost and start - ahead <= local <= end + past:
                     if not written:
                         continue
                     row['validity'] = 'rejected:no_room_position:depth_absent'
@@ -521,6 +522,60 @@ class ScoredRunTest(Base):
         takes = [self.walked_take(seed, meth, 'B', 3.0) for seed in range(2)]
         code, text = cli(*self.score_args(takes, scored=True, meth=meth))
         self.assertEqual(code, 0, text)
+        self.assertNotIn('EXCLUDED', text)
+
+    def assert_stalled_near_passes_fail(self, past):
+        """26 near passes, both people lost from the start of the mark until `past` seconds after its end: the tracks
+        coast through each other and nearly every take comes back swapped."""
+        def plan(block):
+            block['scoring']['crossings_plan'] = {'near_pass': 20}
+        meth = self.closed_method(change=plan)
+        stall = reject_when(lambda who, ts, mark: who in ('A', 'B') and mark[0] <= ts <= mark[1] + past)
+        takes = [self.make_take('near_pass', seed=seed, noise='typical', meth=meth, edit_observations=stall) for seed in range(26)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 1, text)
+        self.assertIn('FAILED', text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertGreaterEqual(report['crossings'], 20)
+        self.assertFalse(report['gate']['idf1_met'])
+        self.assertTrue(report['gate']['silent_swaps_zero'])
+        self.assertGreater(report['flagged_switches'], 3 * report['switches_outside_crossings'])
+
+    def test_a_stall_that_ends_inside_the_window_on_swapped_tracks_fails_the_gate(self):
+        self.assert_stalled_near_passes_fail(1.0)
+
+    def test_a_stall_that_ends_as_the_window_closes_on_swapped_tracks_fails_the_gate(self):
+        self.assert_stalled_near_passes_fail(2.0)
+
+    def test_a_stall_that_ends_past_the_window_on_swapped_tracks_fails_the_gate(self):
+        self.assert_stalled_near_passes_fail(2.5)
+
+    def test_a_stall_that_began_before_the_window_and_ends_on_swapped_tracks_fails_the_gate(self):
+        """The same from the other side: they cross while nobody sees them, and the window holds only what came after."""
+        meth = self.closed_method()
+        takes = [self.walked_take(seed, meth, 'AB', 0.0, lead=8.0, ahead=2.5) for seed in range(20)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 1, text)
+        self.assertIn('FAILED', text)
+        with open(self.path('score', 'score.json'), encoding='utf-8') as f:
+            report = json.load(f)
+        self.assertEqual(report['crossings'], 20)
+        self.assertFalse(report['gate']['idf1_met'])
+
+    def test_the_readmes_script_passes_on_fresh_takes_at_the_proposed_values(self):
+        plan = {'crossing': 12, 'crossing_occluded': 5, 'occlusion': 3, 'near_pass': 3, 'door': 2}
+        script = (('clean_crossing', 8), ('touching_crossing', 4), ('crossing_behind_armchair', 5), ('armchair_occlusion', 3),
+                  ('near_pass', 3), ('swap_at_door', 2))
+
+        def close(block):
+            block['scoring']['crossings_plan'] = plan
+        meth = self.closed_method('METHOD-script.md', close)
+        scenes = [scene for scene, n in script for _ in range(n)]
+        takes = [self.make_take(scene, seed=12000 + k, noise='typical', meth=meth) for k, scene in enumerate(scenes)]
+        code, text = cli(*self.score_args(takes, scored=True, meth=meth))
+        self.assertEqual(code, 0, text)
+        self.assertIn('PASSED', text)
         self.assertNotIn('EXCLUDED', text)
 
     def test_a_max_coast_the_scorer_cannot_read_is_a_refusal(self):

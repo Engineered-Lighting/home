@@ -238,7 +238,7 @@ the value.
 | `tracker.reconfirm_s` | 1.5 s | How long after doubt a track is confident again, and how long a new track waits to be; until then, no narrow beam and no teaching |
 | `scoring.window_pad_s` | 2.0 s | How much of each crossing's before and after is scored |
 | `scoring.face_visible_score_min` | 0.4 | The keypoint score that counts as a visible face (a stand-in) |
-| `scoring.trial_rule` | `sides` `take`, `min_scored` 2, `contact_reach_m` 2.0, `unseen_s` 0.6 | What a marked crossing must show to count. `take` counts someone hidden past the padding if they are seen again within `tracker.max_coast_s`, and `window` does not. Past the coast neither counts: the track has ended (METHOD.md) |
+| `scoring.trial_rule` | `sides` `take`, `min_scored` 2, `contact_reach_m` 2.0, `unseen_s` 0.6 | What a marked crossing must show to count. `take` counts someone hidden past the padding if they are seen again within `tracker.max_coast_s`, and `window` does not. Under `take` their `min_scored` sightings out there are read, at less weight than a padded side, so a session where the detector stalls like that can read better than its swaps deserve. Past the coast neither counts: the track has ended (METHOD.md) |
 | `scoring.unresolved_switch` | `flagged` | How a track's change of person counts when it crosses cannot-tell labels and the tracker was sure for part of them: `flagged` or `silent` |
 | `scoring.crossings_plan` | the script above: 12 `crossing`, 5 `crossing_occluded`, 3 `occlusion`, 3 `near_pass`, 2 `door` | How many of each kind must count. A scored run refuses when any kind falls short |
 
@@ -256,9 +256,12 @@ the value.
    `record.time_field`, before the freeze: `null` keeps to the schema, and a name puts the
    frame's capture time on every line, which rung 5 must then read.
 3. **What the gate counts.** The contracts do not spell out three things, which are read
-   here as: IDF1 pooled over padded crossings, with whole-take IDF1 reported beside it; a
-   silent swap outside any crossing also fails; flagged switches and ambiguous share are
-   reported with no limit. Agreed?
+   here as: IDF1 pooled over padded crossings, and over each followed person's nearest
+   `min_scored` sightings on each side of the mark where those lie outside the padding, with
+   whole-take IDF1 reported beside it; a silent swap outside any crossing also fails; flagged
+   switches and ambiguous share are reported with no limit. So a flagged swap fails only
+   through IDF1, and METHOD.md measures how little that can be when a detector stall leaves it
+   few sightings: half the near passes of a session can come back swapped and pass. Agreed?
 4. **Frame rate.** The method is tuned at 4 frames a second and weak at 2 (METHOD.md). The
    stopped den loop placed people about once a second; R6's path sustained 4.6-4.9 Hz. The
    session needs a detector path at the higher rate. Is that the plan?

@@ -471,6 +471,106 @@ class TrialRuleTest(unittest.TestCase):
                 self.assertIn('trial_rule', scorer_core.trial_problem(bad))
 
 
+def tracks_from(links, when, tracks, confident=False):
+    """The same links, from time `when` on with each person on the track `tracks` gives, and that confidence."""
+    return [(t, o, p, tracks[p] if t >= when else k, confident if t >= when else c) for t, o, p, k, c in links]
+
+
+SWAPPED = {'A': 'trk-2', 'B': 'trk-1'}
+
+
+class ReadPastWindowTest(unittest.TestCase):
+    """A followed person's sightings may lie outside the window, and those are where a trial's outcome shows."""
+
+    def scored(self, links, positions, mark=(10.0, 12.0), rule=None):
+        window = {'id': 'w', 'kind': 'crossing', 'mark': list(mark), 'start': mark[0] - 2.0, 'end': mark[1] + 2.0}
+        take = scorer_core.score_take(links, [window], 2, trial=rule or RULE, positions=positions, max_unseen_s=COAST_S)
+        return take, take['windows'][0]
+
+    def counts(self, row):
+        return row['idtp'], row['idfp'], row['idfn']
+
+    def test_a_swap_seen_only_after_the_window_closes_costs_idf1_and_is_its_switch(self):
+        links, positions = walkers({'A': [(0, 10), (15, 20)], 'B': [(0, 10), (15, 20)]})
+        take, row = self.scored(tracks_from(links, 15, SWAPPED), positions)
+        self.assertTrue(row['admitted'], row['excluded_because'])
+        self.assertEqual(self.counts(row), (18, 4, 4), 'nine frames each in the window, and the first two each past it')
+        self.assertLess(row['idf1'], 0.9)
+        self.assertEqual((row['switches'], row['flagged_switches']), (2, 2))
+        self.assertEqual(take['outside']['switches'], 0, 'read by the crossing, so not counted again outside it')
+        self.assertEqual({s['time'] for s in row['switch_detail']}, {15.0})
+
+    def test_a_swap_across_a_stall_that_began_before_the_window_opened_costs_idf1(self):
+        links, positions = walkers({'A': [(0, 7), (13, 20)], 'B': [(0, 7), (13, 20)]})
+        _, row = self.scored(tracks_from(links, 13, SWAPPED), positions)
+        self.assertTrue(row['admitted'], row['excluded_because'])
+        self.assertEqual(self.counts(row), (10, 4, 4), 'five frames each in the window, and the last two each before it')
+        self.assertLess(row['idf1'], 0.9)
+
+    def test_back_on_their_own_tracks_costs_nothing(self):
+        for spans in ({'A': [(0, 10), (15, 20)], 'B': [(0, 10), (15, 20)]}, {'A': [(0, 7), (13, 20)], 'B': [(0, 7), (13, 20)]}):
+            take, row = self.scored(*walkers(spans))
+            self.assertEqual((row['idfp'], row['idfn'], row['switches'], take['outside']['switches']), (0, 0, 0, 0))
+            self.assertEqual(row['idf1'], 1.0)
+            self.assertEqual(row['idtp'], 22 if spans['A'][0][1] == 10 else 14, 'the sightings outside the window were read')
+
+    def test_a_person_seen_enough_in_the_window_is_read_no_further_under_either_side(self):
+        links, positions = walkers({'A': [(0, 20)], 'B': [(0, 20)]})
+        for sides in ('take', 'window'):
+            with self.subTest(sides=sides):
+                take, row = self.scored(tracks_from(links, 15, SWAPPED), positions, rule=dict(RULE, sides=sides))
+                self.assertEqual(self.counts(row), (50, 0, 0))
+                self.assertEqual((row['switches'], take['outside']['switches']), (0, 2))
+
+    def test_one_sighting_in_the_window_and_one_past_it(self):
+        spans = {'A': [(0, 10), (14, 14), (16, 20)], 'B': [(0, 10), (14, 14), (16, 20)]}
+        links, positions = walkers(spans)
+        _, row = self.scored(tracks_from(links, 16, SWAPPED), positions)
+        self.assertEqual(self.counts(row), (20, 2, 2), 'only the one each past the window, at 16')
+
+    def test_only_the_nearest_sightings_are_read(self):
+        links, positions = walkers({'A': [(0, 10), (15, 20)], 'B': [(0, 10), (15, 20)]})
+        take, row = self.scored(tracks_from(links, 15.5, SWAPPED), positions)
+        self.assertEqual(self.counts(row), (22, 0, 0), 'the swap comes at the third sighting back: a later matter, counted outside')
+        self.assertEqual((row['switches'], take['outside']['switches']), (0, 2))
+
+    def test_how_many_are_read_is_min_scored(self):
+        links, positions = walkers({'A': [(0, 10), (15, 20)], 'B': [(0, 10), (15, 20)]})
+        _, row = self.scored(tracks_from(links, 15, SWAPPED), positions, rule=dict(RULE, min_scored=3))
+        self.assertEqual(self.counts(row), (18, 6, 6))
+
+    def test_someone_not_followed_is_not_read_past_the_window(self):
+        _, row = self.scored(*walkers({'A': [(0, 40)], 'B': [(0, 10), (20, 40)]}))
+        self.assertEqual(row['followed'], ['A'])
+        self.assertEqual(self.counts(row), (34, 0, 0), 'twenty-five frames of A and nine of B, all in the window')
+
+    def test_a_silent_swap_past_the_window_counts_in_the_crossing_and_once(self):
+        links, positions = walkers({'A': [(0, 10), (15, 20)], 'B': [(0, 10), (15, 20)]})
+        take, row = self.scored(tracks_from(links, 15, SWAPPED, confident=True), positions)
+        self.assertEqual(row['silent_swaps'], 2)
+        self.assertEqual(take['outside']['silent_swaps'], 0)
+        summary = scorer_core.summarize([take], 0.9)
+        self.assertEqual((summary['silent_swaps'], summary['silent_swaps_outside_crossings'], summary['crossings_with_silent_swap']),
+                         (2, 0, 1))
+        self.assertFalse(summary['gate']['passed'])
+
+    def test_two_boxes_of_one_person_past_the_window_are_one_sighting(self):
+        links, positions = walkers({'A': [(0, 10), (15, 20)], 'B': [(0, 10), (15, 20)]})
+        links = sorted(links + [(15.0, 'a2', 'A', 'trk-1', False)])
+        positions['a2'] = (0.0, 1.0)
+        _, row = self.scored(links, positions)
+        self.assertEqual(self.counts(row), (22, 1, 0), 'A at 15 and 15.25, and the second box a false positive, as in a window')
+
+    def test_the_mapping_rung_5_reads_stays_the_tracks_in_the_window(self):
+        links, positions = walkers({'A': [(0, 8.25), (13.25, 20)], 'B': [(0, 8.25), (13.25, 20)]})
+        for new in ({'A': 'trk-0a', 'B': 'trk-0b'}, {'A': 'trk-8', 'B': 'trk-9'}):
+            with self.subTest(new=new):
+                _, row = self.scored(tracks_from(links, 13.25, new), positions, mark=(10.0, 11.0))
+                self.assertTrue(row['admitted'], row['excluded_because'])
+                self.assertEqual(self.counts(row), (4, 4, 4))
+                self.assertEqual(row['mapping'], {'A': 'trk-1', 'B': 'trk-2'})
+
+
 def good_truth_lines():
     return [
         {'version': truth.VERSION, 'kind': 'header', 'take': 't1', 'people': ['A', 'B']},

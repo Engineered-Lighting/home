@@ -529,6 +529,13 @@ class FrameFieldsTest(unittest.TestCase):
     def test_a_frames_own_id_is_used(self):
         self.assertEqual(self.decided([{"id": "frame-7", "ts": T0 + 7}])["light_state"], "frame-7")
 
+    def test_a_frame_between_the_plan_and_the_send_is_not_named(self):
+        p = tc.policy(send_latency_s=5, light_states=[frame(T0 + 7), frame(T0 + 12)])
+        tc.start(p)
+        tc.feed(p, tc.ps(T0 + 10))
+        [d] = tc.feed(p, tc.ev(T0 + 15, "tick", {}, "runner"))
+        self.assertEqual((d["ts"], d["inputs"]["light_state_ts"]), (T0 + 10, T0 + 7))
+
     def test_none_before_the_decision(self):
         inputs = self.decided([frame(T0 + 10.001), frame(T0 + 20)])
         self.assertEqual((inputs["light_state"], inputs["light_state_ts"], inputs["light_state_status"]),

@@ -513,7 +513,7 @@ class Run:
         occ, _ = self.occupied(frame.ts)
         entries = []
         for sid, row in rows.items():
-            if row["measured"] is None or row.get("residual") is None:
+            if row["measured"] is None or row["predicted"] is None:
                 continue
             flags = []
             if row["held_lit"]:
@@ -533,7 +533,7 @@ class Run:
                     flags.append(cause)
             entries.append({"surface_id": sid, "predicted": _r(row["predicted"], 3),
                             "residual": _r(row["measured"] - row["predicted"], 3),
-                            "residual_pct": _r(100 * row["residual"], 2), "unit": frame.unit,
+                            "residual_pct": _r(100 * row["residual"], 2) if "residual" in row else None, "unit": frame.unit,
                             "against": {"decision_id": d.id, "hold_set_revision": revision},
                             "flags": flags})
         return entries, None

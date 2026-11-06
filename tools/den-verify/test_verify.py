@@ -517,6 +517,10 @@ class HeldPointsCount(unittest.TestCase):
             hr = self.run_cases([self.vacancy_off(pin, reading)], {"held_rule": "exclude_both"})[2]
             self.assertEqual((hr["hit_rate"]["hits"], hr["hit_rate"]["misses"]), (0, 0), reading)
             self.assertEqual(hr["excluded_held_or_superseded"], 20, reading)
+        r = residual(self.run_cases([self.vacancy_off(50, 0.0)])[1], syn.T0 + 5, "p00")
+        self.assertEqual((r["predicted"], r["residual"], r["residual_pct"]), (0.0, 0.0, None))
+        self.assertEqual(r["against"]["hold_set_revision"], 4)
+        self.assertIn("held", r["flags"])
 
     def test_a_held_bulb_nudged_inside_the_bound_counts_like_a_steady_one(self):
         decisions, _, report = self.steady_beside_a_hold(True, 135.0, level_after=0.52)
@@ -1167,6 +1171,61 @@ class DimsAndOffs(unittest.TestCase):
         self.assertEqual(report["hit_rate"]["verdict"], "fail")
         self.assertEqual(len(d["verify"]["explanation"]), 6)
         self.assertIsNone(point(d, "p1")["residual"])  # the model is high there, so the read frame predicts below zero
+
+    def left_on(self, err, overrides=None):
+        """B0 is told off and stays on, at err times the model, in the verify frame and a frame 55 s later."""
+        pts = self.names[:4]
+        model = syn.hue_model({n: {B0: 300.0} for n in pts}, kelvins=(2700,))
+        t = syn.T0
+        dec = syn.hue_decision("d", t + 0.5, {B0: 0.8}, {B0: {"level": 0.0, "steps": send(t + 0.5)}}, "ls-r",
+                               targets={f"T{i}": {"surface_id": n} for i, n in enumerate(pts)})
+        frames = [syn.light_state(t + o, {n: 240.0 * err for n in pts}, anchored=False, ident=f"ls-{o}") for o in (5, 60)]
+        frames.insert(0, syn.light_state(t, {n: 240.0 * err for n in pts}, anchored=False, ident="ls-r"))
+        return score([dec], frames, model, overrides=overrides)
+
+    def test_a_bulb_left_on_after_an_off_is_in_the_residual_whichever_way_the_model_is_off(self):
+        zero = {"background": "zero"}
+        for err, overrides, predicted, pct in ((0.95, None, -12.0, None), (1.05, None, 12.0, 2000.0),
+                                               (0.95, zero, 0.0, None), (1.05, zero, 0.0, None)):
+            decisions, states, report = self.left_on(err, overrides)
+            self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"outside"}, err)
+            self.assertEqual(report["frames"]["residual_written"], 2, err)
+            for at in (syn.T0 + 5, syn.T0 + 60):
+                s = next(s for s in states if s["ts"] == at)
+                self.assertNotIn("residual_status", s, err)
+                self.assertEqual(len(s["residual"]), 4, (err, overrides, at))
+                for e in s["residual"]:
+                    self.assertEqual(e["predicted"], predicted, (err, overrides))
+                    self.assertEqual(e["residual"], round(240.0 * err - predicted, 3), (err, overrides))
+                    self.assertEqual(e["residual_pct"], pct, (err, overrides))
+                    self.assertIn("outside", e["flags"], (err, overrides))
+                    self.assertIn("drift", e["flags"], (err, overrides))
+
+    def test_an_off_that_landed_is_in_the_residual_with_no_share_of_nothing(self):
+        d, f, model = self.one_point(0.8, 0.0, 0.0)
+        for overrides in (None, {"background": "zero"}):
+            r = residual(score(d, f, model, overrides=overrides)[1], syn.T0 + 5, "desk-1")
+            self.assertEqual((r["predicted"], r["residual"], r["residual_pct"]), (0.0, 0.0, None), overrides)
+            self.assertIn("wide_tolerance", r["flags"], overrides)
+            self.assertNotIn("outside", r["flags"], overrides)
+
+    def test_a_dark_point_nothing_changed_at_is_in_the_residual_and_flagged_nothing(self):
+        d, f, model = self.one_point(0.0, 0.0, 5.0)
+        decisions, states, _ = score(d, f, model)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "unverifiable")
+        r = residual(states, syn.T0 + 5, "desk-1")
+        self.assertEqual((r["predicted"], r["residual"], r["residual_pct"], r["flags"]), (0.0, 5.0, None, []))
+
+    def test_a_surface_with_no_prediction_has_no_residual_entry(self):
+        # missing from the read frame, so the read-frame background has nothing to predict it from
+        model = syn.hue_model({"a": {B0: 300.0}, "b": {B0: 300.0}}, kelvins=(2700,))
+        t = syn.T0
+        ref = syn.light_state(t, {"a": 60.0}, anchored=False, ident="ls-r")
+        dec = syn.hue_decision("d", t + 0.5, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, "ls-r",
+                               targets={"A": {"surface_id": "a"}, "B": {"surface_id": "b"}})
+        decisions, states, _ = score([dec], [ref, syn.light_state(t + 5, {"a": 240.0, "b": 240.0}, anchored=False)], model)
+        self.assertEqual(point(decisions[0], "b")["status"], "unverifiable")
+        self.assertEqual([e["surface_id"] for e in states[1]["residual"]], ["a"])
 
     def test_a_dim_that_landed_short_of_the_change_is_still_a_miss(self):
         t = syn.T0

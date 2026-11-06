@@ -259,11 +259,14 @@ marked occupied in the report and in its residual `flags`. Occupied frames are
 still scored; occupancy feeds the shadow explanation.
 
 **LightState residuals.** Every frame that is not excluded, after the first
-decision, gets `residual`: one entry per surface the model predicts, against
-the actual resulting state of the latest decision in force at the hold set's
-current revision. Case V11: after A's dim (c-190405 pins F1.spot at 50%,
-revision 8), the applied scene predicts 368 lx at counter-1 until a re-solve,
-and ls-190409's 357 lx is a −2.99% residual, flagged `held`, never `drift`.
+decision, gets `residual`: one entry per surface the frame measures and the model
+predicts, against the actual resulting state of the latest decision in force at
+the hold set's current revision. Where the prediction is not positive the entry
+keeps its absolute `residual` with `residual_pct` null, so a bulb left on after an
+off is recorded whichever way the model is off. Case V11: after A's dim (c-190405
+pins F1.spot at 50%, revision 8), the applied scene predicts 368 lx at counter-1
+until a re-solve, and ls-190409's 357 lx is a −2.99% residual, flagged `held`,
+never `drift`.
 
 ## Pending owner decisions, built as named options
 
@@ -288,7 +291,8 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
 - `LightState.residual[]` is typed `{surface_id, measured − predicted}`. The
   tool writes `{surface_id, predicted, residual, residual_pct, unit, against
   {decision_id, hold_set_revision}, flags[]}`, with `residual` = measured −
-  predicted in `unit`, and `flags` from `held`, `occupied`, `outside`,
+  predicted in `unit`, `residual_pct` null when the prediction is not positive,
+  and `flags` from `held`, `occupied`, `outside`,
   `daylight`, `shadow`, `drift`, `unexplained`, `fallback_patch`,
   `wide_tolerance` (`within` only by the wider bound), `below_noise` (the change
   there is below the meter's noise).

@@ -16,6 +16,8 @@ import events
 HERE = Path(__file__).resolve().parent
 ORDER = ("need", "incumbent", "decide")
 TAIL_S = 150.0  # seconds of ticks after the last input, so a vacancy OFF can still happen
+MAX_TICKS = 16_000_000  # a year of 2 s ticks, each a line of the log; no replay comes near it
+LATEST_S = 253402300799.0  # 9999-12-31, as far as a datetime goes; far past it, adding a tick to a time stops moving it
 
 
 def tagged(items, source):
@@ -42,6 +44,17 @@ def describe(policy):
             "config_sha256": events.sha256_json(policy.config)}
 
 
+def check_span(inputs, tick_s, tail_s):
+    """ValueError for inputs no run can tick through, before a run grows a heap of ticks until memory runs out: a time that
+    isn't a number, one past any clock, or two good ones a lifetime apart, which is --mqtt with no --mqtt-t0 beside real facts."""
+    times = [item[0] for item in inputs]
+    read = [item[0] for item in inputs if item[1] not in events.REFERENCE_KINDS]
+    if not (all(events.is_number(t) and abs(t) <= LATEST_S for t in times) and events.is_number(tick_s) and events.is_number(tail_s)
+            and tick_s > 0 and (not read or (max(read) + tail_s - min(read)) / tick_s <= MAX_TICKS)):
+        raise ValueError("no run can tick through these inputs, from %r to %r at tick_s %r and tail_s %r: a time in one of them is wrong"
+                         % (min(times, default=None), max(times, default=None), tick_s, tail_s))
+
+
 def run(inputs, policies, *, tick_s=2.0, tail_s=TAIL_S, plant=True, shown="incumbent", synthetic=False,
         assume_occupied=False, sources=(), actuation=None):
     """(header, events) for one run; inputs are (t, kind, data, source).
@@ -53,6 +66,7 @@ def run(inputs, policies, *, tick_s=2.0, tail_s=TAIL_S, plant=True, shown="incum
     actuation defaults to synthetic or replay, by the synthetic flag. 'shadow' decides beside what the real bulbs
     reported, so it needs the plant off: a run the plant echoes is not one. Nothing is sent in any den-core run,
     and a synthetic run is only ever synthetic."""
+    check_span(inputs, tick_s, tail_s)
     inputs = sorted(inputs, key=lambda item: item[0])
     read = [item for item in inputs if item[1] not in events.REFERENCE_KINDS]
     if not read:

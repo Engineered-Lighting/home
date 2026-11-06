@@ -109,7 +109,7 @@ def poll_log(path):
             row = json.loads(raw)
             t = datetime.fromisoformat(row["t"]).timestamp()
             lights, occ = row["lights"].items(), row["occ"]
-        except (ValueError, TypeError, KeyError, AttributeError):
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError, OSError):  # the last two: a date no clock here has
             raise ValueError("%s line %d is not a poll row" % (path, number)) from None
         # Lights before occupancy, as in the synthetic preamble.
         for entity_id, state in lights:
@@ -129,7 +129,7 @@ def mqtt_timeline(path, t0=0.0):
     by den_lighting's own rules: mqtt_count, mqtt_availability, mqtt_connection_changed."""
     try:
         steps = sorted((s for s in events.read_json(path) if "every" not in s), key=lambda s: s["at"])
-        if any(type(s["at"]) not in (int, float) or not isinstance(s, dict) for s in steps):
+        if any(not isinstance(s, dict) or not events.is_number(s["at"]) for s in steps):
             raise TypeError
     except (TypeError, KeyError):
         raise events.BadFile("%s is not a Frigate MQTT step list" % path) from None
@@ -172,7 +172,14 @@ def occupancy_journal(paths):
     """
     edges = set()
     for path in paths:
-        edges.update(flaps().parse(_text(path).splitlines()))
+        lines = _text(path).splitlines()
+        try:
+            found = flaps().parse(lines)
+        except ValueError as error:  # EDGE takes any run of digits and dots
+            raise ValueError("%s: an occupancy edge's observed_at is not a number: %s" % (path, error)) from None
+        if not all(math.isfinite(edge[0]) for edge in found):  # float() reads 401 digits as Infinity
+            raise ValueError("%s: an occupancy edge's observed_at is not a number a float can hold" % path)
+        edges.update(found)
     den = [(t, a, b) for t, a, b, entity in sorted(edges) if entity == DEN_OCCUPANCY]
     gaps = [(den[n - 1][0], t, a == "off") for n, (t, a, _) in enumerate(den)
             if n and den[n - 1][2] == "on" and a in ("off", "unknown")]
@@ -201,7 +208,7 @@ def recorder_commands(paths):
             try:
                 row = json.loads(raw)
                 t, data = row["time_fired_ts"], row["event_data"]
-                if (type(t) not in (int, float) or not math.isfinite(t) or set(data) != COMMAND_KEYS
+                if (not events.is_number(t) or set(data) != COMMAND_KEYS
                         or data["entity_id"] not in LIGHTS or type(data["revision"]) is not int
                         or not isinstance(data["context_id"], str) or not _scene(data["target"])):
                     raise ValueError
@@ -244,7 +251,7 @@ def recorder_lights(paths, own=()):
             try:
                 row = json.loads(raw)
                 t = row["last_updated_ts"]
-                if (set(row) != LIGHT_KEYS or type(t) not in (int, float) or not math.isfinite(t)
+                if (set(row) != LIGHT_KEYS or not events.is_number(t)
                         or row["entity_id"] not in LIGHTS or not isinstance(row["state"], str)):
                     raise ValueError
                 context, user, parent = (ulid(row[key]) for key in ("context_id", "context_user_id",
@@ -311,13 +318,15 @@ def light_states(path):
         try:
             row = json.loads(raw)
             ts, name = row["ts"], row.get("id")
-            if type(ts) not in (int, float) or not math.isfinite(ts) or (name is not None and not (
-                    isinstance(name, str) and name and len(events.dumps(name)) - 2 <= events.MAX_FRAME_ID)):
+            if not events.is_number(ts):
+                raise ValueError
+            name = "ls-%.3f" % ts if name is None else name  # a ts of 60 digits would make an id no line keeps room for
+            if not (isinstance(name, str) and name and len(events.dumps(name)) - 2 <= events.MAX_FRAME_ID):
                 raise ValueError
         except (ValueError, TypeError, KeyError, AttributeError):
             raise ValueError("%s line %d is not a LightState: it needs a ts in seconds, and any id must be text of at most %d "
                              "characters" % (path, number, events.MAX_FRAME_ID)) from None
-        found.append((float(ts), number, "ls-%.3f" % ts if name is None else name))
+        found.append((float(ts), number, name))
     found.sort()
     for (a, line_a, _), (b, line_b, _) in zip(found, found[1:]):
         if b - a < FRAME_APART_S:
@@ -363,7 +372,7 @@ def den_lighting_status(paths):
             try:
                 row = json.loads(raw)
                 t = row["last_updated_ts"]
-                if (set(row) != STATUS_KEYS or type(t) not in (int, float) or not math.isfinite(t)
+                if (set(row) != STATUS_KEYS or not events.is_number(t)
                         or not isinstance(row["entity_id"], str)):
                     raise ValueError
                 status = _status(row["attributes"])

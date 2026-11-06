@@ -91,7 +91,7 @@ def read_json(path):
     text = read_text(path)
     try:
         return json.loads(text)
-    except ValueError as error:
+    except (ValueError, RecursionError) as error:  # nested deeper than a parser goes
         raise BadFile("%s is not JSON: %s" % (path, error)) from None
 
 
@@ -128,7 +128,7 @@ def validate(event):
     if event["schema"] != SCHEMA:
         raise ValueError("schema must be %s" % SCHEMA)
     t, seq = event["t"], event["seq"]
-    if type(t) not in (int, float) or not math.isfinite(t):
+    if not is_number(t):
         raise ValueError("t must be finite")
     if type(seq) is not int:
         raise ValueError("seq must be an int")
@@ -185,7 +185,7 @@ def read(path):
             if value["seq"] != len(events):
                 raise ValueError("seq %r out of order" % value["seq"])
             events.append(value)
-        except ValueError as error:
+        except (ValueError, RecursionError) as error:
             raise ValueError("%s line %d: %s" % (path, number, error)) from None
     if header is None:
         raise ValueError("%s is empty" % path)

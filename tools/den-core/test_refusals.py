@@ -26,6 +26,7 @@ import fake_light  # noqa: E402
 import incumbent  # noqa: E402
 import light_adapter  # noqa: E402
 import run  # noqa: E402
+import runner  # noqa: E402
 import score  # noqa: E402
 import sources  # noqa: E402
 import synthetic  # noqa: E402
@@ -54,9 +55,9 @@ def out_file(text):
     return b"\xef\xbb\xbf" + text.replace("\n", "\r\n").encode("utf-8")
 
 
-def tool(name, *argv):
+def tool(name, *argv, timeout=300):
     """A tool as the owner runs it: (exit code, stdout, stderr)."""
-    done = subprocess.run([sys.executable, "-B", str(HERE / name), *map(str, argv)], capture_output=True, text=True, timeout=300)
+    done = subprocess.run([sys.executable, "-B", str(HERE / name), *map(str, argv)], capture_output=True, text=True, timeout=timeout)
     return done.returncode, done.stdout, done.stderr
 
 
@@ -384,6 +385,114 @@ class WrongInsideAModelTest(Temp):
         self.assertEqual(tool("check.py", self.tmp / "out" / "log.jsonl")[0], 0)
 
 
+HUGE = "1" + "0" * 400  # what json.loads reads as an int that float() and math.isfinite answer with OverflowError
+ENDLESS_S = 20  # a run that loops over ticks that never end is killed here; a refusal takes under a second
+ON = {"automatic": True, "gaming_session": False, "occupancy": "on", "revision": 1}
+
+
+def edge_at(text):
+    return "occupancy edge: entity=%s from=unknown to=on observed_at=%s\n" % (sources.DEN_OCCUPANCY, text)
+
+
+def status_at(text):
+    return '{"last_updated_ts":%s,"entity_id":"sensor.x","state":"on","attributes":%s}\n' % (text, json.dumps(ON))
+
+
+def steps_at(*times):
+    """A Frigate step list whose person count goes 1, 0, 1, so each step is an occupancy edge."""
+    return "[%s]\n" % ",".join('{"at":%s,"topic":"frigate/den_oak/person","payload":"%d"}' % (t, (n + 1) % 2) for n, t in enumerate(times))
+
+
+class NumbersNoFloatHoldsTest(Temp):
+    """A ts of 401 digits is good JSON. It used to be an OverflowError traceback wherever a time is read."""
+
+    def refuses(self, words, *argv):
+        code, out, err = tool("run.py", *argv, "--out", self.tmp / "out")
+        self.refused(code, out, err, words)
+        self.assertFalse((self.tmp / "out" / "log.jsonl").exists())
+
+    def test_a_frame_correction_command_or_bulb_row(self):
+        correction = {"schema": "den-event-1", "t": 0, "seq": 0, "kind": "correction", "source": "correction_capture",
+                      "data": {"correction_id": "c", "entity_id": events.LIGHTS[0], "after": {"on": True, "brightness": 100, "kelvin": 2700}, "source": "t"}}
+        command = {"entity_id": events.LIGHTS[0], "revision": 1, "target": {"on": True, "brightness": 100, "kelvin": 2700}, "context_id": "c"}
+        good = self.write("commands.jsonl", test_spine.command(T0 + 1, events.LIGHTS[0], test_spine.SCENE, "ctx-1") + "\n")
+        for flag, line, words, argv in (
+                ("--light-states", '{"ts":%s}\n' % HUGE, "line 1 is not a LightState", COORDINATOR),
+                ("--corrections", json.dumps(correction).replace('"t": 0', '"t": %s' % HUGE) + "\n", "line 1 is not a correction-capture correction line",
+                 ["--synthetic", "evening", "--policies", "incumbent"]),
+                ("--live-commands", '{"time_fired_ts":%s,"event_data":%s}\n' % (HUGE, json.dumps(command)), "line 1 is not a den_lighting_command export row",
+                 ["--synthetic", "evening", "--policies", "incumbent"]),
+                ("--lights", '{"last_updated_ts":%s,"entity_id":"%s","state":"on","context_id":"","context_user_id":"","context_parent_id":""}\n' % (HUGE, events.LIGHTS[0]),
+                 "line 1 is not a den bulb state export row", ["--live-commands", good, "--synthetic", "evening", "--policies", "incumbent"])):
+            path = self.write("huge.jsonl", line)
+            with self.subTest(flag):
+                self.refuses(words, flag, path, *argv)
+
+    def test_a_status_row_and_a_step_list(self):
+        self.refuses("line 1 is not a den_lighting status sensor export row", "--status", self.write("status.jsonl", status_at(HUGE)), "--policies", "incumbent")
+        for text in (HUGE, "NaN", "Infinity", "1e999"):
+            with self.subTest(text):
+                self.refuses("is not a Frigate MQTT step list", "--mqtt", self.write("steps.json", steps_at(text)), "--policies", "incumbent")
+
+    def test_a_frame_whose_own_id_would_be_longer_than_a_line_keeps_room_for(self):
+        self.refuses("line 1 is not a LightState", "--light-states", self.write("far.jsonl", '{"ts":-1e300}\n'), *COORDINATOR)
+
+    def test_a_poll_row_at_a_time_no_clock_has(self):
+        self.refuses("line 1 is not a poll row", "--poll", self.write("poll.jsonl", '{"t":"0001-01-01T00:00:00","lights":{},"occ":"on"}\n'), "--policies", "incumbent")
+
+    def test_a_journal_edge_that_is_no_number_names_its_file(self):
+        path = self.write("edges.txt", edge_at("1.2.3"))
+        self.refuses("%s: an occupancy edge's observed_at is not a number" % path, "--journal", path, "--policies", "incumbent")
+
+    def test_nested_too_deep_to_read_is_not_json(self):
+        path = self.write("deep.json", "[" * 200000)
+        self.refuses("%s is not JSON" % path, "--surfaces", path, *COORDINATOR)
+
+
+class TimesNoRunCanReachTest(Temp):
+    """A time a float holds can still be one no run ends at: first + k * tick never passes it, and run.py grew a heap of ticks
+    until the machine ran out of memory. These are killed at ENDLESS_S if that comes back."""
+
+    def refuses(self, words, *argv):
+        code, out, err = tool("run.py", *argv, "--out", self.tmp / "out", timeout=ENDLESS_S)
+        self.refused(code, out, err, words)
+        self.assertFalse((self.tmp / "out" / "log.jsonl").exists())
+
+    def test_a_journal_edge_past_what_a_float_holds(self):
+        path = self.write("edges.txt", edge_at(HUGE))
+        self.refuses("%s: an occupancy edge's observed_at is not a number" % path, "--journal", path, "--policies", "incumbent")
+
+    def test_a_time_far_past_any_tick(self):
+        for flag, name, text in (("--mqtt", "steps.json", steps_at("1e300")), ("--status", "status.jsonl", status_at("1e300")),
+                                 ("--journal", "edges.txt", edge_at("9" * 300))):
+            with self.subTest(flag):
+                self.refuses("a time in one of them is wrong", flag, self.write(name, text), "--policies", "incumbent")
+
+    def test_good_times_too_far_apart_to_tick_through(self):
+        # --mqtt with no --mqtt-t0 sits in 1970: beside real facts that is 56 years of 2 s ticks.
+        self.refuses("a time in one of them is wrong", "--mqtt", self.write("steps.json", steps_at("0", "1793764800")), "--policies", "incumbent")
+        poll = '{"t":"%s","lights":{},"occ":"on"}\n{"t":"%s","lights":{},"occ":"off"}\n' % ("1000-01-01T00:00:00+00:00", "9000-01-01T00:00:00+00:00")
+        self.refuses("a time in one of them is wrong", "--poll", self.write("poll.jsonl", poll), "--policies", "incumbent")
+
+    def test_the_runner_itself_refuses_them(self):
+        one = (T0, "occupancy", {"value": "on", "via": "t"}, "synthetic")
+        far = (T0 + 1e12, "occupancy", {"value": "off", "via": "t"}, "synthetic")
+        for inputs, kwargs in (([one], {"tick_s": 0}), ([one], {"tick_s": -1}), ([one], {"tick_s": 1e-300}), ([one], {"tail_s": 1e300}), ([one, far], {}),
+                               ([(float("inf"), *one[1:])], {}), ([(float("nan"), *one[1:]), one], {}), ([one], {"tick_s": float("nan")})):
+            with self.subTest(kwargs=kwargs, times=[item[0] for item in inputs]), self.assertRaisesRegex(ValueError, "a time in one of them is wrong"):
+                run_cut_short(inputs, **kwargs)
+
+    def test_a_long_evening_still_runs(self):
+        # A week of ticks. The refusal is about times no run reaches, and a real replay never comes near it.
+        one = (T0, "occupancy", {"value": "on", "via": "t"}, "synthetic")
+        self.assertEqual(runner.check_span([one, (T0 + 7 * 86400, "occupancy", {"value": "off", "via": "t"}, "synthetic")], 2.0, runner.TAIL_S), None)
+
+
+def run_cut_short(inputs, **kwargs):
+    """runner.check_span's view of runner.run's arguments, so a guard that is gone fails here and doesn't loop in this process."""
+    runner.check_span(inputs, kwargs.get("tick_s", 2.0), kwargs.get("tail_s", runner.TAIL_S))
+
+
 @unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
 class LogsTest(Temp):
     """check.py, score.py and validate.py on the one file they all read."""
@@ -451,6 +560,16 @@ class LogsTest(Temp):
             with self.subTest(gone=name):
                 code, out, err = tool(name, log)
                 self.refused(code, out, err, "light model unreadable")
+
+    def test_a_line_at_a_time_no_float_holds_is_exit_2_with_its_number(self):
+        head, first, *rest = self.text.split("\n")
+        event = json.loads(first)
+        event["t"] = 10 ** 400
+        path = self.write("huge.jsonl", "\n".join([head, events.dumps(event), *rest]))
+        for name in ("check.py", "score.py", "validate.py"):
+            with self.subTest(name):
+                code, out, err = tool(name, path)
+                self.refused(code, out, err, "line 2")
 
     def test_marks_utf16_a_bom_and_a_bad_line(self):
         mark = json.dumps(test_score.mark(T0, T0 + 10)) + "\n"

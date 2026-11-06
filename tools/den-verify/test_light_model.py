@@ -192,6 +192,20 @@ class Stage1Backend(Temp):
             model.predict({"light.other": lit(0.5)})
         self.assertEqual(model.predict({"light.other": lit(0.0)})["p0"], 0.0)
 
+    def test_a_channel_the_model_lacks_at_an_unknown_level_is_the_same_key_error(self):
+        with self.assertRaisesRegex(KeyError, "no channel"):
+            LightModel(stage1_model(FOUR)).predict({"light.other": {"level": None, "cct_k": None}})
+
+    def test_a_bulb_of_unknown_level_leaves_what_it_reaches_unknown_at_any_of_its_temperatures(self):
+        data = stage1_model(FOUR)
+        for row in (f"{key_of(B3)}@2202K", f"{key_of(B3)}@3294K"):  # B3 lights p0 at one temperature alone
+            data["basis"][row]["p0"] = 0.0
+        data["basis"][f"{key_of(B3)}@6535K"]["p0"] = 5.0
+        got = LightModel(data).predict({B3: {"level": None, "cct_k": None}})
+        self.assertIsNone(got["p0"])
+        self.assertIsNone(got["p3"])
+        self.assertEqual((got["p1"], got["p2"]), (0.0, 0.0))
+
     def test_a_lit_channel_with_no_kelvin_is_a_key_error_as_predict_py_says(self):
         model = LightModel(stage1_model(FOUR))
         with self.assertRaisesRegex(KeyError, "cct_k"):
@@ -256,6 +270,7 @@ class Stage1Backend(Temp):
         self.assertEqual(report["backend"], light_model.BACKEND)
         self.assertEqual(report["model"]["backend"], light_model.BACKEND)
         self.assertIs(report["model"]["fake"], False)
+        self.assertEqual((report["model"]["version"], report["model"]["basis_unit"]), ("lm-stage1-test", "relative"))
         self.assertEqual(report["predict_sha256"], hashlib.sha256(REAL_PREDICT.read_bytes()).hexdigest())
         self.assertEqual(report["inputs"]["predict_py"], report["predict_sha256"])
         self.assertEqual(report["hit_rate"]["hits"], 2)
@@ -623,6 +638,8 @@ class WrongStage1Model(Temp):
         ("a point with no id", {"sample_points": [{"kind": None}]}), ("two points one id", {"sample_points": [{"point_id": "p0"}, {"point_id": "p0"}]}),
         ("one point id of two not text", {"sample_points": [{"point_id": "p0"}, {"point_id": 5}]}),
         ("one channel of two not an object", {"channels": [{"channel_key": "k", "entity_id": B0}, 5]}),
+        ("two real channels one key", {"channels": [{"channel_key": key_of(B0), "entity_id": B0}, {"channel_key": key_of(B0), "entity_id": B1}]}),
+        ("two real channels one entity", {"channels": [{"channel_key": key_of(B0), "entity_id": B0}, {"channel_key": key_of(B1), "entity_id": B0}]}),
         ("an empty channel list", {"channels": []}), ("a channel not an object", {"channels": [5]}), ("a channel with no key", {"channels": [{"entity_id": B0}]}),
         ("a channel with no entity", {"channels": [{"channel_key": "k"}]}), ("a key not text", {"channels": [{"channel_key": 5, "entity_id": B0}]}),
         ("two channels one key", {"channels": [{"channel_key": "k", "entity_id": B0}, {"channel_key": "k", "entity_id": B1}]}),
@@ -655,6 +672,11 @@ class WrongStage1Model(Temp):
                                  ("levels text", "levels", ["a", "b"]), ("no levels", "levels", []), ("g text", "g", ["a", "b"]), ("g too short", "g", [0.0])):
             self.assert_refused(self.change_channel(stage1_model(FOUR), key, value), name)
 
+    def test_too_few_basis_keys_of_real_rows(self):
+        model = stage1_model(FOUR)
+        model["cct"][self.KEY]["basis_keys"] = model["cct"][self.KEY]["basis_keys"][:2]
+        self.assert_refused(model, "two real rows for three temperatures")
+
     def test_inside_a_basis_row(self):
         for name, row in (("not an object", 5), ("a value not a number", {"p0": "x", "p1": 1.0, "p2": 1.0, "p3": 1.0}), ("a block left out", {"p0": 1.0})):
             model = stage1_model(FOUR)
@@ -681,6 +703,23 @@ class WrongStage1Model(Temp):
                 model = {**stage1_model(FOUR), **change}
                 with self.subTest(name), self.assertRaises(BadFile):
                     LightModel({k: v for k, v in model.items() if v is not None or k not in change})
+
+
+class WhyASurfaceHasNoPrediction(unittest.TestCase):
+    def test_each_case_says_which_it_is_and_names_the_flag(self):
+        lacks = {"gone": ["nope"], "empty": [], "half": ["counter-1", "nope"], "fine": ["counter-1"]}
+        given = LightModel(syn.v11_model(), surfaces=lacks)
+        self.assertEqual(given.wrong_surfaces, ["empty", "gone", "half"])
+        self.assertEqual(sorted(given.surfaces), ["fine"])
+        for name in ("gone", "empty", "half"):
+            self.assertIn("has no block, or a block light model lm-den-3 does not have", given.surface_problem(name))
+            self.assertIn("--surfaces", given.surface_problem(name))
+        self.assertIn("is not in the map --surfaces gave", given.surface_problem("room"))
+        unmapped = LightModel(syn.v11_model()).surface_problem("room")
+        self.assertIn("which has the model's point ids", unmapped)
+        self.assertIn("with --surfaces", unmapped)
+        own = LightModel({**syn.v11_model(), "surfaces": {"desk": ["counter-1"]}}).surface_problem("room")
+        self.assertIn("which has the model's own surfaces", own)
 
 
 class SurfaceMapFile(Temp):

@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -243,11 +244,155 @@ class VerifiedMeansSomethingWasJudged(unittest.TestCase):
         self.assertEqual(report["decisions"]["not_verified_by_kind"], {"no read frame": 1, "no surface named": 1, "no frame after settling": 1})
 
 
+class ReasonsNamedInFull(unittest.TestCase):
+    """Each reason a decision can have, by its kind and its words."""
+
+    def test_a_decision_of_another_light_model(self):
+        dec = landed(model="lm-other")
+        decisions, _, report = run([dec], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        entry = not_verified(report)
+        self.assertEqual(entry["kind"], "another light model")
+        self.assertIn("lm-other", entry["reason"])
+        self.assertIsNone(decisions[0]["verify"])
+
+    def test_a_step_with_no_known_fade(self):
+        dec = landed(policy="some-policy@1")
+        _, _, report = run([dec], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        self.assertEqual(not_verified(report)["kind"], "no settle time")
+        self.assertIn("no known fade", not_verified(report)["reason"])
+
+    def test_a_step_with_no_known_fade_says_that_whatever_model_it_names(self):
+        _, _, report = run([landed(policy="some-policy@1", model="lm-other")], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        self.assertEqual(not_verified(report)["kind"], "no settle time")
+
+    def test_no_read_frame_is_said_before_a_bulb_of_unknown_state(self):
+        dec = landed(read=None)
+        dec["inputs"]["actuator_state"][B0] = None
+        decisions, _, report = run([dec], [frame(T, 20.0), frame(T + 5, 80.0)])
+        self.assertEqual(not_verified(report)["kind"], "no read frame")
+        self.assertIn("no read frame", point(decisions[0], "p0")["why"])
+
+    def test_under_the_zero_background_no_frame_after_settling_says_nothing_of_a_read_frame(self):
+        _, _, report = run([landed(read=None)], [], overrides={"background": "zero"})
+        self.assertEqual(not_verified(report)["reason"], "no frame after the decision settled and before the next one")
+
+    def test_a_frame_exactly_at_the_next_decisions_step_is_not_this_ones(self):
+        first, second = landed("d-1"), landed("d-2", at=T + 9.5, read="ls-r")
+        _, _, report = run([first, second], [frame(T, 20.0, "ls-r"), frame(T + 10.0, 80.0)])  # second sends at T + 10; first settled at T + 3.5
+        self.assertEqual(not_verified(report, "d-1")["kind"], "no frame after settling")
+
+    def test_a_long_list_of_reasons_says_three_and_how_many_more(self):
+        targets = {f"T{i}": {"surface_id": f"nowhere-{i}"} for i in range(5)}
+        _, _, report = run([landed(targets=targets)], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        reason = not_verified(report)["reason"]
+        self.assertEqual(sum(f"nowhere-{i} " in reason for i in range(5)), 3)
+        self.assertTrue(reason.endswith("; and 2 more"), reason)
+        targets = {f"T{i}": {"surface_id": f"nowhere-{i}"} for i in range(3)}
+        _, _, report = run([landed(targets=targets)], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        self.assertNotIn("more", not_verified(report)["reason"])
+        self.assertEqual(sum(f"nowhere-{i} " in not_verified(report)["reason"] for i in range(3)), 3)
+
+    def test_a_prior_only_point_has_its_status_and_no_why(self):
+        after = syn.light_state(T + 5, {"p0": 80.0, "p1": 80.0}, anchored=False, basis={"p1": "prior"})
+        decisions, _, _ = run([landed()], [frame(T, 20.0, "ls-r"), after])
+        self.assertEqual(point(decisions[0], "p1")["status"], "prior_only")
+        self.assertNotIn("why", point(decisions[0], "p1"))
+
+    def test_a_status_from_an_earlier_run_goes_when_this_one_judges_it(self):
+        dec = landed()
+        dec["verify_status"] = "from before"
+        decisions, _, _ = run([dec], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        self.assertNotIn("verify_status", decisions[0])
+
+    def test_a_read_frame_in_another_unit_is_no_reference(self):
+        ref = syn.light_state(T, {"p0": 20.0, "p1": 20.0}, anchored=True, ident="ls-r")
+        decisions, _, report = run([landed()], [ref, frame(T + 5, 80.0)])
+        self.assertEqual(point(decisions[0], "p0")["why"], "no reference frame in the same unit")
+        self.assertEqual(not_verified(report)["kind"], "nothing readable")
+
+    def test_the_12_hours_end_where_they_say(self):
+        dec = landed()  # settled at T + 3.5
+        edge, past = T + 3.5 + 12 * 3600, T + 3.5 + 12 * 3600 + 1
+        _, states, _ = run([dec], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0), frame(edge, 80.0), frame(past, 80.0)])
+        self.assertTrue(next(s for s in states if s["ts"] == edge)["residual"])
+        self.assertEqual(next(s for s in states if s["ts"] == past)["residual_status"], "no decision in force")
+
+    def test_frames_spanning_12_hours_are_still_one_evening_to_date_a_clock_time_and_more_are_not(self):
+        dec = landed(read=None)
+        dec["ts"] = "19:03:29.5"
+        dec["applied_scene"][B0]["steps"][0]["sent_at"] = "19:03:30"
+        dec["inputs"]["person_state"] = []
+        out, _, _ = run([dec], [frame(T, 20.0), frame(T + 5, 80.0), frame(T + 12 * 3600, 80.0)], overrides={"background": "zero"})
+        self.assertEqual(out[0]["verify"]["ts"], T + 5)
+        with self.assertRaisesRegex(BadFile, "no date"):
+            run([dec], [frame(T, 20.0), frame(T + 12 * 3600 + 1, 80.0)])
+
+
+class WhereAPinComesFrom(unittest.TestCase):
+    """A hold names a channel as an entity id, or a fixture with its channels, and its pin carries a level and a kelvin."""
+    MODEL = syn.light_model_record("lm-hue-test", "den-test", [syn.sample_point("p0", None, None)], [
+        syn.channel("F1", "spot", None, "gimbal spot", {2700: {"p0": 100.0}, 6500: {"p0": 200.0}}, [0, 254], [0, 1]),
+        syn.channel("F1", "down", None, "down", {2700: {"p0": 10.0}, 6500: {"p0": 20.0}}, [0, 254], [0, 1])], unit="relative")
+
+    def decision(self, spot_scene, hold_set=None):
+        """F1.down goes 0.2 to 0.8 at 2700 K. F1.spot reads 0.5 at 2700 K before, and spot_scene is its entry in applied_scene."""
+        dec = syn.hue_decision("d", T + 0.5, {"F1.down": 0.2, "F1.spot": 0.5}, {"F1.down": {"level": 0.8, "steps": send(T + 0.5)}}, "ls-r",
+                               targets={"A": {"surface_id": "p0"}}, hold_set=hold_set)
+        if spot_scene is not None:
+            dec["applied_scene"]["F1.spot"] = spot_scene
+        return dec
+
+    def predicted(self, dec, corrections=()):
+        frames = [syn.light_state(T, {"p0": 52.0}, anchored=False, ident="ls-r"), syn.light_state(T + 9, {"p0": 58.0}, anchored=False)]
+        _, states, _ = run([dec], frames, data=self.MODEL, corrections=list(corrections))
+        return residual(states, T + 9, "p0")["predicted"]
+
+    def test_a_fixture_and_its_channels_name_the_channel_in_the_copy(self):
+        hold = {"revision": 4, "held": [{"entity_id": "F1", "channels": ["spot"], "pinned": {"level_pct": 30}}]}
+        self.assertAlmostEqual(self.predicted(self.decision({"status": "held", "steps": []}, hold)), 52.0 - 52.0 + 30.0 + 8.0, places=6)
+
+    def test_the_copys_pin_gives_its_kelvin_too(self):
+        hold = {"revision": 4, "held": [{"entity_id": "F1.spot", "channels": [], "pinned": {"level_pct": 30, "cct_k": 6500}}]}
+        self.assertAlmostEqual(self.predicted(self.decision({"status": "held", "steps": []}, hold)), 60.0 + 8.0, places=6)
+
+    def test_a_read_back_with_no_kelvin_keeps_the_kelvin_it_read(self):
+        self.assertAlmostEqual(self.predicted(self.decision({"status": "sent", "readback": {"level": 0.5}, "steps": []})), 50.0 + 8.0, places=6)
+
+    def correction(self, **hold):
+        return {"correction_id": "c", "ts": T + 2, "action": {"settle_s": 0.0}, "snapshot": {"light_state": []},
+                "hold": {"since": T + 2, "ended": None, "hold_set_revision": 9, **hold}}
+
+    def test_a_correction_names_a_fixture_and_its_channels_the_same_way(self):
+        c = self.correction(entity_id="F1", channels=["spot"], pinned={"level_pct": 30})
+        self.assertAlmostEqual(self.predicted(self.decision(None), [c]), 30.0 + 8.0, places=6)
+
+    def test_a_corrections_pin_gives_its_kelvin_too(self):
+        c = self.correction(entity_id="F1.spot", channels=[], pinned={"level_pct": 30, "cct_k": 6500})
+        self.assertAlmostEqual(self.predicted(self.decision(None), [c]), 60.0 + 8.0, places=6)
+
+
 class WhatTheConsoleSays(Cli):
     def test_its_first_line_gives_both_counts(self):
         out, report = self.preview([landed()], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
         self.assertEqual(out.splitlines()[0], "decisions verified 1 of 1, 0 not verified; hit rate 1.0 (2 of 2), gate 0.85: pass (preview)")
         self.assertEqual(report["hit_rate"]["verdict"], "pass")
+
+    def test_with_nothing_to_say_it_says_none_of_the_rest(self):
+        out, report = self.preview([landed()], [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0)])
+        for words in ("not verified:", "unknown state", "can't be told", "not logged", "left out", "read a frame", "meter's noise", "beyond"):
+            self.assertNotIn(words, out)
+        self.assertEqual(report["method"]["file"], "VERIFY-V1.md")
+
+    def test_a_scored_run_says_the_report_it_wrote(self):
+        write_jsonl(self.tmp / "decisions.jsonl", [landed("d-1"), landed("d-2", at=T + 100, read=None)])
+        write_jsonl(self.tmp / "frames.jsonl", [frame(T, 20.0, "ls-r"), frame(T + 5, 80.0), frame(T + 105, 80.0)])
+        (self.tmp / "model.json").write_text(json.dumps(model()), encoding="utf-8")
+        (self.tmp / "VERIFY-V1.md").write_text(method.closed_copy(method.lf_text(HERE / "VERIFY-V1.md")), encoding="utf-8", newline="\n")
+        with mock.patch.object(cli, "refused_backend", lambda m: None), Quiet() as q:
+            code = cli.main(["--method", str(self.tmp / "VERIFY-V1.md"), "run", "--decisions", str(self.tmp / "decisions.jsonl"), "--light-states", str(self.tmp / "frames.jsonl"),
+                             "--model", str(self.tmp / "model.json"), "--out", str(self.tmp / "scored")])
+        self.assertEqual(code, 0, q.buf.getvalue())
+        self.assertIn("not verified: 1 no read frame; report.json lists each with why", q.buf.getvalue())
 
     def test_with_nothing_judged_it_never_says_all_verified(self):
         out, _ = self.preview([landed("d-1"), landed("d-2", at=T + 100)], [])
@@ -718,6 +863,16 @@ class UnknownCauses(Cli):
         self.assertEqual(report["frames"]["occupied"], 0)
         self.assertNotIn("occupancy_status", report["frames"])
 
+    def test_window_daylight_the_other_way_or_too_small_to_say_is_no_daylight(self):
+        low = 20.0 + 60 * 0.6  # below the prediction, so daylight would have to have fallen
+        for windows, cause in (((0.2, 0.6), "drift"), ((0.5, 0.52), "drift"), ((0.6, 0.2), "daylight")):
+            self.assertEqual(self.cause(windows, [], after=low)[0]["cause"], cause, windows)
+
+    def test_the_report_counts_the_misses_with_an_unknown_input(self):
+        report = self.cause((None, None), None)[2]
+        self.assertEqual(report["misses_explained"]["misses_with_an_unknown_input"], 1)
+        self.assertEqual(self.cause(self.STEADY, [])[2]["misses_explained"]["misses_with_an_unknown_input"], 0)
+
     def test_a_miss_with_real_window_data_still_reads_daylight_whatever_else_is_unknown(self):
         for occupancy in (None, []):
             e, flags, _ = self.cause((0.2, 0.6), occupancy, after=20.0 + 60 * 1.5)
@@ -947,6 +1102,13 @@ class TwoEvenings(unittest.TestCase):
         for undated in ({"snapshot": {"light_state": ["ls-190329"]}}, {"snapshot": {}}):
             with self.assertRaisesRegex(BadFile, "correction c.*no date"):
                 run(decisions, frames, corrections=[{**c, **undated}])
+        # a frame only it names dates it as well, and a number of its own dates a clock string beside it
+        frames[2]["id"] = "ls-day2"
+        _, states, _ = run(decisions, frames + [frame(at, 80.0)], corrections=[{**c, "snapshot": {"light_state": ["ls-day2"]}}])
+        self.assertEqual(next(s for s in states if s["ts"] == at)["residual_status"], "not a verify frame: mid_change")
+        numbered = {**c, "ts": at, "snapshot": {}}
+        pinned_on_the_day = Run(closed(), LightModel(model()), decisions, frames, corrections=[numbered], clock=Clock(syn.UTC_OFFSET_S)).holds[0]
+        self.assertEqual(pinned_on_the_day.since, at)
 
     @unittest.skipUnless(shutil.which("powershell.exe"), "no powershell.exe here")
     def test_the_join_the_readme_gives_reads_as_one_run_with_its_interval(self):

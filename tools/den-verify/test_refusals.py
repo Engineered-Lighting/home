@@ -245,11 +245,14 @@ class UnreadableTest(Case):
         self.assert_refused(*self.main(argv), str(blocker))
 
     def test_a_utc_offset_no_clock_has(self):
-        for value in ("nan", "inf", "1e300", "25"):
+        for value in ("nan", "inf", "1e300", "25", "14.5", "-14.5"):
             argv = self.argv()
             argv[argv.index("--utc-offset-h") + 1] = value
             self.assert_refused(*self.main(argv), "--utc-offset-h")
             self.assert_nothing_written()
+        argv = self.argv()
+        argv[argv.index("--utc-offset-h") + 1] = "14"
+        self.assertEqual(self.main(argv)[0], 0)
 
 
 class MalformedTest(Case):

@@ -346,6 +346,35 @@ class Seam(unittest.TestCase):
             for s, value in d.rec["predicted"]["surfaces"].items():
                 if s != "unit" and value is not None:
                     self.assertEqual(round(mine[s], 3), value, (d.id, s))
+        self.assertEqual(run.surfaces_that_differ(), {})
+
+    def test_on_the_merged_tree_the_command_line_finds_its_sibling_by_itself(self):
+        if not (HERE.parent / "den-light" / "predict.py").is_file():
+            self.skipTest("no tools/den-light beside this folder: this one runs on the merged tree")
+        env = {k: v for k, v in os.environ.items() if k not in ("DEN_LIGHT_DIR", "DEN_CORE_DIR")}
+        out = self.tmp / "by-itself"
+        done = subprocess.run([sys.executable, "-B", str(HERE / "verify.py"), "run", "--decisions", str(self.decisions_path), "--surfaces", str(self.surfaces_path),
+                               "--light-states", str(self.frames_path), "--model", str(self.model_path), "--utc-offset-h", "-7", "--out", str(out), "--preview"],
+                              capture_output=True, text=True, env=env, timeout=120)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        report = json.loads((out / "report-preview.json").read_text("utf-8"))
+        self.assertEqual(report["backend"], "den-light predict.py")
+        self.assertEqual(report["hit_rate"]["verdict"], "pass")
+
+    def test_den_cores_readme_line_for_this_tool_runs_as_it_is_written(self):
+        said = [line for line in (CORE / "README.md").read_text("utf-8").splitlines() if line.startswith("python -B tools/den-verify/verify.py run")]
+        if not said:
+            self.skipTest("den-core's README has no verify.py line")
+        words = said[0].split()[3:]
+        for flag, path in (("--decisions", self.decisions_path), ("--surfaces", self.surfaces_path), ("--light-states", self.frames_path),
+                           ("--model", self.model_path), ("--out", self.tmp / "as-the-readme-says")):
+            words[words.index(flag) + 1] = str(path)
+        with Quiet() as q:
+            code = cli.main(words[1:] if words[0] == "tools/den-verify/verify.py" else words)
+        self.assertEqual(code, 0, q.buf.getvalue())
+        report = json.loads((self.tmp / "as-the-readme-says" / "report-preview.json").read_text("utf-8"))
+        self.assertEqual(report["hit_rate"]["verdict"], "pass", q.buf.getvalue())
+        self.assertEqual(report["decisions"]["verified"], len(self.decisions))
 
     # -- 1. correct execution --------------------------------------------------------------------------------------------------
 

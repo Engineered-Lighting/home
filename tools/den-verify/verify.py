@@ -87,14 +87,14 @@ def cmd_run(args):
     names = ("report-preview.json",) if args.preview else OUTPUTS
     clash = [n for n in names if (out / n).exists()]
     if clash:
-        _say(f"refused: {out} already holds {', '.join(clash)}; choose a new --out folder")
-        return 2
+        return _refuse(f"refused: {out} already holds {', '.join(clash)}; choose a new --out folder")
     offset = args.utc_offset_h
     if offset is not None and not (math.isfinite(offset) and abs(offset) <= MOST_OFFSET_H):
         return _refuse(f"refused: --utc-offset-h {offset} is no clock's: it takes hours, -{MOST_OFFSET_H} to {MOST_OFFSET_H}")
     model = LightModel.load(args.model, args.surfaces)
-    if not args.preview and refused_backend(model):
-        return _refuse(refused_backend(model))
+    why_not = None if args.preview else refused_backend(model)
+    if why_not:
+        return _refuse(why_not)
     clock = Clock(None if offset is None else round(offset * 3600))
     run = Run(values, model, read_jsonl(args.decisions, records.decision_problem), records.read_frames(args.light_states),
               corrections=read_jsonl(args.corrections, records.correction_problem),
@@ -105,15 +105,18 @@ def cmd_run(args):
                         "open": m.describe_open(), "values": values}
     report["inputs"] = {k: _sha(getattr(args, k)) for k in INPUTS}
     report["inputs"]["predict_py"] = model.predict_sha256
-    out.mkdir(parents=True, exist_ok=True)
-    if args.preview:
-        report["scored"] = False
-        report["preview_note"] = "proposed values for open slots; not a scored run; no records written"
-        write_json(out / "report-preview.json", report)
-    else:
-        write_jsonl(out / OUTPUTS[0], decisions)
-        write_jsonl(out / OUTPUTS[1], states)
-        write_json(out / OUTPUTS[2], report)
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        if args.preview:
+            report["scored"] = False
+            report["preview_note"] = "proposed values for open slots; not a scored run; no records written"
+            write_json(out / "report-preview.json", report)
+        else:
+            write_jsonl(out / OUTPUTS[0], decisions)
+            write_jsonl(out / OUTPUTS[1], states)
+            write_json(out / OUTPUTS[2], report)
+    except OSError as e:
+        return _refuse(f"refused: {out} cannot be written: {e.strerror or e}")
     hr, counts = report["hit_rate"], report["decisions"]
     _say(f"decisions verified {counts['verified']} of {counts['total']}, {counts['total'] - counts['verified']} not verified; "
          f"hit rate {hr['value']} ({hr['hits']} of {hr['hits'] + hr['misses']}), "
@@ -177,8 +180,6 @@ def main(argv=None):
         return _refuse(str(e))
     except ValueError as e:  # the method file's own check
         return _refuse(f"refused: {e}")
-    except OSError as e:
-        return _refuse(f"refused: {e.filename or args.__dict__.get('out')} cannot be written: {e.strerror or e}")
     except Exception as e:  # what no check named: one sentence still, so a bug in the tool can be found with no stack
         frames = traceback.extract_tb(e.__traceback__)
         where = f" ({Path(frames[-1].filename).name} line {frames[-1].lineno})" if frames else ""

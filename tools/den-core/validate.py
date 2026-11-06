@@ -5,8 +5,8 @@
 LOG is a den-core run log (run.py's log.jsonl), from copied real files or a synthetic evening. This is a
 consistency check of den-core's own code against den_lighting. It is not a lighting-quality gate. It prints one
 line per check (OK, FAIL: <first reason, with times> or n/a: <why>), then an overall line, and exits 0 when no
-check fails, 1 otherwise. Times are UTC, with seconds from the log's first event. A synthetic log also prints
-"synthetic: plumbing only, never a gate".
+check fails, 1 otherwise. A file it can't read at all is one sentence and exit 2. Times are UTC, with seconds from the log's
+first event. A synthetic log also prints "synthetic: plumbing only, never a gate".
 
 1 replay: check.check() replays LOG byte for byte.
 2 need parity: the log's facts, mapped by need.sample(), go through den_lighting's own
@@ -111,6 +111,8 @@ def replay(log_path, first):
         result = check.check(log_path)
     except (OSError, ValueError) as error:
         return fail("replay refused: %s" % error)
+    if result.get("unreadable"):
+        raise events.BadFile(result["reason"])  # a logged light model gone bad: main refuses, as check.py does
     if result["ok"]:
         return ok(result["reason"])
     mismatch = result["first_mismatch"]
@@ -314,8 +316,8 @@ def truth_lines(truth_path, header, log):
     """--truth: per reading block, seconds from its cue to need's engaged and from the next cue to none."""
     title = "truth: " + TRUTH_LABEL
     try:
-        truth = json.loads(Path(truth_path).read_text("utf-8"))
-    except (OSError, ValueError) as error:
+        truth = events.read_json(truth_path)
+    except OSError as error:
         return [title, "  n/a: cannot read %s: %s" % (truth_path, error)]
     if not isinstance(truth, dict) or truth.get("schema") != "reading-shadow-truth-1":
         return [title, "  n/a: %s is not reading-shadow-truth-1" % truth_path]
@@ -373,7 +375,15 @@ def main(argv=None):
     parser.add_argument("log", metavar="LOG", help="a den-core run log (run.py's log.jsonl)")
     parser.add_argument("--truth", metavar="TRUTH_JSON", help="a reading-shadow-truth-1 file (information only)")
     args = parser.parse_args(argv)
-    lines, passed = report(args.log, args.truth)
+    try:
+        events.read_run(args.log)  # refused here, before any check, in the same words as check.py and score.py
+        lines, passed = report(args.log, args.truth)
+    except events.BadFile as error:
+        print(error, file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print("validate.py: unreadable log: %s" % error, file=sys.stderr)
+        return 2
     print("\n".join(lines))
     return 0 if passed else 1
 

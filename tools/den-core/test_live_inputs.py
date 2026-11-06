@@ -150,8 +150,10 @@ class CorrectionAdapterTest(Temp):
     def test_repeats_powershell_and_refusals(self):
         line = correction_line(T0, "cc-1", L0, DIM)
         a = self.write("a.jsonl", [line, ""], newline="\r\n")
-        b = self.write("b.jsonl", [line], encoding="utf-16")  # PowerShell 5.1's `>`: UTF-16 with a byte-order mark
+        b = self.write("b.jsonl", [line], encoding="utf-8-sig")  # PowerShell 5.1's Out-File -Encoding utf8: a byte-order mark
         self.assertEqual(sources.correction_capture([a, b]), [(T0, "correction", json.loads(line)["data"])])
+        with self.assertRaisesRegex(events.BadFile, "is UTF-16"):  # its `>`
+            sources.correction_capture([self.write("c.jsonl", [line], encoding="utf-16")])
         for bad in (correction_line(T0, "cc-1", L0, LIT),  # the same correction and bulb, other values
                     correction_line(T0, "cc-2", "light.kitchen", DIM),
                     correction_line(T0, "cc-3", L0, {"on": True}),
@@ -193,9 +195,11 @@ class StatusAdapterTest(Temp):
         x = Export()
         x.row(T0)
         lines = [json.dumps(r) for r in x.status]
-        utf16 = self.write("s16.jsonl", [lines[0]], encoding="utf-16")
-        self.assertEqual(sources.den_lighting_status([utf16])[0][0], (T0, "occupancy", {"value": "off",
-                                                                                         "via": "den_lighting_status"}))
+        bom = self.write("s8.jsonl", [lines[0]], newline="\r\n", encoding="utf-8-sig")
+        self.assertEqual(sources.den_lighting_status([bom])[0][0], (T0, "occupancy", {"value": "off",
+                                                                                       "via": "den_lighting_status"}))
+        with self.assertRaisesRegex(events.BadFile, "is UTF-16"):
+            sources.den_lighting_status([self.write("s16.jsonl", [lines[0]], encoding="utf-16")])
         other = json.loads(lines[0])
         other["entity_id"] = "sensor.den_lighting_control_2"
         for bad in ([lines[0], json.dumps(other)], ['{"last_updated_ts": 1}'],

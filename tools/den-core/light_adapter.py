@@ -19,7 +19,6 @@ A bulb that is on with no brightness or no kelvin (HA's recorder keeps neither) 
 and so is every total it is part of. Nothing guesses a level.
 """
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -75,6 +74,30 @@ def bad_surfaces(surfaces, points):
     return sorted(name for name, blocks in surfaces.items() if not blocks or not known.issuperset(blocks))
 
 
+def check_shape(model, where):
+    """A sentence for a file that is not a light model, here rather than as a KeyError in the first solve. A model is
+    Stage-1-shaped when it has a `channels` list, and each channel needs what predict.py reads for it."""
+    try:
+        if not isinstance(model, dict):
+            raise TypeError("it must be a JSON object")
+        model["version"], model["basis_unit"]
+        [point["point_id"] for point in model["sample_points"]]
+        if not isinstance(model["channels"], list) or not model["channels"]:
+            raise TypeError("its channels must be a list of channels")
+        for channel in model["channels"]:
+            key, cct, dimming = channel["channel_key"], model["cct"][channel["channel_key"]], model["dimming"][channel["channel_key"]]
+            channel["entity_id"]
+            if len(cct["kelvin"]) != len(cct["basis_keys"]) or not cct["kelvin"] or len(dimming["levels"]) != len(dimming["g"]) or not dimming["g"]:
+                raise TypeError("channel %s has no temperatures or dimming table" % key)
+            for basis_key in cct["basis_keys"]:
+                if not isinstance(model["basis"][basis_key], dict):
+                    raise TypeError("its basis %s is not a row" % basis_key)
+    except KeyError as error:
+        raise events.BadFile("%s is not a light model: it has no %s" % (where, error)) from None
+    except TypeError as error:
+        raise events.BadFile("%s is not a light model: %s" % (where, error)) from None
+
+
 def describe(spec):
     """(model dict, what to log) for a config's light_model spec: {source: fake, params} or {source: file, path}."""
     if spec["source"] == "fake":
@@ -82,9 +105,10 @@ def describe(spec):
         logged = {"source": "fake", "params": spec.get("params", {})}
     elif spec["source"] == "file":
         try:
-            model = json.loads(Path(spec["path"]).read_bytes().decode("utf-8-sig"))
+            model = events.read_json(spec["path"])
         except OSError as error:
-            raise ValueError("light model unreadable: %s" % error) from None
+            raise events.BadFile("light model unreadable: %s" % error) from None
+        check_shape(model, spec["path"])
         logged = {"source": "file", "path": str(spec["path"])}
     else:
         raise ValueError("light_model source must be fake or file: %r" % (spec["source"],))

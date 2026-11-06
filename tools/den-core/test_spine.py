@@ -185,11 +185,15 @@ class AdapterTest(Temp):
         self.assertEqual([d["value"] for _, _, d in items], ["on", "on", "on", "off", "on"])
         self.assertEqual(gaps, [(T0, T0 + 600, False), (T0 + 600, T0 + 4000, True)])
 
-    def test_occupancy_journal_reads_a_powershell_redirect(self):
+    def test_occupancy_journal_refuses_a_powershell_redirect_and_reads_its_utf8(self):
         lines = [edge(T0, "unknown", "on"), edge(T0 + 30, "on", "off")]
         utf16 = self.tmp / "ps.txt"
         utf16.write_bytes("\r\n".join(lines).encode("utf-16"))  # what PowerShell 5.1's > writes
-        self.assertEqual(sources.occupancy_journal([utf16]), sources.occupancy_journal([self.write("a.txt", lines)]))
+        with self.assertRaisesRegex(events.BadFile, "is UTF-16"):
+            sources.occupancy_journal([utf16])
+        utf8 = self.tmp / "ps8.txt"
+        utf8.write_bytes("\r\n".join(lines).encode("utf-8-sig"))  # what its Out-File -Encoding utf8 writes
+        self.assertEqual(sources.occupancy_journal([utf8]), sources.occupancy_journal([self.write("a.txt", lines)]))
 
     def test_recorder_commands(self):
         path = self.write("commands.jsonl", [command(T0 + 5, LIGHTS[1], OFF, "ctx-2"), "",

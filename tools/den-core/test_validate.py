@@ -327,8 +327,9 @@ class Unreadable(Temp):
         self.assertEqual(statuses(lines), {"replay": "FAIL", "need parity": "n/a", "only the look": "n/a",
                                            "holds": "n/a", "quiet": "n/a"})
         self.assertIn("  n/a: unreadable log", lines)
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(validate.main([str(self.tmp / "absent.jsonl")]), 1)
+        with contextlib.redirect_stderr(io.StringIO()) as said:
+            self.assertEqual(validate.main([str(self.tmp / "absent.jsonl")]), 2)
+        self.assertIn("absent.jsonl", said.getvalue())
 
 
 if __name__ == "__main__":

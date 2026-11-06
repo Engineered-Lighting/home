@@ -317,7 +317,7 @@ def structural(log, light, slots):
 
 def read_marks(path):
     marks = []
-    for number, line in enumerate(Path(path).read_bytes().decode("utf-8-sig").splitlines(), 1):
+    for number, line in enumerate(events.read_text(path).splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -332,9 +332,11 @@ def read_marks(path):
 
 
 def report(log_path, marks_path=None, preview=False, gate_path=None):
-    """(lines, exit code)."""
+    """(lines, exit code). events.BadFile, for a file that can't be read at all, goes up to main."""
     try:
-        header, log = events.read(log_path)
+        header, log = events.read_run(log_path)
+    except events.BadFile:
+        raise
     except (OSError, ValueError) as error:
         return ["refused: unreadable log: %s" % error], 2
     entry = coordinator_entry(header)
@@ -344,6 +346,8 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
     gate_now = coordinator.gate_config(gate)
     try:
         policy = coordinator.make_policy(entry["config"])
+    except events.BadFile:
+        raise
     except ValueError as error:
         return ["refused: the coordinator refused its logged config: %s" % error], 2
     light, config = policy.light, entry["config"]
@@ -453,14 +457,22 @@ def main(argv=None):
     parser.add_argument("--slots", action="store_true", help="list the gate file's open slots and exit")
     args = parser.parse_args(argv)
     if args.slots:
-        print("\n".join(open_slot_lines(coordinator.load_gate())))
+        try:
+            print("\n".join(open_slot_lines(coordinator.load_gate())))
+        except (OSError, ValueError) as error:
+            print(error, file=sys.stderr)
+            return 2
         return 0
     if not args.log:
         parser.error("give a LOG, or --slots")
     try:
         lines, code = report(args.log, args.marks, args.preview)
-    except ValueError as error:
-        sys.exit("score.py: %s" % error)
+    except events.BadFile as error:
+        print(error, file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print("score.py: %s" % error, file=sys.stderr)
+        return 2
     print("\n".join(lines))
     return code
 

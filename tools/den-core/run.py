@@ -259,6 +259,14 @@ def summary(header, log):
     return "\n".join(lines)
 
 
+def surface_map(path):
+    surfaces = events.read_json(path)
+    if not (isinstance(surfaces, dict) and all(isinstance(blocks, list) and all(isinstance(p, str) for p in blocks)
+                                               for blocks in surfaces.values())):
+        raise events.BadFile("%s is not a surface map: it must be {surface_id: [point_id, ...]}" % path)
+    return surfaces
+
+
 def coordinator_config(args):
     """The coordinator's config from run.py's flags: only what they set; the gate file gives the rest."""
     config = {}
@@ -266,7 +274,7 @@ def coordinator_config(args):
         config["light_model"] = {"source": "file", "path": str(Path(args.light_model).resolve())}
     if args.surfaces:
         spec = config.setdefault("light_model", {"source": "fake", "params": {}})
-        spec["surfaces"] = json.loads(Path(args.surfaces).read_bytes().decode("utf-8-sig"))
+        spec["surfaces"] = surface_map(args.surfaces)
     comp = {key: value for key, value in (("option", args.compensation), ("form", args.compensation_form)) if value}
     if comp:
         config["compensation"] = comp
@@ -361,7 +369,6 @@ def main(argv=None):
     if ((args.light_model or args.surfaces or args.light_states or args.compensation or args.compensation_form)
             and "coordinator" not in args.policies):
         parser.error("--light-model, --surfaces, --light-states and --compensation need coordinator in --policies")
-    configs = {"coordinator": coordinator_config(args)} if "coordinator" in args.policies else None
     if args.journal and args.assume_occupied:
         parser.error("--journal gives real occupancy; it replaces --assume-occupied, so give one or the other")
     if args.status and (args.synthetic or args.poll or args.mqtt or args.journal or args.assume_occupied):
@@ -373,6 +380,11 @@ def main(argv=None):
         parser.error("--live-commands is compared with the incumbent: add incumbent to --policies")
     if args.lights and not args.live_commands:
         parser.error("--lights needs --live-commands: den_lighting's own bulb changes are known by its commands")
+    for path in (*args.facts, *args.poll, args.mqtt, *args.journal, *args.status, *args.corrections, *args.live_commands, *args.lights,
+                 args.surfaces, args.light_states, args.light_model):
+        if path and path != "fake":  # all of them first, and each named as it was typed, before a run spends any time
+            events.refuse_utf16(path)
+    configs = {"coordinator": coordinator_config(args)} if "coordinator" in args.policies else None
 
     inputs, described, truth, fact_lines = [], [], None, []
     if args.light_states:
@@ -480,8 +492,18 @@ def main(argv=None):
         coordinator_outputs(out, log, next(p for p in policies if isinstance(p, coordinator.Coordinator)).light)
 
 
-if __name__ == "__main__":
+def cli(argv=None):
+    """main on the command line: what it refuses is a sentence and exit 2, never a traceback."""
     try:
-        main()
-    except ValueError as error:
-        sys.exit("run.py: %s" % error)
+        main(argv)
+    except events.BadFile as error:
+        print(error, file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print("run.py: %s" % error, file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(cli())

@@ -36,9 +36,52 @@ KINDS = INPUT_KINDS + DERIVED_KINDS
 # What the runner stamps on a decision. A shadow run decides beside what the bulbs really did and sends nothing, as
 # a replay does; rung 9's ladder entry runs one after the replays. 'shown' is rung 11's and no den-core run sets it.
 ACTUATIONS = ("synthetic", "replay", "shadow")
+HEADER_KEYS = ("schema", "sources", "policies", "tick_s", "tail_s", "plant", "shown", "synthetic", "assume_occupied", "actuation")
 MEDIA_KEYS = frozenset({"image", "images", "jpeg", "jpg", "png", "b64", "base64", "pixels", "bytes"})
 MAX_LINE_BYTES = 16384
 MAX_FRAME_ID = 64  # a LightState's own id, as it goes on a Decision's line; coordinator.LIGHT_STATE_ROOM holds room for it
+
+
+class BadFile(ValueError):
+    """A file given to a tool that cannot be read at all. A tool exits 2 with this sentence and nothing else."""
+
+
+def _utf16(head, path):
+    """PowerShell 5.1's `>` writes a byte-order mark, UTF-16LE and CRLF. A NUL this early is the same text with no mark."""
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff") or b"\0" in head[:4]:
+        raise BadFile("%s is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8" % path)
+
+
+def refuse_utf16(path):
+    """BadFile for a UTF-16 file. One that can't be opened, a folder of day files for one, is for its reader to say."""
+    try:
+        with open(path, "rb") as handle:
+            _utf16(handle.read(4), path)
+    except OSError:
+        pass
+
+
+def read_raw(path):
+    """A file's bytes, without the UTF-8 byte-order mark PowerShell 5.1's Out-File -Encoding utf8 writes. UTF-16 is refused."""
+    raw = Path(path).read_bytes()
+    _utf16(raw[:4], path)
+    return raw[3:] if raw[:3] == b"\xef\xbb\xbf" else raw
+
+
+def read_text(path, errors="strict"):
+    """A file's text, as read_raw. Under `errors`, strict refuses a file that is not UTF-8."""
+    try:
+        return read_raw(path).decode("utf-8", errors)
+    except UnicodeDecodeError:
+        raise BadFile("%s is not UTF-8 (PowerShell 5.1's Set-Content writes ANSI): save it as UTF-8" % path) from None
+
+
+def read_json(path):
+    text = read_text(path)
+    try:
+        return json.loads(text)
+    except ValueError as error:
+        raise BadFile("%s is not JSON: %s" % (path, error)) from None
 
 
 def dumps(event):
@@ -97,13 +140,27 @@ def inside_checkout(path):
     return any((p / ".git").exists() for p in (path, *path.parents))
 
 
-def read(path):
-    """(header, events) from a den-replay-log-1 file; every line is checked."""
-    lines = Path(path).read_bytes().decode("ascii").split("\n")
+def log_lines(path):
+    """A log's lines. A byte-order mark and CRLF are how PowerShell 5.1 copies a file, and say nothing about the log."""
+    lines = read_text(path).split("\n")
     if lines[-1] != "":
         raise ValueError("%s does not end with a newline" % path)
+    return [line[:-1] if line.endswith("\r") else line for line in lines[:-1]]
+
+
+def read_run(path):
+    """read, for a tool that goes on to use the header: one that lacks a run's keys is refused here, not as a KeyError there."""
+    header, events = read(path)
+    missing = [key for key in HEADER_KEYS if key not in header]
+    if missing:
+        raise ValueError("%s: its header lacks %s" % (path, ", ".join(missing)))
+    return header, events
+
+
+def read(path):
+    """(header, events) from a den-replay-log-1 file; every line is checked."""
     header, events = None, []
-    for number, line in enumerate(lines[:-1], 1):
+    for number, line in enumerate(log_lines(path), 1):
         try:
             value = json.loads(line)
             if dumps(value) != line:

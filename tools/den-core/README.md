@@ -22,6 +22,11 @@ does.
 
 ## Run and check
 
+**PowerShell 5.1:** don't redirect with `>`. It writes UTF-16, which `run.py`, `check.py`, `score.py` and `validate.py`
+refuse by name with exit 2, on every file they read. Pipe to `Set-Content` as the commands below do, or repair a file with
+`Get-Content bad.jsonl | Set-Content -Encoding utf8 good.jsonl`. They read the byte-order mark and CRLF that writes. The same
+exit 2 and one sentence, never a traceback, go for any input that is not JSON or not the right shape, and for a missing one.
+
 From the worktree root, with an absolute output folder outside every checkout
 (`C:/tmp/...` on Windows, `/tmp/...` on Linux):
 
@@ -73,7 +78,8 @@ occupancy source with it), `--corrections FILE ...` (correction-capture's
 (den_lighting refuses a changed `policy.py` by itself), re-runs the logged
 adapter inputs with the logged parameters and compares every line byte for
 byte, header included. It prints `OK` or the first mismatching line and exits
-0 or 1.
+0 or 1, or 2 when it can't read the log or a logged light model. A copy with a
+byte-order mark and CRLF compares the same.
 
 ```bash
 python -B tools/den-core/validate.py C:/tmp/den-core/evening-1/log.jsonl --truth C:/tmp/den-core/evening-1/truth.json
@@ -84,8 +90,9 @@ behaved as designed against den_lighting: the replay above; need's reading
 on/off moments against den_lighting's own dwell; that every interval of the
 diff above is decide's labelled placeholder reading look; that decide pins
 and skips held bulbs; and that it stays silent in games and while occupancy
-is unknown. It prints OK, FAIL or n/a per check and exits 0 or 1. It is a
-consistency check of den-core's own code, not a lighting-quality gate.
+is unknown. It prints OK, FAIL or n/a per check and exits 0 or 1, or 2 when it
+can't read a file. It is a consistency check of den-core's own code, not a
+lighting-quality gate.
 `--truth` adds, as information only, how long need took to follow each
 reading block's cues; `tools/reading-shadow` is the gate for those.
 
@@ -304,8 +311,8 @@ How the export is used:
   and the replay's timed decisions (vacancy OFF) fall on its 2 s tick grid.
   So agreeing commands still show as short intervals of a second or two. Read
   the long ones.
-- All three exports are ASCII. If you redirect with `>` instead of
-  `Set-Content`, PowerShell 5.1 writes UTF-16, which the adapters also read.
+- All three exports are ASCII, because `Set-Content` writes them. See
+  "Run and check" on `>`.
 
 ### Exporting the bulb states (Windows PowerShell 5.1)
 

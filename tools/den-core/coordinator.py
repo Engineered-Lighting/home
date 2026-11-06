@@ -29,7 +29,6 @@ light-model file, once.
 """
 import bisect
 import copy
-import json
 from pathlib import Path
 
 import decide
@@ -59,11 +58,15 @@ NO_FRAME_BEFORE = "no LightState at or before this decision"
 
 
 def load_gate(path=None):
-    gate = json.loads(Path(path or GATE_FILE).read_bytes().decode("utf-8-sig"))
-    for name, slot in gate["slots"].items():
-        if slot["status"] not in ("open", "closed") or (slot["status"] == "closed" and slot["value"] is None):
-            raise ValueError("gate slot %s: closed needs a value, else status open" % name)
-    chosen = gate["slots"]["surface_map"]["value"]
+    where = path or GATE_FILE
+    gate = events.read_json(where)
+    try:
+        for name, slot in gate["slots"].items():
+            if slot["status"] not in ("open", "closed") or (slot["status"] == "closed" and slot["value"] is None):
+                raise ValueError("gate slot %s: closed needs a value, else status open" % name)
+        chosen = gate["slots"]["surface_map"]["value"]
+    except (KeyError, TypeError, AttributeError):
+        raise events.BadFile("%s is not a gate file: it needs slots, each with a status and a value" % where) from None
     if chosen is not None and not (isinstance(chosen, dict) and all(
             isinstance(blocks, list) and all(isinstance(p, str) for p in blocks) for blocks in chosen.values())):
         raise ValueError("gate slot surface_map: its value must be {surface_id: [point_id, ...]}")

@@ -1,26 +1,29 @@
 """Replay check (ladder rung 0 in miniature): a logged run re-runs from its logged
 inputs, code and config to the same bytes, header included.
 
-python -B tools/den-core/check.py LOG  prints OK or the first mismatch; exits 0 or 1.
+python -B tools/den-core/check.py LOG  prints OK or the first mismatch; exits 0 or 1. A file it can't read at all, the log or a
+logged light model, is one sentence and exit 2.
 """
 import sys
-from pathlib import Path
 
 import events
 import runner
 
 
-def _refuse(reason):
-    return {"ok": False, "reason": reason, "first_mismatch": None}
+def _refuse(reason, unreadable=False):
+    return {"ok": False, "reason": reason, "first_mismatch": None, **({"unreadable": True} if unreadable else {})}
 
 
 def check(log_path, resolve=None, on_policy=None):
-    """{ok, reason, first_mismatch: {line, logged, replayed} | None}; lines count from 1 (the header).
+    """{ok, reason, first_mismatch: {line, logged, replayed} | None}, and unreadable: True when a file could not be read, which
+    a command line refuses rather than fails; lines count from 1 (the header).
     on_policy(policy), if given, sees each rebuilt policy before the replay; score.py times the coordinator with it."""
     try:
-        header, logged = events.read(log_path)
-    except ValueError as error:
-        return _refuse("unreadable log: %s" % error)
+        header, logged = events.read_run(log_path)
+    except events.BadFile as error:
+        return _refuse(str(error), unreadable=True)
+    except (OSError, ValueError) as error:
+        return _refuse("unreadable log: %s" % error, unreadable=True)
     inputs = [(e["t"], e["kind"], e["data"], e["source"]) for e in logged if e["source"] in events.ADAPTER_SOURCES]
     policies = []
     for entry in header["policies"]:
@@ -30,6 +33,8 @@ def check(log_path, resolve=None, on_policy=None):
             return _refuse("code changed: %s" % name)
         try:
             policy = module.make_policy(entry["config"])
+        except events.BadFile as error:
+            return _refuse(str(error), unreadable=True)
         except ValueError as error:
             return _refuse("%s refused its logged config: %s" % (name, error))
         if len({entry["config_sha256"], events.sha256_json(entry["config"]), events.sha256_json(policy.config)}) > 1:
@@ -42,7 +47,7 @@ def check(log_path, resolve=None, on_policy=None):
         replay_header, replayed = runner.run(inputs, policies, sources=header["sources"], **params)
     except ValueError as error:
         return _refuse("the log's header does not replay: %s" % error)
-    want = Path(log_path).read_bytes().decode("ascii").split("\n")[:-1]
+    want = events.log_lines(log_path)
     got = [events.dumps(value) for value in [replay_header, *replayed]]
     for index in range(max(len(want), len(got))):
         a = want[index] if index < len(want) else None
@@ -53,10 +58,14 @@ def check(log_path, resolve=None, on_policy=None):
     return {"ok": True, "reason": "%d lines replayed byte-identically" % len(got), "first_mismatch": None}
 
 
-if __name__ == "__main__":
-    if len(sys.argv) != 2:
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if len(argv) != 1:
         sys.exit("usage: python -B tools/den-core/check.py LOG")
-    result = check(sys.argv[1])
+    result = check(argv[0])
+    if result.get("unreadable"):
+        print(result["reason"], file=sys.stderr)
+        return 2
     if result["ok"]:
         print("OK: " + result["reason"])
     else:
@@ -64,4 +73,8 @@ if __name__ == "__main__":
         if result["first_mismatch"]:
             print("  logged:   %s\n  replayed: %s" % (result["first_mismatch"]["logged"],
                                                     result["first_mismatch"]["replayed"]))
-    sys.exit(0 if result["ok"] else 1)
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

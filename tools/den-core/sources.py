@@ -43,11 +43,8 @@ def flaps():
 
 
 def _text(path):
-    """A copied text file: UTF-16 when it starts with a byte-order mark (PowerShell 5.1's `>`), else UTF-8."""
-    raw = Path(path).read_bytes()
-    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
-        return raw.decode("utf-16")
-    return raw.decode("utf-8-sig", errors="replace")
+    """A copied text file: UTF-8, with or without a byte-order mark. A bad byte fails its own line; UTF-16 is refused."""
+    return events.read_text(path, "replace")
 
 
 def fact_time(available_at):
@@ -78,7 +75,7 @@ def fact_log(paths):
     log, _ = lab()
     found, seen, torn = [], set(), 0
     for path in paths:
-        rows = Path(path).read_bytes().split(b"\n")
+        rows = events.read_raw(path).split(b"\n")
         terminated = rows[-1] == b""
         if terminated:
             rows.pop()
@@ -105,7 +102,7 @@ def poll_log(path):
     an MQTT zero), so this log's occ=off only approximates its input.
     """
     items, last = [], {}
-    for number, raw in enumerate(Path(path).read_bytes().decode("ascii").splitlines(), 1):
+    for number, raw in enumerate(events.read_text(path).splitlines(), 1):
         if not raw.strip():
             continue
         try:
@@ -130,7 +127,12 @@ def poll_log(path):
 def mqtt_timeline(path, t0=0.0):
     """Occupancy edges from a Frigate MQTT step list (tests/fixtures/mqtt in victoria-ha),
     by den_lighting's own rules: mqtt_count, mqtt_availability, mqtt_connection_changed."""
-    steps = sorted((s for s in json.loads(Path(path).read_text("ascii")) if "every" not in s), key=lambda s: s["at"])
+    try:
+        steps = sorted((s for s in events.read_json(path) if "every" not in s), key=lambda s: s["at"])
+        if any(type(s["at"]) not in (int, float) or not isinstance(s, dict) for s in steps):
+            raise TypeError
+    except (TypeError, KeyError):
+        raise events.BadFile("%s is not a Frigate MQTT step list" % path) from None
     items, value, frigate, broker = [], "unknown", None, None
     for step in steps:
         new = value

@@ -57,9 +57,9 @@ def out_file(text):
     return b"\xef\xbb\xbf" + text.replace("\n", "\r\n").encode("utf-8")
 
 
-def tool(name, *argv, timeout=300):
+def tool(name, *argv, timeout=300, cwd=None):
     """A tool as the owner runs it: (exit code, stdout, stderr)."""
-    done = subprocess.run([sys.executable, "-B", str(HERE / name), *map(str, argv)], capture_output=True, text=True, timeout=timeout)
+    done = subprocess.run([sys.executable, "-B", str(HERE / name), *map(str, argv)], capture_output=True, text=True, timeout=timeout, cwd=cwd)
     return done.returncode, done.stdout, done.stderr
 
 
@@ -139,6 +139,17 @@ class EveryInputOfRunTest(Temp):
                 self.refused(code, out, err, sentence(path))
                 self.assertEqual(err.strip(), sentence(path))
                 self.assertFalse((self.tmp / ("out-" + flag)).exists())
+
+    def test_the_sentence_names_the_path_as_it_was_typed(self):
+        """A relative path with a forward slash, as the owner types it: Path() and resolve() would each say something else."""
+        (self.tmp / "in").mkdir()
+        for flag in self.FLAGS:
+            typed = "in/%s-16.jsonl" % flag
+            (self.tmp / typed).write_bytes(ps51(self.good[flag]))
+            with self.subTest(flag):
+                code, out, err = tool("run.py", *argv_for(flag, typed, self.command), "--out", self.tmp / ("out-" + flag), cwd=self.tmp)
+                self.assertEqual(code, 2, out + err)
+                self.assertEqual(err.strip(), sentence(typed))
 
     def test_a_bom_and_crlf_read_as_the_same_file(self):
         """Out-File -Encoding utf8's bytes. A log is written, so nothing refused it, and its inputs are what the plain file gave."""
@@ -934,6 +945,35 @@ class ReadmeLineTest(unittest.TestCase):
         said = " ".join((HERE / "README.md").read_text("utf-8").split())
         self.assertNotIn("which the adapters also read", said)
         self.assertIn("don't redirect with `>`", said)
+
+    def test_it_says_what_is_refused_and_what_only_fails(self):
+        # Each clause is run above: WrongInsideAModelTest, WrongInsideALogTest, LogsTest's marks and truth, TimesNoRunCanReachTest
+        # and LastResortTest. The sentence once said never a traceback and they did not all hold.
+        said = " ".join((HERE / "README.md").read_text("utf-8").split())
+        for words in ("Any input that is missing, not JSON or the wrong shape is one sentence and exit 2, never a traceback",
+                      "what is inside a light model, a mark or `--truth`", "a log's header, its logged config and its input lines",
+                      "a time past any clock", "`--mqtt` with no `--mqtt-t0`", "a failed check, not a refusal", "`validate.py` goes on check by check",
+                      "stopped on an input of the wrong shape, or a bug of its own"):
+            self.assertIn(words, said)
+        check_says = said.split("`check.py LOG` re-imports")[1].split("```")[0]
+        self.assertIn("wrong shape to replay", check_says)
+        truth_says = said.split("`--truth` adds, as information only")[1].split("Tests:")[0]
+        self.assertIn("missing or the wrong shape is refused like any other file", truth_says)
+        self.assertIn("A log with no `incumbent` in it", said.split("### What a scored run needs")[1].split("### What it gates")[0])
+
+    def test_it_says_nothing_has_run_the_verify_line_here(self):
+        said = " ".join((HERE / "README.md").read_text("utf-8").split())
+        self.assertIn("den-core's tests don't run that line: they check only that it names these files, and it needs a `verify.py` with `--surfaces`", said)
+
+    def test_the_release_fragment_says_the_same(self):
+        fragment = HERE.parents[1] / "changes" / "unreleased" / "den-core-rung-9-coordinator.md"
+        if not fragment.exists():  # a release moves it to the archive
+            return
+        said = " ".join(fragment.read_text("utf-8").split())
+        for words in ("is refused with one sentence and exit 2 when it is UTF-16 (what PowerShell 5.1's `>` writes), missing, malformed or the wrong shape",
+                      "`--truth`", "A log of the right shape with a line changed or wrong inside fails its replay with exit 1", "`validate.py` says so check by check",
+                      "a time no run could reach is refused"):
+            self.assertIn(words, said)
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import random
+import re
 import shutil
 import sys
 import tempfile
@@ -877,6 +878,66 @@ class ReadmeTest(Temp):
         said = " ".join(self.readme().split())
         at = {block_px: round(tc.longest_decision(tc.GridLimitLineTest.touched(block_px)) / 1000, 1) for block_px in (20, 10, 8)}
         self.assertIn("about %.1f KB at the proposed 20 (576 blocks), %.1f KB at 10 and %.1f KB at 8 (3,600 blocks)" % (at[20], at[10], at[8]), said)
+
+    @staticmethod
+    def whole_map(count, width):
+        """Whether a map of this many surfaces, with names this long, stays whole on the line, as README counts it: one reader,
+        every bulb held, the proposed grid, through runner.run beside the real den_lighting."""
+        names = ["s" + str(n).zfill(width - 1) for n in range(count)]
+        spec = {"source": "fake", "params": {"filler": 576 - 12}, "surfaces": {name: ["other/%d" % (n % 500)] for n, name in enumerate(names)}}
+        case = {"script": [(T0 + 10, "A", "engaged", "counter-1")], "touches": [(30 + 10 * n, b, scene(60 + 20 * n)) for n, b in enumerate(events.LIGHTS)], "inputs": []}
+        with mock.patch.dict(hold_fixtures.CASES, {"touched": case}):
+            log = hold_fixtures.run_case("touched", "P1-mode", light_model=spec)[1]
+        return not any("surfaces_not_logged" in d["predicted"] for d in hold_fixtures.decisions(log))
+
+    def test_the_surface_counts_it_gives_are_measured(self):
+        found = re.search(r"about (\d+) surfaces with 10-character names or about (\d+) with 30 fit whole", " ".join(self.readme().split()))
+        self.assertTrue(found)
+        for count, width in ((int(found.group(1)), 10), (int(found.group(2)), 30)):
+            with self.subTest(width=width):
+                self.assertTrue(self.whole_map(int(count * 0.95), width), "fewer than README says fit")
+                self.assertFalse(self.whole_map(int(count * 1.05), width), "more than README says fit")
+
+    @staticmethod
+    def per_track(ids, surfaces, fields=(), reading=False, bulbs=1, **config):
+        """The bytes one more track adds to a Decision's line, with a hold so a Decision is made with all of them on it."""
+        def line(count):
+            p = tc.policy(compensation=config.get("compensation", {"option": "P1", "form": "mode"}), **{k: v for k, v in config.items() if k != "compensation"})
+            tc.start(p)
+            for k, track in enumerate(ids[:count]):
+                person = hold_fixtures.person_state(T0 + 2 + k, track, "engaged" if reading else "none", surfaces[k % len(surfaces)])
+                person["field_support"].update({name: {"last_support_capture_ts": T0 + 1 + k, "value_set_ts": T0 + 2 + k, "support_status": "observed"} for name in fields})
+                tc.feed(p, tc.ev(T0 + 2 + k, "person_state", person, "need"))
+            holds, out = [], []
+            for n, bulb in enumerate(events.LIGHTS[:bulbs]):
+                holds.append(tc.hold(bulb, 100 + 30 * n, T0 + 100 + n))
+                out += tc.feed(p, tc.ev(T0 + 100 + n, "mode", tc.mode(2 + n, holds)["data"], "incumbent"),
+                               tc.ev(T0 + 100 + n, "correction", {"correction_id": "c%d" % n, "entity_id": bulb, "after": scene(100 + 30 * n), "source": "t", "who": {"track_id": ids[0]}}))
+            assert "tracks_not_logged" not in out[-1]["inputs"]
+            return len(events.dumps(out[-1]))
+        return line(2) - line(1)
+
+    def test_the_track_sizes_it_gives_are_measured(self):
+        found = re.search(r"about ([\d.]+) KB each with need v0's one field, ([\d.]+) KB with every field the schema names, or ([\d.]+) KB in the worst shape",
+                          " ".join(self.readme().split()))
+        self.assertTrue(found)
+        grid = {"source": "fake", "params": {"filler": 576 - 12}}
+        every = ("position", "working_region", "focused_engagement", "visual_demand", "attention", "heading", "motion", "posture", "affected")
+        ids = ["track-%06d" % k for k in range(4)]
+        glare = {b: {name: {"G": 3.0, "sd": 0.01} for name in ids} for b in events.LIGHTS}
+        worst = {"source": "fake", "params": {"filler": 576 - 12, "glare": glare, "error": {"median_pct": 8.0, "p90_pct": 20.0}},
+                 "surfaces": {"a-surface-with-a-thirty-char-%d" % n: ["other/%d" % (n * 10 + m) for m in range(10)] for n in range(8)}}
+        measured = (self.per_track(["T0", "T1"], ["counter-1"], light_model=grid),
+                    self.per_track(["T0", "T1"], ["counter-1"], every, light_model=grid),
+                    self.per_track(ids, sorted(worst["surfaces"]), every, reading=True, bulbs=4, light_model=worst, compensation={"option": "P3", "form": "strict"}))
+        for kilobytes, size in zip(map(float, found.groups()), measured):
+            self.assertLess(abs(size / 1000 - kilobytes), 0.15, (found.groups(), measured))
+
+    def test_the_adapters_docstring_says_what_it_calls(self):
+        said = " ".join(light_adapter.__doc__.split())
+        self.assertIn("That is den-light's own predict.py", said)
+        self.assertNotIn("_predict`'s body", said)
+        self.assertNotIn("Today", said)
 
     def test_the_release_fragment_says_what_is_now_true(self):
         fragment = HERE.parents[1] / "changes" / "unreleased" / "den-core-rung-9-coordinator.md"

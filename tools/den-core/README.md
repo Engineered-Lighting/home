@@ -24,8 +24,16 @@ does.
 
 **PowerShell 5.1:** don't redirect with `>`. It writes UTF-16, which `run.py`, `check.py`, `score.py` and `validate.py`
 refuse by name with exit 2, on every file they read. Pipe to `Set-Content` as the commands below do, or repair a file with
-`Get-Content bad.jsonl | Set-Content -Encoding utf8 good.jsonl`. They read the byte-order mark and CRLF that writes. The same
-exit 2 and one sentence, never a traceback, go for any input that is not JSON or not the right shape, and for a missing one.
+`Get-Content bad.jsonl | Set-Content -Encoding utf8 good.jsonl`. They read the byte-order mark and CRLF that writes.
+
+**What they refuse.** Any input that is missing, not JSON or the wrong shape is one sentence and exit 2, never a traceback. That
+goes for what is inside a light model, a mark or `--truth`, for a log's header, its logged config and its input lines, as far as
+`check.py` can't replay them, and for a time past any clock or inputs more than about a year of 2 s ticks apart, which is what
+`--mqtt` with no `--mqtt-t0` beside real facts would be. A log of the right shape with a line changed or wrong inside is a
+failed check, not a refusal: `check.py` prints the line and exits 1, `validate.py` goes on check by check, the check that can't
+read the line failing and saying so, and `score.py` fails its replay line, or stops at exit 2 when it can't read that line
+either. Anything no check named still ends in one sentence and exit 2: `<tool> stopped on an input of the wrong shape, or a bug
+of its own`, with the exception and where it happened, so a bug in the tool can still be found.
 
 From the worktree root, with an absolute output folder outside every checkout
 (`C:/tmp/...` on Windows, `/tmp/...` on Linux):
@@ -78,8 +86,9 @@ occupancy source with it), `--corrections FILE ...` (correction-capture's
 (den_lighting refuses a changed `policy.py` by itself), re-runs the logged
 adapter inputs with the logged parameters and compares every line byte for
 byte, header included. It prints `OK` or the first mismatching line and exits
-0 or 1, or 2 when it can't read the log or a logged light model. A copy with a
-byte-order mark and CRLF compares the same.
+0 or 1, or 2 when it can't read the log or a logged light model, or when the
+header, a logged config or an input line is the wrong shape to replay. A copy
+with a byte-order mark and CRLF compares the same.
 
 ```bash
 python -B tools/den-core/validate.py C:/tmp/den-core/evening-1/log.jsonl --truth C:/tmp/den-core/evening-1/truth.json
@@ -94,7 +103,9 @@ is unknown. It prints OK, FAIL or n/a per check and exits 0 or 1, or 2 when it
 can't read a file. It is a consistency check of den-core's own code, not a
 lighting-quality gate.
 `--truth` adds, as information only, how long need took to follow each
-reading block's cues; `tools/reading-shadow` is the gate for those.
+reading block's cues; `tools/reading-shadow` is the gate for those. A truth file
+that is missing or the wrong shape is refused like any other file, before any
+check runs. One with no reading blocks, or a log with no `need`, reads n/a.
 
 Tests:
 
@@ -584,6 +595,8 @@ Then rung 10 reads what that wrote:
 python -B tools/den-verify/verify.py run --decisions C:/tmp/den-core-r9/real-1/decisions.jsonl --surfaces C:/tmp/den-core-r9/real-1/surfaces.json --light-states C:/tmp/den-core/in/light_state.jsonl --model C:/den-light/SESSION/light-model.json --preview --out C:/tmp/den-verify/real-1
 ```
 
+den-core's tests don't run that line: they check only that it names these files, and it needs a `verify.py` with `--surfaces`.
+
 When the coordinator ran, and only after the log is complete, `run.py` writes two more files beside `log.jsonl`. A run
 without the coordinator writes neither, and every output it has stays byte-identical.
 
@@ -611,7 +624,8 @@ own `predict.py` on the merged tree.
 ### What a scored run needs
 
 `score.py LOG [--marks FILE]` refuses, and exits 2, on any of these. `--preview` runs anyway on the proposals logged in
-the header, prints no verdict and is never a gate.
+the header, prints no verdict and is never a gate. A log with no `incumbent` in it, whose comparator is den_lighting re-run
+beside it, or with no coordinator, is refused either way.
 
 - an open slot in `rung9-gate-v0.json`. `score.py --slots` lists them with their proposals. To close one, set its
   `status` to `closed` and its `value`, then rerun the evening: a log run under another gate file refuses;

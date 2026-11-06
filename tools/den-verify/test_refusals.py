@@ -573,6 +573,13 @@ class WhatIsNotReadIsNotLookedAtTest(Case):
                 shutil.rmtree(self.tmp / "out", ignore_errors=True)
                 self.assertEqual(self.main(self.argv(light_states=path))[0], code)
 
+    def test_an_output_folder_may_be_new_and_deep_or_there_already_with_nothing_in_the_way(self):
+        for out in ("new/and/deep", "there-already"):
+            (self.tmp / "there-already").mkdir(exist_ok=True)
+            code, printed = self.main(self.argv(out))
+            self.assertEqual(code, 0, printed)
+            self.assertTrue((self.tmp / out / "report-preview.json").exists())
+
     def test_a_person_saying_little_and_an_xyz_with_a_height(self):
         self.reads("occupancy", lambda o: o.update(people=[{"track_id": "A", "xy": [1.0, 2.0, "a height nothing reads"]}]))
         self.reads("occupancy", lambda o: o.update(people=None))

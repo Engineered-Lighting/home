@@ -8,8 +8,8 @@ file was copied from, so that test also runs on a branch without den-register.
 
 Writes <out>/room-model.jsonl with five revisions: a first fit, a second fit from
 a later take, the revision a real check-mount appends when it confirms, the
-invalidated one it appends after a 5 degree turn, and a fit from a take after the
-turn. Prints the transform ids.
+invalidated one it appends when two takes agree on a 5 degree turn, and a fit from
+a take after the turn. Prints the transform ids.
 """
 import io
 import shutil
@@ -51,6 +51,13 @@ code, report = register.run_check_mount(first.work, held.take, m=first.m, now=la
 assert report["result"] == "confirmed", text.getvalue()
 
 turned = synthetic.moved(yaw_deg=5.0)
+first_look = harness.Scene(holder, name="first-look", ended=1_800_001_900.0, pose=turned,
+                           background=synthetic.room_depth(turned))
+first_look.click_all()
+text = io.StringIO()
+code, report = register.run_check_mount(first.work, first_look.take, m=first.m, now=lambda: 1_800_001_950.0, out=text)
+assert report["result"] == "not_confirmed" and report["looks_moved"], text.getvalue()
+
 later = harness.Scene(holder, name="later", ended=1_800_002_000.0, pose=turned, background=synthetic.room_depth(turned))
 later.click_all()
 text = io.StringIO()

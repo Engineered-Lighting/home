@@ -1017,11 +1017,11 @@ class TwoEvenings(unittest.TestCase):
         run([], [frame(T, 1.0), frame(T + self.DAY, 1.0)])
         run([], [frame(T, 1.0, "same"), frame(T + 100, 1.0, "same")])
 
-    def read(self, inputs, frames):
+    def read(self, inputs, frames, overrides=None):
         """The decision's own read frame by the value it reads: frames hold 20 at p0 if chosen right."""
         dec = landed(read=None)
         dec["inputs"].update(inputs)
-        decisions, _, report = run([dec], frames + [frame(T + 5, 80.0)])
+        decisions, _, report = run([dec], frames + [frame(T + 5, 80.0)], overrides=overrides)
         return point(decisions[0], "p0"), report
 
     def test_the_ts_names_the_frame_whatever_the_id_says(self):
@@ -1041,10 +1041,11 @@ class TwoEvenings(unittest.TestCase):
         self.assertIn(repr(T - 1.0), not_verified(report)["reason"])
 
     def test_a_reference_by_id_more_than_12_hours_away_is_not_taken(self):
+        # which day's frame an id names, whatever the owner's max_frame_gap_s says of how far a frame speaks: wide here, to see it alone
         decision_at = T + 0.5
         for away, status in ((12 * 3600 + 1, "unverifiable"), (-12 * 3600 - 1, "unverifiable"), (12 * 3600, "within"), (-12 * 3600, "within")):
             at = decision_at + away
-            p, report = self.read({"light_state": "ls-r"}, [frame(at, 20.0, "ls-r")])
+            p, report = self.read({"light_state": "ls-r"}, [frame(at, 20.0, "ls-r")], overrides={"max_frame_gap_s": 2 * self.DAY})
             self.assertEqual(p["status"], status, away)
             if status == "unverifiable":
                 self.assertIn("12 hours", not_verified(report)["reason"])
@@ -1161,8 +1162,111 @@ class TwoEvenings(unittest.TestCase):
         self.assertNotIn(r"C:\den-verify\s1\decisions.jsonl --light-states C:\den-verify\s1", said)
 
 
+class AReadFrameIsNearItsDecision(unittest.TestCase):
+    """How far from a decision a frame it names can stand for the room it read: max_frame_gap_s, a slot, so the number is the owner's.
+    Each right decision here names a frame holding another hour's light: read, it makes a false miss, so it must not be read."""
+    DAY = 86400.0
+    AT = T + 0.5  # the decision's own time
+
+    def named(self, at, by="ts", value=300.0, after=80.0, **kw):
+        """A right decision naming a frame at `at`, by its ts or its id, and the frame after it settled, as it should read."""
+        dec = landed(read=None)
+        dec["inputs"].update({"light_state_ts": at} if by == "ts" else {"light_state": "ls-named"})
+        decisions, states, report = run([dec], [frame(at, value, "ls-named"), frame(T + 5, after)], **kw)
+        return decisions[0], states, report
+
+    def assert_no_read_frame(self, decision, report):
+        self.assertIsNone(decision["verify"]["within_tolerance"])
+        self.assertEqual({p["status"] for p in decision["verify"]["points"]}, {"unverifiable"})
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"), hr)
+        entry = not_verified(report)
+        self.assertEqual(entry["kind"], "no read frame")
+        self.assertIn("no read frame", entry["reason"])
+        self.assertIn("max_frame_gap_s (5 s)", entry["reason"])
+        self.assertIn("ls-named", entry["reason"])
+        self.assertEqual(decision["verify_status"], entry["reason"])
+
+    def test_a_frame_named_by_time_from_yesterday_is_not_read(self):
+        decision, _, report = self.named(self.AT - 23.4 * 3600)
+        self.assert_no_read_frame(decision, report)
+        self.assertIn("84240.0 s before", not_verified(report)["reason"])
+
+    def test_nor_one_hours_old_on_the_same_evening_with_no_step_between(self):
+        decision, _, report = self.named(self.AT - 3 * 3600)
+        self.assert_no_read_frame(decision, report)
+        self.assertIn("10800.0 s before", not_verified(report)["reason"])
+
+    def test_nor_one_named_by_id_inside_the_12_hours_that_find_it(self):
+        decision, _, report = self.named(self.AT - 3 * 3600, by="id")
+        self.assert_no_read_frame(decision, report)
+
+    def test_nor_one_named_hours_after_the_decision(self):
+        for by in ("ts", "id"):
+            with self.subTest(by=by):
+                decision, _, report = self.named(self.AT + 3 * 3600, by=by)
+                self.assert_no_read_frame(decision, report)
+                self.assertIn("10800.0 s after", not_verified(report)["reason"])
+
+    def test_the_line_is_the_slot_itself_either_side_and_either_name(self):
+        for by in ("ts", "id"):
+            for away, status in ((5.0, "within"), (5.01, "unverifiable"), (-5.0, "within"), (-5.01, "unverifiable")):
+                with self.subTest(by=by, away=away):
+                    # the frame shows the state the decision read, so where it is read the point is a hit
+                    decision, _, _ = self.named(self.AT + away, by=by, value=20.0)
+                    self.assertEqual(point(decision, "p0")["status"], status)
+
+    def test_the_number_is_the_owners(self):
+        at = self.AT - 20.0
+        decision, _, _ = self.named(at, value=20.0, overrides={"max_frame_gap_s": 30})
+        self.assertEqual(point(decision, "p0")["status"], "within")
+        decision, _, report = self.named(at, value=20.0, overrides={"max_frame_gap_s": 19})
+        self.assertEqual(point(decision, "p0")["status"], "unverifiable")
+        self.assertIn("max_frame_gap_s (19 s)", not_verified(report)["reason"])
+
+    def test_under_zero_the_level_check_stands_without_it_as_with_no_read_frame_at_all(self):
+        zero = {"background": "zero"}
+        decision, _, report = self.named(self.AT - 3 * 3600, overrides=zero)
+        self.assertIs(decision["verify"]["within_tolerance"], True)
+        self.assertEqual(point(decision, "p0")["status"], "within")
+        self.assertEqual({i["status"] for i in decision["verify"]["increments"]}, {"unverifiable"})
+        self.assertEqual(report["decisions"]["read_frame_stale"], [])
+        decision, _, report = self.named(self.AT - 3 * 3600, after=20.0, overrides=zero)  # a bulb that stayed down still reads as what it is
+        self.assertIs(decision["verify"]["within_tolerance"], False)
+        self.assertEqual(report["hit_rate"]["misses"], 2)
+
+    def test_and_windows_three_hours_apart_name_no_cause_for_a_miss(self):
+        dec = landed(read=None)
+        dec["inputs"]["light_state_ts"] = self.AT - 3 * 3600
+        frames = [syn.light_state(self.AT - 3 * 3600, {"p0": 300.0, "p1": 300.0}, anchored=False, windows={"west-1": 0.9}),
+                  syn.light_state(T + 5, {"p0": 20.0, "p1": 20.0}, anchored=False, windows={"west-1": 0.04})]
+        report = run([dec], frames, overrides={"background": "zero"})[2]
+        self.assertEqual(report["hit_rate"]["misses"], 2)
+        self.assertEqual(report["misses_explained"]["daylight"], 0)
+        self.assertEqual(report["misses_explained"]["unknown_inputs"]["window daylight"], 2)
+
+    def test_the_frames_under_it_get_no_residual(self):
+        _, states, _ = self.named(self.AT - 3 * 3600)
+        last = next(s for s in states if s["ts"] == T + 5)
+        self.assertEqual(last["residual"], [])
+        self.assertIn("decision d", last["residual_status"])
+
+    def test_two_evenings_with_the_camera_late_on_the_second(self):
+        first = landed("d-1", read=None)
+        first["inputs"]["light_state_ts"] = T
+        second = landed("d-2", at=T + self.DAY, read=None)
+        second["inputs"]["light_state_ts"] = T + 5  # den-core names the newest frame at or before it: last night's last
+        frames = [frame(T, 20.0), frame(T + 5, 80.0), frame(T + self.DAY + 5, 380.0)]  # 300 more from outside on the second
+        out, _, report = run([first, second], frames)
+        self.assertIs(by_id(out, "decision_id", "d-1")["verify"]["within_tolerance"], True)
+        self.assertIsNone(by_id(out, "decision_id", "d-2")["verify"]["within_tolerance"])
+        self.assertEqual(not_verified(report, "d-2")["kind"], "no read frame")
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"], hr["sessions"], hr["days_with_nothing_counted"]), (2, 0, "pass", 1, 1))
+
+
 class TheWordInTheMethod(unittest.TestCase):
-    AT_START = "b68d7cb647cfc7aef803544771c5e84783936837abc9bfe1fb3e14a1eb065376"  # the verify-v1 block at c188f7fe, before this round
+    AT_START ="b68d7cb647cfc7aef803544771c5e84783936837abc9bfe1fb3e14a1eb065376"  # the verify-v1 block at c188f7fe, before this round
 
     def test_no_rule_or_number_moved(self):
         m = method.load()

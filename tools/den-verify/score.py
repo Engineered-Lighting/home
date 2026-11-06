@@ -302,17 +302,25 @@ class Run:
 
     def read_frame(self, inputs, ts):
         """(the frame a decision read, None), or (None, why not). Its ts names it, else its id does, within 12 hours: frames
-        are keyed by time, and a derived id comes round again the next day."""
+        are keyed by time, and a derived id comes round again the next day. Whichever names it, a frame further from the
+        decision than max_frame_gap_s says nothing of the room it read: den-core names the newest at or before, however old."""
         at, name = inputs.get("light_state_ts"), inputs.get("light_state")
         if is_number(at):
             found = self.frame_at(at)
-            return found, None if found else f"no LightState at ts {at!r}"
-        if name:
+            if found is None:
+                return None, f"no LightState at ts {at!r}"
+        elif name:
             near = [f for f in self.frames_by_id.get(name) or () if abs(f.ts - ts) <= SAME_EVENING_S]
-            if near:
-                return min(near, key=lambda f: abs(f.ts - ts)), None
-            return None, f"{name} names no LightState within 12 hours of this decision"
-        return None, inputs.get("light_state_status") or "the decision names none"
+            if not near:
+                return None, f"{name} names no LightState within 12 hours of this decision"
+            found = min(near, key=lambda f: abs(f.ts - ts))
+        else:
+            return None, inputs.get("light_state_status") or "the decision names none"
+        away, gap = abs(found.ts - ts), self.m["max_frame_gap_s"]
+        if away > gap:
+            return None, (f"the frame it names, {found.id}, is {away:.1f} s {'before' if found.ts < ts else 'after'} it, "
+                          f"past max_frame_gap_s ({gap:g} s)")
+        return found, None
 
     def _add_correction(self, c):
         snap = c.get("snapshot") or {}

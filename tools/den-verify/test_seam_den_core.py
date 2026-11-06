@@ -64,11 +64,12 @@ Path(sys.argv[2]).write_text(json.dumps(lm, ensure_ascii=False, allow_nan=False)
 RUN_CORE = r'''
 import sys
 from pathlib import Path
-core, light = sys.argv[1:3]
+core, light, later = sys.argv[1:4]
 sys.path.insert(0, core)
-import light_adapter, run
+import light_adapter, run, synthetic
 light_adapter.PREDICT_PATH = Path(light) / "predict.py"
-sys.exit(run.cli(sys.argv[3:]))
+synthetic.T0 += float(later)  # a later evening at the same clock times, which run.py has no flag for
+sys.exit(run.cli(sys.argv[4:]))
 '''
 HAS_POLICY = r'''
 import sys
@@ -92,6 +93,10 @@ def lines_of(path):
 
 def without_light_state(decision):
     return {**decision, "inputs": {k: v for k, v in decision["inputs"].items() if not k.startswith("light_state")}}
+
+
+def not_verified_of(report, decision):
+    return by_id(report["decisions"]["not_verified"], "decision_id", decision["decision_id"])
 
 
 class Truth:
@@ -187,9 +192,9 @@ class Seam(unittest.TestCase):
         cls.frames_list = cls.frames(cls.decisions)
 
     @classmethod
-    def run_core(cls, name, *more, model=None, flags=CORE_FLAGS):
+    def run_core(cls, name, *more, model=None, flags=CORE_FLAGS, later=0.0):
         out = cls.tmp / ("core-" + name)
-        done = python("-c", RUN_CORE, CORE, LIGHT, *flags, "--light-model", model or cls.model_path, "--surfaces", cls.given_map, *more, "--out", out)
+        done = python("-c", RUN_CORE, CORE, LIGHT, later, *flags, "--light-model", model or cls.model_path, "--surfaces", cls.given_map, *more, "--out", out)
         if done.returncode:
             raise AssertionError(done.stdout + done.stderr)
         return out
@@ -789,6 +794,55 @@ class Seam(unittest.TestCase):
         self.assertEqual((hr["misses"], hr["verdict"], hr["sessions"]), (0, "pass", 2), hr)  # the other day's frame reads 0.5 away
         self.assertEqual(hr["interval"], [1.0, 1.0])
         self.assertEqual(report["decisions"]["verified"], 2 * len(self.decisions))
+
+    # -- how far from a decision a frame speaks: real run.py names the newest frame at or before, however old --------------------
+
+    @staticmethod
+    def brighter(frame, by, more):
+        """The same frame `by` seconds on, with `more` from outside at every surface."""
+        return {**frame, "ts": round(frame["ts"] + by, 3),
+                "surface_estimates": [{**e, "value": e["value"] + more} for e in frame["surface_estimates"]]}
+
+    def second_evening(self, name, camera_after):
+        """Two real evenings with their frames joined in one file, as both READMEs allow; the camera starts `camera_after` seconds
+        after the second's first decision, with more light from outside that evening. (frames, decisions of both, the second's)."""
+        day = 86400.0
+        start = lines_of(self.run_core(name + "-first", later=day) / "decisions.jsonl")[0]["ts"]
+        frames = self.frames_list + [self.brighter(f, day, 0.5) for f in self.frames_list if f["ts"] + day > start + camera_after]
+        joined = self.tmp / (name + "-frames.jsonl")
+        write_jsonl(joined, frames)
+        first = lines_of(self.run_core(name + "-1", "--light-states", joined) / "decisions.jsonl")
+        second = lines_of(self.run_core(name + "-2", "--light-states", joined, later=day) / "decisions.jsonl")
+        self.assertGreater(second[0]["ts"] - second[0]["inputs"]["light_state_ts"], 23 * 3600)  # the newest at or before: last night's last
+        self.assertLess(second[1]["ts"] - second[1]["inputs"]["light_state_ts"], 5)
+        return frames, first + second, second
+
+    def test_a_second_evenings_first_decision_does_not_read_last_nights_frame(self):
+        frames, decisions, second = self.second_evening("late-camera", camera_after=0.0)
+        printed, report, written = self.scored(frames, decisions=decisions)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["misses"], hr["verdict"], hr["sessions"], hr["interval"]), (0, "pass", 2, [1.0, 1.0]), hr)
+        self.assertEqual(report["decisions"]["verified"], len(decisions) - 1, report["decisions"]["not_verified"])
+        self.assertIsNone(by_id(written, "decision_id", second[0]["decision_id"])["verify"]["within_tolerance"])
+        [entry] = report["decisions"]["not_verified"]
+        self.assertEqual((entry["decision_id"], entry["kind"]), (second[0]["decision_id"], "no read frame"))
+        self.assertIn("max_frame_gap_s", entry["reason"])
+        self.assertIn("1 no read frame", printed)
+
+    def test_a_read_frame_hours_old_on_the_same_evening_is_not_read(self):
+        """The camera was down for three hours up to the first decision, and the light outside moved meanwhile."""
+        first = self.decisions[0]
+        then = self.brighter(self.frames_list[0], first["ts"] - 3 * 3600.0 - self.frames_list[0]["ts"], 0.5)
+        frames = [then] + [f for f in self.frames_list if f["ts"] > first["ts"]]
+        path = self.tmp / "frames-outage.jsonl"
+        write_jsonl(path, frames)
+        decisions = lines_of(self.run_core("outage", "--light-states", path) / "decisions.jsonl")
+        self.assertEqual(decisions[0]["inputs"]["light_state_ts"], then["ts"])
+        _, report, written = self.scored(frames, decisions=decisions)
+        self.assertEqual(report["hit_rate"]["misses"], 0, report["hit_rate"])
+        self.assertIsNone(written[0]["verify"]["within_tolerance"])
+        self.assertEqual(not_verified_of(report, decisions[0])["kind"], "no read frame")
+        self.assertEqual(report["decisions"]["verified"], len(decisions) - 1, report["decisions"]["not_verified"])
 
 
 if __name__ == "__main__":

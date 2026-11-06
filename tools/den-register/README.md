@@ -227,8 +227,9 @@ for one cross at 5.2 m and five at 2 to 2.5 m, 300 trials each:
 
 - An unmoved camera. With every click at 1 px and depth noise of 0.5% or 1%, no first
   take looked moved. With the far cross clicked at 3 px and stereo depth noise of
-  0.05 px, 10.0% looked moved and 0.7% ended invalidated on the second take. At 4 px
-  and 0.02 to 0.05 px, 21 to 29% looked moved and 1.3 to 2.3% ended invalidated.
+  0.05 px (about 4 cm at that cross), 10.0% looked moved and 0.7% ended invalidated on
+  the second take. At 4 px and 0.02 to 0.05 px, 21 to 29% looked moved and 1.3 to 2.3%
+  ended invalidated on the second take, about 7% if you keep going to six takes.
 - A knock. At 1 px and 0.5% depth a 5° turn was invalidated on the second take every
   time, and a 1° turn, 9.5 cm off across the view, 46% of the time and 76% within six
   takes. Two noisy takes can differ by more than 5 cm and then do not agree: with the
@@ -236,8 +237,8 @@ for one cross at 5.2 m and five at 2 to 2.5 m, 300 trials each:
   96% within six.
 - So do not keep recording takes until one confirms. Each take gives noise another
   chance: over six takes, with the far cross at 3 px, a 1° turn got one confirmation
-  in 6.0% of trials (0.3% at 1 px). If two or three takes say the crosses look moved,
-  treat the camera as moved and register again.
+  in 6.0% of trials (0.3% at 1 px, 10% at 4 px and 0.02 px). If two or three takes say
+  the crosses look moved, treat the camera as moved and register again.
 
 A person standing close to the camera during the check take can invalidate on one
 take, because no click is involved: filling over half of the frame moves the depth
@@ -274,8 +275,8 @@ printed.
    take's noise measured first?
 2. **How far the farthest cross must be.** `mount_min_reach_m` is proposed at 3 m.
    Under it the mount check confirms nothing. The same noise at 0.5% depth, among
-   fits that pass, 400 of them a row: how often a turn is confirmed that puts
-   something in view about 7 cm off (a 0.75° pitch or turn).
+   fits that pass (200 for the first row, 400 for the others): how often a turn is
+   confirmed that puts something in view about 7 cm off (a 0.75° pitch or turn).
 
    | Crosses | 0.75° pitch | 0.75° turn |
    |---|---|---|

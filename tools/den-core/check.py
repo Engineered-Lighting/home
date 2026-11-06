@@ -58,7 +58,8 @@ def check(log_path, resolve=None, on_policy=None):
     except ValueError as error:
         return _refuse("the log's header does not replay: %s" % error)
     except events.SHAPE_ERRORS as error:
-        return _refuse("the log does not replay: an input line or a logged config is the wrong shape: %s" % events.named(error), unreadable=True)
+        return _refuse("the log does not replay: an input line or a logged config is the wrong shape, or a policy has a bug: %s" % events.named(error),
+                       unreadable=True)
     want = events.log_lines(log_path)
     got = [events.dumps(value) for value in [replay_header, *replayed]]
     for index in range(max(len(want), len(got))):

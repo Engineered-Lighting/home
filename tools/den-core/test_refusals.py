@@ -888,6 +888,7 @@ class WrongInsideALogTest(Temp):
         self.refused(code, out, err, "the log does not replay")
         code, out, err = tool("score.py", path, "--preview")
         self.refused(code, out, err, "the log does not replay")
+        self.assertRegex(err.strip(), r"TypeError: .* \(\S+\.py line \d+\)$")
         self.assertEqual(out, "")
 
     def test_a_log_that_replays_is_this_tools_own_if_score_trips_on_it(self):

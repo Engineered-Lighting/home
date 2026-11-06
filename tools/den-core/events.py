@@ -63,15 +63,16 @@ def is_number(value):
 
 
 def named(error):
-    """An exception in words, for a refusal: its type says more than its text for a KeyError or a TypeError."""
-    return "%s: %s" % (type(error).__name__, " ".join(str(error).split()))
+    """An exception in words, for a refusal: its type says more than its text for a KeyError or a TypeError, and where it
+    happened lets a bug in the tool be found with no traceback."""
+    frames = traceback.extract_tb(error.__traceback__)
+    where = " (%s line %d)" % (Path(frames[-1].filename).name, frames[-1].lineno) if frames else ""
+    return "%s: %s%s" % (type(error).__name__, " ".join(str(error).split()), where)
 
 
 def stopped(tool, error):
-    """A tool's last resort, for what no check before it named: one sentence, and where, so a bug of its own can still be found."""
-    frames = traceback.extract_tb(error.__traceback__)
-    where = " (%s line %d)" % (Path(frames[-1].filename).name, frames[-1].lineno) if frames else ""
-    return "%s stopped on an input of the wrong shape, or a bug of its own: %s%s" % (tool, named(error), where)
+    """A tool's last resort, for what no check before it named: one sentence."""
+    return "%s stopped on an input of the wrong shape, or a bug of its own: %s" % (tool, named(error))
 
 
 def _utf16(head, path):

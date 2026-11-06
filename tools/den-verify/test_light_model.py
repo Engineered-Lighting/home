@@ -387,6 +387,58 @@ class Stage1Backend(Temp):
         self.assertEqual(report["model"]["surfaces"]["wrong"], ["desk"])
         self.assertIn("d-on", by_id(report["decisions"]["not_verified"], "decision_id", "d-off")["reason"])
 
+    def named(self, name_of):
+        """One evening with a hold, a person's later hold and a step sent mid-fade, with `name_of` naming each channel: the results."""
+        t = syn.T0
+        data = stage1_model({"p0": {B0: 100.0, B1: 100.0, B2: 40.0}, "p1": {B1: 100.0, B2: 100.0}, "p2": {B0: 80.0, B2: 10.0}})
+        hold = {"revision": 4, "held": [{"entity_id": name_of(B1), "channels": [], "pinned": {"level_pct": 50, "cct_k": 2202, "source": "read-back"}}]}
+        first = decision("d-1", t + 0.5, t, {B0: 0.2, B1: 0.5, B2: 0.5}, {B0: {"level": 0.8, "steps": send(t + 0.5)}, B1: {"status": "held", "level": 0.5}, B2: {"level": 0.5, "steps": []}},
+                         ("p0", "p1", "p2"), hold_set=hold, recipients={B0: {"served": ["A"], "exposed": [], "targets": []}})
+        second = decision("d-2", t + 101.5, t + 100, {B0: 0.8, B1: 0.5, B2: 0.5}, {B0: {"level": 0.4, "steps": send(t + 101.5)}, B2: {"level": 0.9, "steps": send(t + 101.5)}}, ("p0", "p1", "p2"), hold_set=hold)
+        third = decision("d-3", t + 102.5, t + 100, {B0: 0.4, B1: 0.5, B2: 0.9}, {B0: {"level": 0.6, "steps": send(t + 102.5)}}, ("p0", "p1", "p2"), hold_set=hold)
+        for d in (first, second, third):
+            d["inputs"]["actuator_state"] = {name_of(b): v for b, v in d["inputs"]["actuator_state"].items()}
+            d["applied_scene"] = {name_of(b): v for b, v in d["applied_scene"].items()}
+            d["recipients"] = {name_of(b): v for b, v in d["recipients"].items()}
+        later = {"correction_id": "c", "ts": t + 50, "action": {"settle_s": 0.0}, "snapshot": {"light_state": []},
+                 "hold": {"entity_id": name_of(B2), "pinned": {"level_pct": 20, "cct_k": 2202}, "since": t + 50, "ended": None, "hold_set_revision": 9}}
+        frames = [syn.light_state(t + o, {"p0": 20.0 + o, "p1": 40.0 + o, "p2": 15.0 + o}, anchored=False) for o in (0, 5, 60, 100, 110)]
+        decisions, states, report = Run(closed(), LightModel(data), [first, second, third], frames, corrections=[later], clock=Clock(syn.UTC_OFFSET_S)).run()
+        points = {d["decision_id"]: [(p["point_id"], p["status"], p["residual"], p.get("level_bound")) for p in d["verify"]["points"]] if d["verify"] else d["verify_status"] for d in decisions}
+        return (points, [s["residual"] for s in states], report["hit_rate"]["hits"], report["hit_rate"]["misses"], report["excluded_held_or_superseded"],
+                [x["decision_id"] for x in report["decisions"]["not_admitted"]], [x["decision_id"] for x in report["decisions"]["read_frame_stale"]])
+
+    def test_a_whole_evening_reads_the_same_in_entity_ids_channel_keys_or_both(self):
+        by_entity = self.named(lambda e: e)
+        self.assertEqual(by_entity[5], ["d-3"])  # B0's step went out while the same bulb's was fading: that needs one name for it
+        self.assertEqual(self.named(key_of), by_entity)
+        self.assertEqual(self.named(lambda e: key_of(e) if e in (B0, B2) else e), by_entity)
+
+    def test_two_names_for_one_bulb_in_a_decision_count_it_once(self):
+        t = syn.T0
+        dec = decision("d", t + 0.5, t, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, ("p0",))
+        dec["inputs"]["actuator_state"] = {B0: dec["inputs"]["actuator_state"][B0]}
+        dec["applied_scene"] = {key_of(B0): dec["applied_scene"][B0]}
+        frames = [syn.light_state(t, {"p0": 20.0}, anchored=False), syn.light_state(t + 5, {"p0": 80.0}, anchored=False)]
+        decisions, states, report = Run(closed(), LightModel(stage1_model(FOUR)), [dec], frames, clock=Clock(syn.UTC_OFFSET_S)).run()
+        self.assertAlmostEqual(residual(states, t + 5, "p0")["predicted"], 80.0, places=6)
+        self.assertEqual(report["hit_rate"]["hits"], 1)
+        self.assertEqual(decisions[0]["verify"]["increments"][0]["predicted_change"], 60.0)
+
+    def test_a_lit_bulb_the_decision_does_not_list_may_be_in_its_own_prediction_or_not(self):
+        # rung 9 leaves a bulb with no base scene out of its scene and out of predicted.surfaces; the verify still counts its light
+        t = syn.T0
+        for logged in (80.0, 90.0):  # B0's 80 alone, or with B1's 10 at full
+            dec = decision("d", t + 0.5, t, {B0: 0.2, B1: 1.0}, {B0: {"level": 0.8, "steps": send(t + 0.5)}}, ("p0",))
+            dec["predicted"]["surfaces"] = {"p0": logged, "unit": "relative"}
+            frames = [syn.light_state(t, {"p0": 30.0}, anchored=False), syn.light_state(t + 5, {"p0": 90.0}, anchored=False)]
+            decisions, states, report = Run(closed(), LightModel(stage1_model(FOUR)), [dec], frames, clock=Clock(syn.UTC_OFFSET_S)).run()
+            self.assertEqual(report["hit_rate"]["hits"], 1, logged)
+            self.assertAlmostEqual(residual(states, t + 5, "p0")["predicted"], 90.0, places=6)
+        dec["predicted"]["surfaces"] = {"p0": 85.0, "unit": "relative"}
+        _, _, report = Run(closed(), LightModel(stage1_model(FOUR)), [dec], frames, clock=Clock(syn.UTC_OFFSET_S)).run()
+        self.assertEqual(report["decisions"]["not_verified_by_kind"], {"no surface map": 1})
+
     def test_a_decision_the_model_cannot_predict_is_not_held_against_the_map(self):
         t = syn.T0
         data = stage1_model(FOUR)
@@ -569,6 +621,8 @@ class WrongStage1Model(Temp):
         ("version not text", {"version": 5}), ("no unit", {"basis_unit": None}), ("unit not text", {"basis_unit": 5}), ("fake not a flag", {"fake": "no"}),
         ("no points", {"sample_points": None}), ("points not a list", {"sample_points": {}}), ("no points in it", {"sample_points": []}), ("a point not an object", {"sample_points": [5]}),
         ("a point with no id", {"sample_points": [{"kind": None}]}), ("two points one id", {"sample_points": [{"point_id": "p0"}, {"point_id": "p0"}]}),
+        ("one point id of two not text", {"sample_points": [{"point_id": "p0"}, {"point_id": 5}]}),
+        ("one channel of two not an object", {"channels": [{"channel_key": "k", "entity_id": B0}, 5]}),
         ("an empty channel list", {"channels": []}), ("a channel not an object", {"channels": [5]}), ("a channel with no key", {"channels": [{"entity_id": B0}]}),
         ("a channel with no entity", {"channels": [{"channel_key": "k"}]}), ("a key not text", {"channels": [{"channel_key": 5, "entity_id": B0}]}),
         ("two channels one key", {"channels": [{"channel_key": "k", "entity_id": B0}, {"channel_key": "k", "entity_id": B1}]}),
@@ -597,8 +651,8 @@ class WrongStage1Model(Temp):
     def test_inside_a_channels_tables(self):
         for name, key, value in (("kelvin text", "kelvin", ["warm", 3294, 6535]), ("kelvin 0", "kelvin", [0, 3294, 6535]), ("a kelvin twice", "kelvin", [2202, 2202, 6535]),
                                  ("no kelvin", "kelvin", []), ("keys not a list", "basis_keys", 5), ("keys too few", "basis_keys", ["x"]),
-                                 ("levels not rising", "levels", [254, 0]), ("levels text", "levels", ["a", "b"]), ("no levels", "levels", []),
-                                 ("g text", "g", ["a", "b"]), ("g too short", "g", [0.0])):
+                                 ("levels not rising", "levels", [254, 0]), ("levels that stop rising", "levels", [0, 100, 50]), ("a level twice", "levels", [0, 100, 100]),
+                                 ("levels text", "levels", ["a", "b"]), ("no levels", "levels", []), ("g text", "g", ["a", "b"]), ("g too short", "g", [0.0])):
             self.assert_refused(self.change_channel(stage1_model(FOUR), key, value), name)
 
     def test_inside_a_basis_row(self):

@@ -32,10 +32,11 @@ if str(HERE) not in sys.path:
 
 import light_model  # noqa: E402
 import method  # noqa: E402
+import records  # noqa: E402
 import verify as cli  # noqa: E402
 from light_model import LightModel  # noqa: E402
-from records import Clock, write_jsonl  # noqa: E402
-from score import Dec, Run  # noqa: E402
+from records import Clock, read_jsonl, write_jsonl  # noqa: E402
+from score import Run  # noqa: E402
 from test_verify import Quiet, by_id, closed  # noqa: E402
 
 CORE = Path(os.environ.get("DEN_CORE_DIR") or HERE.parent / "den-core")
@@ -336,7 +337,7 @@ class Seam(unittest.TestCase):
         self.assert_own_prediction_agrees(self.run_core("game", flags=(*CORE_FLAGS, "--game")))
 
     def assert_own_prediction_agrees(self, out):
-        decisions = lines_of(out / "decisions.jsonl")
+        decisions = read_jsonl(out / "decisions.jsonl", records.decision_problem)  # each reads as verify.py reads it
         self.assertTrue(decisions)
         light = LightModel(self.model, surfaces=json.loads((out / "surfaces.json").read_text("utf-8")))
         run = Run(closed(), light, decisions, [], clock=Clock(-7 * 3600))

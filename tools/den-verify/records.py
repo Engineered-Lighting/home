@@ -110,9 +110,9 @@ def read_frames(path):
 
 # -- what the tool reads of each record ------------------------------------------
 #
-# A shape is a (words, test) leaf; [shape], a list of it; {key: shape}, an object where those keys may be absent or
-# null, or must be there when the key starts with "!"; {"*": shape}, an object of any keys, each value that shape, or
-# null as well where the key is "*?".
+# A shape is a (words, test) leaf; [shape], a list of it, no item null; {key: shape}, an object where those keys may be
+# absent or null, or must be there when the key starts with "!"; {"*?": shape}, an object of any keys, each value that
+# shape or null.
 
 def is_number(value):
     """A JSON number a float can hold. A bool is not a number here, and neither is NaN or a 401-digit integer."""
@@ -202,12 +202,9 @@ def _wrong(value, shape, where):
 
 
 def _wrong_keys(value, shape, where=""):
-    each = shape.get("*?", shape.get("*"))
-    if each is not None:
+    if "*?" in shape:
         for key, item in value.items():
-            if item is None and "*?" not in shape:
-                return f"{where}{key} must not be null"
-            wrong = None if item is None else _wrong(item, each, f"{where}{key}")
+            wrong = None if item is None else _wrong(item, shape["*?"], f"{where}{key}")
             if wrong:
                 return wrong
         return None

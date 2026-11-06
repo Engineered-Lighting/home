@@ -9,6 +9,7 @@ Everything is synthetic. Nothing reaches a host or a light.
 """
 import copy
 import json
+import os
 import random
 import shutil
 import subprocess
@@ -23,6 +24,7 @@ if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
 import method  # noqa: E402
+import records  # noqa: E402
 import synthetic as syn  # noqa: E402
 import verify as cli  # noqa: E402
 from records import write_jsonl  # noqa: E402
@@ -183,6 +185,28 @@ class Utf16Test(Case):
         self.assertIn("Get-Content bad.jsonl | Set-Content -Encoding utf8 good.jsonl", (HERE / "README.md").read_text("utf-8"))
 
 
+class NamesAPipeCannotWriteTest(Case):
+    def test_a_path_the_code_page_cannot_write_is_an_escape_and_no_traceback(self):
+        folder = self.tmp / "\u4e2d"
+        folder.mkdir()
+        path = folder / "d.txt"
+        path.write_bytes(ps51(self.good["decisions"]))
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+        done = subprocess.run([sys.executable, "-B", str(HERE / "verify.py"), *self.argv(decisions=path)], capture_output=True, env=env, timeout=120)
+        printed = (done.stdout + done.stderr).decode("ascii", "replace")
+        self.assertEqual(done.returncode, 2, printed)
+        self.assertNotIn("Traceback", printed)
+        self.assertIn("is UTF-16 (PowerShell 5.1's > writes that): save it as UTF-8", printed)
+        self.assertTrue(b"\\u4e2d" in done.stdout or "中".encode("utf-8") in done.stdout, printed)  # an escape on a code page, the name on UTF-8
+
+    def test_the_sentence_says_the_path_exactly_where_the_console_can_write_it(self):
+        folder = self.tmp / "caf\xe9"
+        folder.mkdir()
+        path = folder / "d.txt"
+        path.write_bytes(ps51(self.good["decisions"]))
+        self.assertEqual(self.main(self.argv(decisions=path)), (2, sentence(path) + "\n"))
+
+
 class UnreadableTest(Case):
     def test_a_missing_input_is_a_sentence_naming_it(self):
         for flag in self.FLAGS:
@@ -337,6 +361,7 @@ class WrongInsideTest(Case):
         (("applied_scene", BULB, "steps", 0, "result"), 5), (("applied_scene", BULB, "steps", 0, "result", "at"), "soon"),
         (("recipients",), 5), (("recipients", BULB), 5), (("recipients", BULB, "served"), 5), (("recipients", BULB, "exposed"), 5), (("recipients", BULB, "targets"), 5),
         (("recipients", BULB, "targets"), [5]), (("recipients", BULB, "targets"), [{"kind": 5}]), (("recipients", BULB, "targets"), [{"kind": "task", "target_id": 5}]),
+        (("recipients", BULB, "targets"), [{"kind": "task", "track_id": 5}]), (("recipients", BULB, "served"), [None]), (("recipients", BULB, "served"), [5]),
         (("predicted",), 5), (("predicted", "surfaces"), 5), (("predicted", "surfaces", "counter-1"), "x"), (("predicted", "eyes"), 5), (("predicted", "eyes"), [5]),
         (("predicted", "surfaces_not_logged"), "x"), (("predicted", "surfaces_not_logged"), -1), (("predicted", "surfaces_not_logged"), True), (("predicted", "surfaces_not_logged"), 1.5),
     )
@@ -417,7 +442,6 @@ def basis_row(value, key="F1.spot@3500K"):
     return model
 
 
-
 def kelvin_twice():
     """F1.spot captured at 3500 K twice, each with its own key to its one row: a temperature that is no step."""
     model = channel_table("kelvin", [3500, 3500])
@@ -440,6 +464,8 @@ class WrongModelTest(Case):
         ("no dimming", {"dimming": None}), ("dimming not an object", {"dimming": 5}), ("a channel with no dimming", {"dimming": {}}),
         ("no basis", {"basis": None}), ("basis not an object", {"basis": 5}), ("the canon example's own basis", {"basis": {"F1.spot": {"counter-1": None}}}),
         ("a spot model", {"spot_model": {"F1.spot": {"counter-1": {}}}}),
+        ("one id of two not text", {"sample_points": [{"point_id": "counter-1"}, {"point_id": 5}]}), ("an xyz not a list", {"sample_points": [{"point_id": "counter-1", "xyz": 5}]}),
+        ("an xyz with one number", {"sample_points": [{"point_id": "counter-1", "xyz": [1.0]}]}), ("an xyz of text", {"sample_points": [{"point_id": "counter-1", "xyz": [1.0, "x", 2.0]}]}),
         ("surfaces not a map", {"surfaces": 5}), ("a surface not a list", {"surfaces": {"a": 5}}), ("a block not text", {"surfaces": {"a": [5]}}),
     )
     INSIDE = (
@@ -484,6 +510,78 @@ class WrongModelTest(Case):
 
     def test_a_right_model_still_reads(self):
         self.assertEqual(self.main(self.argv())[0], 0)
+
+
+class WhatIsNotReadIsNotLookedAtTest(Case):
+    """A file the tool can read reads, however little it says: each of these would have been a sentence if a check went too far."""
+
+    def reads(self, flag, change, index=0):
+        rows = copy.deepcopy(self.records[flag])
+        change(rows[index])
+        path = self.tmp / (flag + "-fine.txt")
+        write_jsonl(path, rows)
+        shutil.rmtree(self.tmp / "out", ignore_errors=True)
+        code, printed = self.main(self.argv(**{flag.replace("-", "_"): path}))
+        self.assertEqual(code, 0, printed)
+
+    def test_a_decision_saying_little(self):
+        def change(key, value):
+            return lambda d: d.update({key: value})
+
+        for label, edit in (("a target that is no object", lambda d: d["targets"].update(C=5)), ("a target with no surface", lambda d: d["targets"].update(C={"lx": 5})),
+                            ("no targets", change("targets", None)), ("no recipients", change("recipients", None)), ("no predicted", change("predicted", None)),
+                            ("a surface with no value", lambda d: d["predicted"]["surfaces"].update({"counter-1": None})), ("none not logged", lambda d: d["predicted"].update(surfaces_not_logged=0)),
+                            ("a null bulb", lambda d: d["inputs"]["actuator_state"].update({"F1.spot": None})), ("a null applied bulb", lambda d: d["applied_scene"].update({"F1.spot": None})),
+                            ("a null recipient", lambda d: d["recipients"].update({"F1.spot": None})), ("no ts on the read frame", lambda d: d["inputs"].update(light_state_ts=None)),
+                            ("a state id with no number", lambda d: d["inputs"].update(person_state=["A@19:03:30", "B"])), ("a null hold set", lambda d: d["inputs"].update(hold_set=None))):
+            with self.subTest(label):
+                self.reads("decisions", edit)
+
+    def test_a_state_id_no_clock_has_is_no_anchor_for_a_clock_time(self):
+        rows = copy.deepcopy(self.records["decisions"])
+        rows[0]["inputs"].update(person_state=["A@99999999999999", "B@19:03:30"], light_state=None)
+        path = self.tmp / "d.txt"
+        write_jsonl(path, rows)
+        empty = self.write("empty.txt", "")
+        self.assert_refused(*self.main(self.argv(decisions=path, light_states=empty, corrections=empty)), "no date")
+
+    def test_a_frame_saying_little(self):
+        for label, edit in (("a null value", lambda f: f["surface_estimates"][0].update(value=None)), ("a null clip", lambda f: f["surface_estimates"][0].update(clipped_frac=None)),
+                            ("a null basis", lambda f: f["surface_estimates"][0].update(basis=None)), ("a null window", lambda f: f["window_daylight"].append({"window_id": "w", "level": None})),
+                            ("no estimates", lambda f: f.update(surface_estimates=None)), ("no windows", lambda f: f.update(window_daylight=None)), ("its own id", lambda f: f.update(id="f-1"))):
+            with self.subTest(label):
+                self.reads("light-states", edit, 1)
+
+    def test_times_up_to_the_year_3000_and_from_1970(self):
+        rows = copy.deepcopy(self.records["light-states"])
+        for ts, code in ((records.LATEST_S, 0), (records.LATEST_S + 1, 2), (0, 0), (0.5, 0), (-0.5, 2)):
+            with self.subTest(ts=ts):
+                rows[2]["ts"] = ts
+                path = self.tmp / "times.txt"
+                write_jsonl(path, rows)
+                shutil.rmtree(self.tmp / "out", ignore_errors=True)
+                self.assertEqual(self.main(self.argv(light_states=path))[0], code)
+
+    def test_a_person_saying_little_and_an_xyz_with_a_height(self):
+        self.reads("occupancy", lambda o: o.update(people=[{"track_id": "A", "xy": [1.0, 2.0, "a height nothing reads"]}]))
+        self.reads("occupancy", lambda o: o.update(people=None))
+        self.reads("corrections", lambda c: c.update(hold=None, action=None, snapshot=None))
+        self.reads("gold", lambda g: g.update(R_eval=None))
+
+    def test_a_model_saying_as_little(self):
+        def reads(change):
+            path = self.write("fine.json", json.dumps({**syn.v11_model(), **change}))
+            shutil.rmtree(self.tmp / "out", ignore_errors=True)
+            code, printed = self.main(self.argv(model=path))
+            self.assertEqual(code, 0, printed)
+
+        points = syn.v11_model()["sample_points"]
+        reads({"sample_points": [{**p, "xyz": [1.0, 2.0]} for p in points]})
+        reads({"sample_points": [{**p, "xyz": None} for p in points]})
+        reads(channel_table("g", [0.5, 0.5, 0.5, 0.5]))  # a flat dimming table
+        reads(channel_table("kelvin", [3500.5]))  # a temperature that is no round number
+        reads({"fake": True})
+        reads({"fake": None})
 
 
 class LastResortTest(Case):

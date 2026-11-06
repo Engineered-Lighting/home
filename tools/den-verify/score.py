@@ -151,6 +151,8 @@ class Dec:
             self.steps = settle.decision_steps(rec, self.resolve, run.m)
         except settle.Unsettleable as e:
             self.steps, self.problem = [], str(e)
+        for s in self.steps:
+            s.channel = self.canon(s.channel)
         self.settled = settle.settled_at(self.steps, self.ts)
         self.first_sent = min((s.sent_at for s in self.steps), default=None)
         self.changed = sorted({s.channel for s in self.steps})
@@ -249,7 +251,7 @@ class Dec:
         served = set()
         recipients = {self.canon(ch): r for ch, r in (self.rec.get("recipients") or {}).items()}
         for ch in self.changed:
-            served |= set((recipients.get(self.canon(ch)) or {}).get("served") or [])
+            served |= set((recipients.get(ch) or {}).get("served") or [])
         return served
 
 
@@ -359,12 +361,16 @@ class Run:
             self.differs = {}
             for d in self.decs if self.model.stage1 else ():
                 logged = (d.rec.get("predicted") or {}).get("surfaces") or {}
+                listed = {d.canon(ch) for ch in d.rec.get("applied_scene") or {}}
                 try:
-                    computed = self.model.predict(d.state_at(d.ts, ())[0])
+                    state = d.state_at(d.ts, ())[0]
+                    # a bulb it does not list is in the prediction here and may not be in its own: rung 9 leaves one out with no base scene
+                    computed = self.model.predict(state)
+                    own = self.model.predict({ch: s for ch, s in state.items() if ch in listed})
                 except MODEL_ERRORS:
                     continue
                 for sid, value in logged.items():
-                    if is_number(value) and is_number(computed.get(sid)) and abs(computed[sid] - value) > OWN_ROUNDING:
+                    if is_number(value) and all(is_number(c.get(sid)) and abs(c[sid] - value) > OWN_ROUNDING for c in (computed, own)):
                         self.differs.setdefault(sid, f"{sid}: this model and map give {computed[sid]:.3f} for {d.id}'s own read-backs and its "
                                                      f"predicted.surfaces says {value}: check --surfaces, and that this is the model it ran on")
         return self.differs

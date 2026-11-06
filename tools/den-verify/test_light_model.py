@@ -489,7 +489,7 @@ class Stage1Backend(Temp):
         t = syn.T0
         data = stage1_model(FOUR)
         ref = syn.light_state(t, {"p0": 25.0}, anchored=False)
-        after = syn.light_state(t + 9, {"p0": 84.0}, anchored=False)
+        after = syn.light_state(t + 8, {"p0": 84.0}, anchored=False)
         dec = decision("d", t + 0.5, t, {B0: 0.2, B1: 0.5}, {B0: {"level": 0.8, "steps": send(t + 0.5)}, B1: {"level": 0.5, "steps": []}}, ("p0",))
         dec["predicted"]["surfaces"] = {"p0": 85.0, "unit": "relative"}
         correction = {"correction_id": "c", "ts": t + 4, "action": {"settle_s": 0.0}, "snapshot": {"light_state": []},

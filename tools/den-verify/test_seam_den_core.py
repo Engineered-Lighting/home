@@ -844,6 +844,32 @@ class Seam(unittest.TestCase):
         self.assertEqual(not_verified_of(report, decisions[0])["kind"], "no read frame")
         self.assertEqual(report["decisions"]["verified"], len(decisions) - 1, report["decisions"]["not_verified"])
 
+    def test_a_camera_20_s_late_gives_that_decision_neither_frame(self):
+        frames, decisions, second = self.second_evening("later-camera", camera_after=20.0)
+        _, report, written = self.scored(frames, decisions=decisions)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["misses"], hr["verdict"], hr["sessions"], hr["interval"]), (0, "pass", 2, [1.0, 1.0]), hr)
+        self.assertIsNone(by_id(written, "decision_id", second[0]["decision_id"])["verify"])
+        [entry] = report["decisions"]["not_verified"]
+        self.assertEqual((entry["decision_id"], entry["kind"]), (second[0]["decision_id"], "no frame after settling"))
+        self.assertIn("max_frame_gap_s", entry["reason"])
+        self.assertIn("no read frame: the frame it names", entry["reason"])
+
+    def test_tomorrow_mornings_light_is_no_verify_frame(self):
+        """Metering stops at the last decision and resumes 9 hours later, with daylight in the room."""
+        last = self.decisions[-1]
+        night = [f for f in self.frames_list if f["ts"] <= last["ts"] + 0.5]
+        lit = self.truth.light({b: (said(last, b, "applied"), 1.0) for b in self.bulbs})
+        morning = [self.brighter(light_state(last["ts"] + 9 * 3600 + n * EVERY_S, lit), 0.0, 0.6) for n in range(6)]
+        _, report, written = self.scored(night + morning)
+        hr = report["hit_rate"]
+        self.assertEqual((hr["misses"], hr["verdict"], hr["sessions"]), (0, "pass", 1), hr)
+        self.assertEqual(report["decisions"]["verified"], len(self.decisions) - 1, report["decisions"]["not_verified"])
+        self.assertIsNone(written[-1]["verify"])
+        entry = not_verified_of(report, last)
+        self.assertEqual(entry["kind"], "no frame after settling")
+        self.assertIn("max_frame_gap_s", entry["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -599,7 +599,7 @@ class HeldPointsCount(unittest.TestCase):
                       "hold": {"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 50, "cct_k": 2700},
                                "since": t + 2.0, "ended": None, "hold_set_revision": 5}}
         for values, expected in ((self.landing(20), (20, 0, 1.0, "pass")), (self.landing(3), (3, 17, 0.15, "fail"))):
-            after = syn.light_state(t + 9, values, anchored=False)
+            after = syn.light_state(t + 8, values, anchored=False)
             hr = score([dec], [ref, after], self.model, corrections=[correction])[2]["hit_rate"]
             self.assertEqual((hr["hits"], hr["misses"], hr["value"], hr["verdict"]), expected)
 
@@ -701,10 +701,10 @@ class HoldRevision(unittest.TestCase):
         applied = {B0: {"level": 0.8, "steps": send(t + 0.5)}}
         dec = syn.hue_decision("d", t + 0.5, before, applied, "ls-r", hold_set=hold_set,
                                targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)})
-        after = syn.light_state(t + 9, {n: self.K * (0.8 + 0.2 + 0.2 + b3) for n in self.names}, anchored=False)
+        after = syn.light_state(t + 8, {n: self.K * (0.8 + 0.2 + 0.2 + b3) for n in self.names}, anchored=False)
         decisions, states, report = score([dec], [ref, after], self.model, corrections=corrections)
         hr = report["hit_rate"]
-        return (hr["hits"], hr["misses"], hr["verdict"]), residual(states, t + 9, "p00")
+        return (hr["hits"], hr["misses"], hr["verdict"]), residual(states, t + 8, "p00")
 
     def test_a_hold_older_than_the_decisions_copy_has_lapsed(self):
         # nothing writes `ended` after capture; the decision's own revision 9 lists nothing, so B3 is free again
@@ -744,12 +744,12 @@ class HoldRevision(unittest.TestCase):
         copy = {"revision": 9, "held": [{"entity_id": B3, "channels": [B3], "pinned": {"level_pct": 50, "cct_k": 2700}}]}
         dec = syn.hue_decision("d", t + 0.5, before, {b: {"level": 0.0, "steps": send(t + 0.5)} for b in syn.HUE}, "ls-r",
                                targets={f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}, hold_set=copy)
-        after = syn.light_state(t + 9, {n: self.K * 0.5 for n in self.names}, anchored=False)
+        after = syn.light_state(t + 8, {n: self.K * 0.5 for n in self.names}, anchored=False)
         decisions, states, report = score([dec], [ref, after], self.model,
                                           corrections=[self.correction("c-10", 10, 50, t + 5)])
         hr = report["hit_rate"]
         self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (20, 0, "pass"))
-        r = residual(states, t + 9, "p00")
+        r = residual(states, t + 8, "p00")
         self.assertEqual(r["against"]["hold_set_revision"], 10)
         self.assertAlmostEqual(r["predicted"], self.K * 0.5, places=6)
 

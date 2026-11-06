@@ -542,26 +542,35 @@ class Run:
         return None, "no frame after settling", why
 
     def verify_frame(self, d, later):
-        """(frame, None, None), or (None, what kind of reason, the reason)."""
+        """(frame, None, None), or (None, what kind of reason, the reason). The first quiet frame after it settled, before the next
+        decision's step and within max_frame_gap_s: what the room shows later says nothing of how this landed."""
         if d.problem:
             return None, d.problem_kind, d.problem
         nxt = min((x for x in later if x.first_sent is not None), key=lambda x: x.first_sent, default=None)
         t_next = nxt.first_sent if nxt else math.inf
         if t_next < d.settled:
             return None, "superseded", f"superseded before it settled: {nxt.id} sent a step first"
-        busy_seen = None
+        gap = self.m["max_frame_gap_s"]
+        busy_seen = late = None
         for f in self.frames:
             if f.ts < d.settled:
                 continue
-            if f.ts >= t_next or f.ts - d.settled > SAME_EVENING_S:
+            if f.ts >= t_next:
+                break
+            if f.ts - d.settled > gap:
+                late = f.ts - d.settled
                 break
             reason = self.windows.busy(f.ts)
             if reason:
                 busy_seen = busy_seen or reason
                 continue
             return f, None, None
+        within_gap = f"within max_frame_gap_s ({gap:g} s) after the decision settled"
         if busy_seen:
-            return self.no_frame(d, f"no settled frame before the next decision: frames were {busy_seen}")
+            when = within_gap if late is not None else "before the next decision"
+            return self.no_frame(d, f"no settled frame {when}: frames were {busy_seen}")
+        if late is not None:
+            return self.no_frame(d, f"no frame {within_gap}: the next is {late:.1f} s after it")
         return self.no_frame(d, "no frame after the decision settled and before the next one")
 
     def verify(self, d, frame):

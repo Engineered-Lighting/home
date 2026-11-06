@@ -1143,10 +1143,6 @@ class TwoEvenings(unittest.TestCase):
         self.assertIsNone(out[0]["verify"])
         self.assertEqual(not_verified(report, "d-1")["kind"], "no frame after settling")
 
-    def test_a_verify_frame_12_hours_on_is_still_its_own(self):
-        out, _, _ = run([landed("d-1")], [frame(T, 20.0, "ls-r"), frame(T + 3.5 + 12 * 3600, 80.0)])
-        self.assertEqual(out[0]["verify"]["ts"], T + 3.5 + 12 * 3600)
-
     def test_last_nights_decision_is_not_in_force_for_the_next_evenings_first_frame(self):
         decisions, frames = self.two()
         _, states, _ = run(decisions, frames)
@@ -1263,6 +1259,89 @@ class AReadFrameIsNearItsDecision(unittest.TestCase):
         self.assertEqual(not_verified(report, "d-2")["kind"], "no read frame")
         hr = report["hit_rate"]
         self.assertEqual((hr["hits"], hr["misses"], hr["verdict"], hr["sessions"], hr["days_with_nothing_counted"]), (2, 0, "pass", 1, 1))
+
+
+class AVerifyFrameIsNearItsDecision(unittest.TestCase):
+    """How long after a decision settled a frame can judge it: max_frame_gap_s again. Each later frame here holds what the room would
+    hold hours on: read, it makes a false miss, so it must not be read."""
+    SETTLED = T + 3.5  # the send at T + 0.5, den_lighting's 2 s fade and the proposed 1 s margin
+
+    def judged_on(self, *times, value=500.0, **kw):
+        frames = [frame(T, 20.0, "ls-r")] + [frame(t, value) for t in times]
+        decisions, _, report = run([landed()], frames, **kw)
+        return decisions[0], report
+
+    def assert_no_verify_frame(self, decision, report):
+        self.assertIsNone(decision["verify"])
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"], hr["sessions"]), (0, 0, "insufficient", 0), hr)
+        entry = not_verified(report)
+        self.assertEqual(entry["kind"], "no frame after settling")
+        self.assertIn("max_frame_gap_s (5 s)", entry["reason"])
+        self.assertEqual(decision["verify_status"], entry["reason"])
+
+    def test_light_hours_later_is_no_verify_frame(self):
+        decision, report = self.judged_on(self.SETTLED + 9 * 3600)
+        self.assert_no_verify_frame(decision, report)
+        self.assertIn("32400.0 s after", not_verified(report)["reason"])
+
+    def test_nor_under_zero(self):
+        decision, report = self.judged_on(self.SETTLED + 9 * 3600, overrides={"background": "zero"})
+        self.assert_no_verify_frame(decision, report)
+
+    def test_the_line_is_the_slot_itself(self):
+        decision, _ = self.judged_on(self.SETTLED + 5.0, value=80.0)
+        self.assertEqual(decision["verify"]["ts"], self.SETTLED + 5.0)
+        self.assertEqual(point(decision, "p0")["status"], "within")
+        decision, report = self.judged_on(self.SETTLED + 5.01, value=80.0)
+        self.assert_no_verify_frame(decision, report)
+
+    def test_the_number_is_the_owners(self):
+        decision, _ = self.judged_on(self.SETTLED + 20, value=80.0, overrides={"max_frame_gap_s": 30})
+        self.assertEqual(decision["verify"]["ts"], self.SETTLED + 20)
+        decision, report = self.judged_on(self.SETTLED + 20, value=80.0, overrides={"max_frame_gap_s": 19})
+        self.assertIsNone(decision["verify"])
+        self.assertIn("max_frame_gap_s (19 s)", not_verified(report)["reason"])
+
+    def test_it_counts_from_settling_not_from_the_decision(self):
+        dec = landed()
+        dec["applied_scene"][B0]["steps"] = send(T + 0.5, transition_s=20.0)  # settled at T + 21.5
+        out, _, _ = run([dec], [frame(T, 20.0, "ls-r"), frame(T + 10, 50.0), frame(T + 26, 80.0)])
+        self.assertEqual(out[0]["verify"]["ts"], T + 26)
+
+    def person_on_the_first_frame(self, then):
+        """A person's change over the first frame after settling, with the next frame `then`."""
+        c = {"correction_id": "c", "ts": T + 4.5, "action": {"settle_s": 1.0}, "snapshot": {"light_state": []}, "hold": None}
+        decisions, _, report = run([landed()], [frame(T, 20.0, "ls-r"), frame(T + 4, 80.0), frame(then, 80.0)], corrections=[c])
+        return decisions[0], report
+
+    def test_a_frame_skipped_for_a_persons_change_leaves_the_next_inside_the_slot(self):
+        decision, report = self.person_on_the_first_frame(self.SETTLED + 5.0)
+        self.assertEqual(decision["verify"]["ts"], self.SETTLED + 5.0)
+        self.assertEqual(report["hit_rate"]["misses"], 0)
+
+    def test_and_past_it_says_what_the_frames_were(self):
+        decision, report = self.person_on_the_first_frame(self.SETTLED + 5.01)
+        self.assertIsNone(decision["verify"])
+        entry = not_verified(report)
+        self.assertEqual(entry["kind"], "no frame after settling")
+        self.assertIn("max_frame_gap_s (5 s)", entry["reason"])
+        self.assertIn("mid_change", entry["reason"])
+
+    def test_with_no_read_frame_either_it_says_both(self):
+        dec = landed(read=None)
+        dec["inputs"]["light_state_ts"] = T - 3 * 3600
+        out, _, report = run([dec], [frame(T - 3 * 3600, 300.0), frame(self.SETTLED + 9 * 3600, 500.0)])
+        self.assertIsNone(out[0]["verify"])
+        entry = not_verified(report)
+        self.assertEqual(entry["kind"], "no frame after settling")
+        self.assertIn("32400.0 s after", entry["reason"])
+        self.assertIn("no read frame: the frame it names", entry["reason"])
+
+    def test_a_frame_a_few_seconds_on_still_ends_at_the_next_decisions_step(self):
+        out, _, report = run([landed("d-1"), landed("d-2", at=T + 4.5, read="ls-r")], [frame(T, 20.0, "ls-r"), frame(T + 6, 80.0)])
+        self.assertIsNone(by_id(out, "decision_id", "d-1")["verify"])
+        self.assertIn("before the next one", not_verified(report, "d-1")["reason"])
 
 
 class TheWordInTheMethod(unittest.TestCase):

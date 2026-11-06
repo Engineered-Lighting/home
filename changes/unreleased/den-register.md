@@ -21,5 +21,6 @@ with the movement they show held to 5 cm across the whole view and the farthest
 mark far enough from the camera to show a turn, because depth alone cannot see a
 small turn or slide. A confirmation is saved in the RoomModel
 for rung 2 to read. A file PowerShell 5.1's `>` wrote is refused by name with exit 2
-and saves no report; a UTF-8 byte-order mark and CRLF read. Nothing is recorded, run
-or deployed by this change.
+and saves no report; a UTF-8 byte-order mark and CRLF read. A method file with a line
+that does not read is refused the same way, naming the line, so a typo is not read as
+a verdict on the camera. Nothing is recorded, run or deployed by this change.

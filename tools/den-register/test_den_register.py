@@ -11,8 +11,11 @@ import http.client
 import io
 import json
 import math
+import os
 import random
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -38,15 +41,20 @@ LADDER = HERE.parent.parent / "docs" / "architecture" / "live-v1" / "ladder.json
 METHOD_TEXT = (HERE / "REGISTER-V1.md").read_text(encoding="utf-8")
 
 
-def closed_method(**overrides):
-    """REGISTER-V1 with every open slot closed at its proposed value (or an override)."""
+def closed_text(**overrides):
+    """REGISTER-V1's text with every open slot closed at its proposed value (or an override)."""
     def close(match):
         name, proposed = match[1], match[2]
         return f"{name} = {overrides.get(name, proposed)}  # closed for the tests"
     text = re.sub(r"^(\w+) = open\s+# open, proposed (\S+).*$", close, METHOD_TEXT, flags=re.M)
     for name, value in overrides.items():
         text = re.sub(rf"^{name} = [0-9.]+", f"{name} = {value}", text, flags=re.M)
-    return method.parse(text)
+    return text
+
+
+def closed_method(**overrides):
+    """REGISTER-V1 with every open slot closed at its proposed value (or an override)."""
+    return method.parse(closed_text(**overrides))
 
 
 FLOOR = {"f1": [3.0, 2.2, 0.0], "f2": [1.4, 2.2, 0.0], "f3": [3.6, 2.6, 0.0], "f4": [2.2, 1.5, 0.0],
@@ -2113,6 +2121,162 @@ class PowerShellFileTests(Base):
     def test_the_readme_says_how_to_repair_a_file(self):
         readme = (HERE / "README.md").read_text(encoding="utf-8")
         self.assertIn("(Get-Content worksheet.json) | Set-Content -Encoding utf8 worksheet.json", readme)
+
+
+# ---- a method file edited by hand ------------------------------------------------------------------------
+
+def inside_the_block(line):
+    """REGISTER-V1 with this line first inside its block."""
+    return METHOD_TEXT.replace("```register-v1\n", f"```register-v1\n{line}\n", 1)
+
+
+def gate_line(line):
+    """REGISTER-V1 with this line in place of the gate's."""
+    return METHOD_TEXT.replace("gate_m = 0.05", line, 1)
+
+
+# What the slip is: the file's text, and what the sentence must name.
+BAD_METHODS = {
+    "no equals sign": (inside_the_block("this line is not a slot"), "'this line is not a slot'"),
+    "a comma for the point": (gate_line("gate_m = 0,05"), "'gate_m = 0,05'"),
+    "a word for the number": (gate_line("gate_m = five"), "'gate_m = five'"),
+    "nothing after the equals sign": (gate_line("gate_m ="), "'gate_m ='"),
+    "nothing before the equals sign": (inside_the_block("= 3"), "'= 3'"),
+    "a unit after the number": (gate_line("gate_m = 0.05 m"), "'gate_m = 0.05 m'"),
+    "a quoted number": (gate_line('gate_m = "0.05"'), "'gate_m = \"0.05\"'"),
+    "true for a number": (gate_line("gate_m = true"), "'gate_m = true'"),
+    "NaN": (gate_line("gate_m = NaN"), "'gate_m = NaN'"),
+    "a number past a float": (gate_line("gate_m = 1e999"), "'gate_m = 1e999'"),
+    "an integer past a float": (gate_line("gate_m = 1" + "0" * 400), "'gate_m = 1000"),
+    "an integer past Python's limit": (gate_line("gate_m = 1" + "0" * 5000), "'gate_m = 1000"),
+    "brackets past the recursion limit": (gate_line("gate_m = " + "[" * 100_000), "'gate_m = [[["),
+    "a character a console cannot print": (gate_line("gate_m = 0.05 →"), "'gate_m = 0.05 \\u2192'"),
+    "a slot twice": (inside_the_block("gate_m = 0.05"), "'gate_m' is there twice"),
+    "an open slot twice": (inside_the_block("min_spread_m = open  # open, proposed 0.25"),
+                           "'min_spread_m' is there twice"),
+    "a slot both closed and open": (inside_the_block("min_spread_m = 0.25"), "'min_spread_m' is there twice"),
+    "a misspelt slot": (gate_line("gate_x = 0.05"), "not a slot: 'gate_x'"),
+    "a slot commented out": (gate_line("# gate_m = 0.05"), "missing gate_m"),
+    "a slot too many": (inside_the_block("gate_y = 0.05"), "not a slot: 'gate_y'"),
+    "open with no proposal": (METHOD_TEXT.replace("# open, proposed 0.25", "# open, to be decided"), "'min_spread_m'"),
+    "open with a proposal that is no number": (METHOD_TEXT.replace("# open, proposed 0.25", "# open, proposed 01"),
+                                               "'min_spread_m'"),
+    "open with a proposal past a float": (METHOD_TEXT.replace("# open, proposed 0.25",
+                                                              "# open, proposed 1" + "0" * 400), "'min_spread_m'"),
+    "no block": (METHOD_TEXT.replace("```register-v1", "```text"), "exactly one"),
+    "two blocks": (METHOD_TEXT + "\n```register-v1\ngate_m = 0.05\n```\n", "exactly one"),
+    "no closing fence": (METHOD_TEXT[:METHOD_TEXT.rindex("```")], "exactly one"),
+    "fewer fit points than a rigid fit needs": (METHOD_TEXT.replace("min_fit_pairs = 3", "min_fit_pairs = 2"),
+                                                "min_fit_pairs is 2"),
+    "none at all": (METHOD_TEXT.replace("min_fit_pairs = 3", "min_fit_pairs = 0"), "min_fit_pairs is 0"),
+    "an open slot proposing too few": (METHOD_TEXT.replace("min_fit_pairs = 3",
+                                                           "min_fit_pairs = open  # open, proposed 2"),
+                                       "min_fit_pairs is 2"),
+}
+
+
+class HandEditedMethodTests(Base):
+    """REGISTER-V1.md as the commands read it. A slip in it is no verdict: exit 2, one sentence, no report."""
+
+    def setUp(self):
+        super().setUp()
+        self.s = Scene(self, ended=1_800_000_100.0)
+        self.s.click_all()
+        folder = Path(self.tmp.name) / "method"
+        folder.mkdir()
+        self.path = folder / method.METHOD_FILE
+        # A command that gets past the method does not wait on a page here: that fails the test, it does not hang it.
+        for patcher in (mock.patch.object(method, "HERE", folder),
+                        mock.patch.object(register.serve, "serve", side_effect=AssertionError("the page was served"))):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def main(self, *argv):
+        out = io.StringIO()
+        code = register.main([argv[0], str(self.s.work), "--take", str(self.s.take), *argv[1:]], out=out)
+        return code, out.getvalue()
+
+    def assert_no_verdict(self, *names):
+        for argv in (("fit",), ("check-mount",), ("click", "--no-browser")):
+            with self.subTest(argv[0]):
+                code, out = self.main(*argv)
+                self.assertEqual(code, 2, out)
+                self.assertEqual(len(out.strip().splitlines()), 1, out)
+                self.assertTrue(out.startswith(f"REFUSED method_invalid: {self.path}"), out)
+                self.assertLess(len(out), 500, out)
+                for name in names:
+                    self.assertIn(name, out)
+        self.assertEqual(sorted(p.name for p in self.s.work.glob("*-[0-9]*.json")), [])
+        self.assertFalse((self.s.work / "room-model.jsonl").exists())
+
+    def test_each_slip_is_named_and_no_verdict(self):
+        for what, (text, name) in BAD_METHODS.items():
+            with self.subTest(what):
+                self.path.write_text(text, encoding="utf-8", newline="\n")
+                self.assert_no_verdict(name)
+
+    def test_a_crlf_file_says_the_same(self):
+        text, name = BAD_METHODS["no equals sign"]
+        self.path.write_text(text.replace("\n", "\r\n"), encoding="utf-8", newline="")
+        self.assert_no_verdict(name)
+
+    def test_the_sentence_says_what_a_line_holds(self):
+        text, _ = BAD_METHODS["no equals sign"]
+        self.path.write_text(text, encoding="utf-8", newline="\n")
+        self.assert_no_verdict("name = number", "name = open")
+
+    def test_a_file_that_is_not_there(self):
+        self.assert_no_verdict("cannot be read")
+
+    def test_a_folder_of_that_name(self):
+        self.path.mkdir()
+        self.assert_no_verdict("cannot be read")
+
+    def test_a_closed_file_still_registers(self):
+        self.path.write_text(closed_text(), encoding="utf-8", newline="\n")
+        code, out = self.main("fit")
+        self.assertEqual(code, 0, out)
+        self.assertIn("REGISTERED", out)
+
+    def test_open_slots_are_still_a_saved_refusal(self):
+        self.path.write_text(METHOD_TEXT, encoding="utf-8", newline="\n")
+        code, out = self.main("fit")
+        self.assertEqual(code, 1, out)
+        self.assertIn("slots_open", out)
+        self.assertTrue((self.s.work / "fit-1.json").exists())
+        code, out = self.main("check-mount")
+        self.assertEqual(code, 1, out)
+        self.assertIn("slots_open", out)
+        self.assertTrue((self.s.work / "mount-1.json").exists())
+
+    def test_the_commands_that_do_not_read_it_do_not_care(self):
+        out = io.StringIO()
+        code = register.main(["worksheet", str(Path(self.tmp.name) / "new-work")], out=out)
+        self.assertEqual(code, 0, out.getvalue())
+
+    def test_the_readme_names_the_refusal(self):
+        self.assertIn("`method_invalid`", (HERE / "README.md").read_text(encoding="utf-8"))
+
+    def test_on_the_real_command_line(self):
+        # A copy of the tool with nothing patched, as a script runs it, on a console that cannot print every character.
+        tools = Path(self.tmp.name) / "tools"
+        for name in ("den-register", "den-take"):
+            shutil.copytree(HERE.parent / name, tools / name, ignore=shutil.ignore_patterns("__pycache__"))
+        path = tools / "den-register" / method.METHOD_FILE
+        for what in ("no equals sign", "a comma for the point", "a character a console cannot print"):
+            text, name = BAD_METHODS[what]
+            path.write_text(text, encoding="utf-8", newline="\n")
+            for command in ("fit", "check-mount"):
+                with self.subTest(what, command=command):
+                    done = subprocess.run([sys.executable, "-B", str(tools / "den-register" / "register.py"), command,
+                                           str(self.s.work), "--take", str(self.s.take)],
+                                          capture_output=True, encoding="cp1252", timeout=120,
+                                          env=dict(os.environ, PYTHONIOENCODING="cp1252"))
+                    self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+                    self.assertEqual(done.stderr, "")
+                    self.assertTrue(done.stdout.startswith(f"REFUSED method_invalid: {path}"), done.stdout)
+                    self.assertIn(name, done.stdout)
+        self.assertEqual(sorted(p.name for p in self.s.work.glob("*-[0-9]*.json")), [])
 
 
 # ---- the click page ------------------------------------------------------------------------------------

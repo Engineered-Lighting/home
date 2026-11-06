@@ -135,6 +135,12 @@ fit, tell the agent which proposed values to accept (or other values). The
 owner questions below say what they cost. The agent commits them; then run
 `git pull`. Do this before you see any fit result.
 
+If a line of the block does not read, or the file is gone, `click`, `fit` and
+`check-mount` stop with `REFUSED method_invalid`, naming what is wrong, and exit 2.
+That says nothing about the camera. Put the line right, or
+`git checkout -- tools\den-register\REGISTER-V1.md` to start again from what is
+committed.
+
 ## Step 7: fit and read the verdict
 
 ```powershell
@@ -149,6 +155,7 @@ writes `fit-N.json`; a pass also adds a line to `room-model.jsonl` and to
 | Reason | What to do |
 |---|---|
 | `slots_open` | Step 6. |
+| `method_invalid` | Step 6: REGISTER-V1.md does not read, and the line says what is wrong. |
 | `camera_calibration_missing`, `camera_calibration_invalid` | Step 4b. |
 | `intrinsics_missing` | Use another take; if it stays, tell the agent the reason's text. |
 | `too_few_pairs`, `too_few_checks` | Click at least 3 fit points and 2 checks. |

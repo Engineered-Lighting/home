@@ -30,10 +30,10 @@ refuse by name with exit 2, on every file they read. Pipe to `Set-Content` as th
 goes for what is inside a light model, a mark or `--truth`, for a log's header, its logged config and its input lines, as far as
 `check.py` can't replay them, and for a time past any clock or inputs more than about a year of 2 s ticks apart, which is what
 `--mqtt` with no `--mqtt-t0` beside real facts would be. A log of the right shape with a line changed or wrong inside is a
-failed check, not a refusal: `check.py` prints the line and exits 1, `validate.py` goes on check by check, the check that can't
-read the line failing and saying so, and `score.py` fails its replay line, or stops at exit 2 when it can't read that line
-either. Anything no check named still ends in one sentence and exit 2: `<tool> stopped on an input of the wrong shape, or a bug
-of its own`, with the exception and where it happened, so a bug in the tool can still be found.
+failed check, not a refusal, with exit 1: `check.py` prints the line, `validate.py` goes on check by check, the check that can't
+read the line failing and saying so, and `score.py` fails its replay line and says where it stopped reading. Anything no check
+named still ends in one sentence and exit 2: `<tool> stopped on an input of the wrong shape, or a bug of its own`, with the
+exception and where it happened, so a bug in the tool can still be found.
 
 From the worktree root, with an absolute output folder outside every checkout
 (`C:/tmp/...` on Windows, `/tmp/...` on Linux):

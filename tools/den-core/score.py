@@ -333,7 +333,19 @@ def read_marks(path):
 
 
 def report(log_path, marks_path=None, preview=False, gate_path=None):
-    """(lines, exit code). events.BadFile, for a file that can't be read at all, goes up to main."""
+    """(lines, exit code). events.BadFile, for a file that can't be read at all, goes up to main. A log that fails its replay can
+    hold anything inside its lines, and what comes after the replay reads them, so tripping on one is that failure, said so."""
+    lines, failures = [], []
+    try:
+        return _report(lines, failures, log_path, marks_path, preview, gate_path)
+    except events.SHAPE_ERRORS as error:
+        if "replay" not in failures:
+            raise  # what replays byte for byte is what this code wrote, so this is a bug, and main's last resort says where
+        said = "replay failed, and a line of this log is the wrong shape for what comes after it: %s" % events.named(error)
+        return lines + ["verdict: none (preview): %s" % said if preview else "verdict: FAIL: %s" % said], 1
+
+
+def _report(lines, failures, log_path, marks_path, preview, gate_path):
     try:
         header, log = events.read_run(log_path)
     except events.BadFile:
@@ -364,7 +376,7 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
         return ["refused: not a scored run:"] + ["  " + r for r in reasons] + ["  --preview runs on the proposals; it is never a gate"], 2
     slots = config["gate"]["slots"]
     fixed = {name: item["value"] for name, item in gate["fixed"].items()}
-    lines = ["rung 9 on %s" % Path(log_path).name]
+    lines.append("rung 9 on %s" % Path(log_path).name)
     if preview:
         lines.append("preview: logged proposals, not the owner's numbers, so no verdict and never a gate")
     lines.append("both arms through light model %s (%s, unit %s; backend %s)" % (
@@ -379,14 +391,14 @@ def report(log_path, marks_path=None, preview=False, gate_path=None):
     if bad:
         lines.append("surface map: %s: %s" % (", ".join(bad), BAD_MAP))
 
-    failures = []
-
     def gate_line(name, ok, text):
         lines.append("%s: %s (%s)" % (name, "OK" if ok else "FAIL", text))
         if not ok:
             failures.append(name)
 
     result, slowest, calls = replay_and_time(log_path, fixed["max_decision_ms"])
+    if result.get("unreadable"):
+        raise events.BadFile(result["reason"])  # as check.py refuses it
     gate_line("replay", result["ok"], result["reason"])
     gate_line("decision time", slowest < fixed["max_decision_ms"], "slowest of %d calls %.1f ms, limit %d ms" % (
         calls, slowest, fixed["max_decision_ms"]))

@@ -849,6 +849,52 @@ class WrongInsideALogTest(Temp):
             self.assertEqual(code, 1, label)
             self.assertIn("differs", out)
 
+    def test_score_fails_its_replay_line_on_such_a_log_and_says_why_it_stops(self):
+        def decision(e):
+            return e["kind"] == "decision" and e["source"] == "decide"
+
+        def steps(e):
+            for entry in e["data"]["applied_scene"].values():
+                entry["steps"] = 1.5
+
+        for label, wanted, change in (("no applied_scene", decision, lambda e: e["data"].pop("applied_scene")),
+                                      ("no inputs", decision, lambda e: e["data"].pop("inputs")),
+                                      ("no predicted", decision, lambda e: e["data"].pop("predicted")),
+                                      ("steps a number", decision, steps),
+                                      ("a mode's holds a number", lambda e: e["kind"] == "mode", lambda e: e["data"].update(holds=1e300)),
+                                      ("no person fields", lambda e: e["kind"] == "person_state", lambda e: e["data"].pop("focused_engagement"))):
+            path = self.with_event(wanted, change)
+            with self.subTest(label):
+                code, out, err = tool("score.py", path, "--preview")
+                self.assertEqual((code, err), (1, ""), out + err)
+                self.assertRegex(out, r"(?m)^replay: FAIL \(line \d+ differs\)$")
+                self.assertRegex(out, r"(?m)^verdict: none \(preview\): replay failed, and a line of this log is the wrong shape for what comes after it: \w+Error: ")
+
+    def test_a_scored_run_on_such_a_log_fails_with_a_verdict(self):
+        gate = test_score.closed_gate(self.tmp)
+        with test_score.real_backend():
+            log = test_score.replay_log(self.tmp, gate, test_score.real_model(self.tmp), surfaces=test_score.fake_map())[0]
+            self.lines = Path(log).read_text("ascii").split("\n")[:-1]
+            path = self.with_event(lambda e: e["kind"] == "decision" and e["source"] == "decide", lambda e: e["data"].pop("applied_scene"), "scored.jsonl")
+            lines, code = score.report(path, gate_path=gate)
+        self.assertEqual(code, 1, lines)
+        self.assertIn("replay: FAIL", "\n".join(lines))
+        self.assertTrue(lines[-1].startswith("verdict: FAIL: replay failed, and a line of this log is the wrong shape"), lines[-1])
+
+    def test_score_refuses_an_input_line_no_replay_can_run(self):
+        # The incumbent reads a bulb's kelvin as a number, so this one can't replay at all: check.py's exit 2, in score.py's words too.
+        path = self.with_event(lambda e: e["kind"] == "light_observed", lambda e: e["data"].update(on=True, brightness=[], kelvin=[]))
+        code, out, err = tool("check.py", path)
+        self.refused(code, out, err, "the log does not replay")
+        code, out, err = tool("score.py", path, "--preview")
+        self.refused(code, out, err, "the log does not replay")
+        self.assertEqual(out, "")
+
+    def test_a_log_that_replays_is_this_tools_own_if_score_trips_on_it(self):
+        # What replays byte for byte is what this code wrote, so a TypeError after that is a bug, for the last resort to say where.
+        with mock.patch.object(score, "structural", side_effect=TypeError("surprise")), self.assertRaisesRegex(TypeError, "surprise"):
+            score.report(self.tmp / "run" / "log.jsonl", preview=True)
+
     def test_validate_reports_such_a_line_check_by_check(self):
         # The review's probe: every check prints a line and the overall line follows, on a decide log and a coordinator log.
         with mock.patch("builtins.print"):
@@ -984,7 +1030,8 @@ class ReadmeLineTest(unittest.TestCase):
         said = " ".join((HERE / "README.md").read_text("utf-8").split())
         for words in ("Any input that is missing, not JSON or the wrong shape is one sentence and exit 2, never a traceback",
                       "what is inside a light model, a mark or `--truth`", "a log's header, its logged config and its input lines",
-                      "a time past any clock", "`--mqtt` with no `--mqtt-t0`", "a failed check, not a refusal", "`validate.py` goes on check by check",
+                      "a time past any clock", "`--mqtt` with no `--mqtt-t0`", "a failed check, not a refusal, with exit 1", "`validate.py` goes on check by check",
+                      "`score.py` fails its replay line",
                       "stopped on an input of the wrong shape, or a bug of its own"):
             self.assertIn(words, said)
         check_says = said.split("`check.py LOG` re-imports")[1].split("```")[0]
@@ -1003,8 +1050,7 @@ class ReadmeLineTest(unittest.TestCase):
             return
         said = " ".join(fragment.read_text("utf-8").split())
         for words in ("is refused with one sentence and exit 2 when it is UTF-16 (what PowerShell 5.1's `>` writes), missing, malformed or the wrong shape",
-                      "`--truth`", "In `check.py` and `validate.py` a log of the right shape with a line changed or wrong inside fails its replay with exit 1",
-                      "`validate.py` says so check by check",
+                      "`--truth`", "A log of the right shape with a line changed or wrong inside fails its replay with exit 1", "`validate.py` says so check by check",
                       "a time no run could reach is refused"):
             self.assertIn(words, said)
 

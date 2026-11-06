@@ -12,7 +12,10 @@ This note was committed before any code, and revised on 2026-11-05 after the
 pipeline review, with no session yet run: the held rule, which holds pin a
 bulb, the rule for dims, the meter's noise in the level check and which read
 frames can be used. Which points count now comes from predictions and times alone,
-never from a reading. Nothing here has run on real light.
+never from a reading. Revised again on 2026-11-06 to read rung 8's and rung 9's real
+records, with the numbers below as they were: what "verified" means, unknown state, a
+person's change before a decision, several evenings in one run and unknown causes.
+Nothing here has run on real light.
 Running needs the owner's go-ahead; building does not.
 
 ## What is scored
@@ -268,11 +271,15 @@ inside a step's window, or is older than a step another decision sent before thi
 one: a Hue bulb reports its target at once, so `actuator_state` already shows that
 step and the frame does not, and D would take up the difference. With frames 5 s
 apart and a perfect model, a perfect landing read 0 of 6 on such a frame and a bulb
-that stayed stuck read 6 of 6. A stale frame gives no reference, whatever is read
-later. Under `reference_frame` the decision's points are `unverifiable` and a
-LightState under it has no residual. Under `zero` the level check stands and only
-its increments are `unverifiable`. The report lists these decisions
-(`decisions.read_frame_stale`) and the console says how many.
+that stayed stuck read 6 of 6. A person's change whose window starts at or before the
+decision and ends after the read frame makes that frame stale too, for the same
+reason: a Correction at t+2, a decision at t+4.7 and a read frame at t read 0 of 6 on a
+perfect landing. One whose window starts after the decision, or ends by the read frame,
+does not. A stale frame gives no reference, whatever is read later. Under
+`reference_frame` the decision's points are `unverifiable` and a LightState under it
+has no residual. Under `zero` the level check stands and only its increments are
+`unverifiable`. The report lists these decisions (`decisions.read_frame_stale`) and the
+console says how many.
 
 **Occupied seconds** are flagged: a frame inside an occupancy interval is
 marked occupied in the report and in its residual `flags`. Occupied frames are

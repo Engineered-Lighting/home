@@ -274,7 +274,7 @@ class Run:
         settle.mark_mid_transition(all_steps)
         for d in self.decs:
             if d.ref is not None:
-                d.stale_read = settle.stale_read(d.id, d.ts, d.ref.ts, all_steps)
+                d.stale_read = settle.stale_read(d.id, d.ts, d.ref.ts, all_steps, self.windows.changes())
         self.occupancy = [(float(o["start"]), float(o["end"]), o.get("people") or []) for o in occupancy]
         self.gold = list(gold)
 

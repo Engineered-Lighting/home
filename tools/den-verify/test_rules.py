@@ -532,6 +532,126 @@ class AModelErrorStopsOneDecision(Cli):
         self.assertEqual((report["decisions"]["verified"], report["hit_rate"]["verdict"]), (0, "insufficient"))
 
 
+class PersonBeforeDecision(Cli):
+    """A person's change between a decision's read frame and the decision is the stale frame's mechanism: actuator_state shows it
+    and the frame does not. The read frame's D would take up the difference, and a perfect landing read 0 of 6."""
+    names = [f"p{i}" for i in range(6)]
+    was = {B0: 0.3, B1: 0.5}
+    now = {B0: 0.8, B1: 0.5}
+    POINTS = {n: {B0: 300.0, B1: 100.0} for n in names}
+
+    def snap(self, at, levels, ident=None):
+        return syn.light_state(at, {n: 300 * levels.get(B0, 0) + 100 * levels.get(B1, 0) for n in self.names}, anchored=False, ident=ident)
+
+    def correction(self, at, settle=0.0, cid="c-1"):
+        return {"correction_id": cid, "ts": at, "action": {"settle_s": settle}, "snapshot": {"light_state": ["ls-r"]}, "hold": None}
+
+    def case(self, corrections=(), read_at=T, read_levels=None, landed_at=None, overrides=None):
+        """The decision at T + 4.7 reads B0 at 0.8 and asks 0.85; the read frame shows `was`, the person's change coming after it."""
+        targets = {f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}
+        dec = syn.hue_decision("d", T + 4.7, self.now, {B0: {"level": 0.85, "steps": send(T + 4.7)}}, "ls-r", targets=targets)
+        frames = [self.snap(read_at, read_levels or self.was, "ls-r"), self.snap(T + 10, landed_at or {**self.now, B0: 0.85})]
+        return run([dec], frames, self.POINTS, overrides=overrides, corrections=list(corrections))
+
+    def assert_stale(self, result, cid="c-1"):
+        decisions, _, report = result
+        self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"unverifiable"})
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"))
+        [entry] = report["decisions"]["read_frame_stale"]
+        self.assertEqual(entry["decision_id"], "d")
+        self.assertIn(cid, entry["why"])
+        self.assertEqual(not_verified(report)["kind"], "read frame stale")
+
+    def assert_counts(self, result):
+        _, _, report = result
+        self.assertEqual(report["decisions"]["read_frame_stale"], [])
+        self.assertEqual(report["hit_rate"]["hits"] + report["hit_rate"]["misses"], 6)
+
+    def test_with_no_word_of_the_change_it_reads_0_of_6_on_a_perfect_landing(self):
+        # why this rule exists: the record has no word of the change without the Correction
+        _, _, report = self.case()
+        self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (0, 6))
+
+    def test_a_person_changing_a_light_after_the_read_frame_makes_it_stale(self):
+        self.assert_stale(self.case([self.correction(T + 2)]))
+
+    def test_a_bulb_that_stayed_stuck_does_not_read_as_a_hit_on_that_frame(self):
+        self.assert_stale(self.case([self.correction(T + 2)], landed_at=self.was))
+
+    def test_no_reading_changes_it(self):
+        for landed_at in (self.was, self.now, {B0: 0.0, B1: 0.0}, {B0: 1.0, B1: 1.0}):
+            self.assert_stale(self.case([self.correction(T + 2)], landed_at=landed_at))
+
+    def test_a_correction_with_a_hold_counts_as_much_as_one_without(self):
+        hold = {"entity_id": B0, "channels": [B0], "pinned": {"level_pct": 80, "cct_k": 2700}, "since": T + 2, "ended": None, "hold_set_revision": 1}
+        self.assert_stale(self.case([{**self.correction(T + 2), "hold": hold}]))
+
+    def test_under_the_zero_background_the_level_check_stands(self):
+        zero = {"background": "zero"}
+        decisions, states, report = self.case([self.correction(T + 2)], overrides=zero)
+        self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"within"})
+        self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (6, 0))
+        self.assertEqual({i["status"] for i in decisions[0]["verify"]["increments"]}, {"unverifiable"})
+        self.assertEqual([s["decision_id"] for s in report["decisions"]["read_frame_stale"]], ["d"])
+        self.assertTrue(states[1]["residual"])
+        decisions, _, report = self.case([self.correction(T + 2)], overrides=zero, landed_at=self.was)
+        self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (0, 6))
+
+    def test_a_residual_under_it_has_nothing_and_says_why(self):
+        _, states, _ = self.case([self.correction(T + 2)])
+        self.assertEqual(states[1]["residual"], [])
+        self.assertIn("c-1", states[1]["residual_status"])
+
+    def test_a_correction_after_the_decision_does_not_trigger_it(self):
+        for at, settle in ((T + 4.71, 0.0), (T + 6, 0.0), (T + 6, 1.0), (T + 30, 5.0)):
+            with self.subTest(at=at - T, settle=settle):
+                self.assert_counts(self.case([self.correction(at, settle)], read_levels=self.now))
+
+    def test_a_change_far_before_the_read_frame_does_not_trigger_it(self):
+        for at, settle in ((T - 100, 0.0), (T - 100, 5.0), (T - 1.0, 0.0), (T - 1.5, 0.0)):
+            with self.subTest(at=at - T, settle=settle):
+                self.assert_counts(self.case([self.correction(at, settle)], read_levels=self.now))
+
+    def test_the_change_is_its_window_from_settling_to_its_margin(self):
+        # busy from ts - settle_s to ts + settle_margin_s (1 s), as for a verify frame: half open at its end
+        self.assert_counts(self.case([self.correction(T - 1.0)], read_levels=self.now))  # ends as the frame is taken
+        self.assert_stale(self.case([self.correction(T - 0.999)]))                       # the frame is inside it
+        self.assert_stale(self.case([self.correction(T - 0.5, 3.0)]))                    # and inside one that began before it
+        self.assert_stale(self.case([self.correction(T + 4.7)]))                         # at the decision
+        self.assert_stale(self.case([self.correction(T + 6.0, 1.3)]))                    # begun by the decision: its state may show it
+        self.assert_counts(self.case([self.correction(T + 6.0, 1.29)], read_levels=self.now))  # begun after it
+
+    def test_any_correction_in_the_window_is_enough_and_the_first_is_named(self):
+        far = self.correction(T - 100, cid="c-far")
+        self.assert_stale(self.case([far, self.correction(T + 2)]))
+
+    def test_a_frame_taken_after_the_persons_change_counts_both_ways(self):
+        for landed_at, hits in (({**self.now, B0: 0.85}, 6), (self.was, 0)):
+            _, _, report = self.case([self.correction(T + 2)], read_at=T + 3, read_levels=self.now, landed_at=landed_at)
+            self.assertEqual(report["decisions"]["read_frame_stale"], [])
+            self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (hits, 6 - hits))
+
+    def test_the_steps_rule_still_stands_beside_it(self):
+        first = syn.hue_decision("d-0", T + 0.2, self.was, {B0: {"level": 0.8, "steps": send(T + 0.2)}}, "ls-r")
+        second = syn.hue_decision("d", T + 4.7, self.now, {B0: {"level": 0.85, "steps": send(T + 4.7)}}, "ls-r", targets={"A": {"surface_id": "p0"}})
+        _, _, report = run([first, second], [self.snap(T, self.was, "ls-r"), self.snap(T + 10, {**self.now, B0: 0.85})], self.POINTS)
+        self.assertIn("d-0", by_id(report["decisions"]["read_frame_stale"], "decision_id", "d")["why"])
+
+    def test_the_owner_is_told_on_the_console(self):
+        decisions, frames = [], [self.snap(T, self.was, "ls-r"), self.snap(T + 10, {**self.now, B0: 0.85})]
+        dec = syn.hue_decision("d", T + 4.7, self.now, {B0: {"level": 0.85, "steps": send(T + 4.7)}}, "ls-r", targets={"A": {"surface_id": "p0"}})
+        write_jsonl(self.tmp / "corrections.jsonl", [self.correction(T + 2)])
+        out, report = self.preview([dec], frames, model(self.POINTS), "--corrections", str(self.tmp / "corrections.jsonl"))
+        self.assertIn("1 decision(s) read a frame from before a step landed or a person changed a light", out)
+        self.assertEqual(report["hit_rate"]["verdict"], "insufficient")
+        out.encode("ascii")
+
+    def test_the_note_says_so(self):
+        note = " ".join((HERE / "VERIFY-V1.md").read_text("utf-8").split())
+        self.assertIn("A person's change whose window starts at or before the decision and ends after the read frame makes that frame stale too", note)
+
+
 class TwoEvenings(unittest.TestCase):
     """Frames are keyed by ts. Two may share a derived ls-HHMMSS id on different days, and each decision reads its own."""
     DAY = 86400.0

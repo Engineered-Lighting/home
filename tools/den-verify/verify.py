@@ -131,7 +131,8 @@ def cmd_run(args):
              f"{sum(u['points'] for u in unknown)} point(s) that depend on it were not judged")
     stale = report["decisions"]["read_frame_stale"]
     if stale:
-        _say(f"{len(stale)} decision(s) read a frame from before a step landed: nothing taken from that frame was judged")
+        _say(f"{len(stale)} decision(s) read a frame from before a step landed or a person changed a light: "
+             "nothing taken from that frame was judged")
     if noise["count"]:
         _say(f"{noise['count']} counted point(s) have a change below the meter's noise "
              f"({noise['hits']} hit(s), {noise['misses']} miss(es)); "

@@ -88,18 +88,24 @@ def mark_mid_transition(all_steps):
         by_channel.setdefault(s.channel, []).append(s)
 
 
-def stale_read(decision_id, decision_ts, read_ts, all_steps):
+def stale_read(decision_id, decision_ts, read_ts, all_steps, changes=()):
     """Why the frame a decision read cannot show the state it read, or None.
 
     A Hue bulb reports its target at once, so a decision's actuator_state already
     shows a step that went out ahead of it. A frame inside a step's window, or
-    older than such a step, shows a different room from that state.
+    older than such a step, shows a different room from that state. A person's
+    change does the same: `changes` is (start, end, reference) for each, and one
+    begun by the decision that was not over by the frame may be in actuator_state.
+    One begun after the decision, or over by the frame, says nothing about it.
     """
     for s in all_steps:
         if s.sent_at <= read_ts < s.end:
             return f"{s.reason}: {s.decision_id} was landing at the read frame"
         if s.decision_id != decision_id and read_ts < s.end and s.sent_at < decision_ts:
             return f"the read frame is older than {s.decision_id}'s step"
+    for start, end, ref in changes:
+        if read_ts < end and start <= decision_ts:
+            return f"a person's change ({ref}) came after the read frame"
     return None
 
 
@@ -115,6 +121,10 @@ class Windows:
 
     def add_change(self, ts, settle_s, margin_s, ref):
         self.items.append((ts - (settle_s or 0), ts + margin_s, "mid_change", ref))
+
+    def changes(self):
+        """The people's changes: (start, end, reference)."""
+        return [(start, end, ref) for start, end, reason, ref in self.items if reason == "mid_change"]
 
     def busy(self, t):
         """The reason a frame at t is excluded, or None when it is settled."""

@@ -255,6 +255,18 @@ def view_points(signature, k, reach_m):
     return points
 
 
+def deeper_cells(signature, later):
+    """The signature with each cell at the deeper of its depth and a later frame's of the same cell.
+
+    Something near in one frame can be gone from the other, and view_points needs what the camera can see past it. A
+    cell the later frame has no depth for keeps its own; one the registration frame has none for stays None, which
+    view_points counts at the reach.
+    """
+    return dict(signature, cells=[[None if then is None else then if seen is None else max(then, seen)
+                                   for then, seen in zip(reference, row)]
+                                  for reference, row in zip(signature["cells"], later["cells"])])
+
+
 def check_mount(signature, current, *, tolerance_mm, tolerance_fraction, changed_fraction, minimum_cells):
     """'changed', 'no_large_change' or 'unknown' (too few comparable cells), as in spatial_validation.
 

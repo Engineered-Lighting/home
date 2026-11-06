@@ -1298,6 +1298,46 @@ class MountTests(Base):
                 self.assertGreater(report["view_movement_m"], 0.05)
                 self.assertEqual(len(s.room_models()), 1)
 
+    def near_marks_over_a_top_band(self, band_mm, later_band_mm, pose):
+        """Marks on a surface 1.75 m away, depth band_mm across the top 150 rows, later_band_mm on the later take."""
+        marks = {"a": synthetic.in_view(-1.0, -0.1, 1.75), "b": synthetic.in_view(1.0, -0.1, 1.75),
+                 "c": synthetic.in_view(-0.9, 0.73, 1.75), "d": synthetic.in_view(0.9, 0.73, 1.75),
+                 "e": synthetic.in_view(0.0, -0.1, 1.75), "f": synthetic.in_view(0.0, 0.73, 1.75)}
+
+        def plane(band):
+            return [mm for y in range(synthetic.H) for mm in [band if y < 150 else 1750] * synthetic.W]
+
+        return self.holed_registration(marks, ("a", "b", "c", "d"), ("e", "f"), plane(band_mm), pose, plane(later_band_mm))
+
+    def test_a_near_object_gone_by_the_later_frame_cannot_hide_a_turn(self):
+        # The 2026-11-05 verifier's case: something 1.2 m away across the top of the registration frame, removed later,
+        # and a 1.25 degree turn. The later frame's depth is on file and shows 5 m there: 5.4 to 10.1 cm real error.
+        s, later = self.near_marks_over_a_top_band(1200, 5000, synthetic.moved(yaw_deg=1.25))
+        code, report, text = self.check(s, later.take)
+        self.assertLess(max(mark["error_m"] for mark in report["marks"]), 0.05, "every mark is within the gate")
+        self.assertEqual((code, report["result"]), (1, "not_confirmed"), text)
+        self.assertGreater(report["view_movement_m"], 0.05)
+        self.assertIn("in view", text)
+        self.assertEqual(len(s.room_models()), 1)
+
+    def test_each_cell_counts_at_the_deeper_of_its_depth_on_the_two_frames(self):
+        pose = synthetic.moved(yaw_deg=0.5)
+        far_then, far_later, near_both = (self.movement_over_a_band(*bands, pose) for bands in (
+            (5000, 1200), (1200, 5000), (1200, 1200)))
+        self.assertAlmostEqual(far_then, far_later, delta=0.002, msg="whichever frame saw it far")
+        self.assertGreater(far_later, near_both + 0.01)
+
+    def movement_over_a_band(self, band_mm, later_band_mm, pose):
+        self.tearDown()
+        self.setUp()
+        s, later = self.near_marks_over_a_top_band(band_mm, later_band_mm, pose)
+        return self.check(s, later.take)[1]["view_movement_m"]
+
+    def test_a_cell_the_later_frame_has_no_depth_for_keeps_the_registration_frame_s(self):
+        pose = synthetic.moved(yaw_deg=0.5)
+        kept = self.movement_over_a_band(1200, 0, pose)
+        self.assertAlmostEqual(kept, self.movement_over_a_band(1200, 1200, pose), delta=0.002)
+
     def test_leaving_a_far_cross_with_no_depth_out_of_the_fit_cannot_confirm_a_turn(self):
         # README step 5 lets the owner leave a point with no depth unclicked. A far end too dark for depth then
         # has no mark and no cell to show a turn.

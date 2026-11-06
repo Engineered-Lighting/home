@@ -603,10 +603,11 @@ def agreeing_take(work, tid, mount, take, marks, m):
     return report if apart <= m["gate_m"] else None
 
 
-def why_not_confirmed(entry, mount, marks, m):
+def why_not_confirmed(entry, mount, marks, m, later=None):
     """(why these marks do not confirm the registration, or None; what to do; what to record).
 
-    REGISTER-V1.md, "A moved camera". What to do is None when it is to click the marks.
+    REGISTER-V1.md, "A moved camera". What to do is None when it is to click the marks. later is the later frame's depth
+    signature: what the view holds is read from both frames.
     """
     gate = m["gate_m"]
     clicked = {mark["id"]: mark for mark in marks}
@@ -617,8 +618,9 @@ def why_not_confirmed(entry, mount, marks, m):
                 f"{', '.join(not_clicked)}"), None, facts
     before = {mark["id"]: mark["camera_xyz_m"] for mark in mount["marks"]}
     start, after = list(before.values()), [clicked[pid]["camera_xyz_m"] for pid in before]
+    view = scene.deeper_cells(mount["signature"], later) if later else mount["signature"]
     movement = rigid.largest_move(start, after, start + scene.view_points(
-        mount["signature"], entry["intrinsics"]["rectified_left"], m["mount_view_reach_m"]))
+        view, entry["intrinsics"]["rectified_left"], m["mount_view_reach_m"]))
     facts["view_movement_m"] = records.rounded(movement)
     motion = marks_motion(mount, marks)
     if motion["off_m"] > gate:
@@ -697,7 +699,8 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
         if take["ended_unix"] <= mount["take_ended_unix"]:
             raise Refused("mount_take_not_later", f"{Path(take_dir).name} was not recorded after the take {tid} was "
                                                   "registered from, so it says nothing about a later move")
-        result = scene.check_mount(mount["signature"], scene.mount_signature(bundle),
+        later = scene.mount_signature(bundle)
+        result = scene.check_mount(mount["signature"], later,
                                    tolerance_mm=m["mount_tolerance_mm"],
                                    tolerance_fraction=m["mount_tolerance_fraction"],
                                    changed_fraction=m["mount_changed_fraction"],
@@ -731,7 +734,7 @@ def run_check_mount(work, take_dir, frame=None, *, camera_id=None, m=None, now=t
                          "click slipped, clicking it again on this take clears it too. If what carries a cross moved, "
                          "the next take will agree with this one, so measure that cross again and register again.")
         else:
-            why_not, next_step, facts = why_not_confirmed(entry, mount, marks, m)
+            why_not, next_step, facts = why_not_confirmed(entry, mount, marks, m, later)
             report.update(facts, result="not_confirmed" if why_not else "confirmed")
             earlier = (entry.get("confirmed") or {}).get("take_ended_unix")
             if not why_not and not (scene._finite(earlier) and earlier >= take["ended_unix"]):

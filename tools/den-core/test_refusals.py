@@ -587,6 +587,29 @@ class LogsTest(Temp):
             code, out, err = tool("score.py", self.log, "--preview", "--marks", self.write("marks-shape.jsonl", json.dumps(bad) + "\n"))
             self.refused(code, out, err, "line 1")
 
+    def test_a_mark_wrong_inside_is_its_line_and_not_a_traceback(self):
+        whole = test_score.mark(T0, T0 + 10)
+        region = whole["R_eval"]
+        text = json.dumps(whole)
+        for name, line in (("surface_id a list", json.dumps({**whole, "R_eval": {**region, "surface_id": []}})),
+                           ("surface_id an object", json.dumps({**whole, "R_eval": {**region, "surface_id": {"a": 1}}})),
+                           ("surface_id a number", json.dumps({**whole, "R_eval": {**region, "surface_id": 5}})),
+                           ("surface_id null", json.dumps({**whole, "R_eval": {**region, "surface_id": None}})),
+                           ("R_eval text", json.dumps({**whole, "R_eval": "surface_id"})),
+                           ("end of 401 digits", text.replace('"end": %s' % (T0 + 10), '"end": %s' % HUGE)),
+                           ("start of 401 digits", text.replace('"start": %s' % T0, '"start": %s' % HUGE)),
+                           ("placement_sd of 401 digits", text.replace('"placement_sd": 3', '"placement_sd": %s' % HUGE)),
+                           ("start NaN", text.replace('"start": %s' % T0, '"start": NaN')),
+                           ("placement_sd Infinity", text.replace('"placement_sd": 3', '"placement_sd": Infinity'))):
+            self.assertNotEqual(line, text, name)
+            path = self.write("marks-shape.jsonl", line + "\n")
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "%s line 1" % path.name):
+                score.read_marks(path)
+        path = self.write("marks-shape.jsonl", json.dumps({**whole, "R_eval": {**region, "surface_id": []}}) + "\n")
+        code, out, err = tool("score.py", self.log, "--preview", "--marks", path)
+        self.refused(code, out, err, "line 1")
+        self.assertEqual(len(score.read_marks(self.write("good.jsonl", text + "\n"))), 1)
+
     def test_truth_utf16_a_bom_and_malformed(self):
         truth = {"schema": "reading-shadow-truth-1", "blocks": []}
         path = self.write("truth-16.json", ps51(json.dumps(truth)))

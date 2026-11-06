@@ -38,6 +38,7 @@ KINDS = INPUT_KINDS + DERIVED_KINDS
 ACTUATIONS = ("synthetic", "replay", "shadow")
 MEDIA_KEYS = frozenset({"image", "images", "jpeg", "jpg", "png", "b64", "base64", "pixels", "bytes"})
 MAX_LINE_BYTES = 16384
+MAX_FRAME_ID = 64  # a LightState's own id, as it goes on a Decision's line; coordinator.LIGHT_STATE_ROOM holds room for it
 
 
 def dumps(event):

@@ -4,6 +4,7 @@ python -B tools/den-core/run.py --out ABSDIR [--synthetic evening [--seed N] [--
     [--facts PATH ...] [--poll FILE ...] [--mqtt FILE --mqtt-t0 EPOCH]
     [--journal FILE ... | --assume-occupied | --status FILE ...] [--corrections FILE ...]
     [--live-commands FILE ... [--lights FILE ...]] [--policies incumbent] [--no-plant] [--actuation shadow]
+    [--light-model FILE] [--surfaces FILE] [--light-states FILE] [--compensation P0|P1|P2|P3] (with coordinator in --policies)
 """
 import argparse
 import json
@@ -268,6 +269,8 @@ def coordinator_config(args):
     comp = {key: value for key, value in (("option", args.compensation), ("form", args.compensation_form)) if value}
     if comp:
         config["compensation"] = comp
+    if args.light_states:
+        config["light_states"] = sources.light_states(args.light_states)
     return config
 
 
@@ -326,6 +329,8 @@ def main(argv=None):
     parser.add_argument("--light-model", help="with the coordinator: 'fake' (the default), or rung 8's light-model.json")
     parser.add_argument("--surfaces", help="with the coordinator: JSON {surface_id: [point_id, ...]} over the light model's blocks, "
                                            "to preview; the default is the gate file's surface_map slot")
+    parser.add_argument("--light-states", help="with the coordinator: LightState JSON Lines (den-photometry's light_state.jsonl), so each "
+                                               "Decision names the newest frame at or before it; a reference, not an input to the solve")
     parser.add_argument("--compensation", choices=["P0", "P1", "P2", "P3"],
                         help="with the coordinator: a named option; the default is the gate file's slot")
     parser.add_argument("--compensation-form", choices=["strict", "mode"])
@@ -341,9 +346,9 @@ def main(argv=None):
         parser.error("--actuation shadow decides beside the real bulbs' reports: give --lights or --no-plant")
     if {"decide", "coordinator"} <= set(args.policies):
         parser.error("decide and coordinator are one policy in two versions: give one of them")
-    if ((args.light_model or args.surfaces or args.compensation or args.compensation_form)
+    if ((args.light_model or args.surfaces or args.light_states or args.compensation or args.compensation_form)
             and "coordinator" not in args.policies):
-        parser.error("--light-model, --surfaces and --compensation need coordinator in --policies")
+        parser.error("--light-model, --surfaces, --light-states and --compensation need coordinator in --policies")
     configs = {"coordinator": coordinator_config(args)} if "coordinator" in args.policies else None
     if args.journal and args.assume_occupied:
         parser.error("--journal gives real occupancy; it replaces --assume-occupied, so give one or the other")
@@ -358,6 +363,9 @@ def main(argv=None):
         parser.error("--lights needs --live-commands: den_lighting's own bulb changes are known by its commands")
 
     inputs, described, truth, fact_lines = [], [], None, []
+    if args.light_states:
+        described.append({"name": Path(args.light_states).name, "sha256": events.sha256_file(args.light_states)})
+        print("light_states: %d frame(s) to name, none of them an input to the solve" % len(configs["coordinator"]["light_states"]))
     if args.synthetic:
         params = {"seed": args.seed, "touch": args.touch, "game": args.game}
         if args.clean:

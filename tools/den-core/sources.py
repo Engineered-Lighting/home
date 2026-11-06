@@ -22,6 +22,7 @@ LIGHT_KEYS = frozenset({"last_updated_ts", "entity_id", "state", "context_id", "
 STATUS_KEYS = frozenset({"last_updated_ts", "entity_id", "state", "attributes"})
 CORRECTION_KEYS = frozenset({"correction_id", "entity_id", "after", "source"})
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+FRAME_APART_S = 0.0005  # den-verify takes a frame by its ts within this
 
 
 def lab():
@@ -294,6 +295,32 @@ def correction_capture(paths):
             seen[key] = item
             found.append(item)
     return sorted(found, key=lambda item: (item[0], LIGHTS.index(item[2]["entity_id"])))
+
+
+def light_states(path):
+    """[{id, ts}] in time order from canon LightState JSON Lines, in the shape den-photometry writes as light_state.jsonl. A
+    frame's id is its `id` key if it has one, else 'ls-%.3f' % ts. The frames are references for the coordinator to name, not
+    inputs to its solve, so nothing else of them goes on. A bad line, or two frames within den-verify's 0.0005 s, which it could
+    not tell apart, raises ValueError; blank lines are skipped."""
+    found = []
+    for number, raw in enumerate(_text(path).splitlines(), 1):
+        if not raw.strip():
+            continue
+        try:
+            row = json.loads(raw)
+            ts, name = row["ts"], row.get("id")
+            if type(ts) not in (int, float) or not math.isfinite(ts) or (name is not None and not (
+                    isinstance(name, str) and name and len(events.dumps(name)) - 2 <= events.MAX_FRAME_ID)):
+                raise ValueError
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise ValueError("%s line %d is not a LightState: it needs a ts in seconds, and any id must be text of at most %d "
+                             "characters" % (path, number, events.MAX_FRAME_ID)) from None
+        found.append((float(ts), number, "ls-%.3f" % ts if name is None else name))
+    found.sort()
+    for (a, line_a, _), (b, line_b, _) in zip(found, found[1:]):
+        if b - a < FRAME_APART_S:
+            raise ValueError("%s lines %d and %d are both at ts %r: two frames at one time can't be told apart" % (path, line_a, line_b, a))
+    return [{"id": name, "ts": ts} for ts, _, name in found]
 
 
 def _status(attributes):

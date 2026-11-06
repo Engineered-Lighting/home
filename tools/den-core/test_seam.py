@@ -32,6 +32,8 @@ import incumbent  # noqa: E402
 import light_adapter  # noqa: E402
 import run  # noqa: E402
 import score  # noqa: E402
+import sources  # noqa: E402
+import synthetic  # noqa: E402
 import test_coordinator as tc  # noqa: E402
 import test_score  # noqa: E402
 from hold_fixtures import T0, SLOTS, scene  # noqa: E402
@@ -480,6 +482,223 @@ class ChoiceOfSceneTest(Temp):
             for option in sorted(hold_fixtures.OPTIONS):
                 rows += hold_fixtures.decisions(hold_fixtures.run_case(case, option)[1])
         self.assertEqual(choice_digest(rows), self.FIXTURES)
+
+
+def light_state(ts, **extra):
+    """One LightState as den-photometry writes it to light_state.jsonl: no id, and ts present."""
+    return {"record": "light_state", "contract": "live-v1", "ts": ts, "camera_id": "den-oak", "room_version": "den-v1",
+            "exposure": {"time_ms": 10.0, "gain": 1.0, "black_level": None, "wb_locked": True, "linear": True,
+                         "normalisation_version": "meter-norm/v1"},
+            "anchored": False, "surface_estimates": [{"surface_id": "counter-1", "value": 0.5, "unit": "relative", "clipped_frac": 0.0,
+                                                      "rho_status": "measured", "basis": "measured"}],
+            "window_daylight": [], "sun": None, "blinds": "unknown", "residual": [], **extra}
+
+
+def frame(ts, **extra):
+    return {"id": extra.get("id", "ls-%.3f" % ts), "ts": ts}
+
+
+def without_light_state(decision):
+    return {**decision, "inputs": {k: v for k, v in decision["inputs"].items() if not k.startswith("light_state")}}
+
+
+def coordinator_decisions(log):
+    return [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+
+
+class FrameFieldsTest(unittest.TestCase):
+    """inputs.light_state: the newest frame at or before a Decision's ts, never one after it."""
+
+    def decided(self, frames=None, at=T0 + 10):
+        p = tc.policy(**({} if frames is None else {"light_states": frames}))
+        tc.start(p)
+        [d] = tc.feed(p, tc.ps(at))
+        return d["inputs"]
+
+    def test_the_newest_frame_at_or_before(self):
+        inputs = self.decided([frame(T0 - 10), frame(T0 + 7), frame(T0 + 12)])
+        self.assertEqual((inputs["light_state"], inputs["light_state_ts"]), ("ls-%.3f" % (T0 + 7), T0 + 7))
+        self.assertNotIn("light_state_status", inputs)
+
+    def test_a_frame_exactly_at_the_decisions_ts(self):
+        inputs = self.decided([frame(T0 + 7), frame(T0 + 10), frame(T0 + 10.001)])
+        self.assertEqual((inputs["light_state"], inputs["light_state_ts"]), ("ls-%.3f" % (T0 + 10), T0 + 10))
+        self.assertNotIn("light_state_status", inputs)
+
+    def test_a_frames_own_id_is_used(self):
+        self.assertEqual(self.decided([{"id": "frame-7", "ts": T0 + 7}])["light_state"], "frame-7")
+
+    def test_none_before_the_decision(self):
+        inputs = self.decided([frame(T0 + 10.001), frame(T0 + 20)])
+        self.assertEqual((inputs["light_state"], inputs["light_state_ts"], inputs["light_state_status"]),
+                         (None, None, "no LightState at or before this decision"))
+
+    def test_an_empty_file_is_given_but_has_none_before(self):
+        self.assertEqual(self.decided([])["light_state_status"], "no LightState at or before this decision")
+
+    def test_no_file(self):
+        inputs = self.decided()
+        self.assertEqual((inputs["light_state"], inputs["light_state_ts"], inputs["light_state_status"]),
+                         (None, None, "no LightState given"))
+
+    def test_the_config_hash_a_decision_logs_does_not_move_with_the_frames(self):
+        self.assertEqual(self.decided([frame(T0)])["config_sha256"], self.decided()["config_sha256"])
+
+    def test_frames_out_of_order_or_at_one_ts_in_a_config_refuse(self):
+        for frames in ([frame(T0 + 1), frame(T0)], [frame(T0), frame(T0)]):
+            with self.subTest(frames=frames), self.assertRaisesRegex(ValueError, "light_states"):
+                tc.policy(light_states=frames)
+
+    def test_room_is_held_on_the_line_for_every_form_of_the_fields(self):
+        longest = {"light_state": "x" * events.MAX_FRAME_ID, "light_state_ts": T0 + 0.1234567}
+        for fields in (longest, {"light_state": None, "light_state_ts": None, "light_state_status": coordinator.NO_FRAME_BEFORE}):
+            self.assertLessEqual(len(events.dumps(fields)), coordinator.LIGHT_STATE_ROOM)
+        event = tc.ev(T0 + 1234567.125, "decision", {"actuation": "synthetic"}, "decide")
+        event["seq"] = 10 ** 9
+        self.assertLessEqual(coordinator.LINE_ROOM + coordinator.LIGHT_STATE_ROOM + len(events.dumps(event)), events.MAX_LINE_BYTES)
+
+
+class LightStateFileTest(Temp):
+    def write(self, *rows, raw=False):
+        path = self.tmp / "light_state.jsonl"
+        path.write_text("".join((row if raw else json.dumps(row)) + "\n" for row in rows), encoding="utf-8", newline="\n")
+        return path
+
+    def test_den_photometrys_shape_reads_as_id_and_ts_only(self):
+        self.assertEqual(sources.light_states(self.write(light_state(T0 + 5), light_state(T0 + 1))), [frame(T0 + 1), frame(T0 + 5)])
+
+    def test_an_id_on_the_frame_is_kept(self):
+        self.assertEqual(sources.light_states(self.write(light_state(T0, id="f-1"))), [{"id": "f-1", "ts": T0}])
+
+    def test_blank_lines_and_crlf_read(self):
+        path = self.tmp / "crlf.jsonl"
+        path.write_bytes(("\r\n" + json.dumps(light_state(T0)) + "\r\n\r\n").encode("utf-8"))
+        self.assertEqual(sources.light_states(path), [frame(T0)])
+
+    def test_two_frames_at_one_ts_are_refused_naming_both_lines(self):
+        with self.assertRaisesRegex(ValueError, "lines 1 and 3 are both at ts"):
+            sources.light_states(self.write(light_state(T0), light_state(T0 + 1), light_state(T0)))
+
+    def test_two_frames_verify_could_not_tell_apart_are_refused(self):
+        with self.assertRaisesRegex(ValueError, "both at ts"):
+            sources.light_states(self.write(light_state(T0), light_state(T0 + 0.0004)))
+
+    def test_bad_lines_are_refused_with_their_number(self):
+        for name, line in (("no ts", json.dumps({"record": "light_state"})), ("not json", "{"), ("a list", "[1]"),
+                           ("text ts", json.dumps(light_state("soon"))), ("true ts", json.dumps(light_state(True))),
+                           ("NaN", '{"ts": NaN}'), ("no ts in an envelope", json.dumps({"schema": "den-event-1", "t": T0})),
+                           ("id not text", json.dumps(light_state(T0, id=5))), ("empty id", json.dumps(light_state(T0, id=""))),
+                           ("long id", json.dumps(light_state(T0, id="x" * (events.MAX_FRAME_ID + 1))))):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "line 2"):
+                sources.light_states(self.mixed(line))
+
+    def mixed(self, line):
+        path = self.tmp / "bad.jsonl"
+        path.write_text(json.dumps(light_state(T0 - 5)) + "\n" + line + "\n", encoding="utf-8", newline="\n")
+        return path
+
+
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class LightStatesRunTest(Temp):
+    ARGV = ["--synthetic", "evening", "--touch", "--policies", "need", "incumbent", "coordinator"]
+
+    def run_it(self, name, *more):
+        with mock.patch("builtins.print") as printed:
+            run.main([*self.ARGV, *more, "--out", str(self.tmp / name)])
+        path = self.tmp / name / "log.jsonl"
+        header, log = events.read(path)
+        return path, header, log, "\n".join(str(call.args[0]) for call in printed.call_args_list)
+
+    def frames(self, *offsets, shuffled=False):
+        rows = [light_state(synthetic.T0 + offset) for offset in offsets]
+        if shuffled:
+            random.Random(3).shuffle(rows)
+        path = self.tmp / ("frames-%d.jsonl" % len(list(self.tmp.iterdir())))
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8", newline="\n")
+        return path
+
+    def test_the_same_decisions_with_and_without_the_file_apart_from_these_fields(self):
+        _, _, plain, _ = self.run_it("plain")
+        _, _, framed, _ = self.run_it("framed", "--light-states", str(self.frames(*range(-700, 2000, 7))))
+        a, b = coordinator_decisions(plain), coordinator_decisions(framed)
+        self.assertTrue(a)
+        self.assertEqual([without_light_state(d) for d in b], [without_light_state(d) for d in a])
+        self.assertTrue(all(d["inputs"]["light_state"] for d in b))
+        self.assertTrue(all(d["inputs"]["light_state_status"] == "no LightState given" for d in a))
+
+    def test_each_decision_names_the_newest_frame_at_or_before_it_never_a_later_one(self):
+        times = [synthetic.T0 + offset for offset in range(-700, 2000, 7)]
+        _, _, log, _ = self.run_it("framed", "--light-states", str(self.frames(*range(-700, 2000, 7), shuffled=True)))
+        for d in coordinator_decisions(log):
+            before = [t for t in times if t <= d["ts"]]
+            self.assertEqual(d["inputs"]["light_state_ts"], before[-1])
+            self.assertEqual(d["inputs"]["light_state"], "ls-%.3f" % before[-1])
+            self.assertLessEqual(d["inputs"]["light_state_ts"], d["ts"])
+
+    def test_it_replays_byte_for_byte_with_the_file_and_tampering_is_caught(self):
+        path, _, _, _ = self.run_it("framed", "--light-states", str(self.frames(0, 100, 200)))
+        self.assertTrue(check.check(path)["ok"], check.check(path)["reason"])
+        text = path.read_text("ascii")
+        moved = text.replace('"light_state_ts":%r' % (synthetic.T0 + 100.0), '"light_state_ts":%r' % (synthetic.T0 + 99.0), 1)
+        if moved != text:
+            copy_path = self.tmp / "moved.jsonl"
+            copy_path.write_bytes(moved.encode("ascii"))
+            self.assertFalse(check.check(copy_path)["ok"])
+
+    def test_the_other_policies_events_are_unchanged(self):
+        _, _, plain, _ = self.run_it("plain")
+        _, _, framed, _ = self.run_it("framed", "--light-states", str(self.frames(0, 100, 200)))
+        self.assertEqual([e for e in plain if not (e["kind"] == "decision" and e["source"] == "decide")],
+                         [e for e in framed if not (e["kind"] == "decision" and e["source"] == "decide")])
+        self.assertEqual(len(plain), len(framed))
+
+    def test_only_each_frames_id_and_ts_reach_the_log(self):
+        path, header, _, _ = self.run_it("framed", "--light-states", str(self.frames(0, 100)))
+        config = next(p for p in header["policies"] if p["module"] == "coordinator")["config"]
+        self.assertEqual(config["light_states"], [frame(synthetic.T0), frame(synthetic.T0 + 100)])
+        text = path.read_text("ascii")
+        for word in ("surface_estimates", "rho_status", "normalisation_version"):
+            self.assertNotIn(word, text)
+        self.assertIn("frames-0.jsonl", {row["name"] for row in header["sources"]})
+
+    def test_the_summary_says_how_many_frames(self):
+        _, _, _, text = self.run_it("framed", "--light-states", str(self.frames(0, 100)))
+        self.assertIn("light_states: 2 frame(s)", text)
+
+    def test_a_score_and_a_validate_read_the_log(self):
+        import validate
+        path, _, _, _ = self.run_it("framed", "--light-states", str(self.frames(0, 100)))
+        self.assertEqual(score.report(path, preview=True)[1], 0)
+        self.assertTrue(validate.report(path)[1])
+
+    def test_without_the_coordinator_it_is_refused(self):
+        frames = self.frames(0)
+        for policies in (["need", "incumbent", "decide"], ["incumbent"]):
+            with self.subTest(policies), mock.patch("sys.stderr"), self.assertRaises(SystemExit) as stopped:
+                run.main(["--synthetic", "evening", "--policies", *policies, "--light-states", str(frames), "--out", str(self.tmp / "no")])
+            self.assertEqual(stopped.exception.code, 2)
+        self.assertFalse((self.tmp / "no").exists())
+
+    def test_two_frames_at_one_ts_stop_the_run_with_no_log(self):
+        path = self.tmp / "twice.jsonl"
+        path.write_text(json.dumps(light_state(synthetic.T0)) + "\n" + json.dumps(light_state(synthetic.T0)) + "\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "both at ts"):
+            self.run_it("twice", "--light-states", str(path))
+        self.assertFalse((self.tmp / "twice" / "log.jsonl").exists())
+
+    def test_a_line_near_full_keeps_the_same_surfaces_with_and_without_the_file(self):
+        names = ["surface-with-a-long-thirty-name-%03d" % n for n in range(400)]
+        model = fake_light.build(surfaces=False, filler=576 - 12)
+        blocks = [p["point_id"] for p in model["sample_points"]]
+        surfaces = self.tmp / "wide.json"
+        surfaces.write_text(json.dumps({name: [blocks[n % 576]] for n, name in enumerate(names)}), encoding="utf-8")
+        model_path = self.write_model(model)
+        wide = ("--light-model", str(model_path), "--surfaces", str(surfaces))
+        _, _, plain, _ = self.run_it("plain", *wide)
+        _, _, framed, _ = self.run_it("framed", *wide, "--light-states", str(self.frames(*range(-700, 2000, 7))))
+        a, b = coordinator_decisions(plain), coordinator_decisions(framed)
+        self.assertTrue([d for d in a if d["predicted"].get("surfaces_not_logged")])
+        self.assertEqual([without_light_state(d) for d in b], [without_light_state(d) for d in a])
 
 
 if __name__ == "__main__":

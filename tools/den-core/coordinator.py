@@ -20,9 +20,14 @@ Stand-ins, all logged in the header: one seed Look, a Preference with level fact
 at 0. A track's surface is its working_region.surface_id, else 'room': the blocks the gate's surface_map names for it on
 a real model, else the whole view. An eye is named by its track_id, because need v0 has no attention and rung 8 writes `glare: null`.
 
+inputs.light_state names the newest LightState at or before a Decision's ts, from run.py --light-states. It is a reference
+for rung 10 and never an input to the solve: a run with the file writes the same Decisions as one without, apart from the
+light_state fields, which go on a line after it is fitted so they can't change what fits.
+
 Standard library only. handle() reads no clock, randomness, file or network; make_policy reads the gate file and a
 light-model file, once.
 """
+import bisect
 import copy
 import json
 from pathlib import Path
@@ -45,7 +50,11 @@ OPTIONS = ("P0", "P1", "P2", "P3")
 EPS = 1e-9
 HARD_PENALTY = 1000.0  # added to a candidate's cost when a hard constraint or a bound rejects it
 SUPPORT_KEYS = ("last_support_capture_ts", "support_status")  # what the schema's Decision.inputs.field_support carries
-LINE_ROOM = events.MAX_LINE_BYTES - 200  # a Decision's own bytes, leaving room for the runner's envelope and actuation
+LIGHT_STATE_ROOM = 120  # the inputs.light_state fields in their longest form, with events.MAX_FRAME_ID
+# A Decision's own bytes when it is fitted, leaving room for the light_state fields, the runner's envelope and actuation.
+LINE_ROOM = events.MAX_LINE_BYTES - 200 - LIGHT_STATE_ROOM
+NO_FRAME_GIVEN = "no LightState given"
+NO_FRAME_BEFORE = "no LightState at or before this decision"
 
 
 def load_gate(path=None):
@@ -214,7 +223,10 @@ class Coordinator:
 
     def __init__(self, config, light):
         self.config, self.light = config, light
-        self.config_sha256 = events.sha256_json(config)
+        # The frames are references, so the hash a Decision logs is the same with them as without.
+        self.config_sha256 = events.sha256_json({key: value for key, value in config.items() if key != "light_states"})
+        self.frames = config.get("light_states")
+        self.frame_times = [frame["ts"] for frame in self.frames or ()]
         self.slots = config["gate"]["slots"]
         self.look = config["looks"][decide.LOOK]["scene"]
         self.state = {"occupancy": "unknown", "vacant_since": None, "actuator_state": {b: None for b in LIGHTS},
@@ -664,13 +676,19 @@ class Coordinator:
             "preference": {"scope": "household", "offsets": self.config["preference"]["offsets"]},
             "comfort_limits": self.config["preference"]["comfort_limits"]["version"],
             "light_model": self.light.version,
-            "light_state": None,
-            "light_state_status": "no light_state until rung 7",
             "body_envelope": self.config["body_envelope"],
             "coordinator": VERSION,
             "recipient_rule": "recipients/v1",
             "compensation": option_name(comp),
         }
+
+    def _frame_at(self, ts):
+        """The inputs.light_state fields for a Decision's ts: the newest frame at or before it, never a later one."""
+        count = bisect.bisect_right(self.frame_times, ts)
+        if count:
+            return {"light_state": self.frames[count - 1]["id"], "light_state_ts": self.frames[count - 1]["ts"]}
+        return {"light_state": None, "light_state_ts": None,
+                "light_state_status": NO_FRAME_GIVEN if self.frames is None else NO_FRAME_BEFORE}
 
     def _record(self, plan, t, trigger):
         self.made += 1
@@ -737,7 +755,8 @@ class Coordinator:
             record["hold_limited"] = plan["hold_limited"]
         whole = {s: None if v is None else round(v, 3) for s, v in self.light.predict(result).items()}
         self._rows(record, result, tasks, {**whole, "unit": self.light.unit})
-        return {"kind": "decision", "data": copy.deepcopy(self._fitted(record, result, tasks))}
+        fitted = self._fitted(record, result, tasks)
+        return {"kind": "decision", "data": copy.deepcopy({**fitted, "inputs": {**fitted["inputs"], **self._frame_at(record["ts"])}})}
 
     def _rows(self, record, result, tasks, surfaces):
         """What a Decision says per track about the actual resulting state, beside the surfaces it lists."""
@@ -877,6 +896,9 @@ def make_policy(config=None):
         raise ValueError("unknown local-completion option: %s" % effective["local_completion"])
     if effective["gaming"] not in ("non-gaming-stratified", "complete-policy"):
         raise ValueError("unknown gaming option: %s" % effective["gaming"])
+    frames = effective.get("light_states") or []
+    if any(a["ts"] >= b["ts"] for a, b in zip(frames, frames[1:])):
+        raise ValueError("light_states must be in time order, with one frame at a time")
     model, logged = light_adapter.describe(effective["light_model"])
     chosen = effective["gate"]["slots"].get("surface_map")
     if chosen and not logged.get("surfaces") and not model.get("fake"):  # a run may name another, which score.py refuses

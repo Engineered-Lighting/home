@@ -86,6 +86,11 @@ def feed(p, *items):
     return [o["data"] for item in items for o in p.handle(item)]
 
 
+def fitted_size(d):
+    """A Decision's bytes as they were fitted to its line: the light_state fields go on after, in the room held for them."""
+    return len(events.dumps({**d, "inputs": {key: value for key, value in d["inputs"].items() if not key.startswith("light_state")}}))
+
+
 def touch(t, bulb, b, who="A"):
     """What the runner hands the coordinator for a person's touch: the incumbent's mode, then the correction itself."""
     return [ev(t, "mode", mode(2, [hold(bulb, b, t)])["data"], "incumbent"),
@@ -1008,8 +1013,8 @@ class WideMapLineTest(unittest.TestCase):
         self.assertEqual(kept, others[:len(kept)])
         self.assertEqual(d["predicted"]["surfaces_not_logged"], len(others) - len(kept))
         self.assertGreater(len(kept), 100)
-        self.assertLessEqual(len(events.dumps(d)), coordinator.LINE_ROOM)
-        self.assertLess(coordinator.LINE_ROOM - len(events.dumps(d)), 50)  # one more would not have fit
+        self.assertLessEqual(fitted_size(d), coordinator.LINE_ROOM)
+        self.assertLess(coordinator.LINE_ROOM - fitted_size(d), 50)  # one more would not have fit
         result = {b: e["readback"] for b, e in d["applied_scene"].items()}
         at = p.light.predict(result)
         for name in listed:
@@ -1135,7 +1140,7 @@ class ManyTracksLineTest(unittest.TestCase):
         self.assertGreater(d["inputs"]["tracks_not_logged"], 0)
         listed = set(d["predicted"]["surfaces"]) - {"unit"}
         self.assertEqual(len(listed) + d["predicted"]["surfaces_not_logged"], len(surfaces) + 1)  # 'room' as well
-        self.assertLess(coordinator.LINE_ROOM - len(events.dumps(d)), 50)  # the line is full, not cut short at the tracks
+        self.assertLess(coordinator.LINE_ROOM - fitted_size(d), 50)  # the line is full, not cut short at the tracks
 
     def test_a_left_out_tracks_surface_is_owed_no_place_on_a_full_line(self):
         p, _ = self.wide_map_seen("a-near", "z-far")  # z-far sorts last, so only a track there could have kept it
@@ -1155,8 +1160,8 @@ class ManyTracksLineTest(unittest.TestCase):
         [d] = self.valid(feed(p, *touch(T0 + 50, FL, 80, "T29")))
         self.assertEqual(self.tracks(d), sorted("T%d" % k for k in range(30 - len(self.tracks(d)), 30)))
         kept = {**d, "inputs": {**d["inputs"], "tracks_not_logged": 0}}
-        self.assertLess(len(events.dumps(kept)), coordinator.LINE_ROOM)
-        self.assertGreater(len(events.dumps(kept)) + 2500, coordinator.LINE_ROOM)  # one more track would not have fit
+        self.assertLess(fitted_size(kept), coordinator.LINE_ROOM)
+        self.assertGreater(fitted_size(kept) + 2500, coordinator.LINE_ROOM)  # one more track would not have fit
         lone = policy()
         start(lone)
         name = "A" * 20000  # no use on any line, but it is the only track there is

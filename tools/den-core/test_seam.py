@@ -701,5 +701,113 @@ class LightStatesRunTest(Temp):
         self.assertEqual([without_light_state(d) for d in b], [without_light_state(d) for d in a])
 
 
+@unittest.skipUnless(HAVE_POLICY, "den_lighting policy.py not found")
+class OutputsTest(Temp):
+    """decisions.jsonl and surfaces.json beside log.jsonl, for rung 10. Only when the coordinator ran."""
+    ARGV = ["--synthetic", "evening", "--touch", "--policies", "need", "incumbent", "coordinator"]
+
+    def run_it(self, *argv, name="out"):
+        with mock.patch("builtins.print") as printed:
+            run.main([*argv, "--out", str(self.tmp / name)])
+        return self.tmp / name, "\n".join(str(call.args[0]) for call in printed.call_args_list)
+
+    def test_decisions_jsonl_is_the_coordinators_decisions_in_log_order_with_their_version(self):
+        out, text = self.run_it(*self.ARGV)
+        _, log = events.read(out / "log.jsonl")
+        mine = [e["data"] for e in log if e["kind"] == "decision" and e["source"] == "decide"]
+        raw = (out / "decisions.jsonl").read_bytes()
+        self.assertTrue(mine)
+        self.assertNotIn(b"\r", raw)
+        self.assertTrue(raw.endswith(b"\n"))
+        lines = raw.decode("utf-8").split("\n")[:-1]
+        self.assertEqual(lines, [events.dumps({**d, "version": "decision/v2"}) for d in mine])
+        self.assertTrue(all(json.loads(line)["policy"] == coordinator.POLICY for line in lines))
+        self.assertLess(max(map(len, lines)), events.MAX_LINE_BYTES)
+        self.assertIn("decisions: %s (%d)" % (out / "decisions.jsonl", len(mine)), text)
+        self.assertIn("surfaces: %s" % (out / "surfaces.json"), text)
+
+    def test_the_version_is_on_decisions_jsonl_only(self):
+        out, _ = self.run_it(*self.ARGV)
+        _, log = events.read(out / "log.jsonl")
+        self.assertFalse([e for e in log if e["kind"] == "decision" and "version" in e["data"]])
+
+    def test_surfaces_json_is_the_map_the_coordinator_ran_on_with_room_spelled_out(self):
+        out, _ = self.run_it(*self.ARGV)
+        header, _ = events.read(out / "log.jsonl")
+        config = next(p for p in header["policies"] if p["module"] == "coordinator")["config"]
+        ran = coordinator.make_policy(config).light
+        raw = (out / "surfaces.json").read_bytes()
+        self.assertNotIn(b"\r", raw)
+        written = json.loads(raw.decode("utf-8"))
+        self.assertEqual(written, ran.surfaces)
+        self.assertEqual(written["room"], ran.points)
+
+    def test_surfaces_json_round_trips_through_the_coordinators_own_map(self):
+        model = self.write_model(stage1_shaped())
+        named = self.tmp / "named.json"
+        named.write_text(json.dumps({"desk": ["counter-1/0", "counter-1/1"]}), encoding="utf-8")
+        out, _ = self.run_it(*self.ARGV, "--light-model", str(model), "--surfaces", str(named), name="first")
+        written = json.loads((out / "surfaces.json").read_text("utf-8"))
+        self.assertEqual(sorted(written), ["desk", "room"])
+        self.assertEqual(len(written["room"]), 12)
+        again, _ = self.run_it(*self.ARGV, "--light-model", str(model), "--surfaces", str(out / "surfaces.json"), name="second")
+        self.assertEqual(json.loads((again / "surfaces.json").read_text("utf-8")), written)
+        header, _ = events.read(again / "log.jsonl")
+        config = next(p for p in header["policies"] if p["module"] == "coordinator")["config"]
+        self.assertEqual(coordinator.make_policy(config).light.surfaces, written)
+        first = (out / "decisions.jsonl").read_text("ascii").split("\n")
+        second = (again / "decisions.jsonl").read_text("ascii").split("\n")
+        self.assertEqual([json.loads(line)["predicted"]["surfaces"] for line in first if line],
+                         [json.loads(line)["predicted"]["surfaces"] for line in second if line])
+
+    def test_with_no_coordinator_nothing_new_is_written(self):
+        for policies in (["need", "incumbent", "decide"], ["incumbent"]):
+            with self.subTest(policies):
+                out, text = self.run_it("--synthetic", "evening", "--policies", *policies, name="-".join(policies))
+                self.assertEqual(sorted(p.name for p in out.iterdir() if not p.name.startswith("la-fact-log")), ["log.jsonl", "truth.json"])
+                self.assertNotIn("decisions:", text)
+
+    def test_they_are_written_only_after_the_log_is_complete(self):
+        real, seen = events.write, []
+
+        def write(path, header, log):
+            seen.append(sorted(p.name for p in Path(path).parent.iterdir()))
+            real(path, header, log)
+
+        with mock.patch.object(events, "write", write):
+            out, _ = self.run_it(*self.ARGV)
+        self.assertEqual(seen, [[]])
+        self.assertTrue((out / "decisions.jsonl").exists())
+
+    def test_a_run_that_stops_leaves_neither(self):
+        with mock.patch.object(run.runner, "run", side_effect=ValueError("decision line over 16384 bytes")), mock.patch("builtins.print"):
+            with self.assertRaises(ValueError):
+                run.main([*self.ARGV, "--out", str(self.tmp / "out")])
+        self.assertFalse((self.tmp / "out").exists())
+
+    def test_an_out_folder_holding_either_is_refused_before_anything_is_written(self):
+        for name in ("decisions.jsonl", "surfaces.json"):
+            folder = self.tmp / name.split(".")[0]
+            folder.mkdir()
+            (folder / name).write_text("", encoding="utf-8")
+            with self.subTest(name), mock.patch("sys.stderr"), self.assertRaises(SystemExit) as stopped:
+                run.main([*self.ARGV, "--out", str(folder)])
+            self.assertEqual(stopped.exception.code, 2)
+            self.assertFalse((folder / "log.jsonl").exists())
+
+    def test_a_run_with_no_decisions_writes_an_empty_file(self):
+        first, _ = self.run_it(*self.ARGV, name="first")
+        out, _ = self.run_it("--facts", str(first), "--policies", "need", "coordinator", name="facts-only")
+        self.assertEqual((out / "decisions.jsonl").read_bytes(), b"")
+        self.assertTrue(json.loads((out / "surfaces.json").read_text("utf-8"))["room"])
+
+    def test_the_lines_carry_the_light_state_fields(self):
+        frames = self.tmp / "frames.jsonl"
+        frames.write_text(json.dumps(light_state(synthetic.T0 - 700)) + "\n", encoding="utf-8")
+        out, _ = self.run_it(*self.ARGV, "--light-states", str(frames))
+        for line in (out / "decisions.jsonl").read_text("ascii").splitlines():
+            self.assertEqual(json.loads(line)["inputs"]["light_state_ts"], synthetic.T0 - 700)
+
+
 if __name__ == "__main__":
     unittest.main()

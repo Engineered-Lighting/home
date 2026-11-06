@@ -41,6 +41,7 @@ HERE = Path(__file__).resolve().parent
 GATE_FILE = HERE / "rung9-gate-v0.json"
 VERSION = "coordinator-k16-v0"
 POLICY = "coordinator@k16-v0"
+DECISION_VERSION = "decision/v2"  # schemas.json's proposed major; the contracts ask a record to carry its version in a JSON Lines file
 LIGHTS = decide.LIGHTS
 OFF = decide.OFF
 ENVELOPE = {"version": "body-envelope/v1", "parameters": None, "parameters_status": "pending (envelope-parameters)"}

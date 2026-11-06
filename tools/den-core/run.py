@@ -23,6 +23,7 @@ import synthetic
 
 REPLANS = frozenset({"occupancy", "light_observed", "person_state", "mode", "tick"})  # decide.handle plans on these
 PAIR_S = 5.0  # correction-capture's WINDOW_S: a hold's own bulb row lies at most this long before the hold
+COORDINATOR_OUTPUTS = ("decisions.jsonl", "surfaces.json")  # beside log.jsonl, only when the coordinator ran
 
 
 def utc(t):
@@ -299,6 +300,17 @@ def _new_file(path, text):
         handle.write(text)
 
 
+def coordinator_outputs(out, log, light):
+    """What rung 10 reads, beside a complete log: the coordinator's Decisions, each with its record version, and the surface
+    map it ran on, 'room' spelled out."""
+    rows = [{**e["data"], "version": coordinator.DECISION_VERSION} for e in log
+            if e["kind"] == "decision" and e["source"] == coordinator.Coordinator.id]
+    _new_file(out / "decisions.jsonl", "".join(events.dumps(row) + "\n" for row in rows))
+    _new_file(out / "surfaces.json", json.dumps(light.surfaces, indent=2, sort_keys=True) + "\n")
+    print("decisions: %s (%d)" % (out / "decisions.jsonl", len(rows)))
+    print("surfaces: %s" % (out / "surfaces.json"))
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True, help="absolute folder outside every git checkout")
@@ -338,7 +350,7 @@ def main(argv=None):
     out = Path(args.out)
     if not out.is_absolute() or events.inside_checkout(out):
         parser.error("--out must be an absolute folder outside every git checkout")
-    if (out / "log.jsonl").exists():
+    if any((out / name).exists() for name in ("log.jsonl", *(COORDINATOR_OUTPUTS if "coordinator" in args.policies else ()))):
         parser.error("%s already holds a log" % out)
     if args.actuation and args.synthetic:
         parser.error("a synthetic run is only ever actuation synthetic: leave out --actuation")
@@ -449,7 +461,8 @@ def main(argv=None):
         described += [{"name": p.name, "sha256": events.sha256_file(p)} for p in paths]
         print("recorder_commands: kept %d of %d live command(s) inside the replayed span" % (len(kept), len(items)))
 
-    header, log = runner.run(inputs, runner.load_policies(args.policies, configs), plant=not (args.no_plant or args.lights),
+    policies = runner.load_policies(args.policies, configs)
+    header, log = runner.run(inputs, policies, plant=not (args.no_plant or args.lights),
                              synthetic=bool(args.synthetic), assume_occupied=args.assume_occupied,
                              sources=described, actuation=args.actuation)
     out.mkdir(parents=True, exist_ok=True)
@@ -463,6 +476,8 @@ def main(argv=None):
             _new_file(out / ("la-fact-log-1-%s.jsonl" % day), "".join(line + "\n" for line in lines))
     print(summary(header, log))
     print("log: %s" % (out / "log.jsonl"))
+    if "coordinator" in args.policies:
+        coordinator_outputs(out, log, next(p for p in policies if isinstance(p, coordinator.Coordinator)).light)
 
 
 if __name__ == "__main__":

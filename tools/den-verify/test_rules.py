@@ -1328,6 +1328,13 @@ class AVerifyFrameIsNearItsDecision(unittest.TestCase):
         self.assertIn("max_frame_gap_s (5 s)", entry["reason"])
         self.assertIn("mid_change", entry["reason"])
 
+    def test_with_nothing_after_the_skipped_frame_the_slot_is_not_why(self):
+        c = {"correction_id": "c", "ts": T + 4.5, "action": {"settle_s": 1.0}, "snapshot": {"light_state": []}, "hold": None}
+        report = run([landed()], [frame(T, 20.0, "ls-r"), frame(T + 4, 80.0)], corrections=[c])[2]
+        entry = not_verified(report)
+        self.assertEqual(entry["kind"], "no frame after settling")
+        self.assertEqual(entry["reason"], "no settled frame before the next decision: frames were mid_change")
+
     def test_with_no_read_frame_either_it_says_both(self):
         dec = landed(read=None)
         dec["inputs"]["light_state_ts"] = T - 3 * 3600

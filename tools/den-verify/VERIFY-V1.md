@@ -10,9 +10,9 @@ open slot.
 
 This note was committed before any code, and revised on 2026-11-05 after the
 pipeline review, with no session yet run: the held rule, which holds pin a
-bulb, the rule for dims and the meter's noise in the level check. Which points
-count now comes from predictions alone, never from a reading. Nothing here has
-run on real light.
+bulb, the rule for dims, the meter's noise in the level check and which read
+frames can be used. Which points count now comes from predictions and times alone,
+never from a reading. Nothing here has run on real light.
 Running needs the owner's go-ahead; building does not.
 
 ## What is scored
@@ -45,8 +45,10 @@ For each point at the verify frame:
   - `outside` otherwise;
   - `prior_only` when the estimate's `basis` is `prior`;
   - `unverifiable` when the surface is missing from the frame, its usable share
-    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's, or
-    nothing is lit there and nothing changed. Its `residual` is then null.
+    (1 − `clipped_frac`) is below `v_min`, its unit differs from the model's,
+    nothing is lit there and nothing changed, or under `reference_frame` the
+    frame the decision read is stale (see "Read frames"). Its `residual` is then
+    null.
 
 A `fallback_patch` estimate is scored here, because a fallback patch is a
 verify aid. It never counts as delivered service: the gold share below treats
@@ -58,7 +60,8 @@ D(p) + Ê(p; state), and the background D comes from the slot `background`:
 
 - `reference_frame` (proposed): D(p) = measured − Ê(p; state before), on the
   frame the decision read (`Decision.inputs.light_state`) with the state it read
-  (`Decision.inputs.actuator_state`);
+  (`Decision.inputs.actuator_state`), unless that frame is stale (see "Read
+  frames");
 - `zero`: D(p) = 0, for runs after dark.
 
 Under `reference_frame` the prediction works out as the read frame's measurement
@@ -239,6 +242,18 @@ step. If the next decision sends a step before this one has settled, it was
 superseded before it settled; if no frame qualifies, likewise `verify` is null
 with `verify_status` giving the reason.
 
+**Read frames.** The background and the increments take the frame the decision
+read, so it has to show the state the decision read. It is stale when it falls
+inside a step's window, or is older than a step another decision sent before this
+one: a Hue bulb reports its target at once, so `actuator_state` already shows that
+step and the frame does not, and D would take up the difference. With frames 5 s
+apart and a perfect model, a perfect landing read 0 of 6 on such a frame and a bulb
+that stayed stuck read 6 of 6. A stale frame gives no reference, whatever is read
+later. Under `reference_frame` the decision's points are `unverifiable` and a
+LightState under it has no residual. Under `zero` the level check stands and only
+its increments are `unverifiable`. The report lists these decisions
+(`decisions.read_frame_stale`) and the console says how many.
+
 **Occupied seconds** are flagged: a frame inside an occupancy interval is
 marked occupied in the report and in its residual `flags`. Occupied frames are
 still scored; occupancy feeds the shadow explanation.
@@ -283,8 +298,8 @@ Behind the slot `record_extensions`, proposed `verify-ext/v1`:
 - `explanation` is null when nothing missed, else a list of
   `{point_id, cause, basis}`.
 - `verify` is null with a sibling `verify_status` when no verify frame exists;
-  a frame with no residual (mid-fade, or before any decision) keeps
-  `residual: []` with a sibling `residual_status`.
+  a frame with no residual (mid-fade, before any decision, or under a decision
+  whose read frame is stale) keeps `residual: []` with a sibling `residual_status`.
 - A LightState is named by an `id` key when its line has one, else
   `ls-HHMMSS` in local time, with hundredths for a frame off the whole second
   (the contracts cite `ls-190409` but give LightState no id field).

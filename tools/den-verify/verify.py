@@ -93,6 +93,9 @@ def cmd_run(args):
     left, noise = report["excluded_held_or_superseded"], report["below_meter_noise"]
     if left:
         _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs")
+    stale = report["decisions"]["read_frame_stale"]
+    if stale:
+        _say(f"{len(stale)} decision(s) read a frame from before a step landed: nothing taken from that frame was judged")
     if noise["count"]:
         _say(f"{noise['count']} counted point(s) have a change below the meter's noise "
              f"({noise['hits']} hit(s), {noise['misses']} miss(es)); "

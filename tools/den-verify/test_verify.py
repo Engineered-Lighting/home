@@ -900,6 +900,134 @@ class MidFade(unittest.TestCase):
         self.assertEqual(report["hit_rate"]["hits"] + report["hit_rate"]["misses"], 0)
 
 
+class StaleReadFrame(unittest.TestCase):
+    """The read frame has to show the state the decision read: D takes up whatever is wrong with it."""
+
+    names = [f"p{i}" for i in range(6)]
+    t = syn.T0
+    was = {B0: 0.3, B1: 0.5}
+    now = {B0: 0.8, B1: 0.5}
+    scenes = ({B0: 0.0, B1: 0.0}, {B0: 0.1, B1: 0.1}, {B0: 0.85})  # an off, a deep dim, a one-bulb nudge
+
+    def setUp(self):
+        self.model = syn.hue_model({n: {B0: 300.0, B1: 100.0} for n in self.names}, kelvins=(2700,))
+        self.targets = {f"T{i}": {"surface_id": n} for i, n in enumerate(self.names)}
+
+    def frame(self, at, levels, ident=None):
+        return syn.light_state(at, {n: 300 * levels[B0] + 100 * levels[B1] for n in self.names}, anchored=False, ident=ident)
+
+    def records(self, first_sent, read_at, read_levels, scene, landed=None):
+        """d-1 sends B0 0.3 -> 0.8 at first_sent; d-2, at t + 4.7, shows that target and read the frame at read_at."""
+        t = self.t
+        frames = [self.frame(t, self.was, "ls-0")]
+        if read_at != t:
+            frames.append(self.frame(read_at, read_levels, "ls-read"))
+        d1 = syn.hue_decision("d-1", first_sent, self.was, {B0: {"level": 0.8, "steps": send(first_sent)}}, "ls-0",
+                              targets=self.targets)
+        d2 = syn.hue_decision("d-2", t + 4.7, self.now, {b: {"level": lv, "steps": send(t + 4.7)} for b, lv in scene.items()},
+                              "ls-0" if read_at == t else "ls-read", targets=self.targets)
+        frames += [self.frame(t + 10, landed or {**self.now, **scene}), self.frame(t + 65, landed or {**self.now, **scene})]
+        return [d1, d2], frames
+
+    def second(self, *args, overrides=None, **kw):
+        decisions, frames = self.records(*args, **kw)
+        out = score(decisions, frames, self.model, overrides=overrides)
+        return by_id(out[0], "decision_id", "d-2"), out[1], out[2]
+
+    def assert_says_nothing(self, d, report):
+        self.assertEqual({p["status"] for p in d["verify"]["points"]}, {"unverifiable"})
+        self.assertIsNone(d["verify"]["within_tolerance"])
+        self.assertIsNone(d["verify"]["explanation"])
+        hr = report["hit_rate"]
+        self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (0, 0, "insufficient"))
+
+    def test_a_perfect_landing_on_a_frame_older_than_the_last_landing_is_no_miss(self):
+        for scene in self.scenes:
+            d, _, report = self.second(self.t + 0.2, self.t, self.was, scene)
+            self.assert_says_nothing(d, report)
+
+    def test_a_perfect_landing_on_a_frame_inside_a_fade_is_no_miss(self):
+        for scene in self.scenes:
+            d, _, report = self.second(self.t - 1.0, self.t, {B0: 0.55, B1: 0.5}, scene)
+            self.assert_says_nothing(d, report)
+
+    def test_a_bulb_that_stayed_stuck_does_not_read_as_a_pass(self):
+        # d-1's bulb never moved: the old frame matches it, and this read 6 of 6
+        d, _, report = self.second(self.t + 0.2, self.t, self.was, {B0: 0.85}, landed=self.was)
+        self.assert_says_nothing(d, report)
+
+    def test_a_step_still_landing_when_the_decision_was_made_makes_the_frame_stale_too(self):
+        d, _, report = self.second(self.t + 3.0, self.t, self.was, {B1: 0.6})
+        self.assert_says_nothing(d, report)
+        self.assertEqual(report["decisions"]["not_admitted"], [])  # another channel: the rule here is the only one
+
+    def test_no_reading_changes_it(self):
+        for landed in (self.was, self.now, {B0: 0.0, B1: 0.0}, {B0: 1.0, B1: 1.0}):
+            d, _, report = self.second(self.t + 0.2, self.t, self.was, {B0: 0.1, B1: 0.1}, landed=landed)
+            self.assert_says_nothing(d, report)
+
+    def test_a_frame_taken_after_the_last_landing_counts_both_ways(self):
+        # read at t + 3.5, past d-1's end at t + 3.2; d-2's step comes after d-1's decision, so d-1 counts as well
+        for scene in self.scenes:
+            d, _, report = self.second(self.t + 0.2, self.t + 3.5, self.now, scene)
+            self.assertEqual({p["status"] for p in d["verify"]["points"]}, {"within"})
+            hr = report["hit_rate"]
+            self.assertEqual((hr["hits"], hr["misses"], hr["verdict"]), (12, 0, "pass"))
+            self.assertEqual(report["decisions"]["read_frame_stale"], [])
+        d, _, report = self.second(self.t + 0.2, self.t + 3.5, self.now, {B0: 0.85}, landed=self.was)
+        self.assertEqual({p["status"] for p in d["verify"]["points"]}, {"outside"})
+
+    def test_a_frame_taken_as_the_step_ends_counts(self):
+        d, _, report = self.second(self.t + 0.2, self.t + 3.2, self.now, {B0: 0.85})
+        self.assertEqual({p["status"] for p in d["verify"]["points"]}, {"within"})
+        self.assertEqual(report["decisions"]["read_frame_stale"], [])
+
+    def test_the_decisions_own_step_makes_a_frame_stale_only_if_the_frame_is_inside_it(self):
+        t = self.t
+        ref = self.frame(t, self.was, "ls-0")
+        for sent, status in ((t + 0.5, "within"), (t - 0.5, "unverifiable")):
+            dec = syn.hue_decision("d", t + 0.5, self.was, {B0: {"level": 0.8, "steps": send(sent)}}, "ls-0", targets=self.targets)
+            decisions, _, _ = score([dec], [ref, self.frame(t + 5, self.now)], self.model)
+            self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {status}, sent)
+
+    def test_the_zero_background_takes_nothing_from_the_frame_and_still_judges_the_level(self):
+        zero = {"background": "zero"}
+        for scene in self.scenes:
+            for first_sent, read_levels in ((self.t + 0.2, self.was), (self.t - 1.0, {B0: 0.55, B1: 0.5})):
+                d, _, report = self.second(first_sent, self.t, read_levels, scene, overrides=zero)
+                self.assertEqual({p["status"] for p in d["verify"]["points"]}, {"within"})
+                self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (6, 0))
+                # the increment does read the frame: d-1's landing is in it and not in this decision's change
+                self.assertEqual({i["status"] for i in d["verify"]["increments"]}, {"unverifiable"})
+        d, _, report = self.second(self.t + 0.2, self.t, self.was, {B0: 0.85}, landed=self.was, overrides=zero)
+        self.assertEqual({p["status"] for p in d["verify"]["points"]}, {"outside"})
+        self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (0, 6))
+
+    def test_the_residual_says_why_it_has_nothing_while_that_decision_is_in_force(self):
+        _, states, _ = self.second(self.t + 0.2, self.t, self.was, {B0: 0.85})
+        for at in (self.t + 10, self.t + 65):
+            s = next(s for s in states if s["ts"] == at)
+            self.assertEqual(s["residual"], [])
+            self.assertIn("d-2", s["residual_status"])
+            self.assertIn("d-1", s["residual_status"])
+        _, states, _ = self.second(self.t + 0.2, self.t, self.was, {B0: 0.85}, overrides={"background": "zero"})
+        self.assertAlmostEqual(residual(states, self.t + 10, "p0")["residual"], 0.0, places=6)
+
+    def test_the_owner_is_told(self):
+        decisions, frames = self.records(self.t + 0.2, self.t, self.was, {B0: 0.85})
+        with tempfile.TemporaryDirectory() as tmp:
+            argv = write_case(tmp, decisions, frames, self.model)
+            with Quiet() as q:
+                self.assertEqual(cli.main(argv), 0)
+            report = json.loads((Path(tmp) / "out" / "report.json").read_text(encoding="utf-8"))
+        stale = report["decisions"]["read_frame_stale"]
+        self.assertEqual([s["decision_id"] for s in stale], ["d-2"])
+        self.assertIn("d-1", stale[0]["why"])
+        out = q.buf.getvalue()
+        self.assertIn("1 decision(s) read a frame from before a step landed", out)
+        out.encode("ascii")
+
+
 class DaylightAndDrift(unittest.TestCase):
     """Daylight is explained as daylight, never as drift; drift and shadow are told apart."""
 

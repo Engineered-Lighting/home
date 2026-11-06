@@ -18,7 +18,9 @@ a hit and a bulb that stayed on is a miss. A fault inside those bounds cannot be
 seen: at the proposed allowance, one bulb of four stuck on a dim shallower than
 about 2.5:1 reads as a hit, the same line as going up, and the report gives what
 the hit rate would be without such hits. A change below the meter's noise is judged
-to that noise, and a pass needs the hit rate without such points to pass too. Which
+to that noise, and a pass needs the hit rate without such points to pass too. A
+decision that read a frame from before a step landed is unverifiable under the
+read-frame background, not a hit or a miss. Which
 points count never depends on what they read. It reads records
 already on disk, opens no network connection, and refuses a scored run until the
 owner closes its open slots in `VERIFY-V1.md`.

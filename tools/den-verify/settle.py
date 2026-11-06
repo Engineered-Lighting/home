@@ -87,6 +87,21 @@ def mark_mid_transition(all_steps):
         by_channel.setdefault(s.channel, []).append(s)
 
 
+def stale_read(decision_id, decision_ts, read_ts, all_steps):
+    """Why the frame a decision read cannot show the state it read, or None.
+
+    A Hue bulb reports its target at once, so a decision's actuator_state already
+    shows a step that went out ahead of it. A frame inside a step's window, or
+    older than such a step, shows a different room from that state.
+    """
+    for s in all_steps:
+        if s.sent_at <= read_ts < s.end:
+            return f"{s.reason}: {s.decision_id} was landing at the read frame"
+        if s.decision_id != decision_id and read_ts < s.end and s.sent_at < decision_ts:
+            return f"the read frame is older than {s.decision_id}'s step"
+    return None
+
+
 class Windows:
     """Busy windows: steps landing and people changing lights."""
 

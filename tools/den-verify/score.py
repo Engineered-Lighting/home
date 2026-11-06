@@ -118,7 +118,7 @@ class Dec:
             or run.first_ts
         self.resolve = lambda v: run.clock.resolve(v, anchor)
         self.ts = self.resolve(rec.get("ts"))
-        self.problem = None
+        self.problem = self.stale_read = None
         try:
             self.steps = settle.decision_steps(rec, self.resolve, run.m)
         except settle.Unsettleable as e:
@@ -238,6 +238,9 @@ class Run:
         all_steps = [s for d in self.decs for s in d.steps]
         self.windows.add_steps(all_steps)
         settle.mark_mid_transition(all_steps)
+        for d in self.decs:
+            if d.ref is not None:
+                d.stale_read = settle.stale_read(d.id, d.ts, d.ref.ts, all_steps)
         self.occupancy = [(float(o["start"]), float(o["end"]), o.get("people") or []) for o in occupancy]
         self.gold = list(gold)
 
@@ -290,7 +293,9 @@ class Run:
             measured, why = frame.usable(sid, m) if unit_ok else (None, "unit mismatch")
             row["basis"] = (frame.estimates.get(sid) or {}).get("basis")
             ref_val, rwhy = None, "no reference frame in the same unit"
-            if ref is not None and ref.unit == frame.unit:
+            if d.stale_read:
+                rwhy = f"reference frame: {d.stale_read}"
+            elif ref is not None and ref.unit == frame.unit:
                 ref_val, rwhy = ref.usable(sid, m)
                 rwhy = rwhy and f"reference frame: {rwhy}"
             if m["background"] == "zero":
@@ -499,6 +504,8 @@ class Run:
             return None, "no decision in force"
         if d.problem:
             return None, f"decision {d.id}: {d.problem}"
+        if d.stale_read and self.m["background"] != "zero":
+            return None, f"decision {d.id}: {d.stale_read}"
         try:
             rows, revision = self.evaluate(d, frame, frame.ts)
         except KeyError as e:
@@ -620,7 +627,7 @@ class Run:
         below_noise = {"count": 0, "hits": 0}
         wide_by_day = {}
         excluded_by_status = {"within": 0, "outside": 0}
-        not_admitted, not_verified = [], []
+        not_admitted, not_verified, read_frame_stale = [], [], []
         spill_counts, inc_counts = {}, {}
         for i, d in enumerate(self.decs):
             rec = copy.deepcopy(d.rec)
@@ -641,6 +648,8 @@ class Run:
             rec["verify"] = verify
             rec.pop("verify_status", None)
             decisions_out.append(rec)
+            if d.stale_read:
+                read_frame_stale.append({"decision_id": d.id, "why": d.stale_read})
             admitted = not any(s.mid_transition for s in d.steps)
             if not admitted:
                 not_admitted.append({"decision_id": d.id, "pending": "fixture-capabilities",
@@ -717,7 +726,8 @@ class Run:
             "model": {"version": self.model.version, "basis_unit": self.model.basis_unit,
                       "backend": self.model.backend},
             "decisions": {"total": len(self.decs), "verified": len(rows_out),
-                          "not_verified": not_verified, "not_admitted": not_admitted},
+                          "not_verified": not_verified, "not_admitted": not_admitted,
+                          "read_frame_stale": read_frame_stale},
             "frames": frame_counts,
             "hit_rate": rate,
             "excluded_held_or_superseded": excluded_held,

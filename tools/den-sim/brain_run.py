@@ -1,16 +1,19 @@
-"""The real lighting brain on a scripted reader, for the den simulation.
+"""The real lighting brain on what the pipeline produced, for the den simulation.
 
-The same wiring as tools/fixtures/den-reading-coordinator.py: the real
-ActivityLoop, BrainPublisher and Brain under a fake clock, writing one JSON
-timeline to stdout. Only the deep stack is fake: the joints and the activity
-label are typed in here, no camera or model runs, and no socket can open.
+The same wiring as tools/fixtures/den-reading-coordinator.py: the real ActivityLoop, BrainPublisher and
+Brain under a fake clock, writing one JSON timeline to stdout. Only the deep stack is fake: it hands over
+the person and label chain.py's adapter made, with jev and deep_stack health asserted. No camera or model
+runs, and no socket can open. The geometry copy has camera_m null, so facing comes from the shoulder
+labels, and a refusal shows as no beam.
 
-Reads {"geometry", "scenario", "seat_m", "facing_xy"} as JSON on stdin, and
-optionally {"person", "label"} from chain.py's adapter, in place of typed ones.
+Reads JSON on stdin:
+  {"geometry", "person", "label"}   one click: the brain's timeline
+  {"geometry", "startup"}           page start: the empty room's row, and, when startup holds
+                                    {"seat_m", "facing_unit", "spot_m"}, each fixture against the
+                                    stated facing and the spot, through the brain's aim.py
 """
 import dataclasses
 import json
-import math
 import sys
 from pathlib import Path
 
@@ -28,15 +31,15 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'stack/services/perception-lab'), str(ROOT / 'stack/services/lighting-brain')]
 from activity_loop import ActivityLoop  # noqa: E402
 from brain_publisher import BrainPublisher  # noqa: E402
+from lighting_brain import aim  # noqa: E402
 from lighting_brain.brain import Brain  # noqa: E402
 from lighting_brain.geometry import load_geometry  # noqa: E402
 from lighting_brain.settings import Settings  # noqa: E402
 
 START = 1792411200.0  # Noon UTC, so the night rule stays out of this.
 OFFSETS = (0, 1, 2, 3)  # Reading must hold 3 s before the brain lights a spot.
-LABELS = {'reading_on_couch': 'reading', 'not_reading': 'phone_use'}
 SCRIPTED = 'SIMULATION-scripted'
-SHOULDER_ABOVE_SEAT_M, HEAD_ABOVE_SHOULDER_M, SHOULDER_HALF_M, HEAD_PITCH_DEG = .5, .23, .18, 20.
+SHOULDER_ABOVE_SEAT_M, HEAD_ABOVE_SHOULDER_M = .5, .23
 
 
 class Clock:
@@ -47,7 +50,7 @@ class Clock:
 
 
 class Deep:
-    """The fake deep stack: it hands over whatever the script typed in."""
+    """The fake deep stack: it hands over what the adapter produced."""
     seen = {}
 
     def start(self):
@@ -72,17 +75,6 @@ def binding(at, number):
                 observed_at=at, available_at=at, valid_until=at + 2.8)
 
 
-def scripted_reader(seat, facing_xy):
-    """Person A, sitting at the seat. Without a camera the brain takes facing from
-    the shoulder labels (facing = z x (right - left)), so the labels are set for it."""
-    length = math.hypot(*facing_xy)
-    fx, fy = facing_xy[0] / length, facing_xy[1] / length
-    x, y, z = seat[0], seat[1], seat[2] + SHOULDER_ABOVE_SEAT_M
-    dx, dy = fy * SHOULDER_HALF_M, -fx * SHOULDER_HALF_M
-    return dict(track_id='person-A', shoulders_m={'left': [x - dx, y - dy, z], 'right': [x + dx, y + dy, z]},
-                head_m=[x, y, z + HEAD_ABOVE_SHOULDER_M], head_pitch_deg=HEAD_PITCH_DEG, approximate=True)
-
-
 def row(phase, brain, clock):
     evaluation = brain.evaluation
     facts = evaluation.facts
@@ -92,12 +84,31 @@ def row(phase, brain, clock):
                 reader=dataclasses.asdict(facts.reader) if facts.reader else None)
 
 
+def startup_line(geometry, seat, facing, spot):
+    """Each fixture against the stated facing and the spot, in words only: aim.py's own rule, on a reader
+    seated at the mark's seat point facing the stated way, with the hand on the spot."""
+    shoulder = (seat[0], seat[1], seat[2] + SHOULDER_ABOVE_SEAT_M)
+    reader = aim.Reader(shoulder_mid=shoulder, facing=(facing[0], facing[1], 0.0), facing_source='stated',
+                        head=(shoulder[0], shoulder[1], shoulder[2] + HEAD_ABOVE_SHOULDER_M), head_source='stated', hand=tuple(spot))
+    settings = Settings(timezone='UTC')
+    words = []
+    for number, fixture in enumerate(geometry.fixtures, 1):
+        candidate = aim.evaluate_fixture(fixture, reader, settings)
+        words.append('F%d clear' % number if candidate.ok else 'F%d refused: %s' % (number, candidate.reason.split(':')[0].replace('_', ' ')))
+    return words
+
+
 def main():
     request = json.load(sys.stdin)
-    label = request.get('label') or LABELS[request['scenario']]
+    geometry = load_geometry(request['geometry'])
     clock, deep, published = Clock(), Deep(), []
-    brain = Brain(load_geometry(request['geometry']), Settings(timezone='UTC'), clock)
+    brain = Brain(geometry, Settings(timezone='UTC'), clock)
     rows = [row('empty', brain, clock)]
+    if 'startup' in request:
+        stated = request['startup']
+        print(json.dumps(dict(empty_row=rows[0], camera_m=geometry.camera_m,
+                              startup=startup_line(geometry, stated['seat_m'], stated['facing_unit'], stated['spot_m']) if stated else None), allow_nan=False))
+        return
 
     def post(raw):
         body = json.loads(raw)
@@ -113,7 +124,7 @@ def main():
     brain.ingest('victoria', dict(schema='activity-lighting-events-1', events=[
         dict(type='occupancy', home='victoria', room='den', source=SCRIPTED + '/occupancy', observed_at=START,
              sent_at=START, ttl_s=90, present=True, people_count=1)]))
-    person = request.get('person') or scripted_reader(request['seat_m'], request['facing_xy'])
+    person, label = request['person'], request['label']
     for number, offset in enumerate(OFFSETS, 1):
         clock.value = START + offset
         source = binding(clock.value, number)
@@ -124,7 +135,7 @@ def main():
                                    valid_until=source['valid_until']))
         loop.tick()
         rows.append(row('person_a', brain, clock))
-    print(json.dumps(dict(scenario=request['scenario'], label=label, scripted_reader=person, rows=rows,
+    print(json.dumps(dict(label=label, person=person, rows=rows, camera_m=geometry.camera_m,
                           events=sum(len(body['events']) for body in published),
                           schemas=sorted({body['schema'] for body in published}),
                           camera_calls=0, model_calls=0), allow_nan=False))

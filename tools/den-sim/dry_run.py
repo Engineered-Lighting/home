@@ -4,12 +4,11 @@ Real compile_target on a FICTIONAL profile, with its pivot and basis taken from
 the fixture the brain chose. Then the real plan and wire codec, read by path
 because it is on no git ref, sealed with the contract's public test key for a
 fictional device. Then the literal Home Assistant POST with a placeholder ieee,
-the two CAN A4 frames, and the Hue form of what decide v0 asked for in chain.py.
-Nothing here can send: there is no token, no route and no socket. Prints one JSON
-document to stdout.
+and the two CAN A4 frames. Nothing here can send: there is no token, no route and
+no socket. Prints one JSON document to stdout.
 
-Reads JSON on stdin: {"scenario", "brain", "decide", "codec_tools",
-"codec_contracts"}. "brain" is null when the brain lit nothing, or else
+Reads JSON on stdin: {"take", "brain", "codec_tools", "codec_contracts"}, where
+take is the take's folder id. "brain" is null when the brain lit nothing, or else
 {"fixture_id", "aim_origin_m", "horizontal_world_reference", "target_m", "level",
 "cct_k", "pan_deg", "tilt_deg"}.
 """
@@ -157,21 +156,11 @@ def can_frames(ik, contracts):
     return result
 
 
-def hue_form(scene_by_light):
-    calls = []
-    for entity, scene in scene_by_light.items():
-        if scene['on']:
-            calls.append(dict(route='/api/services/light/turn_on', body=dict(entity_id=entity, brightness=scene['brightness'], color_temp_kelvin=scene['kelvin'])))
-        else:
-            calls.append(dict(route='/api/services/light/turn_off', body=dict(entity_id=entity)))
-    return calls
-
-
 def main():
     request = json.load(sys.stdin)
-    brain, decide = request['brain'], request['decide']
-    out = dict(sent=False, send_path=None, scenario=request['scenario'], brain=brain, ik=None, spot=None, plan=None, wire=None, can=None,
-               decide={**decide, 'calls': hue_form(decide['requested_scene'] or {})}, codec=dict(found=False, tools=request['codec_tools']))
+    brain = request['brain']
+    out = dict(sent=False, send_path=None, take=request['take'], brain=brain, ik=None, spot=None, plan=None, wire=None, can=None,
+               codec=dict(found=False, tools=request['codec_tools']))
     tools = Path(request['codec_tools'])
     if (tools / 'c12_runtime_plan.py').is_file() and (tools / 'c12_runtime_wire.py').is_file():
         codec, plan_sha = load_by_path(tools, 'c12_runtime_plan')

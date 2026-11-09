@@ -36,7 +36,7 @@ $py = "$env:USERPROFILE\ml\den-detector\Scripts\python.exe"
 
 Python sockets are refused through an audit hook. Ultralytics runs offline with no auto-install, and
 onnxruntime's telemetry is off, because native code can't be hooked. On this PC's CPU a frame with a
-person takes about 66 ms, and an empty one about 40 ms.
+person takes about 70 ms, and an empty one about 42 ms.
 
 ## The tests
 

@@ -254,6 +254,13 @@ test('the hop table: 26 hops, each with its pin, and adapters that name their st
     assert.ok(['recorded', 'page', 'click'].includes(hop.when));
   }
   assert.deepEqual(Object.keys(REFS.codec.sha256).sort(), ['contracts/motor-protocol-allowlist-v1.json', 'contracts/runtime-plan-v1.json', 'tools/c12_runtime_plan.py', 'tools/c12_runtime_wire.py']);
+  // The plan's recorded inputs (condition 2), each in the table for every hop the plan names it for: the
+  // table holds the finished state, so a later step meets no false condition 2 reason.
+  const PLAN = [[['shots.json', 'render'], [1, 2, 3]], [['take', 'check'], [3, 4, 6]], [['marks take', 'clicks', 'calibration', 'facing.json'], [5]],
+    [['room model'], [5, 7, 14, 15, 16]], [['rows'], [6]], [['method copy'], [9]], [['replies'], [12]], [['your mark', 'your export'], [14]],
+    [['light model'], [16, 17, 26]], [['fixture table'], [16, 18, 21]]];
+  const short = PLAN.flatMap(([kinds, hops]) => hops.flatMap(n => kinds.filter(kind => !TABLE.hops[n - 1].recorded_inputs.includes(kind)).map(kind => `${n}: ${kind}`)));
+  assert.deepEqual(short, []);
 });
 
 /* ---------- test 2 and test 19: searches over code ---------- */
@@ -377,6 +384,8 @@ test('the real chain on every prepared take: step 2\'s words, not yet, and nothi
   const first = await status();
   assert.deepEqual(first.scenes, display.map(({ take, label }) => ({ take, label })), 'the buttons carry labels and take ids, never the words');
   for (const key of ['seat_m', 'point']) assert.ok(!JSON.stringify({ couch: first.couch, brain: first.brain }).includes(`"${key}"`), `${key} left the startup record`);
+  // The authored room's stand-in seat sits on the floor's centre, so its facing is a tie-break, and the page says so.
+  assert.match(first.placement.summary, /; the reader faces a tie-break, not the stated rule: the seat's middle is the floor's centre/);
   const clicks = {};
   for (const scene of display) {
     const done = await click(scene.take);

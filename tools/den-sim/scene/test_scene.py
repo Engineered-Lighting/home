@@ -711,6 +711,15 @@ class Placement(unittest.TestCase):
         left = prepare.placement(self.MARK, [2.0, 1.0], 90.0, 0.44)      # a quarter turn to the reader's left
         self.assertTrue(np.allclose(left["facing_unit"], [1, 0], atol=1e-12))
 
+    def test_a_seat_on_the_floor_centre_is_named_a_tie_break(self):
+        """The stand-in seat: a square around the floor's centre, so no edge is longest and no side is nearer."""
+        self.assertEqual(prepare.placement(self.MARK, [2.0, 1.0], 0.0, 0.44)["facing_rule"], "perpendicular to the longest edge, toward the floor's centre")
+        square = {"schema": prepare.MARK_SCHEMA, "seat": {"point_m": [2.0, 2.0, 0.45]},
+                  "zone": {"vertices_m": [[1.6, 1.6, 0.45], [2.4, 1.6, 0.45], [2.4, 2.4, 0.45], [1.6, 2.4, 0.45]], "centre_m": [2.0, 2.0, 0.45]}}
+        tied = prepare.placement(square, [2.0, 2.0], 0.0, 0.44)
+        self.assertTrue(tied["facing_rule"].startswith("a tie-break, not the stated rule"))
+        self.assertTrue(np.allclose(tied["facing_unit"], [0, 1], atol=1e-12))
+
     def test_a_mark_without_its_shape_is_refused(self):
         for broken in ({**self.MARK, "schema": "something-else"}, {**self.MARK, "zone": {"vertices_m": [[0, 0, 0]]}}, {**self.MARK, "seat": {}}):
             with self.assertRaises(prepare.Stop):

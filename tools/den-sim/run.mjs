@@ -198,7 +198,7 @@ function placement() {
   if (!found) return { registered: false, summary: `the re-fit on ${where} was refused: ${refused || 'no fit registered'}`, read, wrote: [], tools: {}, stand_in: TABLE.hops[4].stand_ins[4], files };
   const roomModel = path.join(FITS, found.folder, 'room-model.jsonl');
   return { registered: true, folder: found.folder, reused, files, read, tools: found.receipt.tools,
-    summary: `re-fit ${found.receipt.transform_id} on ${where}${reused ? ', unchanged since an earlier start' : ', at this start'}`,
+    summary: `re-fit ${found.receipt.transform_id} on ${where}${reused ? ', unchanged since an earlier start' : ', at this start'}${found.receipt.facing_rule ? `; the reader faces ${found.receipt.facing_rule}` : ''}`,
     wrote: [{ path: `fits/${found.folder}/room-model.jsonl`, sha256: found.receipt.room_model_sha256 }],
     stand_in: mine ? TABLE.hops[4].stand_ins[4] : `re-fit at page start: the pose placed on a public stand-in seat at the DECLARED point, not your sofa mark`,
     room_model: { path: roomModel, sha256: found.receipt.room_model_sha256, by: `refit-receipt.json of fit ${found.folder}` },

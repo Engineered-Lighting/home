@@ -584,11 +584,16 @@ def placement(mark, centre, turn_deg, seat_height_m):
     if length < 1e-6:
         raise Stop(5, "the sofa mark's longest edge is vertical")
     normal = [-(b[1] - a[1]) / length, (b[0] - a[0]) / length]
-    if normal[0] * (centre[0] - middle[0]) + normal[1] * (centre[1] - middle[1]) < 0:
+    toward = normal[0] * (centre[0] - middle[0]) + normal[1] * (centre[1] - middle[1])
+    if toward < 0:
         normal = [-normal[0], -normal[1]]
+    # A seat whose middle is the floor's centre leaves the rule no side to choose: the first longest edge's
+    # normal decides, and the record says so in words, so the page can name it a tie-break.
+    rule = ("a tie-break, not the stated rule: the seat's middle is the floor's centre, so the first longest edge decides"
+            if abs(toward) < 1e-9 else "perpendicular to the longest edge, toward the floor's centre")
     angle = math.atan2(normal[0], -normal[1]) + math.radians(turn_deg)      # the picture's reader faces -y
     return {"rotation_z_rad": angle, "facing_unit": [math.sin(angle), -math.cos(angle)],
-            "translation_m": [middle[0], middle[1], seat[2] - seat_height_m]}
+            "translation_m": [middle[0], middle[1], seat[2] - seat_height_m], "facing_rule": rule}
 
 
 def place(point, transform):
@@ -652,7 +657,8 @@ def refit(args):
     registered = report["result"] == "registered"
     write_json(folder / "refit-receipt.json", {
         "schema": SCHEMA_REFIT, "set": set_dir.name, "result": report["result"], "transform_id": report.get("transform_id"),
-        "reasons": [r["reason"] for r in report.get("reasons", [])], "inputs": inputs, "slots_closed_in_memory": proposals,
+        "reasons": [r["reason"] for r in report.get("reasons", [])], "inputs": inputs, "facing_rule": transform["facing_rule"],
+        "slots_closed_in_memory": proposals,
         "room_model_sha256": sha256_file(folder / "room-model.jsonl") if registered else None,
         "tools": tools, "refit_unix": round(time.time(), 3)})
     if registered:

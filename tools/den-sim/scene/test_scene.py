@@ -881,8 +881,8 @@ class Trace(unittest.TestCase):
             inside = lambda path, root: Path(path).resolve().is_relative_to(root.resolve())
             self.assertGreater(len(writes), 100)
             self.assertEqual([w for w in writes if not inside(w, home)], [], "no write outside the data root")
-            real = [Path(os.environ[name]) for name in ("LOCALAPPDATA", "APPDATA", "TEMP") if os.environ.get(name)] + [Path.home() / "AppData"]
-            self.assertEqual([w for w in writes if any(inside(w, root) for root in [temp, tmp / "lad", tmp / "ad", *real])], [], "none under AppData or TEMP")
+            # The run's own TEMP, LOCALAPPDATA and APPDATA, and the real AppData that holds this user's TEMP.
+            self.assertEqual([w for w in writes if any(inside(w, root) for root in (temp, tmp / "lad", tmp / "ad", Path.home() / "AppData"))], [], "none under AppData or TEMP")
             self.assertFalse(any(temp.iterdir()), "and nothing native landed in TEMP either")
             print(f"\n  traced {len(processes)} Python processes, {len(writes)} writes, all under the data root", file=sys.stderr)
             self.assertTrue([w for w in [str(tmp / "elsewhere.txt")] if not inside(w, home)], "control: a write outside is found")

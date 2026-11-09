@@ -1,7 +1,8 @@
 // The den simulation's honesty and safety test, in a real browser against the real harness, on a
-// prepared set: the beam travels, a refusal leaves the spot off, a take with nobody stops at the
-// detector, the top line reads "not yet" with step 2's words hop by hop, the picture is the take's
-// own frame with no box, no coordinate is printed, and nothing leaves the page. It uses --room
+// prepared set: the beam travels, a refusal leaves the spot off, a take with nobody and a blank one
+// stop at the detector with no box, the top line reads "not yet" with step 3's words hop by hop, the
+// picture is the take's own frame with the model's box and joints from that frame's row, the torso
+// line is said against the limit only, no coordinate is printed, and nothing leaves the page. It uses --room
 // authored and a scratch data root (DEN_SIM_HOME and LOCALAPPDATA), so no household data or
 // private file is involved. It runs on this PC only: it needs a prepared set, the pinned refs in
 // tools/den-sim/refs.json and the codec on disk, so no CI job names it.
@@ -32,8 +33,8 @@ const EXPECTED_CSP_BLOCKS = new Set(['http://127.0.0.1:8765/healthz']);
 const FEED_POST = 'POST /__sim/feed';
 const SET = process.env.DEN_SIM_SET ? path.resolve(process.env.DEN_SIM_SET) : null;
 const SKIP = SET && fs.existsSync(path.join(SET, 'display.json')) ? false : 'needs DEN_SIM_SET=<a prepared set>';
-// The plan's step 2 words ("Labels that change"), hop by hop, with no sofa mark saved.
-const STEP2 = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'SCRIPTED', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
+// The plan's step 3 words ("Labels that change"), hop by hop, with no sofa mark saved.
+const STEP3 = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
   11: 'MISSING', 12: 'SCRIPTED', 13: 'ADAPTER', 14: 'SCRIPTED', 15: 'MISSING', 16: 'MISSING', 17: 'ADAPTER', 18: 'ADAPTER', 19: 'SCRIPTED', 20: 'REAL',
   21: 'ADAPTER', 22: 'ADAPTER', 23: 'SCRIPTED', 24: 'MISSING', 25: 'MISSING', 26: 'MISSING' };
 
@@ -129,7 +130,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
   await t.test('the page says what it is before anything runs', async () => {
     await openHome(page);
     const strip = await page.textContent('[data-den-sim-strip]');
-    for (const words of ['SIMULATION', 'rendered takes', 'no inference ran', 'nothing is sent', 'AUTHORED ROOM', 'AUTHORED SOCKETS', 'DECLARED',
+    for (const words of ['SIMULATION', 'rendered takes', 'a real detector\'s recorded rows', 'Qwen\'s words typed', 'nothing is sent', 'AUTHORED ROOM', 'AUTHORED SOCKETS', 'DECLARED',
       'INVENTED CAMERA: it does not exist', 'Home\'s code from this PC\'s harness, not your deployed Home']) assert.ok(strip.includes(words), `the strip says ${words}: ${strip}`);
     assert.deepEqual(await page.locator('[data-den-sim-feed]').allTextContents(), display.map(scene => scene.label), 'one button per prepared take, labelled from the display file');
     assert.deepEqual(await page.locator('[data-den-sim-feed]').evaluateAll(nodes => nodes.map(node => node.dataset.denSimFeed)), display.map(scene => scene.take), 'a button carries a take id, never a word');
@@ -153,37 +154,54 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(last.fixture_id, held.feed.summary.fixture_id, 'Home lit the fixture the brain chose');
     assert.ok(Math.abs(last.pan_deg - held.feed.summary.pan_deg) < .05 && Math.abs(last.tilt_deg - held.feed.summary.tilt_deg) < .05, 'Home agrees with the brain');
     assert.deepEqual(last.target, held.feed.swing.final_target_m, 'the beam ends on the brain\'s target');
-    // A lit result says the detector is scripted, so standing and blank lighting too is no surprise.
-    await page.waitForFunction(() => /no detector looks at the picture: the joints come from the figure's truth, so a blank picture or a figure standing by the couch lights a spot too/
+    // A lit result says the older brain's own rule decides on the couch, so a standing figure lighting is no surprise.
+    await page.waitForFunction(() => /The older brain's own 1\.5 m rule decides whether the reader is on the couch, so a figure standing within 1\.5 m of the seat lights a spot too/
       .test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
     t.diagnostic(`${aims.length} distinct aims, ${aims[0]} to ${aims.at(-1)}, ${held.feed.summary.fixture_id}`);
   });
 
-  await t.test('the top line reads "not yet", lists why, and every row reads step 2\'s word', async () => {
+  await t.test('the top line reads "not yet", lists why, and every row reads step 3\'s word', async () => {
     assert.equal(await page.textContent('[data-den-sim-top-line-text]'), 'Connected start to finish: not yet');
-    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 9 adapter (8 real tools with a named stand-in, 1 written for this simulation), 8 scripted, 6 missing');
+    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 10 adapter (9 real tools with a named stand-in, 1 written for this simulation), 7 scripted, 6 missing');
     assert.ok(await page.locator('[data-den-sim-reason]').count() > 10, 'the reasons are listed');
-    for (const [n, word] of Object.entries(STEP2)) assert.equal(await hopStatus(page, n), word, `hop ${n}`);
+    for (const [n, word] of Object.entries(STEP3)) assert.equal(await hopStatus(page, n), word, `hop ${n}`);
     assert.deepEqual(await page.locator('[data-den-sim-hops] h4').allTextContents(), ['Recorded once', 'Built when this page started', 'Ran on this click', 'Not built yet, or not reached on this click']);
     // Which rows sit under each heading: a row that didn't run is never under "Ran on this click".
     const underHeadings = await page.locator('[data-den-sim-hops] h4').evaluateAll(nodes => nodes.map(node => [node.textContent, [...node.nextElementSibling.querySelectorAll('[data-den-sim-hop]')].map(item => Number(item.dataset.denSimHop))]));
-    assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5]], ['Built when this page started', [14]], ['Ran on this click', [6, 7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23]],
+    assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5, 6]], ['Built when this page started', [14]], ['Ran on this click', [7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23]],
       ['Not built yet, or not reached on this click', [11, 15, 16, 24, 25, 26]]]);
     const names = await page.locator('[data-den-sim-hop]').evaluateAll(nodes => nodes.sort((a, b) => a.dataset.denSimHop - b.dataset.denSimHop).map(node => node.dataset.denSimName));
     assert.deepEqual(names, JSON.parse(fs.readFileSync(path.join(HERE, 'hops.json'), 'utf8')).hops.map(hop => hop.name), 'one row per hop, named as the table names it');
     assert.ok(!names.some(name => /Person to aim|decide v0/.test(name)), '#424\'s two rows left the list');
-    assert.match(await page.textContent('[data-den-sim-hop="6"]'), /fake_detector places the figure's true joints from the truth folder/, 'the detector row says the joints are the truth');
+    const six = await page.textContent('[data-den-sim-hop="6"]');
+    assert.match(six, /rows checked against the model on .*YOLO26s found a person on \d+ of \d+ usable frames, and RTMPose-m placed its joints/, 'the detector row says a real model found the person');
+    for (const stand of ['YOLO26s and RTMPose-m on this PC\'s CPU, not the live host', 'available_ts counts compute only', 'detect.py is new', 'authorize is answered yes'])
+      assert.ok(six.includes(stand), `hop 6 names its stand-in: ${stand}`);
+    assert.doesNotMatch(six, /truth|fake_detector/);
+    assert.match(await page.textContent('[data-den-sim-hop="10"]'), /The track list decides whether the older brain runs at all.*still typed in brain_run\.py until step 6/);
+    assert.match(await page.textContent('[data-den-sim-hop="12"]'), /answers typed from the truth folder's held object/);
     assert.match(await page.textContent('[data-den-sim-hop="3"]'), /re-checked by hash now/);
   });
 
-  await t.test('the picture is the take\'s own frame, read back out of its NV12, and no box is drawn', async () => {
+  await t.test('the picture is the take\'s own frame, with the model\'s box, score and joints from that frame\'s row', async () => {
     const size = await page.$eval('[data-den-sim-picture]', img => img.complete && [img.naturalWidth, img.naturalHeight]);
     assert.deepEqual(size, [640, 360]);
     const status = await statusOf(), bytes = Buffer.from(await (await fetch(ORIGIN + '/__sim/picture')).arrayBuffer());
     const written = fs.readFileSync(path.join(status.run, `click-${status.click.click}`, 'picture.png'));
     assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), crypto.createHash('sha256').update(written).digest('hex'), 'the click\'s own picture');
-    assert.equal(await page.locator('#den-sim-panel svg, #den-sim-panel canvas, #den-sim-panel video').count(), 0, 'no box, no figure drawn over it');
     assert.equal(await page.locator('#den-sim-panel img').count(), 1, 'one picture');
+    assert.equal(await page.locator('#den-sim-panel canvas, #den-sim-panel video').count(), 0);
+    // The box drawn is the one in the recorded row of the very frame the picture shows.
+    const receipt = await (await fetch(ORIGIN + '/__sim/receipt')).json(), { rgb_seq: seq, boxes } = receipt.picture;
+    const rowsFile = path.join(SET, receipt.take, 'detections.jsonl');
+    const row = fs.readFileSync(rowsFile, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).find(item => item.frame.rgb_seq === seq);
+    assert.deepEqual(boxes.map(box => box.box_xyxy), row.detections.filter(d => d.class === 'person').map(d => d.box_xyxy.map(v => Math.round(v * 10) / 10)));
+    const drawn = await page.$$eval('[data-den-sim-boxes] rect', rects => rects.map(r => ['x', 'y', 'width', 'height'].map(k => Number(r.getAttribute(k)))));
+    assert.deepEqual(drawn, boxes.map(({ box_xyxy: [x0, y0, x1, y1] }) => [x0, y0, x1 - x0, y1 - y0]));
+    assert.match(await page.textContent('[data-den-sim-boxes] text'), /^person 0\.\d\d$/, 'the box\'s score');
+    assert.ok(await page.locator('[data-den-sim-boxes] [data-den-sim-joint]').count() >= 5, 'its supported joints');
+    assert.match(await page.textContent('[data-den-sim-picture-note]'), /YOLO26s's person box and score and RTMPose-m's supported joints from this frame's recorded row/);
+    assert.match(await page.textContent('[data-den-sim-torso]'), /^Against hop 15's on-the-couch limit, which step 5 builds: torso \d\.\d\d m (under|over) the limit/);
   });
 
   await t.test('no coordinate is printed: the aim target and the hand point show only their distance from the seat', async () => {
@@ -225,25 +243,33 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(await page.getAttribute('[data-den-sim-hop="21"]', 'data-reached'), '0', 'hops past the refusal are not reached');
   });
 
-  await t.test('nobody there: the click stops at the detector, says so, and lights nothing', async () => {
-    await openHome(page);
-    reports.nobody = await fixtureReport(page);
-    await startSampler(page);
-    await press(page, 'Nobody there');
-    const stopped = await phase('stopped');
-    const { everLit } = await stopSampler(page);
-    assert.equal(everLit, 0);
-    assert.deepEqual(stopped.click.stopped, { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true });
-    await page.waitForFunction(() => /the detector saw nobody, nothing was asked/.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
-    assert.equal(await hopStatus(page, 6), 'SCRIPTED');
-    assert.equal(await page.getAttribute('[data-den-sim-hop="7"]', 'data-reached'), '0');
-  });
+  for (const label of ['Nobody there', 'Blank frame']) {
+    await t.test(`${label.toLowerCase()}: the click stops at the detector, says so, draws no box and lights nothing`, async () => {
+      await openHome(page);
+      reports[label] = await fixtureReport(page);
+      await startSampler(page);
+      await press(page, label);
+      const stopped = await phase('stopped');
+      const { everLit } = await stopSampler(page);
+      assert.equal(everLit, 0);
+      assert.deepEqual(stopped.click.stopped, { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true });
+      await page.waitForFunction(() => /the detector saw nobody, nothing was asked/.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
+      assert.equal(await hopStatus(page, 6), 'ADAPTER', 'the detector ran and saw nobody');
+      assert.match(await page.textContent('[data-den-sim-hop="6"]'), /YOLO26s found no person on any of the \d+ usable frames/);
+      assert.equal(await page.getAttribute('[data-den-sim-hop="7"]', 'data-reached'), '0');
+      await page.waitForFunction(() => document.querySelector('[data-den-sim-picture-note]')?.textContent.includes('holds no person'), null, { timeout: 10000 });
+      assert.equal(await page.locator('[data-den-sim-boxes]').count(), 0, 'no box');
+      assert.equal(await page.isVisible('[data-den-sim-torso]'), false, 'no torso line');
+      assert.equal(stopped.feed.summary, null, 'no person point reached the page, so no person marker on the floor');
+    });
+  }
 
   await t.test('Home\'s fixture report is the same across scenes on a fresh page', () => {
     assert.ok(reports.reading.length === 4, JSON.stringify(reports.reading));
     assert.deepEqual(reports.phone, reports.reading);
-    assert.deepEqual(reports.nobody, reports.reading);
-    const moved = structuredClone(reports.nobody);
+    assert.deepEqual(reports['Nobody there'], reports.reading);
+    assert.deepEqual(reports['Blank frame'], reports.reading);
+    const moved = structuredClone(reports['Nobody there']);
     moved[0].pan_deg += 1;
     assert.notDeepEqual(moved, reports.reading, 'control: one changed angle differs');
   });
@@ -251,7 +277,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
   await t.test('after every run: nothing left the page, and the only write was the feed', async () => {
     assert.deepEqual(seen.external, [], 'zero external requests');
     assert.deepEqual([...new Set(seen.writes)], [FEED_POST], 'zero non-GET except the feed');
-    assert.equal(seen.writes.length, 3, 'one feed post per click');
+    assert.equal(seen.writes.length, 4, 'one feed post per click');
     assert.deepEqual(seen.sockets, [], 'no WebSocket opened');
     const blocked = await page.evaluate(() => (window.__denSimCsp || []).map(row => row.uri));
     assert.deepEqual(blocked.filter(uri => !EXPECTED_CSP_BLOCKS.has(uri)), [], 'nothing unexpected was stopped by the page policy');

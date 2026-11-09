@@ -78,7 +78,7 @@ function reasonsFor(table, receipt) {
     // 4: its tools
     for (const tool of row.tools || []) {
       if (!tool.expected || tool.actual !== tool.expected) {
-        const why = !tool.expected ? 'has no pin' : tool.pin === 'HEAD' ? 'differs from HEAD (an uncommitted edit)' : `differs from ${tool.pin}`;
+        const why = tool.why || (!tool.expected ? 'has no pin' : tool.pin === 'HEAD' ? 'differs from HEAD (an uncommitted edit)' : `differs from ${tool.pin}`);
         say(4, `${label}: ${tool.path} ${why}`, row.n);
       }
     }

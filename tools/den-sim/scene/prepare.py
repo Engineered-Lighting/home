@@ -159,7 +159,8 @@ def pins():
 
 def archive(tree, commits, log=None):
     """den-register and den-take at their pins into one folder, so den-register finds den-take beside it.
-    Returns {tool: {commit, files: {path: {blob, sha256}}}}."""
+    Returns {tool: {commit, files: {path: {blob, sha256}}}}, both hashed from the extracted bytes that run,
+    never copied from ls-tree, so a click can hold them to the pinned blob."""
     record = {}
     for name, path in TOOLS.items():
         sha = commits[name]
@@ -171,8 +172,9 @@ def archive(tree, commits, log=None):
             tar.extractall(tree, filter="data")
         files = {}
         for line in git("ls-tree", "-r", sha, "--", path).decode().splitlines():
-            meta, file = line.split("\t", 1)
-            files[file] = {"blob": meta.split()[2], "sha256": sha256_file(tree / file)}
+            file = line.split("\t", 1)[1]
+            data = (tree / file).read_bytes()
+            files[file] = {"blob": hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest(), "sha256": sha256_bytes(data)}
         record[name] = {"commit": sha, "pin": f"refs.json tools.{name}", "files": files}
     sys.path[:0] = [str(tree / TOOLS["den-register"]), str(tree / TOOLS["den-take"])]
     return record

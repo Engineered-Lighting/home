@@ -53,15 +53,34 @@ export function headTools(paths) {
   const expected = blobsAt(resolve('HEAD'), paths), actual = git(['hash-object', '--stdin-paths'], paths.join('\n') + '\n').split('\n');
   return paths.map((file, i) => ({ path: file, pin: 'HEAD', expected: expected[file] || null, actual: actual[i] || null }));
 }
+// A recorded file's blob, held to the bytes that ran as well: the sha256 prepare took of the file it
+// ran must be the sha256 of the pinned blob's bytes, so a blob name copied from ls-tree vouches for nothing.
+function ranAs(commit, file, row) {
+  if (!row?.blob) return null;
+  if (row.sha256 && row.sha256 !== sha256At(commit, file)) return `${row.blob}, though the bytes that ran (sha256 ${row.sha256.slice(0, 12)}) are not its bytes`;
+  return row.blob;
+}
 // A tool recorded by prepare, from its receipt: the blobs it ran against the blobs at the pin refs.json names now.
 function recordedTools(record, pinRef, pinLabel) {
   const commit = resolve(pinRef), expected = blobsAt(commit, Object.keys(record.files));
   return [{ path: `${pinLabel} commit`, pin: pinLabel, expected: commit, actual: record.commit },
-    ...Object.entries(record.files).map(([file, row]) => ({ path: file, pin: pinLabel, expected: expected[file] || null, actual: row.blob }))];
+    ...Object.entries(record.files).map(([file, row]) => ({ path: file, pin: pinLabel, expected: expected[file] || null, actual: ranAs(commit, file, row) }))];
 }
+const onBranch = new Map();
+// Whether a commit is this branch's: HEAD or one of its ancestors.
+function isAncestor(commit) {
+  if (!onBranch.has(commit)) {
+    try { execFileSync('git', ['-C', ROOT, 'merge-base', '--is-ancestor', commit, 'HEAD'], { windowsHide: true, stdio: 'ignore' }); onBranch.set(commit, true); } catch { onBranch.set(commit, false); }
+  }
+  return onBranch.get(commit);
+}
+// The harness files prepare ran, against their blobs at the commit that prepared the set, which must
+// be on this branch: a set prepared from an unrelated commit with other scene code doesn't read clean.
 function harnessTools(harness, names) {
-  const files = ['prepare.py', ...names].map(name => `tools/den-sim/scene/${name}`), expected = blobsAt(harness.commit, files);
-  return files.map(file => ({ path: file, pin: `the commit that prepared it (${harness.commit.slice(0, 8)})`, expected: expected[file] || null, actual: harness.files[file]?.blob || null }));
+  const files = ['prepare.py', ...names].map(name => `tools/den-sim/scene/${name}`), expected = blobsAt(harness.commit, files), pin = `the commit that prepared it (${harness.commit.slice(0, 8)})`;
+  return [{ path: 'the commit that prepared it', pin: 'an ancestor of HEAD', expected: harness.commit, actual: isAncestor(harness.commit) ? harness.commit : `${harness.commit.slice(0, 8)}, not on this branch`,
+      why: `(${harness.commit.slice(0, 8)}) is not on this branch: HEAD does not descend from it` },
+    ...files.map(file => ({ path: file, pin, expected: expected[file] || null, actual: ranAs(harness.commit, file, harness.files[file]) }))];
 }
 // What kind of recorded input a prepare-time read was, by its name.
 function kindOf(n, file) {

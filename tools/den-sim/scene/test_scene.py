@@ -28,6 +28,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
@@ -728,6 +729,43 @@ class Guard(unittest.TestCase):
         self.assertIn("PermissionError", self.run_guarded(True, "socket.getaddrinfo('example.com', 80)").stderr)
         # Control: the re-fit's guard refuses loopback too.
         self.assertIn("PermissionError", self.run_guarded(False, bind).stderr)
+
+
+class Archive(unittest.TestCase):
+    def test_each_archived_file_is_recorded_by_the_bytes_that_were_extracted(self):
+        """A receipt's blob for an archived tool comes from the file that runs, not from ls-tree, so a click
+        can tell an edited archive from the pin. The control: an unedited file still records the pinned blob."""
+        real_run = prepare.subprocess.run
+
+        def edited_archive(argv, **kwargs):
+            done = real_run(argv, **kwargs)
+            if "archive" not in argv or "tools/den-take" not in argv:
+                return done
+            out = io.BytesIO()
+            with tarfile.open(fileobj=io.BytesIO(done.stdout)) as source, tarfile.open(fileobj=out, mode="w") as target:
+                for info in source.getmembers():
+                    data = source.extractfile(info).read() if info.isfile() else None
+                    if info.name == "tools/den-take/take.py":
+                        data += b"\n# edited after the pin\n"
+                        info.size = len(data)
+                    target.addfile(info, io.BytesIO(data) if data is not None else None)
+            return subprocess.CompletedProcess(done.args, done.returncode, out.getvalue(), done.stderr)
+
+        path_before = list(sys.path)
+        try:
+            with scratch() as tmp, mock.patch.object(prepare.subprocess, "run", edited_archive):
+                tree = Path(tmp) / "tools"
+                record = prepare.archive(tree, prepare.pins())["den-take"]
+                ran = (tree / "tools/den-take/take.py").read_bytes()
+        finally:
+            sys.path[:] = path_before
+        pinned = lambda name: git("ls-tree", record["commit"], "--", name).decode().split()[2]
+        take_py = record["files"]["tools/den-take/take.py"]
+        self.assertTrue(ran.endswith(b"# edited after the pin\n"))
+        self.assertEqual(take_py["sha256"], sha(ran))
+        self.assertEqual(take_py["blob"], hashlib.sha1(b"blob %d\0" % len(ran) + ran).hexdigest())
+        self.assertNotEqual(take_py["blob"], pinned("tools/den-take/take.py"))
+        self.assertEqual(record["files"]["tools/den-take/check.py"]["blob"], pinned("tools/den-take/check.py"))
 
 
 @NEEDS_SET

@@ -215,6 +215,26 @@ test('a receipt hashes hop 1\'s and hop 5\'s recorded reads again, never copying
   assert.match(reasonsOn(recordedReceipt(copy, take, prepared), 1).join('\n'), /collision\.glb/);
 });
 
+test('a receipt holds each recorded tool to its pinned bytes, and the prepare commit to this branch', { skip: NEEDS_SET }, () => {
+  const take = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes[0].take;
+  const fresh = () => JSON.parse(fs.readFileSync(path.join(SET, take, 'prepare-receipt.json'), 'utf8'));
+  const toolReasons = prepared => topLine(TABLE, recordedReceipt(SET, take, prepared)).reasons.filter(reason => reason.condition === 4 && reason.hop <= 5).map(reason => reason.text);
+  assert.deepEqual(toolReasons(fresh()), [], 'as prepared, every recorded tool is its pinned blob');
+  // An archived tool that ran edited, its blob name still the pinned one: the bytes give it away.
+  const edited = fresh();
+  edited.hops['3'].tool_files['tools/den-take/take.py'].sha256 = '2'.repeat(64);
+  assert.match(toolReasons(edited).join('\n'), /^3 Frames: tools\/den-take\/take\.py differs from refs\.json tools\.den-take$/m);
+  // So for a harness file prepare ran.
+  const harness = fresh();
+  harness.harness.files['tools/den-sim/scene/vcam.py'].sha256 = '3'.repeat(64);
+  assert.match(toolReasons(harness).join('\n'), /^2 Virtual camera and depth: tools\/den-sim\/scene\/vcam\.py differs from the commit that prepared it/m);
+  // A set prepared from a commit that is not on this branch: its scene code was some other branch's.
+  const elsewhere = fresh(), other = execFileSync('git', ['-C', ROOT, 'rev-parse', `${REFS.tools['den-core-live']}^{commit}`], { encoding: 'utf8' }).trim();
+  assert.throws(() => execFileSync('git', ['-C', ROOT, 'merge-base', '--is-ancestor', other, 'HEAD'], { stdio: 'ignore' }), 'the control commit is not on this branch');
+  elsewhere.harness.commit = other;
+  assert.match(toolReasons(elsewhere).join('\n'), /^5 Camera registration: the commit that prepared it \([0-9a-f]{8}\) is not on this branch: HEAD does not descend from it$/m);
+});
+
 test('the hop table: 26 hops, each with its pin, and adapters that name their stand-ins', () => {
   assert.deepEqual(TABLE.hops.map(hop => hop.n), Array.from({ length: 26 }, (_, i) => i + 1));
   for (const hop of TABLE.hops) {

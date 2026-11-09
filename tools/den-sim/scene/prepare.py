@@ -4,8 +4,8 @@
     python -B -X utf8 tools\\den-sim\\scene\\prepare.py
     python -B -X utf8 tools\\den-sim\\scene\\prepare.py --refit --set SET --mark MARK --export EXPORT --floor FLOOR [--facing FACING]
 
-Without --refit it makes one new set under %LOCALAPPDATA%\\den-sim\\prepared\\<random id>\\ and never
-reads the private folder, so an agent can run it:
+Without --refit it makes one new set under <data root>\\prepared\\<random id>\\ and never reads the
+private folder, so an agent can run it. The data root is DEN_SIM_HOME, or else %USERPROFILE%\\den-sim:
 
 1. render.mjs draws the marks shot and the scenes in shots.json, eight poses each, under a random word
    per scene. The word is the scene's only name: in the render's file names, the display file and the
@@ -105,6 +105,13 @@ def read_owner_json(path):
     raw = Path(path).read_bytes()
     text = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig")
     return json.loads(text)
+
+
+def data_root(env=None):
+    """DEN_SIM_HOME when set, or else <home>\\den-sim. Never %LOCALAPPDATA%: the Claude app's packaged
+    processes see that through a private store, so the owner's own PowerShell would not."""
+    env = os.environ if env is None else env
+    return Path(env["DEN_SIM_HOME"]) if env.get("DEN_SIM_HOME") else Path.home() / "den-sim"
 
 
 def random_id():
@@ -387,9 +394,7 @@ def prepare(args):
     shots_path = HERE / "shots.json"
     shots = json.loads(shots_path.read_text(encoding="utf-8"))
     seed = shots["seed"] if args.seed is None else args.seed
-    if not os.environ.get("LOCALAPPDATA") and not args.out:
-        raise SystemExit("LOCALAPPDATA is not set")
-    root = Path(args.out or Path(os.environ["LOCALAPPDATA"]) / "den-sim" / "prepared").resolve()
+    root = Path(args.out or data_root() / "prepared").resolve()
     root.mkdir(parents=True, exist_ok=True)
     set_dir, work = root / random_id(), root / (".work-" + random_id())
     set_dir.mkdir()
@@ -600,7 +605,7 @@ def refit(args):
     inputs = {"mark": sha256_file(args.mark), "export": sha256_file(args.export), "floor": sha256_file(args.floor),
               "facing": sha256_file(args.facing) if args.facing else None, "set_worksheet": sha256_file(source / "worksheet.json"),
               "marks_take": info["marks_take"]["digest"]}
-    fits = Path(args.fits or Path(os.environ["LOCALAPPDATA"]) / "den-sim" / "private" / "fits").resolve()
+    fits = Path(args.fits or data_root() / "private" / "fits").resolve()
     fits.mkdir(parents=True, exist_ok=True)
     for earlier in sorted(fits.glob("*/refit-receipt.json")):
         old = json.loads(earlier.read_text(encoding="utf-8"))
@@ -655,7 +660,7 @@ def refit(args):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Prepare the den simulation's recorded scenes, or re-fit a set on the owner's mark.")
-    parser.add_argument("--out", help=r"the prepared folder (default %%LOCALAPPDATA%%\den-sim\prepared)")
+    parser.add_argument("--out", help=r"the prepared folder (default <data root>\prepared)")
     parser.add_argument("--seed", type=int, help="moves the small motion and the noise (default: shots.json's)")
     parser.add_argument("--refit", action="store_true", help="re-fit one set on the owner's files; only run.mjs and fresh_run.py start this")
     parser.add_argument("--set", help="--refit: the prepared set")
@@ -663,7 +668,7 @@ def main(argv=None):
     parser.add_argument("--export", help="--refit: the owner's registration export the mark names")
     parser.add_argument("--floor", help="--refit: the pack's floor.json, for the floor's centre")
     parser.add_argument("--facing", help="--refit: facing.json, degrees from the stated facing (left is positive)")
-    parser.add_argument("--fits", help=r"--refit: where the new fit goes (default %%LOCALAPPDATA%%\den-sim\private\fits)")
+    parser.add_argument("--fits", help=r"--refit: where the new fit goes (default <data root>\private\fits)")
     args = parser.parse_args(argv)
     if args.refit:
         if not (args.set and args.mark and args.export and args.floor):

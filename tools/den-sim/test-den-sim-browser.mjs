@@ -41,7 +41,7 @@ const statusOf = async () => (await fetch(ORIGIN + '/__sim/status')).json();
 const phase = name => until(async () => { const status = await statusOf(); return status.feed.phase === name && status; }, `phase ${name}`);
 
 function startHarness(localAppData) {
-  const child = spawn(process.execPath, [path.join(HERE, 'run.mjs'), '--room', 'authored'], { env: { ...process.env, LOCALAPPDATA: localAppData }, windowsHide: true });
+  const child = spawn(process.execPath, [path.join(HERE, 'run.mjs'), '--room', 'authored'], { env: { ...process.env, DEN_SIM_HOME: localAppData, LOCALAPPDATA: localAppData }, windowsHide: true });
   let output = '';
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { output += chunk; });
@@ -141,7 +141,7 @@ test('den simulation: honest and safe', { timeout: 420000 }, async t => {
   });
 
   await t.test('the Qwen row reads SCRIPTED unless a reply receipt exists', async () => {
-    const receipt = fs.existsSync(path.join(scratch, 'den-sim', 'private', QWEN_RECEIPT));
+    const receipt = fs.existsSync(path.join(scratch, 'private', QWEN_RECEIPT));
     assert.equal(receipt, false, 'this test has no receipt');
     for (const status of [await hopStatus(page, 'Qwen reply'), await hopRun(page, 'Qwen reply')]) assert.equal(status, 'SCRIPTED');
     assert.match(await page.textContent('[data-den-sim-pipeline-hop="Qwen reply"]'), /typed.*No model ran/);
@@ -224,6 +224,6 @@ test('den simulation: honest and safe', { timeout: 420000 }, async t => {
     const probe = path.join(scratch, 'tries-a-socket.py');
     fs.writeFileSync(probe, "import socket\ntry:\n    socket.create_connection(('127.0.0.1', 9), timeout=1)\n    print('NOT REFUSED')\nexcept RuntimeError as error:\n    print('refused: ' + str(error))\n");
     assert.match(execFileSync('python', [path.join(HERE, 'chain.py'), '--guarded', probe], { encoding: 'utf8', windowsHide: true }), /^refused: /);
-    assert.deepEqual(fs.readdirSync(path.join(scratch, 'den-sim', 'private')), [], 'an authored run writes nothing there');
+    assert.deepEqual(fs.readdirSync(path.join(scratch, 'private')), [], 'an authored run writes nothing there');
   });
 });

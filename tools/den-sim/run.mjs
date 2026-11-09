@@ -9,7 +9,7 @@
 //
 // Needs python on the PATH for the lighting brain (standard library only).
 //
-// Optional private inputs, read only from %LOCALAPPDATA%\den-sim\private:
+// Optional private inputs, read only from <data root>\private (DEN_SIM_HOME, or %USERPROFILE%\den-sim):
 //   registration-revision-3.json       saved from Home; otherwise AUTHORED SOCKETS
 //   victoria-den-sofa-target-v4.json   your sofa mark; otherwise a DECLARED couch point
 //   couch-declared.json                {"point_m":[x,y,z]}, the DECLARED point to use
@@ -25,6 +25,7 @@ import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import { prepareBrain } from './brain.mjs';
+import { dataRoot } from './data-root.mjs';
 import { BRAIN_BASE, createFeed, hopList } from './feed.mjs';
 
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
@@ -38,8 +39,7 @@ function option(name, fallback) {
 }
 const room = option('room', 'real');
 if (!['real', 'authored'].includes(room)) throw Error('--room must be real or authored');
-if (!process.env.LOCALAPPDATA) throw Error('LOCALAPPDATA is not set');
-const OUT = path.join(process.env.LOCALAPPDATA, 'den-sim'), PRIVATE = path.join(OUT, 'private');
+const OUT = dataRoot(), PRIVATE = path.join(OUT, 'private');
 const relative = path.relative(ROOT, OUT);
 if (!relative.startsWith('..') && !path.isAbsolute(relative)) throw Error('run output must stay outside the checkout');
 const run = path.join(OUT, 'runs', new Date().toISOString().replace(/[:.]/g, '-'));

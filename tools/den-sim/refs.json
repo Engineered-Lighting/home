@@ -21,6 +21,6 @@
     "contracts": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\contracts\\c12"
   },
   "content_packs": "C:\\claude\\home\\app\\data\\home-content",
-  "output_root": "%LOCALAPPDATA%\\den-sim",
+  "output_root": "%USERPROFILE%\\den-sim, or DEN_SIM_HOME when it is set",
   "tools_note": "The fix round's final heads (claude/fix-rung-1, -2, -3, -5, -8-stage1, -9, -10), commits on this PC, read with git archive. The key names are the refs #424 first pinned; den-take is read from den-observe's commit, which carries tools/den-take."
 }

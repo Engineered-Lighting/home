@@ -11,8 +11,8 @@ Each has a control that must make it fail. Standard library and numpy only.
 
 The parts that read a prepared set need DEN_SIM_SET=<a set folder under prepared>; without it they skip
 and say so. They only read it: the re-fit writes its fits and private files under a temporary folder
-of its own (in TEMP), with LOCALAPPDATA pointed there too, and the controls that change files work on
-hard-linked copies whose changed files are replaced, never written through.
+of its own (in TEMP), with DEN_SIM_HOME and LOCALAPPDATA pointed there too, and the controls that change
+files work on hard-linked copies whose changed files are replaced, never written through.
 """
 import ast
 import csv
@@ -556,9 +556,9 @@ class Refit(unittest.TestCase):
             raise unittest.SkipTest("needs DEN_SIM_SET=<a prepared set>")
         cls.tmp = tempfile.TemporaryDirectory(prefix="den-sim-refit-")
         base = Path(cls.tmp.name)
-        cls.private = base / "den-sim" / "private"
+        cls.private = base / "private"
         cls.private.mkdir(parents=True)
-        cls.env = {**ENV, "LOCALAPPDATA": str(base)}
+        cls.env = {**ENV, "DEN_SIM_HOME": str(base), "LOCALAPPDATA": str(base)}
         # A sealed invented export and mark at revision 3, by Home's own sealers, on an authored pack.
         corners = [[1.1, 2.3, 0.45], [2.9, 2.3, 0.45], [2.9, 3.2, 0.45], [1.1, 3.2, 0.45]]   # a 1.8 m by 0.9 m couch
         script = base / "invent.mjs"
@@ -645,6 +645,30 @@ class Refit(unittest.TestCase):
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertNotEqual(set_digests(copy), before)
             self.assertEqual(set_digests(SET), {k: v for k, v in before.items()}, "the control must not touch the real set")
+
+
+# ---- the data root -----------------------------------------------------------------------------------------
+
+class DataRoot(unittest.TestCase):
+    """DEN_SIM_HOME, or else <home>\\den-sim; never %LOCALAPPDATA%, which the Claude app's processes see privately."""
+
+    def test_the_default_is_the_home_folder_and_never_localappdata(self):
+        with scratch() as tmp:
+            home, lad = Path(tmp) / "home", Path(tmp) / "lad"
+            planted = lad / "den-sim" / "prepared" / "0123456789ab"
+            planted.mkdir(parents=True)
+            (planted / "set.json").write_text('{"schema": "den-sim-prepared-set-1"}', encoding="utf-8")
+            env = {k: v for k, v in ENV.items() if k != "DEN_SIM_HOME"}
+            env.update(USERPROFILE=str(home), HOME=str(home), LOCALAPPDATA=str(lad))
+            code = (f"import sys; sys.path.insert(0, {str(HERE)!r}); import prepare; prepare.guard(False); "
+                    "print(prepare.data_root())")
+            done = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(done.returncode, 0, done.stderr)
+            self.assertEqual(Path(done.stdout.strip()), home / "den-sim")
+            # Control: the planted %LOCALAPPDATA% set is not where the root points, so nothing there is read.
+            self.assertNotIn(str(lad), done.stdout)
+            self.assertEqual(prepare.data_root({"DEN_SIM_HOME": str(lad)}), lad)
+            self.assertEqual(prepare.data_root({}), Path.home() / "den-sim")
 
 
 # ---- the private transform, the guard and the receipts' tool pins ------------------------------------------

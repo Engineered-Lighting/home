@@ -3,6 +3,8 @@
 - rows_hold: recorded rows read ADAPTER only under hop 6's conditions. An edited, empty or truncated rows
   file, an empty usable part, a frame over 1.0 s, a lost weight pin, a count, a name that isn't a model, and
   rows never checked against the model each read MISSING with why, never nobody;
+- weight_tools: the weights are read from detector-run.json whenever it parses, so rows that fail another
+  condition never read as changed weights;
 - no_track: a person box with no track never reads nobody;
 - torso: said relative to the limit only;
 - person_to_aim takes the newest entry with both shoulders;
@@ -85,6 +87,21 @@ class RowsHold(unittest.TestCase):
         self.assertEqual(len(held["rows"]), len(self.rows))
         self.assertGreater(held["with_person"], 0)
         self.assertEqual(held["names"], ["rtmpose-m", "yolo26s"])
+
+    def test_the_weights_are_read_whenever_detector_run_json_parses(self):
+        """Rows that fail another condition never read as changed weights (condition 4): only a real change does."""
+        replace(self.take / "detections.jsonl", "\n".join([self.lines[0] + " ", *self.lines[1:]]) + "\n")
+        self.assertEqual(self.why(), "detections.jsonl is not the one prepare recorded")
+        weights = chain.weight_tools(self.take, PINS)
+        self.assertEqual([w["path"] for w in weights], ["weights yolo26s.pt", "weights rtmpose-m-body7.onnx", "weights artifact.json"])
+        self.assertTrue(all(w["actual"] == w["expected"] for w in weights), weights)
+        self.edit_run(lambda run: run["counts"].update(over_limit=1))
+        self.assertTrue(all(w["actual"] == w["expected"] for w in chain.weight_tools(self.take, PINS)), "an over-limit count is no weight change")
+        self.edit_run(lambda run: run["weights"].update({"rtmpose-m-body7.onnx": "0" * 64}))
+        changed = [w["path"] for w in chain.weight_tools(self.take, PINS) if w["actual"] != w["expected"]]
+        self.assertEqual(changed, ["weights rtmpose-m-body7.onnx"], "control: a changed digest is told")
+        replace(self.take / "detector-run.json", "{not json")
+        self.assertEqual(chain.weight_tools(self.take, PINS), [], "a file that can't be read gives none: hop 6 is MISSING for it already")
 
     def test_an_edited_empty_or_truncated_rows_file_reads_missing(self):
         replace(self.take / "detections.jsonl", "\n".join([self.lines[0] + " ", *self.lines[1:]]) + "\n")

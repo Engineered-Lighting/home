@@ -203,12 +203,24 @@ export function finalRow(row, n, stop) {
   return { ...empty, n, name: hop.name, word: 'MISSING', reached: true, ran: 'no row on this click', note: why, summary: `No row: ${why}.` };
 }
 
+// What the panel says under the picture. Boxes are the shown frame's person boxes when hop 6's rows hold,
+// and null when they don't: then no row is drawn, and the note never says the frame holds no person.
+export function pictureNote(picture) {
+  if (!picture || picture.error) return null;
+  const frame = 'The take\'s own frame, read back out of its NV12 plane';
+  if (!Array.isArray(picture.boxes)) return `${frame}. The detector's recorded rows did not pass hop 6's checks, so no box is drawn.`;
+  if (!picture.boxes.length) return `${frame}. The detector's row for this frame holds no person, so no box is drawn.`;
+  const scores = picture.boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ');
+  return `${frame}, with YOLO26s's person box and score (${scores}) and RTMPose-m's supported joints from this frame's recorded row.`;
+}
+
 // The panel's view: the words and notes, without the digests the page has no use for.
 export function receiptView(receipt) {
   // A row sits under what it did on this click. A row that didn't run (not built yet, not reached, or
   // with no row) sits apart, never under "Ran on this click".
   const group = row => row.reached === false || /^(not |no row)/.test(row.ran) ? 'not run' : row.ran.startsWith('recorded') ? 'recorded' : row.ran.includes('page start') ? 'page' : 'click';
-  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, torso: receipt.torso?.line || null, boxes: receipt.picture?.boxes || [],
+  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, torso: receipt.torso?.line || null,
+    boxes: Array.isArray(receipt.picture?.boxes) ? receipt.picture.boxes : null, picture_note: pictureNote(receipt.picture),
     rows: receipt.rows.map(row => ({ n: row.n, name: row.name, word: row.word, reached: row.reached !== false, ran: row.ran, group: group(row),
       summary: row.summary || row.note || '', stand_ins: row.stand_ins || [], tool: row.tool?.path || null })) };
 }

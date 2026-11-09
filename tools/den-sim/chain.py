@@ -280,6 +280,20 @@ def rows_hold(take, rows, hop, pins):
     return dict(rows=recorded, run=run, with_person=len(people), names=sorted(names)), None
 
 
+def weight_tools(take, pins):
+    """The weight digests detector-run.json holds, against requirements.lock's, read whenever the file parses,
+    so rows that fail hop 6's other checks never read as changed weights. A file that can't be read gives none:
+    hop 6 reads MISSING for it already."""
+    try:
+        weights = json.loads((take / 'detector-run.json').read_text(encoding='utf-8'))['weights']
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(weights, dict):
+        return []
+    return [dict(path='weights %s' % file, pin='tools/den-detect/requirements.lock', expected=pins[file], actual=weights.get(file))
+            for file in (*detect.WEIGHTS, 'artifact.json')]
+
+
 def no_track(with_person, frames, run, output):
     """Hop 8's sentence when the rows hold a person and no track formed: what was seen, and why no track formed,
     from replay's run.json counts. It never says nobody."""
@@ -429,13 +443,13 @@ def chain(request):
     run = held['run'] if held else {}
     rows_read = click.recorded('%s/detections.jsonl' % take.name, take / 'detections.jsonl', 'rows', by_take, (hop.get('rows') or {}).get('sha256'))
     run_read = click.recorded('%s/detector-run.json' % take.name, take / 'detector-run.json', 'rows', by_take, (hop.get('run') or {}).get('sha256'))
-    weights = [dict(path='weights %s' % file, pin='tools/den-detect/requirements.lock', expected=pins[file], actual=(run.get('weights') or {}).get(file))
-               for file in (*detect.WEIGHTS, 'artifact.json')]
-    six = dict(tools=head_tools(*own, 'tools/den-detect/detect.py', 'tools/den-detect/requirements.lock') + weights,
+    six = dict(tools=head_tools(*own, 'tools/den-detect/detect.py', 'tools/den-detect/requirements.lock') + weight_tools(take, pins),
                read=[take_read, check_read, rows_read, run_read], wrote=[], stand_ins=named(6, 0, 1, 2, 3, 4))
+    # The person boxes of the shown frame's row. None, not an empty list, when the rows don't hold: the panel
+    # then says no row passed hop 6's checks, never that the frame holds no person.
     boxes = [dict(score=round(d['score'], 3), box_xyxy=[round(v, 1) for v in d['box_xyxy']],
                   keypoints=[None if k is None else [round(k[0], 1), round(k[1], 1), round(k[2], 3)] for k in d['keypoints']] if d['keypoints'] else None)
-             for row in (held['rows'] if held else []) if row['frame']['rgb_seq'] == picture.get('rgb_seq') for d in row['detections'] if d['class'] == 'person']
+             for row in held['rows'] if row['frame']['rgb_seq'] == picture.get('rgb_seq') for d in row['detections'] if d['class'] == 'person'] if held else None
     print(json.dumps(dict(picture=dict(picture, boxes=boxes, boxes_from='%s/detections.jsonl' % take.name if held else None))), flush=True)
     if not held:
         emit(6, 'MISSING', 'The recorded rows do not hold: %s.' % why, ran='recorded %s' % request.get('recorded'), note=why, **six)

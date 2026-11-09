@@ -200,7 +200,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.deepEqual(drawn, boxes.map(({ box_xyxy: [x0, y0, x1, y1] }) => [x0, y0, x1 - x0, y1 - y0]));
     assert.match(await page.textContent('[data-den-sim-boxes] text'), /^person 0\.\d\d$/, 'the box\'s score');
     assert.ok(await page.locator('[data-den-sim-boxes] [data-den-sim-joint]').count() >= 5, 'its supported joints');
-    assert.match(await page.textContent('[data-den-sim-picture-note]'), /YOLO26s's person box and score and RTMPose-m's supported joints from this frame's recorded row/);
+    assert.match(await page.textContent('[data-den-sim-picture-note]'), /YOLO26s's person box and score \(person 0\.\d\d\) and RTMPose-m's supported joints from this frame's recorded row/);
     assert.match(await page.textContent('[data-den-sim-torso]'), /^Against hop 15's on-the-couch limit, which step 5 builds: torso \d\.\d\d m (under|over) the limit/);
   });
 

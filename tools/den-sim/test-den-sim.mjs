@@ -463,6 +463,7 @@ test('the real chain on every prepared take: step 3\'s words, test 1\'s outcomes
   // The tests post no fixture report, so Home is never fed: the brain's own word, in its row, says what lit.
   assert.deepEqual([reading.view.stopped, /^The older brain chose \S+, \d\.\d+ m from the seat/.test(reading.receipt.rows[16].summary)], [null, true], 'reading lights');
   assert.ok(reading.view.boxes.length >= 1 && reading.view.boxes.every(box => box.score >= .5 && box.keypoints.length === 17), 'reading\'s frame has the model\'s box and joints');
+  assert.equal(reading.view.picture_note, `The take's own frame, read back out of its NV12 plane, with YOLO26s's person box and score (${reading.view.boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ')}) and RTMPose-m's supported joints from this frame's recorded row.`);
   assert.match(clicks['Holding a phone'].receipt.rows[16].summary, /^The older brain lit nothing: /, 'phone stays off');
   for (const label of ['Nobody there', 'Blank frame']) {
     const { view, status: now } = clicks[label];
@@ -471,6 +472,7 @@ test('the real chain on every prepared take: step 3\'s words, test 1\'s outcomes
     assert.equal(view.rows[5].word, 'ADAPTER', `${label}: the detector ran and saw nobody, it didn't break`);
     assert.ok(view.rows.filter(row => row.n > 6).every(row => !row.reached), label);
     assert.deepEqual([view.boxes, view.torso, now.feed.summary, now.feed.phase], [[], null, null, 'stopped'], `${label}: no box, no torso line, no brain, no beam`);
+    assert.match(view.picture_note, /The detector's row for this frame holds no person, so no box is drawn\.$/, label);
   }
   // Standing, reported: what the click did and why.
   const standing = clicks['Standing by the couch with a book'];
@@ -605,9 +607,17 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   replaceFile(rowsFile, rowsText.replace('\n', ' \n'));
   const edited = await click(phone);
   assert.deepEqual(edited.click.stopped, { hop: 6, why: 'detections.jsonl is not the one prepare recorded', answer: false });
-  assert.deepEqual([edited.click.rows[5].word, edited.click.rows[6].reached, edited.click.boxes], ['MISSING', false, []]);
+  assert.deepEqual([edited.click.rows[5].word, edited.click.rows[6].reached, edited.click.boxes], ['MISSING', false, null]);
+  assert.equal(edited.click.picture_note, 'The take\'s own frame, read back out of its NV12 plane. The detector\'s recorded rows did not pass hop 6\'s checks, so no box is drawn.');
+  assert.doesNotMatch(edited.click.picture_note, /holds no person/, 'the phone take\'s frame holds a person: rows that fail their checks never say otherwise');
   assert.equal(edited.click.top_line.line, 'Connected start to finish: not yet');
   assert.ok(edited.click.top_line.reasons.some(reason => reason.condition === 6 && reason.hop === 6));
+  // The weights are untouched: no condition 4 reason says they changed. Hop 6's only reasons are the MISSING row and the break.
+  const atSix = edited.click.top_line.reasons.filter(reason => reason.hop === 6);
+  assert.ok(atSix.length && atSix.every(reason => reason.condition === 6 || reason.condition === null), JSON.stringify(atSix));
+  assert.ok(!edited.click.top_line.reasons.some(reason => /weights .* differs/.test(reason.text)), 'no weight reads as changed');
+  const sixTools = (await (await fetch(ORIGIN + '/__sim/receipt')).json()).rows[5].tools.filter(tool => tool.path.startsWith('weights '));
+  assert.deepEqual(sixTools.map(tool => [tool.path, tool.actual === tool.expected]), [['weights yolo26s.pt', true], ['weights rtmpose-m-body7.onnx', true], ['weights artifact.json', true]]);
   assert.equal(edited.feed.phase, 'pipeline_failed');
 });
 

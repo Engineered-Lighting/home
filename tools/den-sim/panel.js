@@ -83,11 +83,11 @@
   const SVG = 'http://www.w3.org/2000/svg', JOINT_MIN = .4;   // the pose manifest's score_threshold: a joint at or over it is supported
   const EDGES = [[0, 1], [0, 2], [1, 3], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10], [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16]];
   const draw = (tag, attrs, text) => { const node = document.createElementNS(SVG, tag); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); if (text) node.textContent = text; return node; };
-  function drawBoxes(boxes) {
+  // boxes: the shown frame's person boxes, or null when hop 6's rows didn't hold. note: receipt.mjs's words for either.
+  function drawBoxes(boxes, note) {
     pictureBox.querySelector('svg')?.remove();
-    pictureNote.textContent = boxes.length ? `The take's own frame, read back out of its NV12 plane, with YOLO26s's person box and score and RTMPose-m's supported joints from this frame's recorded row.`
-      : 'The take\'s own frame, read back out of its NV12 plane. The detector\'s row for this frame holds no person, so no box is drawn.';
-    if (!boxes.length) return;
+    pictureNote.textContent = note || '';
+    if (!boxes?.length) return;
     const svg = draw('svg', { viewBox: '0 0 640 360', 'data-den-sim-boxes': String(boxes.length), 'aria-hidden': 'true' });
     for (const box of boxes) {
       const [x0, y0, x1, y1] = box.box_xyxy, points = box.keypoints || [];
@@ -220,7 +220,7 @@
       topLine.append(el('details', { 'data-den-sim-reasons': '1' }, el('summary', { textContent: `Why: ${top.reasons.length} reasons` }),
         el('ul', {}, ...top.reasons.map(reason => el('li', { 'data-den-sim-reason': String(reason.condition ?? ''), textContent: reason.condition ? `(${reason.condition}) ${reason.text}` : reason.text })))));
     }
-    if (click.picture) { picture.src = `/__sim/picture?click=${click.click}`; drawBoxes(click.boxes || []); } else pictureBox.hidden = pictureNote.hidden = true;
+    if (click.picture) { picture.src = `/__sim/picture?click=${click.click}`; drawBoxes(click.boxes, click.picture_note); } else pictureBox.hidden = pictureNote.hidden = true;
     hopRows.replaceChildren(...GROUPS.flatMap(([group, heading]) => {
       const rows = click.rows.filter(row => row.group === group);
       return rows.length ? [el('h4', { textContent: heading }), el('ul', {}, ...rows.map(row => el('li', { 'data-den-sim-hop': String(row.n), 'data-den-sim-name': row.name,

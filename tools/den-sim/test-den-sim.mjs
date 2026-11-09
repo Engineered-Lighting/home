@@ -620,9 +620,10 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   assert.doesNotMatch(edited.click.picture_note, /holds no person/, 'the phone take\'s frame holds a person: rows that fail their checks never say otherwise');
   assert.equal(edited.click.top_line.line, 'Connected start to finish: not yet');
   assert.ok(edited.click.top_line.reasons.some(reason => reason.condition === 6 && reason.hop === 6));
-  // The weights are untouched: no condition 4 reason says they changed. Hop 6's only reasons are the MISSING row and the break.
+  // The weights are untouched, so no condition 4 reason at hop 6 says they changed: the rows file's digest (2), the
+  // word (3), MISSING (6) and the break are its reasons.
   const atSix = edited.click.top_line.reasons.filter(reason => reason.hop === 6);
-  assert.ok(atSix.length && atSix.every(reason => reason.condition === 6 || reason.condition === null), JSON.stringify(atSix));
+  assert.deepEqual(atSix.map(reason => reason.condition), [2, 3, 6, null], JSON.stringify(atSix));
   assert.ok(!edited.click.top_line.reasons.some(reason => /weights .* differs/.test(reason.text)), 'no weight reads as changed');
   const sixTools = (await (await fetch(ORIGIN + '/__sim/receipt')).json()).rows[5].tools.filter(tool => tool.path.startsWith('weights '));
   assert.deepEqual(sixTools.map(tool => [tool.path, tool.actual === tool.expected]), [['weights yolo26s.pt', true], ['weights rtmpose-m-body7.onnx', true], ['weights artifact.json', true]]);

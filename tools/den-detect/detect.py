@@ -16,8 +16,12 @@ at 0.5 or more (at most two), then from_perception_lab. available_ts is the capt
 compute only. A frame over 1.0 s of compute comes out rejected by den-observe, and is counted. Writes
 detections.jsonl (den-detections-1) and detector-run.json beside the take.
 
-With --only and --against it runs the same steps on those frames, writes nothing, and compares their person
-boxes with the recorded rows, within 1 px: prepare's check that the model reproduces its rows.
+With --only and --against it runs the same steps on those frames, writes nothing, and compares each person
+with the recorded rows: its box and its joints within 1 px, its score and each joint's within 0.001.
+That is prepare's check that the model reproduces its rows.
+
+It refuses when the interpreter's distributions are not requirements.lock's: a version, one missing, or
+one the lock doesn't list. The weights are held to the lock's digests at load.
 
 Python sockets are refused. Ultralytics' settings and caches, and anything that would go to %TEMP%, go under
 --state, never AppData. Exit 0 when done, 2 when refused, with one line on stderr.
@@ -47,6 +51,7 @@ MODELS = ("yolo26s", "rtmpose-m")            # the names from_perception_lab wri
 WEIGHTS = ("yolo26s.pt", "rtmpose-m-body7.onnx")
 PERSON_MIN, MAX_PEOPLE = 0.5, 2              # pose_composition.POLICY: minimum_confidence .5, max_people 2
 LIMIT_S, TOLERANCE_PX = 1.0, 1.0             # den-observe's proposed detector_max_age_s; the reproduce check
+TOLERANCE_SCORE = 1e-3                       # the reproduce check on a person's score and each joint's
 WIDTH, HEIGHT = 640, 360
 AUTHORIZE = "answered yes by detect.py: no Lab admission runs on this PC"
 NETWORK = ("socket.connect", "socket.bind", "socket.sendto", "socket.sendmsg", "socket.getaddrinfo",
@@ -195,33 +200,62 @@ def person_boxes(row):
     return [d["box_xyxy"] for d in row["detections"] if d["class"] == "person"]
 
 
+def people(row):
+    return [d for d in row["detections"] if d["class"] == "person"]
+
+
+def differs(old, new):
+    """One recorded person against the model's: (worst px over its box and joints, why it differs or None).
+    A score or a joint's score off by more than TOLERANCE_SCORE, or a joint placed on one side only, differs."""
+    worst = max(abs(u - v) for u, v in zip(old["box_xyxy"], new["box_xyxy"]))
+    if abs(old["score"] - new["score"]) > TOLERANCE_SCORE:
+        return worst, f"a person's score moved {abs(old['score'] - new['score']):.4f}, over {TOLERANCE_SCORE:g}"
+    a, b = old.get("keypoints") or [], new.get("keypoints") or []
+    if len(a) != len(b):
+        return worst, f"{len(a)} joints recorded on a person, the model gives {len(b)}"
+    for p, q in zip(a, b):
+        if (p is None) != (q is None):
+            return worst, "a joint recorded on one side only"
+        if p is None:
+            continue
+        worst = max(worst, abs(p[0] - q[0]), abs(p[1] - q[1]))
+        if abs(p[2] - q[2]) > TOLERANCE_SCORE:
+            return worst, f"a joint's score moved {abs(p[2] - q[2]):.4f}, over {TOLERANCE_SCORE:g}"
+    return worst, None
+
+
 def compare(recorded, fresh):
-    """Person boxes of fresh rows against the recorded rows of the same frames: (ok, worst px, why)."""
+    """Each person in fresh rows against the recorded rows of the same frames, in the rows' order: boxes and
+    joints within TOLERANCE_PX, scores within TOLERANCE_SCORE. (ok, worst px, why)."""
     by_seq, worst = {r["frame"].get("rgb_seq"): r for r in recorded}, 0.0
     for row in fresh:
         seq = row["frame"]["rgb_seq"]
         old = by_seq.get(seq)
         if old is None:
             return False, worst, f"frame rgb_seq {seq} has no recorded row"
-        a, b = person_boxes(old), person_boxes(row)
+        a, b = people(old), people(row)
         if len(a) != len(b):
             return False, worst, f"frame rgb_seq {seq}: {len(a)} person boxes recorded, the model gives {len(b)}"
         for x, y in zip(a, b):
-            worst = max(worst, *(abs(u - v) for u, v in zip(x, y)))
+            moved, why = differs(x, y)
+            worst = max(worst, moved)
+            if why:
+                return False, round(worst, 4), f"frame rgb_seq {seq}: {why}"
     if worst > TOLERANCE_PX:
-        return False, round(worst, 4), f"a person box moved {worst:.2f} px, over {TOLERANCE_PX:g} px"
+        return False, round(worst, 4), f"a person box or joint moved {worst:.2f} px, over {TOLERANCE_PX:g} px"
     return True, round(worst, 4), None
 
 
-def versions(wanted):
-    from importlib.metadata import PackageNotFoundError, version
-    found = {}
-    for name in wanted:
-        try:
-            found[name] = version(name)
-        except PackageNotFoundError:
-            found[name] = None
-    return found
+def installed():
+    """Every distribution this interpreter can import from, by name and version: one the lock doesn't name too."""
+    from importlib.metadata import distributions
+    return {d.metadata["Name"]: d.version for d in distributions()}
+
+
+def unlocked(pinned, have):
+    """Where the interpreter and the lock's versions disagree: a version, one missing, or one the lock doesn't name."""
+    return [f"{name} {have.get(name) or 'missing'} (the lock: {pinned.get(name) or 'not listed'})"
+            for name in sorted(set(pinned) | set(have), key=str.lower) if have.get(name) != pinned.get(name)]
 
 
 def main(argv=None):
@@ -235,18 +269,25 @@ def main(argv=None):
     parser.add_argument("--against", help="with --only: the recorded rows to compare person boxes with")
     args = parser.parse_args(argv)
     try:
+        # Every path before contain(), which moves the working folder into --state.
         take, pinned = Path(args.take).resolve(), lock()
+        tools_root, models = Path(args.tools_root).resolve(), Path(args.models).resolve()
+        against = Path(args.against).resolve() if args.against else None
         contain(args.state)
-        have = versions(pinned["versions"])
-        if have != pinned["versions"]:
-            raise Refused("the venv is not requirements.lock's: " + ", ".join(f"{k} {have[k]}" for k in have if have[k] != pinned["versions"][k]))
+        have = installed()
+        wrong = unlocked(pinned["versions"], have)
+        if wrong:
+            more = f", and {len(wrong) - 5} more" if len(wrong) > 5 else ""
+            raise Refused(f"the venv is not requirements.lock's: {', '.join(wrong[:5])}{more}")
         check_file, rows = usable(take)
         if args.only:
             wanted = args.only.split(",")
             rows = [r for r in rows if r["n"] in wanted]
             if len(rows) != len(wanted):
                 raise Refused("--only names a frame outside the usable part")
-        detector = Detector(args.tools_root, args.models, pinned["weights"])
+            if against is None:
+                raise Refused("--only needs --against, the recorded rows to compare with")
+        detector = Detector(tools_root, models, pinned["weights"])
         out, ms, merged, over = [], [], 0, 0
         for row in rows:
             got, dropped, compute_s = detector.frame(take, row)
@@ -255,7 +296,7 @@ def main(argv=None):
             merged += dropped
             over += compute_s > LIMIT_S
         if args.only:
-            ok, worst, why = compare(detector.read_rows(args.against), out)
+            ok, worst, why = compare(detector.read_rows(against), out)
             print(json.dumps({"ok": ok, "frames": [int(r["n"]) for r in rows], "max_px": worst, "why": why, "ms": ms}))
             if not ok:
                 raise Refused(f"the model did not reproduce the recorded rows: {why}")

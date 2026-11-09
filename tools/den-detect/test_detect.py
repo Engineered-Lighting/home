@@ -2,8 +2,11 @@
 
 - the Lab files it imports close: every import resolves inside detect.TREE at the pin, and chain.py
   archives the same tree;
-- it refuses Python sockets before anything else, and the lock pins the venv and the weights;
-- the reproduce check compares person boxes within 1 px;
+- it refuses Python sockets before anything else, and the lock pins the venv and the weights: a distribution
+  the lock doesn't name is refused too, and main refuses an interpreter that isn't the lock's;
+- the reproduce check compares each person's box and joints within 1 px, and its scores within 0.001;
+- the usable part's bounds, a frame held to its digest and timed by its compute only, and main counting a
+  frame over 1.0 s, on stand-ins for the models;
 - on a prepared set, in the venv: the model reproduces a take's recorded rows, a fake's rows relabelled
   with the real models' names are refused at that check, and RTMPose's left and right on the figure
   against the truth's joints (this test may read the truth: nothing downstream does).
@@ -24,6 +27,8 @@ import tarfile
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -106,9 +111,28 @@ class Lock(unittest.TestCase):
             (Path(tmp) / "lock").write_text(text.replace("ultralytics==8.4.0", "ultralytics==8.4.1"), encoding="utf-8")
             self.assertNotEqual(detect.lock(Path(tmp) / "lock")["versions"], pinned["versions"], "control: a changed line is told apart")
 
+    def test_a_distribution_the_lock_does_not_name_is_told(self):
+        pinned = detect.lock()["versions"]
+        self.assertEqual(detect.unlocked(pinned, dict(pinned)), [], "control: the lock's own distributions")
+        self.assertEqual(detect.unlocked(pinned, {**pinned, "planted-extra": "1.0"}), ["planted-extra 1.0 (the lock: not listed)"])
+        self.assertEqual(detect.unlocked(pinned, {**pinned, "ultralytics": "8.4.1"}), ["ultralytics 8.4.1 (the lock: 8.4.0)"])
+        short = dict(pinned)
+        del short["rtmlib"]
+        self.assertEqual(detect.unlocked(pinned, short), ["rtmlib missing (the lock: 0.0.16)"])
 
-def row(seq, *boxes):
-    return {"frame": {"rgb_seq": seq}, "detections": [{"class": cls, "box_xyxy": box} for cls, box in boxes]}
+    def test_main_refuses_an_interpreter_that_is_not_the_locks(self):
+        """This PC's own Python is not the venv: main refuses before it reads the take or loads a model."""
+        with tempfile.TemporaryDirectory() as tmp:
+            done = subprocess.run([sys.executable, "-B", str(HERE / "detect.py"), str(Path(tmp) / "no-take"), "--tools-root", tmp, "--state", str(Path(tmp) / "state")],
+                                  capture_output=True, text=True, env={**ENV, "TEMP": tmp, "TMP": tmp}, cwd=tmp)
+        self.assertEqual(done.returncode, 2, done.stderr)
+        self.assertRegex(done.stderr.strip(), r"^refused: the venv is not requirements\.lock's: .+ \(the lock: ")
+
+
+def row(seq, *found):
+    """A den-detections-1 row's frame and detections: (class, box) or (class, box, score, keypoints)."""
+    items = [(*item, 0.9, None)[:4] for item in found]
+    return {"frame": {"rgb_seq": seq}, "detections": [{"class": cls, "box_xyxy": box, "score": score, "keypoints": kp} for cls, box, score, kp in items]}
 
 
 class Compare(unittest.TestCase):
@@ -120,6 +144,96 @@ class Compare(unittest.TestCase):
         self.assertIn("over 1 px", why)
         self.assertFalse(detect.compare(recorded, [row(1), row(2)])[0], "a person the model no longer finds")
         self.assertFalse(detect.compare(recorded, [row(3)])[0], "a frame with no recorded row")
+
+    def test_scores_and_joints_too(self):
+        """A channel swap moved boxes 0.74 px but a score 0.08: the check holds the scores and the joints as well."""
+        joints = [[100.0 + j, 50.0 + j, 0.9] for j in range(17)]
+        recorded = [row(1, ("person", [10, 20, 110, 300], 0.91, joints))]
+        same = lambda **change: row(1, ("person", [10, 20, 110, 300], change.get("score", 0.91), change.get("keypoints", joints)))
+        self.assertEqual(detect.compare(recorded, [same()]), (True, 0.0, None), "control: the same person holds")
+        self.assertIn("a person's score moved 0.0600", detect.compare(recorded, [same(score=0.85)])[2])
+        moved = [list(p) for p in joints]
+        moved[9][0] += 1.5
+        self.assertEqual(detect.compare(recorded, [same(keypoints=moved)])[:2], (False, 1.5))
+        faint = [list(p) for p in joints]
+        faint[3][2] = 0.5
+        self.assertIn("a joint's score moved", detect.compare(recorded, [same(keypoints=faint)])[2])
+        self.assertIn("17 joints recorded on a person, the model gives 0", detect.compare(recorded, [same(keypoints=None)])[2], "no crop, no joints")
+        gone = [list(p) for p in joints]
+        gone[4] = None
+        self.assertIn("one side only", detect.compare(recorded, [same(keypoints=gone)])[2])
+
+
+def fake_take(folder, frames, span):
+    """frames.csv and one check-1.json whose usable part is frames span[0] to span[1]: what usable() reads."""
+    folder.mkdir(parents=True)
+    lines = ["n,rgb_seq,t_host_s,file,npz_sha256"] + [f"{n},{100 + n},{10 + n * 0.25},frames/{n}.npz,{'0' * 64}" for n in range(1, frames + 1)]
+    (folder / "frames.csv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (folder / "check-1.json").write_text(json.dumps({"usable": {"segments": [{"first_n": span[0], "last_n": span[1]}]}}), encoding="utf-8")
+    return folder
+
+
+class Usable(unittest.TestCase):
+    def test_both_bounds_are_in_and_one_check_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            take = fake_take(Path(tmp) / "take", 8, (3, 6))
+            check, rows = detect.usable(take)
+            self.assertEqual((check.name, [r["n"] for r in rows]), ("check-1.json", ["3", "4", "5", "6"]))
+            (take / "check-2.json").write_text((take / "check-1.json").read_text(encoding="utf-8"), encoding="utf-8")
+            with self.assertRaisesRegex(detect.Refused, "2 check-N.json files"):
+                detect.usable(take)
+            (take / "check-2.json").unlink()
+            (take / "check-1.json").write_text(json.dumps({"usable": {"segments": [{"first_n": 20, "last_n": 30}]}}), encoding="utf-8")
+            with self.assertRaisesRegex(detect.Refused, "usable part is empty"):
+                detect.usable(take)
+
+
+class Frame(unittest.TestCase):
+    """Detector.frame on stand-ins for the models: the frame is held to frames.csv's digest, and available_ts is
+    the capture time plus this frame's compute only."""
+
+    def test_held_to_its_digest_and_timed_by_its_compute_only(self):
+        import numpy
+        with tempfile.TemporaryDirectory() as tmp:
+            take = Path(tmp)
+            (take / "f.npz").write_bytes(b"frame bytes")
+            stub = SimpleNamespace(np=numpy, check=SimpleNamespace(read_bundle=lambda data, with_rgb: (None, bytes(detect.WIDTH * detect.HEIGHT * 3 // 2))),
+                                   decode=lambda nv12, width, height: numpy.zeros((height, width, 3), numpy.uint8),
+                                   run=lambda bgr, frame_id: ({"boxes": []}, 0, 0.25), row_of=lambda result, **kw: kw,
+                                   pose=SimpleNamespace(manifest={"model_version": "body7"}))
+            row = {"n": "5", "file": "f.npz", "npz_sha256": detect.sha256(b"frame bytes"), "rgb_seq": "7", "t_host_s": "100.0"}
+            got, _, seconds = detect.Detector.frame(stub, take, row)
+            self.assertEqual((got["capture_ts"], got["available_ts"], got["rgb_seq"], seconds), (100.0, 100.25, 7, 0.25))
+            with self.assertRaisesRegex(detect.Refused, "frame 5 is not the one frames.csv recorded"):
+                detect.Detector.frame(stub, take, {**row, "npz_sha256": "0" * 64})
+
+
+class Main(unittest.TestCase):
+    """main's loop on a stand-in detector, with the venv's versions stood in: a frame over 1.0 s is counted."""
+
+    def run_main(self, slow):
+        class Stub:
+            preprocessing, load_ms, warm_ms = {}, 1.0, 1.0
+
+            def __init__(self, *_):
+                pass
+
+            def frame(self, take, row):
+                return {"frame": {"rgb_seq": int(row["rgb_seq"])}, "detections": []}, 0, 1.5 if row["n"] in slow else 0.05
+
+            def files(self):
+                return {}
+        with tempfile.TemporaryDirectory() as tmp:
+            take = fake_take(Path(tmp) / "take", 5, (2, 4))
+            with mock.patch.object(detect, "contain"), mock.patch.object(detect, "installed", return_value=detect.lock()["versions"]), \
+                    mock.patch.object(detect, "Detector", Stub), mock.patch("sys.stdout", io.StringIO()):
+                self.assertEqual(detect.main([str(take), "--tools-root", tmp, "--state", tmp]), 0)
+            return json.loads((take / "detector-run.json").read_text(encoding="utf-8"))
+
+    def test_a_frame_over_the_limit_is_counted(self):
+        run = self.run_main(slow={"3"})
+        self.assertEqual((run["counts"]["frames"], run["counts"]["over_limit"], run["ms"]["max"]), (3, 1, 1500.0))
+        self.assertEqual(self.run_main(slow=set())["counts"]["over_limit"], 0, "control: none over")
 
 
 def usable_take(label):
@@ -172,6 +286,15 @@ class Model(unittest.TestCase):
         refused = run_detect(self.take, self.tools, Path(self.tmp.name) / "state", "--only", ",".join(self.frames), "--against", planted)
         self.assertEqual(refused.returncode, 2)
         self.assertIn("refused: the model did not reproduce the recorded rows", refused.stderr)
+
+    def test_relative_paths_are_resolved_before_the_working_folder_moves(self):
+        """contain() moves the working folder into --state, so a relative --tools-root or --against is resolved first."""
+        tmp = Path(self.tmp.name)
+        done = subprocess.run([str(VENV), "-B", str(HERE / "detect.py"), str(self.take), "--tools-root", "tools", "--state", "state-relative",
+                               "--only", self.frames[0], "--against", os.path.relpath(self.take / "detections.jsonl", tmp)],
+                              capture_output=True, text=True, env={**ENV, "TEMP": str(tmp), "TMP": str(tmp)}, cwd=tmp, timeout=600)
+        self.assertEqual(done.returncode, 0, done.stderr[-600:])
+        self.assertTrue(json.loads(done.stdout.strip().splitlines()[-1])["ok"])
 
     def test_left_and_right_against_the_truth(self):
         """Could not verify: whether RTMPose names left and right correctly on the figure. Per frame and pair,

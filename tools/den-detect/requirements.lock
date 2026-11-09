@@ -1,6 +1,7 @@
 # den-detect's venv, as measured on this PC on 2026-11-09: %USERPROFILE%\ml\den-detector, Python 3.12.10, CPU only.
 # Every distribution in it at its exact version, then the weights in its models\ folder by sha256. detect.py
-# refuses to run when the venv's versions or the weights differ from these lines.
+# refuses to run when the venv holds a distribution these lines don't name, misses one, or holds another
+# version, and it holds the weights to these digests at load.
 #
 # Rebuild it with the plan's hop 6 install lines, in PowerShell 5.1: about 340 MB from PyTorch's download host,
 # PyPI and GitHub, and 1 to 1.5 GB on disk. The rtmlib wheel and the pose model come from the pose preparation

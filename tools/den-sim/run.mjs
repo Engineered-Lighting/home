@@ -30,7 +30,7 @@ import { createContentPackHandler } from '../../web-gateway/content-pack-route.m
 import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs';
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
-import { prepareBrain, standInSofa } from './brain.mjs';
+import { prepareBrain, privateReason, standInSofa } from './brain.mjs';
 import { dataRoot, newestPreparedSet } from './data-root.mjs';
 import { BRAIN_BASE, createFeed } from './feed.mjs';
 import { TABLE, headTools, receiptView, sha256 } from './receipt.mjs';
@@ -95,7 +95,7 @@ function loadRegistration() {
       const result = Core.validateDocument(doc, { binding });
       if (doc.revision === 3 && result.ok) return { doc, source: 'export', label: 'REAL SOCKETS · registration revision 3', file };
       privateNotes.push(`registration export refused: revision ${doc.revision}, valid ${result.ok}`);
-    } catch (error) { privateNotes.push('registration export unreadable: ' + error.message); }
+    } catch (error) { privateNotes.push('registration export refused: ' + privateReason(error)); }
   }
   const doc = Core.sealDocument(Core.normalizeDocument(authoredDocument(binding, Core)));
   if (!Core.validateDocument(doc, { binding }).ok) throw Error('authored registration is invalid for the active pack');
@@ -121,7 +121,7 @@ function loadCouch() {
       Sofa.validateSofaTarget(found.doc, { binding, equipment_ref: { revision: registration.doc.revision, digest: registration.doc.digest } },
         { sealDesk: sealRegisteredDeskTarget, digest: Core.digest });
       return { point: found.doc.seat.point_m, source: 'sofa_mark', label: 'YOUR SOFA MARK', mark: found.doc, file: found.file };
-    } catch (error) { privateNotes.push(`sofa mark refused by its seal: ${error.message}`); }
+    } catch (error) { privateNotes.push(`sofa mark refused by its seal: ${privateReason(error)}`); }
   }
   const declared = declaredPoint();
   return { point: declared.point, source: 'declared', label: 'DECLARED', where: declared.where, standIn: standInSofa(declared.point, registration.doc) };
@@ -139,7 +139,7 @@ function declaredPoint() {
       const point = readPrivateJson(file).point_m;
       if (Array.isArray(point) && point.length === 3 && point.every(Number.isFinite)) return { point, where: 'couch-declared.json' };
       privateNotes.push('couch-declared.json refused: point_m must be [x, y, z]');
-    } catch (error) { privateNotes.push('couch-declared.json unreadable: ' + error.message); }
+    } catch (error) { privateNotes.push('couch-declared.json refused: ' + privateReason(error)); }
   }
   return { point: [...floorCentre(), SEAT_HEIGHT_M], where: 'the middle of the floor' };
 }

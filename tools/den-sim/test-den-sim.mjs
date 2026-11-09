@@ -585,4 +585,16 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
   await run.stop();
   assert.match(text, /Sockets: AUTHORED SOCKETS \| Couch: DECLARED/);
   assert.match(text, /needs the registration export it names/);
+  // A malformed private file is refused by name only: JSON.parse's own message quotes the file's text.
+  const fragment = '[2.345, 6.789, O.45]';
+  assert.throws(() => JSON.parse(`{"point_m": ${fragment}}`), error => coordinatesIn(error.message, [6.789]).length > 0, 'control: the parser quotes the text');
+  fs.writeFileSync(path.join(privateFolder, 'registration-revision-3.json'), `{"registration": ${fragment}}`);
+  fs.writeFileSync(path.join(privateFolder, 'couch-declared.json'), `{"point_m": ${fragment}}`);
+  ({ run, text } = await start());
+  try {
+    assert.match(text, /^Note: registration export refused: unreadable \(SyntaxError\)$/m);
+    assert.match(text, /^Note: couch-declared\.json refused: unreadable \(SyntaxError\)$/m);
+    const notes = (await status()).private_notes.join('\n');
+    assert.deepEqual(coordinatesIn(text + notes, [2.345, 6.789]), [], 'no part of the file in the console or the notes');
+  } finally { await run.stop(); }
 });

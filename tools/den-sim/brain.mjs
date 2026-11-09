@@ -36,6 +36,10 @@ const BRAIN_FILES = ['tools/den-sim/brain_run.py', 'tools/den-sim/brain.mjs', 't
 const DRY_RUN_FILES = ['tools/den-sim/dry_run.py', ...['fixture_execution.py', 'fixture_joint_execution.py', 'fixture_profile.py', 'test_fixture_profile.py']
   .map(name => `stack/services/home-context/${name}`)];
 
+// Why a private file was refused, safe to print: a validator's reason code as it is, anything else by
+// its error's name only. A JSON.parse message quotes the file's text, which can hold a coordinate.
+export const privateReason = error => /^[a-z][a-z0-9_]*$/.test(String(error?.message)) ? error.message : `unreadable (${error?.name || 'Error'})`;
+
 export function standInSofa(point, registration) {
   const [x, y, z] = point;
   const corners = [[-1, -1], [1, -1], [1, 1], [-1, 1]].map(([dx, dy]) => ({ point_m: [x + dx * ZONE_HALF_M, y + dy * ZONE_HALF_M, z], normal_unit: [0, 0, 1] }));
@@ -52,7 +56,7 @@ function baseGeometry({ registration, couch, notes }) {
   const inputs = { couch: couch.label, sockets: registration.label };
   if (registration.source === 'export' && couch.source === 'sofa_mark') {
     try { return { geometry: buildBrainGeometry({ sofa: couch.mark, registration: registration.doc, generatedAt: Date.now() / 1000 }).geometry, inputs }; }
-    catch (error) { notes.push(`sofa mark refused by brain-targets: ${error.message}. Using a stand-in zone around its seat point.`); }
+    catch (error) { notes.push(`sofa mark refused by brain-targets: ${privateReason(error)}. Using a stand-in zone around its seat point.`); }
   }
   const sofa = couch.standIn || standInSofa(couch.point, registration.doc);
   return { geometry: relabel(buildBrainGeometry({ sofa, registration: registration.doc, generatedAt: Date.now() / 1000 }).geometry, inputs), inputs };

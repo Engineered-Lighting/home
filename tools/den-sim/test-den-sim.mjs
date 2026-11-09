@@ -8,10 +8,10 @@
 //   set DEN_SIM_SET=<a prepared set>, DEN_SIM_HOME and LOCALAPPDATA to scratch folders, then
 //   node --test tools\den-sim\test-den-sim.mjs
 //
-// The harness tests need DEN_SIM_SET and skip without it. They start run.mjs with this process's
-// DEN_SIM_HOME and LOCALAPPDATA, and refuse to start unless both are set, so nothing reads or
-// writes the owner's private folder or runs. The real-room test reads the real scan pack's binding
-// and floor, read-only, as the plan's own probe did; its export and mark are invented and sealed here.
+// The harness tests need DEN_SIM_SET and skip without it. Each starts run.mjs with DEN_SIM_HOME and
+// LOCALAPPDATA both pointed at a new scratch folder of its own, so nothing reads or writes the
+// owner's private folder or runs. The real-room test reads the real scan pack's binding and floor,
+// read-only, as the plan's own probe did; its export and mark are invented and sealed here.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

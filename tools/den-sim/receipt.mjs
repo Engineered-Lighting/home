@@ -1,0 +1,140 @@
+// One click's run-receipt.json: per hop its word, whether it ran now, was built at page start or was
+// recorded on a date, its tool files against their pins, the files it read and wrote with digests,
+// and its stand-ins. Recorded hops take theirs from prepare-receipt.json, and hop 5's re-fit from
+// refit-receipt.json. The panel and top_line.mjs read only this.
+import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
+export const TABLE = JSON.parse(fs.readFileSync(path.join(HERE, 'hops.json'), 'utf8'));
+export const SCHEMA = 'den-sim-run-receipt-1';
+const HARNESS = { 1: ['render.mjs', 'page.html', 'figure.js', 'shots.json'], 2: ['vcam.py'], 3: [], 4: [], 5: [] };
+
+export const sha256 = file => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+const git = (args, input) => execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8', windowsHide: true, input, stdio: ['pipe', 'pipe', 'ignore'] });
+const lsTree = new Map();
+// {path: blob} at a commit. Commits never change, so each is read once.
+export function blobsAt(commit, paths) {
+  const key = `${commit} ${paths.join(' ')}`;
+  if (!lsTree.has(key)) {
+    const out = {};
+    for (const line of git(['ls-tree', '-r', commit, '--', ...paths]).split('\n').filter(Boolean)) out[line.split('\t')[1]] = line.split('\t')[0].split(' ')[2];
+    lsTree.set(key, out);
+  }
+  return lsTree.get(key);
+}
+export const resolve = ref => git(['rev-parse', `${ref}^{commit}`]).trim();
+// This branch's files against their blobs at HEAD, read on each click: an uncommitted edit shows.
+export function headTools(paths) {
+  const expected = blobsAt(resolve('HEAD'), paths), actual = git(['hash-object', '--stdin-paths'], paths.join('\n') + '\n').split('\n');
+  return paths.map((file, i) => ({ path: file, pin: 'HEAD', expected: expected[file] || null, actual: actual[i] || null }));
+}
+// A tool recorded by prepare, from its receipt: the blobs it ran against the blobs at the pin refs.json names now.
+function recordedTools(record, pinRef, pinLabel) {
+  const commit = resolve(pinRef), expected = blobsAt(commit, Object.keys(record.files));
+  return [{ path: `${pinLabel} commit`, pin: pinLabel, expected: commit, actual: record.commit },
+    ...Object.entries(record.files).map(([file, row]) => ({ path: file, pin: pinLabel, expected: expected[file] || null, actual: row.blob }))];
+}
+function harnessTools(harness, names) {
+  const files = ['prepare.py', ...names].map(name => `tools/den-sim/scene/${name}`), expected = blobsAt(harness.commit, files);
+  return files.map(file => ({ path: file, pin: `the commit that prepared it (${harness.commit.slice(0, 8)})`, expected: expected[file] || null, actual: harness.files[file]?.blob || null }));
+}
+// What kind of recorded input a prepare-time read was, by its name.
+function kindOf(n, file) {
+  if (n === 1) return file.endsWith('shots.json') ? 'shots.json' : 'render';
+  if (file.endsWith('.npz')) return 'marks take';
+  if (/clicks-[0-9a-f]+\.json$/.test(file)) return 'clicks';
+  if (file.endsWith('camera-calibration.json')) return 'calibration';
+  if (file.endsWith('worksheet.json')) return 'worksheet';
+  return 'unknown';
+}
+
+// Hops 1 to 5, as prepare recorded them, with hop 3's re-check by hash and hop 5's re-fit at page start.
+function recordedRows({ prepared, refs, recheck, takeRead, placement }) {
+  const by = `prepare-receipt.json of take ${prepared.take}`, rows = [];
+  for (const n of [1, 2, 3, 4, 5]) {
+    const hop = prepared.hops[String(n)];
+    if (!hop) { rows.push({ n, name: TABLE.hops[n - 1].name, word: 'MISSING', reached: true, ran: 'not recorded', note: 'prepare recorded no such hop', tools: [], read: [], wrote: [], stand_ins: [] }); continue; }
+    const row = { n, name: hop.hop, word: hop.word, reached: true, ran: `recorded ${prepared.recorded}`, tool: { path: hop.tool, commit: hop.commit, pin: hop.pin },
+      tools: harnessTools(prepared.harness, HARNESS[n]), read: [], wrote: [], stand_ins: [...hop.stand_ins] };
+    const vouched = file => ({ path: file.path, sha256: file.sha256, recorded: { kind: kindOf(n, file.path), by, sha256: file.sha256 } });
+    if (n === 1) {
+      row.summary = `render.mjs drew ${new Set(hop.wrote.map(file => file.pose)).size} poses of procedural-1 on ${hop.renderer.split('(')[0].trim()} software GL, three r${hop.three}; ${hop.external_requests} requests left loopback.`;
+      row.read = hop.read.map(vouched);
+      row.wrote = hop.wrote.map(file => ({ path: `render (${file.kind}, pose ${file.pose})`, sha256: file.sha256 }));
+    }
+    if (n === 2) row.summary = `vcam.py served ${hop.frames_built} frames as ${hop.camera_id}, session ${hop.session}, at ${hop.speed}x, picture ${hop.picture}.`;
+    if (n === 3 || n === 4) {
+      row.tools.push(...recordedTools(hop.tool_files ? { commit: hop.commit, files: hop.tool_files } : { commit: hop.commit, files: {} }, refs.tools['den-take'], 'refs.json tools.den-take'));
+      row.wrote = hop.wrote.map(file => ({ path: file.path, sha256: file.sha256 }));
+      if (n === 4) row.read = [takeRead];
+      row.summary = n === 3 ? `take.py recorded ${hop.counts?.kept ?? 0} frames in ${hop.wall_s} s of wall, on a fast clock with its cues silenced.`
+        : `check.py: ${hop.verdict}, retained ${hop.retained}, ${hop.usable_s} s usable; the harness answered its second-person prompt.`;
+    }
+    if (n === 3) {
+      row.ran = `recorded ${prepared.recorded}, re-checked by hash now`;
+      row.read = recheck ? recheck.read : [];
+      row.tools.push(...(recheck?.tools || []));
+      if (recheck && !recheck.ok) { row.word = 'MISSING'; row.note = recheck.reason; }
+      row.recheck = recheck ? { ok: recheck.ok, frames: recheck.frames, reason: recheck.reason } : null;
+    }
+    if (n === 5) {
+      row.tools.push(...recordedTools({ commit: hop.commit, files: hop.tool_files }, refs.tools['den-register'], 'refs.json tools.den-register'));
+      row.read = hop.read.map(vouched);
+      row.wrote = hop.wrote.map(file => ({ path: file.path, sha256: file.sha256 }));
+      row.stand_ins = hop.stand_ins.filter(text => !text.startsWith("the pose is in the picture's own frame"));
+      row.ran = `recorded ${prepared.recorded}, re-fit at page start`;
+      row.summary = `${hop.result} ${hop.transform_id || ''}, error bound ${hop.error_bound_mm} mm; ${placement.summary}`;
+      for (const [name, record] of Object.entries(placement.tools || {})) row.tools.push(...recordedTools(record, refs.tools[name], `refs.json tools.${name}`));
+      row.read.push(...placement.read);
+      row.wrote.push(...placement.wrote);
+      row.stand_ins.push(placement.stand_in);
+      if (hop.word !== 'ADAPTER' || !placement.registered) { row.word = 'MISSING'; row.note = placement.registered ? hop.reasons.join(', ') : placement.summary; }
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
+const missing = (n, note, extra = {}) => ({ n, name: TABLE.hops[n - 1].name, word: 'MISSING', reached: true, ran: 'not built', note, summary: note, tools: [], read: [], wrote: [], stand_ins: [], ...extra });
+
+// The whole receipt. start: what run.mjs built at page start; chain: chain.py's rows and stop; brain,
+// command: the older brain's timeline and the dry run; files: this click's own outputs with digests.
+export function buildReceipt({ click, takeId, setId, prepared, refs, start, chain, brain, command, pressedAgain = false }) {
+  const rows = recordedRows({ prepared, refs, recheck: chain.recheck, takeRead: chain.takeRead, placement: start.placement });
+  const byN = new Map(chain.rows.map(row => [row.n, row]));
+  for (const n of [6, 7, 8, 9, 10, 11, 12, 13]) {
+    const row = byN.get(n);
+    rows.push(row ? { name: TABLE.hops[n - 1].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...row } : null);
+  }
+  rows.push({ ...start.couch, n: 14, name: TABLE.hops[13].name, reached: true });
+  rows.push(missing(15, "Not built: rung 6 isn't, so nothing joins the person's state to a track; hop 17's adapter does it."));
+  rows.push(missing(16, 'Not built: no light model exists before any picture yet.', { ran: 'not built at page start' }));
+  rows.push(brain?.row || null);
+  rows.push(brain?.feedRow || null, brain?.motionRow || null, start.home);
+  rows.push(...(command?.rows || [null, null, null]));
+  rows.push(missing(24, 'Not built: nothing compares where Home points with where the Decision said.'),
+    missing(25, 'Not built: no virtual meter reads Home\'s modeled light.'), missing(26, 'Not built: den-verify does not run.'));
+  // A hop past where the click stopped keeps its expected word, greyed, "not reached on this click".
+  const stop = chain.stop || brain?.stop || null;
+  const out = rows.map((row, i) => {
+    const n = i + 1, hop = TABLE.hops[i];
+    if (row && !(stop && n > stop.hop)) return row;
+    return { n, name: hop.name, word: hop.word, reached: false, ran: 'not reached on this click', note: 'not reached on this click', tools: [], read: [], wrote: [], stand_ins: [] };
+  });
+  return { schema: SCHEMA, click, take: takeId, set: setId, recorded: prepared.recorded, written_unix: Date.now() / 1000,
+    prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, rows: out };
+}
+
+// The panel's view: the words and notes, without the digests the page has no use for.
+export function receiptView(receipt) {
+  const when = new Map(TABLE.hops.map(hop => [hop.n, hop.when]));
+  // A row sits under what it did on this click; a row that didn't run sits where the table says it will.
+  const group = row => row.reached === false || /^not /.test(row.ran) ? when.get(row.n) : row.ran.startsWith('recorded') ? 'recorded' : row.ran.includes('page start') ? 'page' : 'click';
+  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped,
+    rows: receipt.rows.map(row => ({ n: row.n, name: row.name, word: row.word, reached: row.reached !== false, ran: row.ran, group: group(row),
+      summary: row.summary || row.note || '', stand_ins: row.stand_ins || [], tool: row.tool?.path || null })) };
+}

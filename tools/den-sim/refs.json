@@ -16,9 +16,15 @@
     "den-verify": "82a8ef38"
   },
   "codec": {
-    "note": "On no git ref, so it is read by path and each run logs its sha. It is older than the release origin/main pins in room_production_canonical_provider.py.",
+    "note": "On no git ref, so it is read by path and pinned by these sha256 digests: a click whose codec files differ reads not yet. It is older than the release origin/main pins in room_production_canonical_provider.py.",
     "tools": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\tools",
-    "contracts": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\contracts\\c12"
+    "contracts": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\contracts\\c12",
+    "sha256": {
+      "tools/c12_runtime_plan.py": "477de391670b0b85a39df41135ae5e66fe68e87b1416a2e2792cd4780af7379d",
+      "tools/c12_runtime_wire.py": "a7afb1c3f43ea0421987138154bc049068eff17f2dfc9de7a6ec2e7b8697f3b3",
+      "contracts/runtime-plan-v1.json": "e352aa58a6b2d7f5e357927b3d9b1f43acd95a5a134c5c2a9190720c806d6f48",
+      "contracts/motor-protocol-allowlist-v1.json": "cc52d554764f85fb9c6d15f56f2a4122cbc7a5f545608bfd845bfd477d52e422"
+    }
   },
   "content_packs": "C:\\claude\\home\\app\\data\\home-content",
   "output_root": "%USERPROFILE%\\den-sim, or DEN_SIM_HOME when it is set",

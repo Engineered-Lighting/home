@@ -6,7 +6,9 @@
 - test 2, nothing told: the random words, and the search over what exists now, the detector's rows,
   detector-run.json and detect.py's argv among it;
 - test 19, safety: with DEN_SIM_PREPARE_TRACE=1, an audit-hook trace of a whole prepare run in a scratch
-  data root (about 3 minutes): no Python write outside the data root, none under AppData or TEMP.
+  data root (about 3 minutes): no Python write outside the data root, none under AppData or TEMP, and that
+  set's receipts hold as the real set's do. Its control runs every time: a write planted outside the data
+  root, in a process the tracer is loaded into the same way, is found.
 
 Each has a control that must make it fail. Standard library and numpy only.
 
@@ -853,6 +855,47 @@ sys.addaudithook(_hook)
 """
 
 
+def trace_env(tmp, home, temp, trace, hook):
+    """The tracer loaded from sitecustomize into every Python process started with this environment."""
+    (hook / "sitecustomize.py").write_text(TRACER, encoding="utf-8")
+    return {**ENV, "DEN_SIM_HOME": str(home), "TEMP": str(temp), "TMP": str(temp), "LOCALAPPDATA": str(tmp / "lad"), "APPDATA": str(tmp / "ad"),
+            "PYTHONPATH": str(hook), "DEN_SIM_TRACE": str(trace)}
+
+
+def traced(trace):
+    """(each traced process's argv, every write the processes asked for)."""
+    processes, writes = [], []
+    for log in trace.glob("*.jsonl"):
+        lines = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+        processes.append(" ".join(lines[0]["argv"]))
+        writes += [line["path"] for line in lines[1:]]
+    return processes, writes
+
+
+def inside(path, root):
+    return Path(path).resolve().is_relative_to(root.resolve())
+
+
+class TraceControl(unittest.TestCase):
+    """Trace's control, cheap enough to run every time: a write planted outside the data root by a process
+    started the way Trace starts prepare's (this PC's Python, and the detector's venv when it is here) is found."""
+
+    def test_a_planted_write_outside_the_data_root_is_found(self):
+        with scratch() as tmp:
+            tmp = Path(tmp)
+            home, temp, trace, hook = tmp / "home", tmp / "temp", tmp / "trace", tmp / "hook"
+            for folder in (home, temp, trace, hook):
+                folder.mkdir()
+            env, planted = trace_env(tmp, home, temp, trace, hook), tmp / "elsewhere.txt"
+            pythons = [sys.executable] + ([str(prepare.detector_python())] if prepare.detector_python().is_file() else [])
+            for python in pythons:
+                subprocess.run([python, "-B", "-c", f"open(r'{planted}', 'a').write('x'); open(r'{home / 'inside.txt'}', 'a').write('x')"], env=env, check=True)
+            processes, writes = traced(trace)
+            self.assertEqual(len(processes), len(pythons), "the tracer loaded in each process")
+            self.assertEqual([str(Path(w).resolve()) for w in writes if not inside(w, home)], [str(planted.resolve())] * len(pythons), "the planted write is found, once per process")
+            self.assertEqual(sum(inside(w, home) for w in writes), len(pythons), "and the write inside is not")
+
+
 @unittest.skipUnless(os.environ.get("DEN_SIM_PREPARE_TRACE") == "1", "a whole prepare run, about 3 minutes: set DEN_SIM_PREPARE_TRACE=1")
 class Trace(unittest.TestCase):
     """Test 19: every Python process a prepare run starts (prepare.py, and detect.py in the venv) logs each write
@@ -866,26 +909,23 @@ class Trace(unittest.TestCase):
             home, temp, trace, hook = tmp / "home", tmp / "temp", tmp / "trace", tmp / "hook"
             for folder in (home, temp, trace, hook):
                 folder.mkdir()
-            (hook / "sitecustomize.py").write_text(TRACER, encoding="utf-8")
-            env = {**ENV, "DEN_SIM_HOME": str(home), "TEMP": str(temp), "TMP": str(temp), "LOCALAPPDATA": str(tmp / "lad"), "APPDATA": str(tmp / "ad"),
-                   "PYTHONPATH": str(hook), "DEN_SIM_TRACE": str(trace)}
+            env = trace_env(tmp, home, temp, trace, hook)
             done = subprocess.run([sys.executable, "-B", "-X", "utf8", str(HERE / "prepare.py")], capture_output=True, text=True, env=env, timeout=1200)
             self.assertEqual(done.returncode, 0, done.stdout[-2000:] + done.stderr[-2000:])
-            processes, writes = [], []
-            for log in trace.glob("*.jsonl"):
-                lines = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
-                processes.append(" ".join(lines[0]["argv"]))
-                writes += [line["path"] for line in lines[1:]]
+            processes, writes = traced(trace)
             self.assertEqual(sum("detect.py" in p for p in processes), 10, "detect.py ran in the venv, traced: twice per scene take")
             self.assertTrue(any(p.endswith("prepare.py") for p in processes))
-            inside = lambda path, root: Path(path).resolve().is_relative_to(root.resolve())
             self.assertGreater(len(writes), 100)
             self.assertEqual([w for w in writes if not inside(w, home)], [], "no write outside the data root")
             # The run's own TEMP, LOCALAPPDATA and APPDATA, and the real AppData that holds this user's TEMP.
             self.assertEqual([w for w in writes if any(inside(w, root) for root in (temp, tmp / "lad", tmp / "ad", Path.home() / "AppData"))], [], "none under AppData or TEMP")
             self.assertFalse(any(temp.iterdir()), "and nothing native landed in TEMP either")
             print(f"\n  traced {len(processes)} Python processes, {len(writes)} writes, all under the data root", file=sys.stderr)
-            self.assertTrue([w for w in [str(tmp / "elsewhere.txt")] if not inside(w, home)], "control: a write outside is found")
+            # The set this run prepared holds as the real one must: hop 6's part of every receipt included
+            # (rows and run digests, the pins, three frames checked against the model).
+            made = [folder for folder in (home / "prepared").iterdir() if (folder / "set.json").is_file()]
+            self.assertEqual(len(made), 1)
+            receipts_hold(self, made[0])
 
 
 class Archive(unittest.TestCase):
@@ -925,35 +965,41 @@ class Archive(unittest.TestCase):
         self.assertEqual(record["files"]["tools/den-take/check.py"]["blob"], pinned("tools/den-take/check.py"))
 
 
+def receipts_hold(case, folder):
+    """Every take's prepare-receipt.json in a set: keyed by its digest, its tools pinned, and hop 6's part from
+    detector-run.json, checked against the model on three frames."""
+    info = json.loads((folder / "set.json").read_text(encoding="utf-8"))
+    for item in info["takes"]:
+        receipt = json.loads((folder / item["take"] / "prepare-receipt.json").read_text(encoding="utf-8"))
+        case.assertEqual(receipt["take_digest"], item["digest"])
+        case.assertEqual(receipt["take_digest"], sha((folder / item["take"] / "frames.csv").read_bytes()))
+        case.assertEqual([receipt["hops"][h]["word"] for h in "12345"], ["SCRIPTED", "SCRIPTED", "ADAPTER", "ADAPTER", "ADAPTER"])
+        six = receipt["hops"].get("6")
+        if item["kind"] == "marks":
+            case.assertIsNone(six, "the marks take gets no rows")
+            continue
+        # Hop 6's part, from detector-run.json: the rows and the run record by digest, the pinned weights,
+        # the tools as they ran, and the check against the model within 1 px.
+        run = json.loads((folder / item["take"] / "detector-run.json").read_text(encoding="utf-8"))
+        case.assertEqual(six["rows"]["sha256"], sha((folder / item["take"] / "detections.jsonl").read_bytes()))
+        case.assertEqual(six["run"]["sha256"], sha((folder / item["take"] / "detector-run.json").read_bytes()))
+        case.assertEqual((run["take_digest"], run["rows"]["sha256"]), (item["digest"], six["rows"]["sha256"]))
+        case.assertEqual(six["weights"], prepare.den_detect.lock()["weights"])
+        case.assertEqual((six["commit"], six["counts"], run["counts"]["over_limit"]), (git("rev-parse", REFS["tools"]["rung-2-observe"]).decode().strip(), run["counts"], 0))
+        case.assertEqual(six["detect_py"]["blob"], git("rev-parse", f"{info_head(receipt)}:tools/den-detect/detect.py").decode().strip())
+        case.assertTrue(six["checked"]["ok"] and six["checked"]["max_px"] <= 1.0 and len(six["checked"]["frames"]) == 3, six["checked"])
+        case.assertEqual(receipt["hops"]["4"]["second_person"]["answered_by"], prepare.HARNESS)
+        case.assertIsNone(receipt["refusal"])
+        for hop, tool in (("3", "den-take"), ("5", "den-register")):
+            case.assertTrue(git("rev-parse", REFS["tools"][tool]).decode().strip() == receipt["hops"][hop]["commit"])
+    case.assertEqual(json.loads((folder / info["fit"]["folder"] / "room-model.jsonl").read_text(encoding="utf-8").splitlines()[-1])["cameras"][-1]["method"],
+                     "virtual-scene + fit")
+
+
 @NEEDS_SET
 class Receipts(unittest.TestCase):
     def test_each_take_has_a_receipt_keyed_by_its_digest_with_pinned_tools(self):
-        info, _, _ = the_set()
-        for item in info["takes"]:
-            receipt = json.loads((SET / item["take"] / "prepare-receipt.json").read_text(encoding="utf-8"))
-            self.assertEqual(receipt["take_digest"], item["digest"])
-            self.assertEqual(receipt["take_digest"], sha((SET / item["take"] / "frames.csv").read_bytes()))
-            self.assertEqual([receipt["hops"][h]["word"] for h in "12345"], ["SCRIPTED", "SCRIPTED", "ADAPTER", "ADAPTER", "ADAPTER"])
-            six = receipt["hops"].get("6")
-            if item["kind"] == "marks":
-                self.assertIsNone(six, "the marks take gets no rows")
-                continue
-            # Hop 6's part, from detector-run.json: the rows and the run record by digest, the pinned weights,
-            # the tools as they ran, and the check against the model within 1 px.
-            run = json.loads((SET / item["take"] / "detector-run.json").read_text(encoding="utf-8"))
-            self.assertEqual(six["rows"]["sha256"], sha((SET / item["take"] / "detections.jsonl").read_bytes()))
-            self.assertEqual(six["run"]["sha256"], sha((SET / item["take"] / "detector-run.json").read_bytes()))
-            self.assertEqual((run["take_digest"], run["rows"]["sha256"]), (item["digest"], six["rows"]["sha256"]))
-            self.assertEqual(six["weights"], prepare.den_detect.lock()["weights"])
-            self.assertEqual((six["commit"], six["counts"], run["counts"]["over_limit"]), (git("rev-parse", REFS["tools"]["rung-2-observe"]).decode().strip(), run["counts"], 0))
-            self.assertEqual(six["detect_py"]["blob"], git("rev-parse", f"{info_head(receipt)}:tools/den-detect/detect.py").decode().strip())
-            self.assertTrue(six["checked"]["ok"] and six["checked"]["max_px"] <= 1.0 and len(six["checked"]["frames"]) == 3, six["checked"])
-            self.assertEqual(receipt["hops"]["4"]["second_person"]["answered_by"], prepare.HARNESS)
-            self.assertIsNone(receipt["refusal"])
-            for hop, tool in (("3", "den-take"), ("5", "den-register")):
-                self.assertTrue(git("rev-parse", REFS["tools"][tool]).decode().strip() == receipt["hops"][hop]["commit"])
-        self.assertEqual(json.loads((SET / info["fit"]["folder"] / "room-model.jsonl").read_text(encoding="utf-8").splitlines()[-1])["cameras"][-1]["method"],
-                         "virtual-scene + fit")
+        receipts_hold(self, SET)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hops 1 to 5, recorded once: the rendered scenes through the real recorder, check and fit.
+"""Hops 1 to 6, recorded once: the rendered scenes through the real recorder, check, fit and detector.
 
     python -B -X utf8 tools\\den-sim\\scene\\prepare.py
     python -B -X utf8 tools\\den-sim\\scene\\prepare.py --refit --set SET --mark MARK --export EXPORT --floor FLOOR [--facing FACING]
@@ -16,8 +16,13 @@ private folder, so an agent can run it. The data root is DEN_SIM_HOME, or else %
 3. The fit on the marks take with real ClickSession and run_fit, unedited den-register, its open slots
    closed and its labels set in memory, so the record says `virtual-scene + fit`. Its text goes to a
    log in the set, never to the console.
-4. prepare-receipt.json beside each take, keyed by the take's digest (sha256 of frames.csv); set.json,
-   display.json and truth\\<word>\\ in the set; one line appended to prepared\\tries.jsonl.
+4. Hop 6 on each scene take, after its check: tools\\den-detect\\detect.py in the detector's venv
+   (%USERPROFILE%\\ml\\den-detector\\Scripts\\python.exe, or DEN_DETECT_PYTHON) records YOLO26s and RTMPose-m
+   rows beside the take. At the end it runs again on three frames of each take, and the person boxes must
+   come back within 1 px. A missing venv or weights, a digest or a mismatch is a refusal at hop 6, never a fake.
+5. prepare-receipt.json beside each take, keyed by the take's digest (sha256 of frames.csv), with hop 6's part
+   taken from detector-run.json; set.json, display.json and truth\\<word>\\ in the set; one line appended to
+   prepared\\tries.jsonl.
 
 --refit is for the owner's run.mjs (and later fresh_run.py), on the owner's files, when the mark's,
 export's or facing's digest changed. It copies a set's clicks and calibration into a new folder under
@@ -50,7 +55,8 @@ import numpy as np
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-sys.path.insert(0, str(HERE))
+sys.path[:0] = [str(HERE), str(ROOT / "tools/den-detect")]
+import detect as den_detect  # noqa: E402  constants and stdlib helpers only: its models load in the venv
 import vcam  # noqa: E402
 
 SCHEMA_RECEIPT, SCHEMA_SET, SCHEMA_DISPLAY = "den-sim-prepare-receipt-1", "den-sim-prepared-set-1", "den-sim-display-1"
@@ -63,16 +69,17 @@ PHONE_CLOCK_S = 2.3456  # the slate's clock is camera time minus this; check.py 
 LOOPBACK = "127.0.0.1"
 SCENE_FILES = ("shots.json", "figure.js", "page.html", "render.mjs", "vcam.py", "prepare.py", "frame_hash.py")
 TOOLS = {"den-register": "tools/den-register", "den-take": "tools/den-take"}
+DETECT, DETECT_PYTHON = ROOT / "tools/den-detect/detect.py", "DEN_DETECT_PYTHON"
 NETWORK = ("socket.connect", "socket.bind", "socket.sendto", "socket.sendmsg", "socket.getaddrinfo",
            "socket.gethostbyname", "socket.gethostbyaddr", "socket.getnameinfo")
 
 
 class Stop(Exception):
-    """A hop refused: (hop, reason)."""
+    """A hop refused: (hop, reason), on the take it names, or else on the last take recorded."""
 
-    def __init__(self, hop, reason):
+    def __init__(self, hop, reason, take=None):
         super().__init__(f"hop {hop}: {reason}")
-        self.hop, self.reason = hop, reason
+        self.hop, self.reason, self.take = hop, reason, take
 
 
 def guard(loopback):
@@ -152,9 +159,9 @@ def git(*args):
     return done.stdout
 
 
-def pins():
+def pins(names=TOOLS):
     refs = json.loads((ROOT / "tools/den-sim/refs.json").read_text(encoding="utf-8"))["tools"]
-    return {name: git("rev-parse", refs[name] + "^{commit}").decode().strip() for name in TOOLS}
+    return {name: git("rev-parse", refs[name] + "^{commit}").decode().strip() for name in names}
 
 
 def archive(tree, commits, log=None):
@@ -276,6 +283,64 @@ def record_take(take, check, m, camera, folder, token_file, log):
     if report["verdict"] != "PASS" or not report["retained"] or not usable["segments"]:
         problem = f"check.py: {report['verdict']}, retained {report['retained']}, {len(usable['segments'])} usable segments"
     return hop3, hop4, problem
+
+
+# ---- hop 6 -------------------------------------------------------------------------------------------
+
+def detector_python(env=None):
+    env = os.environ if env is None else env
+    return Path(env[DETECT_PYTHON]) if env.get(DETECT_PYTHON) else Path.home() / "ml" / "den-detector" / "Scripts" / "python.exe"
+
+
+def detector_tree(tree, log):
+    """detect.py's --tools-root: den-observe, den-take and the Lab's workers at refs.json's rung-2-observe, as
+    chain.py archives them. Returns the commit."""
+    sha = pins(["rung-2-observe"])["rung-2-observe"]
+    done = log.run(["git", "-C", ROOT, "archive", "--format=tar", sha, *den_detect.TREE])
+    if done.returncode:
+        raise Stop(6, f"git archive rung-2-observe: {done.stderr.decode('utf-8', 'replace').strip()[-200:]}")
+    tree.mkdir(parents=True)
+    with tarfile.open(fileobj=io.BytesIO(done.stdout)) as tar:
+        tar.extractall(tree, filter="data")
+    return sha
+
+
+def run_detector(folder, tree, state, log, *extra):
+    python = detector_python()
+    if not python.is_file():
+        raise Stop(6, f"the detector's venv is missing: build %USERPROFILE%\\ml\\den-detector from tools\\den-detect\\requirements.lock, "
+                      f"or set {DETECT_PYTHON}. No fake stands in", take=folder.name)
+    done = log.run([python, "-B", DETECT, folder, "--tools-root", tree, "--state", state, *extra], timeout=900)
+    out = done.stdout.decode("utf-8", "replace")
+    log.keep(out)
+    if done.returncode:
+        why = (done.stderr.decode("utf-8", "replace").strip().splitlines() or ["no message"])[-1]
+        raise Stop(6, f"detect.py on take {folder.name}: {why.removeprefix('refused: ')}", take=folder.name)
+    return out.strip().splitlines()
+
+
+def detect_take(folder, tree, state, commit, log):
+    """Hop 6 on one scene take: rows recorded beside it, and its receipt's part, from detector-run.json."""
+    run_detector(folder, tree, state, log)
+    run = json.loads((folder / "detector-run.json").read_text(encoding="utf-8"))
+    rows = {"path": f"{folder.name}/detections.jsonl", "sha256": sha256_file(folder / "detections.jsonl")}
+    if run["rows"]["sha256"] != rows["sha256"] or run["take_digest"] != sha256_file(folder / "frames.csv"):
+        raise Stop(6, f"take {folder.name}: detector-run.json does not match the rows or the take beside it", take=folder.name)
+    return {"hop": "Detector and box", "word": "ADAPTER", "ran": "recorded", "tool": "tools/den-detect/detect.py",
+            "commit": commit, "pin": "refs.json tools.rung-2-observe", "tool_files": run["tools"]["files"],
+            "detect_py": run["tools"]["detect.py"], "lock": run["tools"]["requirements.lock"], "rows": rows,
+            "run": {"path": f"{folder.name}/detector-run.json", "sha256": sha256_file(folder / "detector-run.json")},
+            "weights": run["weights"], "device": run["device"], "counts": run["counts"],
+            "ms": {key: run["ms"][key] for key in ("median", "max", "load", "warmup")}, "authorize": run["authorize"], "checked": None}
+
+
+def reproduce(folder, hop, tree, state, log, date):
+    """The model again on three frames of the take: its person boxes must match the recorded rows within 1 px."""
+    _, rows = den_detect.usable(folder)
+    picked = sorted({int(rows[0]["n"]), int(rows[len(rows) // 2]["n"]), int(rows[-1]["n"])})
+    result = json.loads(run_detector(folder, tree, state, log, "--only", ",".join(map(str, picked)), "--against", folder / "detections.jsonl")[-1])
+    hop["checked"] = {"on": date, "frames": picked, "max_px": result["max_px"], "tolerance_px": den_detect.TOLERANCE_PX, "ok": result["ok"]}
+    return hop["checked"]
 
 
 # ---- the fit ------------------------------------------------------------------------------------------
@@ -403,10 +468,12 @@ def prepare(args):
     work.mkdir()
     log = Log(set_dir)
     started, date = time.time(), time.strftime("%Y-%m-%d")
-    takes, refusal, receipts, fit_info, tools_head, display = [], None, {}, None, None, {}
+    takes, refusal, refused_take, receipts, fit_info, tools_head, display = [], None, None, {}, None, None, {}
     try:
         tools_head = harness_files()
         tools = archive(work / "tools", pins(), log)
+        detect_tree, detect_state = work / "detect-tools", work / "detector"
+        detect_commit = detector_tree(detect_tree, log)
         import check
         import method
         import register
@@ -493,8 +560,18 @@ def prepare(args):
                     f"{hops['4'].get('verdict') or 'not checked'}, {hops['4'].get('usable_s', 0)} s usable")
             if problem:
                 raise Stop(3 if hops["3"]["word"] == "MISSING" else 4, problem)
+            hops["6"] = detect_take(folder, detect_tree, detect_state, detect_commit, log)
+            c = hops["6"]["counts"]
+            log.say(f"  hop 6: a person on {c['with_person']} of {c['frames']} usable frames, median {hops['6']['ms']['median']:.0f} ms a frame, "
+                    f"{c['over_limit']} over {den_detect.LIMIT_S:g} s")
+
+        # The check that the model reproduces its rows, once every take has them.
+        for folder, (kind, hops) in receipts.items():
+            if kind == "scene":
+                checked = reproduce(folder, hops["6"], detect_tree, detect_state, log, date)
+                log.say(f"Take {folder.name}: rows checked against the model on frames {checked['frames']}, within {checked['max_px']} px")
     except Stop as stop:
-        refusal = {"hop": stop.hop, "reason": stop.reason}
+        refusal, refused_take = {"hop": stop.hop, "reason": stop.reason}, stop.take
         log.say(f"Stopped at hop {stop.hop}: {stop.reason}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -504,7 +581,7 @@ def prepare(args):
                                           "A scene's word is its only name, also in the render's file names and the truth folder.",
                                           "scenes": [display[i] for i in sorted(display)]})
     for folder, (kind, hops) in receipts.items():
-        failed = refusal if refusal and folder.name == takes[-1]["take"] else None
+        failed = refusal if refusal and folder.name == (refused_take or takes[-1]["take"]) else None
         write_json(folder / "prepare-receipt.json", receipt(folder, kind, hops, failed, set_dir, seed, date, started, tools_head))
     write_json(set_dir / "set.json", {
         "schema": SCHEMA_SET, "set": set_dir.name, "recorded": date, "started_unix": round(started, 3), "ended_unix": round(time.time(), 3),
@@ -532,7 +609,7 @@ def receipt(folder, kind, hops, refusal, set_dir, seed, date, started, harness):
 
 
 def write_truth(truth_dir, word, render_name, scene, folder, poses):
-    """The truth folder: what the scene really holds, for the report and (until step 4) fake_detector only."""
+    """The truth folder: what the scene really holds, for the report and tests, and (until step 4) hop 12's typed answers."""
     target = truth_dir / word
     target.mkdir(parents=True, exist_ok=True)
     if render_name != word and (truth_dir / render_name / "poses.json").exists():

@@ -174,7 +174,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.deepEqual(names, JSON.parse(fs.readFileSync(path.join(HERE, 'hops.json'), 'utf8')).hops.map(hop => hop.name), 'one row per hop, named as the table names it');
     assert.ok(!names.some(name => /Person to aim|decide v0/.test(name)), '#424\'s two rows left the list');
     const six = await page.textContent('[data-den-sim-hop="6"]');
-    assert.match(six, /rows checked against the model on .*YOLO26s found a person on \d+ of \d+ usable frames, and RTMPose-m placed its joints/, 'the detector row says a real model found the person');
+    assert.match(six, /rows checked against the model on .*YOLO26s found a person on \d+ of \d+ usable frames, and RTMPose-m placed joints on \d+ of them/, 'the detector row says a real model found the person');
     for (const stand of ['YOLO26s and RTMPose-m on this PC\'s CPU, not the live host', 'available_ts counts compute only', 'detect.py is new', 'authorize is answered yes'])
       assert.ok(six.includes(stand), `hop 6 names its stand-in: ${stand}`);
     assert.doesNotMatch(six, /truth|fake_detector/);

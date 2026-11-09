@@ -241,10 +241,12 @@ def step_picture(request):
     return dict(width=FRAME_PX[0], height=FRAME_PX[1])
 
 
-def rows_hold(take, rows, hop, pins):
+def rows_hold(take, rows, hop, pins, take_digest, check_sha256):
     """Hop 6's conditions on the rows prepare recorded beside the take (plan line 442): (held, None), or
     (None, why). Anything less reads MISSING, never "nobody". rows: frames.csv's usable part; hop: the take's
-    prepare-receipt.json hop 6; pins: requirements.lock's weight digests."""
+    prepare-receipt.json hop 6; pins: requirements.lock's weight digests; take_digest and check_sha256: the
+    take and the check this click holds, which detector-run.json must name, so rows recorded for another take
+    can't stand in."""
     if not rows:
         return None, "the check's usable part is empty, so no rows can cover it"
     if not hop:
@@ -258,6 +260,10 @@ def rows_hold(take, rows, hop, pins):
         return None, 'detections.jsonl is not the one prepare recorded'
     try:
         run = json.loads(run_file.read_text(encoding='utf-8'))
+        if run['take_digest'] != take_digest:
+            return None, 'detector-run.json was recorded for another take'
+        if run['check']['sha256'] != check_sha256:
+            return None, "detector-run.json was recorded against another check than this take's"
         if any(run['weights'].get(name) != pins[name] for name in detect.WEIGHTS):
             return None, "detector-run.json does not hold both pinned weight digests"
         recorded = [json.loads(line) for line in rows_file.read_text(encoding='utf-8').splitlines() if line.strip()]
@@ -267,6 +273,7 @@ def rows_hold(take, rows, hop, pins):
         if seqs != usable:
             return None, 'the rows cover %d of the %d usable frames' % (len(set(seqs) & set(usable)), len(usable))
         people = [row for row in recorded if detect.person_boxes(row)]
+        joints = [row for row in people if any(d['class'] == 'person' and d['keypoints'] for d in row['detections'])]
         if (run['counts']['frames'], run['counts']['with_person']) != (len(recorded), len(people)):
             return None, "the rows' counts are not detector-run.json's"
         names = {row['detector']['boxes'] for row in recorded} | {row['detector']['keypoints'] for row in recorded if 'keypoints' in row['detector']}
@@ -277,7 +284,15 @@ def rows_hold(take, rows, hop, pins):
             return None, '%d frames took over %g s of compute, so den-observe rejects them: prepare again on a quiet PC' % (max(late, run['counts']['over_limit']), detect.LIMIT_S)
     except (KeyError, TypeError, ValueError, AttributeError):
         return None, 'detections.jsonl or detector-run.json is not what detect.py writes'
-    return dict(rows=recorded, run=run, with_person=len(people), names=sorted(names)), None
+    return dict(rows=recorded, run=run, with_person=len(people), with_joints=len(joints), names=sorted(names)), None
+
+
+def found_line(held):
+    """Hop 6's sentence on rows that hold a person: on how many frames, and on how many of them RTMPose-m placed
+    joints. A person box under 0.5 is never cropped, so it can be box only."""
+    joints = ('RTMPose-m placed joints on %d of them' % held['with_joints'] if held['with_joints']
+              else 'RTMPose-m placed no joints on any of them: box only')
+    return 'YOLO26s found a person on %d of %d usable frames, and %s' % (held['with_person'], len(held['rows']), joints)
 
 
 def weight_tools(take, pins):
@@ -294,12 +309,19 @@ def weight_tools(take, pins):
             for file in (*detect.WEIGHTS, 'artifact.json')]
 
 
-def no_track(with_person, frames, run, output):
+PERSON_KINDS = ('keypoints', 'person_box')   # den-observe's kinds for a person: with joints, or a box only
+
+
+def no_track(with_person, frames, observations, output):
     """Hop 8's sentence when the rows hold a person and no track formed: what was seen, and why no track formed,
-    from replay's run.json counts. It never says nobody."""
-    counts = run['gate']['counts']
-    seen = ', '.join('%s %d' % (key, value) for key, value in sorted(counts['validity'].items())) or 'none'
-    return 'the detector saw a person on %d of %d usable frames, and no track formed: observations %s. %s' % (
+    from the person observations' validity (replay's run.json counts every kind together, the furniture's boxes
+    too) and den_track.py's own line. It never says nobody."""
+    counts = {}
+    for obs in observations:
+        if obs['kind'] in PERSON_KINDS:
+            counts[obs['validity']] = counts.get(obs['validity'], 0) + 1
+    seen = ', '.join('%s %d' % (key, value) for key, value in sorted(counts.items())) or 'none'
+    return 'the detector saw a person on %d of %d usable frames, and no track formed: person observations %s. %s' % (
         with_person, frames, seen, ' '.join(output.split('\n')[1:2]) or 'den_track.py made no lines')
 
 
@@ -439,7 +461,7 @@ def chain(request):
     # Hop 6, recorded by prepare: the rows YOLO26s and RTMPose-m wrote beside the take, held to its conditions.
     hop = request.get('detector') or {}
     pins = detect.lock()['weights']
-    held, why = rows_hold(take, rows, hop, pins)
+    held, why = rows_hold(take, rows, hop, pins, request['take_digest'], request['check_sha256'])
     run = held['run'] if held else {}
     rows_read = click.recorded('%s/detections.jsonl' % take.name, take / 'detections.jsonl', 'rows', by_take, (hop.get('rows') or {}).get('sha256'))
     run_read = click.recorded('%s/detector-run.json' % take.name, take / 'detector-run.json', 'rows', by_take, (hop.get('run') or {}).get('sha256'))
@@ -461,8 +483,7 @@ def chain(request):
     if not people:
         emit(6, 'ADAPTER', 'YOLO26s found no person on any of the %d usable frames, so RTMPose-m had nothing to crop; %s.' % (len(held['rows']), measured), ran=ran, **six)
         raise Stop(6, 'the detector saw nobody, nothing was asked', answer=True)
-    emit(6, 'ADAPTER', 'YOLO26s found a person on %d of %d usable frames, and RTMPose-m placed its joints; %s. Rows name %s.'
-         % (people, len(held['rows']), measured, ' and '.join(held['names'])), ran=ran, rows=len(held['rows']), with_person=people, **six)
+    emit(6, 'ADAPTER', '%s; %s. Rows name %s.' % (found_line(held), measured, ' and '.join(held['names'])), ran=ran, rows=len(held['rows']), with_person=people, **six)
     found = dict(with_person=people, rows=len(held['rows']))
 
     # Hop 7: observations, on the room model this page placed. The archives are this hop's and every later tool's.
@@ -499,7 +520,7 @@ def chain(request):
          wrote=[click.file(work / 'track' / 'tracks.jsonl'), click.file(work / 'track' / 'track-run.json')], stand_ins=[])
     # Zero tracks stops the chain before route, which exits 2 on them. The rows held a person, so never "nobody".
     if not track_run['counts']['tracks']:
-        raise Stop(8, no_track(people, len(held['rows']), run_json, output), answer=True)
+        raise Stop(8, no_track(people, len(held['rows']), read_jsonl(observe / 'observations.jsonl'), output), answer=True)
 
     # Hop 9: the real router with its fake sender, on a method copy that knows this camera's frame size.
     at(9)

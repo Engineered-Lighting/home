@@ -421,7 +421,7 @@ test('the real chain on every prepared take: step 3\'s words, test 1\'s outcomes
   assert.equal(reading.view.rows[10].ran, 'not built', 'hop 11 ran nothing');
   assert.ok(!reading.view.rows.some(row => /Person to aim|decide v0/.test(row.name)), "#424's two rows have left the list");
   const recorded = JSON.parse(fs.readFileSync(path.join(SET, 'set.json'), 'utf8')).recorded;
-  assert.match(reading.view.rows[5].summary, /^YOLO26s found a person on \d+ of \d+ usable frames, and RTMPose-m placed its joints; median \d+ ms a frame on this PC's CPU; rows checked against the model on \S+, on 3 frames, within [0-9.]+ px\. Rows name rtmpose-m and yolo26s\.$/);
+  assert.match(reading.view.rows[5].summary, /^YOLO26s found a person on \d+ of \d+ usable frames, and RTMPose-m placed joints on \d+ of them; median \d+ ms a frame on this PC's CPU; rows checked against the model on \S+, on 3 frames, within [0-9.]+ px\. Rows name rtmpose-m and yolo26s\.$/);
   assert.equal(reading.view.rows[5].ran, `recorded ${recorded}, rows checked against the model on ${recorded}`);
   assert.deepEqual(reading.view.rows[5].stand_ins, TABLE.hops[5].stand_ins, 'hop 6 names every stand-in the table names');
   assert.equal(reading.view.rows[2].ran, `recorded ${recorded}, re-checked by hash now`);

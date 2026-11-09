@@ -1,12 +1,14 @@
 """Test 6 (detector label) and test 7's hop 6 controls on chain.py's own functions (plan, "Done means"):
 
 - rows_hold: recorded rows read ADAPTER only under hop 6's conditions. An edited, empty or truncated rows
-  file, an empty usable part, a frame over 1.0 s, a lost weight pin, a count, a name that isn't a model, and
-  rows never checked against the model each read MISSING with why, never nobody;
+  file, an empty usable part, rows of other frames, a frame over 1.0 s, a lost weight pin, a count, a name
+  that isn't a model, rows recorded for another take or check, and rows never checked against the model (or
+  checked and failed) each read MISSING with why, never nobody;
+- found_line: the joints RTMPose-m placed are counted, and a person with none reads box only;
 - weight_tools: the weights are read from detector-run.json whenever it parses, so rows that fail another
   condition never read as changed weights;
-- no_track: a person box with no track never reads nobody;
-- torso: said relative to the limit only;
+- no_track: a person box with no track never reads nobody, and only person observations are counted;
+- torso: said relative to the limit only, the median of the supported, valid points of the last 2 s;
 - person_to_aim takes the newest entry with both shoulders;
 - the click path calls no fake_detector.
 
@@ -59,12 +61,14 @@ class RowsHold(unittest.TestCase):
         check = next(self.take.glob("check-*.json"))
         self.rows = chain.usable_rows(self.take, json.loads(check.read_text(encoding="utf-8")))
         self.lines = (self.take / "detections.jsonl").read_text(encoding="utf-8").splitlines()
+        self.digests = dict(take_digest=json.loads((self.take / "prepare-receipt.json").read_text(encoding="utf-8"))["take_digest"],
+                            check_sha256=chain.sha256_file(check))
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def why(self, rows=None, hop=None):
-        held, why = chain.rows_hold(self.take, self.rows if rows is None else rows, self.hop if hop is None else hop, PINS)
+    def why(self, rows=None, hop=None, **digests):
+        held, why = chain.rows_hold(self.take, self.rows if rows is None else rows, self.hop if hop is None else hop, PINS, **{**self.digests, **digests})
         self.assertEqual(held is None, why is not None)
         self.assertNotIn("nobody", why or "")
         return why
@@ -82,11 +86,40 @@ class RowsHold(unittest.TestCase):
         replace(self.take / "detector-run.json", json.dumps(run))
 
     def test_the_recorded_rows_hold(self):
-        held, why = chain.rows_hold(self.take, self.rows, self.hop, PINS)
+        held, why = chain.rows_hold(self.take, self.rows, self.hop, PINS, **self.digests)
         self.assertIsNone(why)
         self.assertEqual(len(held["rows"]), len(self.rows))
         self.assertGreater(held["with_person"], 0)
         self.assertEqual(held["names"], ["rtmpose-m", "yolo26s"])
+        self.assertEqual(chain.found_line(held), "YOLO26s found a person on %d of %d usable frames, and RTMPose-m placed joints on %d of them"
+                         % (held["with_person"], len(self.rows), held["with_joints"]))
+
+    def test_a_person_with_no_joints_reads_box_only(self):
+        """Person under 0.5: YOLO26s's box, no crop, so no joints. The sentence says box only, never joints placed."""
+        bare = [json.loads(line) for line in self.lines]
+        for row in bare:
+            for d in row["detections"]:
+                d["keypoints"] = None
+        replace(self.take / "detections.jsonl", "\n".join(json.dumps(row) for row in bare) + "\n")
+        held, why = chain.rows_hold(self.take, self.rows, self.recorded(), PINS, **self.digests)
+        self.assertIsNone(why)
+        self.assertEqual((held["with_joints"], held["with_person"] > 0), (0, True))
+        self.assertEqual(chain.found_line(held), "YOLO26s found a person on %d of %d usable frames, and RTMPose-m placed no joints on any of them: box only"
+                         % (held["with_person"], len(self.rows)))
+        self.assertIn("placed joints", chain.found_line({**held, "with_joints": 1}), "control: one frame with joints says so")
+
+    def test_rows_of_other_frames_read_missing(self):
+        """As many rows as usable frames, one of them for a frame outside the usable part: the rgb_seq sets differ."""
+        moved = [json.loads(line) for line in self.lines]
+        moved[3]["frame"]["rgb_seq"] = max(int(row["rgb_seq"]) for row in self.rows) + 1000
+        replace(self.take / "detections.jsonl", "\n".join(json.dumps(row) for row in moved) + "\n")
+        self.assertEqual(len(moved), len(self.rows))
+        self.assertEqual(self.why(hop=self.recorded()), "the rows cover %d of the %d usable frames" % (len(self.rows) - 1, len(self.rows)))
+
+    def test_rows_recorded_for_another_take_or_check_read_missing(self):
+        self.assertEqual(self.why(take_digest="0" * 64), "detector-run.json was recorded for another take")
+        self.assertEqual(self.why(check_sha256="0" * 64), "detector-run.json was recorded against another check than this take's")
+        self.assertIsNone(self.why(), "control: this take's own digests hold")
 
     def test_the_weights_are_read_whenever_detector_run_json_parses(self):
         """Rows that fail another condition never read as changed weights (condition 4): only a real change does."""
@@ -131,6 +164,9 @@ class RowsHold(unittest.TestCase):
         self.edit_run(lambda run: run["weights"].update({"yolo26s.pt": "0" * 64}))
         self.assertEqual(self.why(), "detector-run.json is not the one prepare recorded")
         self.assertEqual(self.why(hop=self.recorded()), "detector-run.json does not hold both pinned weight digests")
+        self.edit_run(lambda run: run["weights"].update({"yolo26s.pt": PINS["yolo26s.pt"], "rtmpose-m-body7.onnx": "0" * 64}))
+        self.assertEqual(self.why(hop=self.recorded()), "detector-run.json does not hold both pinned weight digests", "the pose weights too")
+        self.edit_run(lambda run: run["weights"].update({"rtmpose-m-body7.onnx": PINS["rtmpose-m-body7.onnx"]}))
         self.edit_run(lambda run: run["weights"].update({"yolo26s.pt": PINS["yolo26s.pt"]}) or run["counts"].update(with_person=run["counts"]["with_person"] - 1))
         self.assertEqual(self.why(hop=self.recorded()), "the rows' counts are not detector-run.json's")
         self.edit_run(lambda run: run["counts"].update(with_person=run["counts"]["with_person"] + 1))
@@ -139,15 +175,20 @@ class RowsHold(unittest.TestCase):
 
     def test_rows_never_checked_against_the_model_read_missing(self):
         self.assertEqual(self.why(hop={**self.hop, "checked": None}), "prepare did not check these rows against the model")
+        self.assertEqual(self.why(hop={**self.hop, "checked": {**self.hop["checked"], "ok": False}}), "prepare did not check these rows against the model",
+                         "checked, and the model did not reproduce them")
         self.assertEqual(self.why(hop={}), "prepare recorded no detector rows for this take")
 
 
 class NoTrack(unittest.TestCase):
     def test_a_person_box_with_no_track_never_reads_nobody(self):
-        run = {"gate": {"counts": {"validity": {"rejected:no_room_position:depth_absent": 12}}}}
-        said = chain.no_track(12, 82, run, "UNSCORED: 12 open slots\nleft out: 0 not a person, 12 rejected, 0 with no position\n")
-        self.assertEqual(said, "the detector saw a person on 12 of 82 usable frames, and no track formed: observations "
+        person = [{"kind": "person_box", "validity": "rejected:no_room_position:depth_absent"}] * 12
+        furniture = [{"kind": "object_box", "validity": "rejected:no_room_position:depth_discontinuity"}] * 30 + [{"kind": "object_box", "validity": "valid"}] * 40
+        said = chain.no_track(12, 82, person + furniture, "UNSCORED: 12 open slots\nleft out: 0 not a person, 12 rejected, 0 with no position\n")
+        self.assertEqual(said, "the detector saw a person on 12 of 82 usable frames, and no track formed: person observations "
                                "rejected:no_room_position:depth_absent 12. left out: 0 not a person, 12 rejected, 0 with no position")
+        self.assertNotIn("depth_discontinuity", said, "the couch's and the book's boxes are not why no track formed")
+        self.assertIn("valid 1.", chain.no_track(12, 82, person + [{"kind": "keypoints", "validity": "valid"}], "x\ny\n"), "control: a person's keypoints count")
         never = re.compile(r"\bnobody\b|saw no one")
         self.assertIsNone(never.search(said))
         self.assertIsNotNone(never.search("the detector saw nobody, nothing was asked"), "control: the nobody sentence is caught")
@@ -178,6 +219,19 @@ class Torso(unittest.TestCase):
         self.assertIsNone(chain.torso(uncertain, 0.45)["margin_m"], "only supported joints count")
         self.assertIsNone(chain.torso([], 0.45))
 
+    def test_the_median_of_valid_points_over_the_last_two_seconds(self):
+        newest = self.observations([0.80, 0.80, 0.80, 0.80], at=200.0)    # 9 entries, 200.0 to 202.0 s
+        older = self.observations([1.60, 1.60, 1.60, 1.60], at=190.0)     # 10 s earlier: outside the window
+        self.assertEqual(chain.torso(newest, 0.45)["margin_m"], -0.1)
+        self.assertEqual(chain.torso(newest + older, 0.45)["margin_m"], -0.1, "only the last 2 s count")
+        skewed = self.observations([0.80, 0.80, 0.80, 2.00])    # one hip far off: the median holds, a mean would not
+        self.assertEqual(chain.torso(skewed, 0.45)["margin_m"], -0.1)
+        invalid = self.observations([1.60, 1.60, 1.60, 1.60], at=201.0)
+        for obs in invalid:
+            obs["validity"] = "rejected:no_room_position:depth_absent"
+        self.assertEqual(chain.torso(newest + invalid, 0.45)["margin_m"], -0.1, "rejected observations don't count")
+        self.assertNotEqual(chain.torso(newest + self.observations([1.6] * 4, at=201.0), 0.45)["margin_m"], -0.1, "control: valid ones in the window do")
+
 
 class PersonToAim(unittest.TestCase):
     def test_the_newest_entry_with_both_shoulders(self):
@@ -189,6 +243,9 @@ class PersonToAim(unittest.TestCase):
         self.assertEqual(got["from_bundle_at"], 10.0, "the newest entry lost a shoulder, so the one before it is used")
         self.assertEqual(max([both, one], key=lambda e: e["ts"])["ts"], 11.0, "control: the newest entry alone is the one without")
         self.assertEqual(chain.person_to_aim([{"track_id": 1, "keypoint_series": [one]}], person)[1], "no bundle entry has both shoulders in the room frame")
+        later = {"ts": 10.5, "joints_room": [{"j": 5, "xyz": [3, 1, 1]}, {"j": 6, "xyz": [4, 1, 1]}]}
+        got, _ = chain.person_to_aim([{"track_id": 1, "keypoint_series": [later, both, one]}], person)
+        self.assertEqual((got["from_bundle_at"], got["person"]["shoulders_m"]["left"]), (10.5, [3, 1, 1]), "of two with both shoulders, the newer")
 
 
 class NoFake(unittest.TestCase):

@@ -114,7 +114,7 @@ export function buildReceipt({ click, takeId, setId, prepared, refs, start, chai
   rows.push(missing(15, "Not built: rung 6 isn't, so nothing joins the person's state to a track; hop 17's adapter does it."));
   rows.push(missing(16, 'Not built: no light model exists before any picture yet.', { ran: 'not built at page start' }));
   rows.push(brain?.row || null);
-  rows.push(brain?.feedRow || null, brain?.motionRow || null, start.home);
+  rows.push(brain?.feedRow || null, brain?.motionRow || null, start.home && { ...start.home, name: TABLE.hops[19].name, reached: true });
   rows.push(...(command?.rows || [null, null, null]));
   rows.push(missing(24, 'Not built: nothing compares where Home points with where the Decision said.'),
     missing(25, 'Not built: no virtual meter reads Home\'s modeled light.'), missing(26, 'Not built: den-verify does not run.'));

@@ -162,8 +162,8 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.ok(await page.locator('[data-den-sim-reason]').count() > 10, 'the reasons are listed');
     for (const [n, word] of Object.entries(STEP2)) assert.equal(await hopStatus(page, n), word, `hop ${n}`);
     assert.deepEqual(await page.locator('[data-den-sim-hops] h4').allTextContents(), ['Recorded once', 'Built when this page started', 'Ran on this click']);
-    const names = await page.locator('[data-den-sim-hop]').evaluateAll(nodes => nodes.map(node => node.dataset.denSimName));
-    assert.equal(names.length, 26);
+    const names = await page.locator('[data-den-sim-hop]').evaluateAll(nodes => nodes.sort((a, b) => a.dataset.denSimHop - b.dataset.denSimHop).map(node => node.dataset.denSimName));
+    assert.deepEqual(names, JSON.parse(fs.readFileSync(path.join(HERE, 'hops.json'), 'utf8')).hops.map(hop => hop.name), 'one row per hop, named as the table names it');
     assert.ok(!names.some(name => /Person to aim|decide v0/.test(name)), '#424\'s two rows left the list');
     assert.match(await page.textContent('[data-den-sim-hop="6"]'), /fake_detector places the figure's true joints from the truth folder/, 'the detector row says the joints are the truth');
     assert.match(await page.textContent('[data-den-sim-hop="3"]'), /re-checked by hash now/);

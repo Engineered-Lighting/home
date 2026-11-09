@@ -271,6 +271,7 @@ test('the real chain on every prepared take: step 2\'s words, not yet, and nothi
   }
   const reading = clicks['Reading on the couch'];
   assert.deepEqual(Object.fromEntries(reading.view.rows.map(row => [row.n, row.word])), Object.fromEntries(Object.entries(STEP2).map(([n, word]) => [Number(n), word])));
+  for (const { view } of Object.values(clicks)) assert.deepEqual(view.rows.map(row => row.name), TABLE.hops.map(hop => hop.name), 'every row is named as the table names it');
   assert.equal(reading.view.top_line.count_line, '3 real, 9 adapter (7 real tools with a named stand-in, 2 written for this simulation), 8 scripted, 6 missing');
   assert.ok(!reading.view.rows.some(row => /Person to aim|decide v0/.test(row.name)), "#424's two rows have left the list");
   assert.match(reading.view.rows[5].summary, /joints from the truth/);

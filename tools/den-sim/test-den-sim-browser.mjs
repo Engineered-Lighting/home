@@ -196,11 +196,15 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     const rowsFile = path.join(SET, receipt.take, 'detections.jsonl');
     const row = fs.readFileSync(rowsFile, 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).find(item => item.frame.rgb_seq === seq);
     assert.deepEqual(boxes.map(box => box.box_xyxy), row.detections.filter(d => d.class === 'person').map(d => d.box_xyxy.map(v => Math.round(v * 10) / 10)));
-    const drawn = await page.$$eval('[data-den-sim-boxes] rect', rects => rects.map(r => ['x', 'y', 'width', 'height'].map(k => Number(r.getAttribute(k)))));
+    const drawn = await page.$$eval('[data-den-sim-boxes] rect[data-den-sim-box]', rects => rects.map(r => ['x', 'y', 'width', 'height'].map(k => Number(r.getAttribute(k)))));
     assert.deepEqual(drawn, boxes.map(({ box_xyxy: [x0, y0, x1, y1] }) => [x0, y0, x1 - x0, y1 - y0]));
     assert.match(await page.textContent('[data-den-sim-boxes] text'), /^person 0\.\d\d$/, 'the box\'s score');
+    // Legible: the score's letters stand at least 10 px tall on the page, and the note repeats it.
+    const scorePx = await page.$eval('[data-den-sim-boxes] text', node => node.getBoundingClientRect().height);
+    assert.ok(scorePx >= 10, `the score is ${scorePx.toFixed(1)} px tall`);
     assert.ok(await page.locator('[data-den-sim-boxes] [data-den-sim-joint]').count() >= 5, 'its supported joints');
     assert.match(await page.textContent('[data-den-sim-picture-note]'), /YOLO26s's person box and score \(person 0\.\d\d\) and RTMPose-m's supported joints from this frame's recorded row/);
+    assert.ok((await page.textContent('[data-den-sim-picture-note]')).includes(`person ${boxes[0].score.toFixed(2)}`), 'the note repeats the score drawn');
     assert.match(await page.textContent('[data-den-sim-torso]'), /^Against hop 15's on-the-couch limit, which step 5 builds: torso \d\.\d\d m (under|over) the limit/);
   });
 

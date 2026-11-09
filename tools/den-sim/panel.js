@@ -91,8 +91,11 @@
     const svg = draw('svg', { viewBox: '0 0 640 360', 'data-den-sim-boxes': String(boxes.length), 'aria-hidden': 'true' });
     for (const box of boxes) {
       const [x0, y0, x1, y1] = box.box_xyxy, points = box.keypoints || [];
+      // The score at 26 units of a 640-wide frame, on a dark backing: legible with the picture shown about 320 px wide.
+      const lx = Math.min(Math.max(0, x0), 640 - 150), ly = y0 >= 32 ? y0 - 32 : Math.max(0, y0);
       svg.append(draw('rect', { x: x0, y: y0, width: x1 - x0, height: y1 - y0, fill: 'none', stroke: '#3cdc3c', 'stroke-width': 2, 'data-den-sim-box': '1' }),
-        draw('text', { x: x0 + 3, y: Math.max(13, y0 - 4), fill: '#3cdc3c', 'font-size': 14, 'font-family': 'system-ui, sans-serif' }, `person ${box.score.toFixed(2)}`));
+        draw('rect', { x: lx, y: ly, width: 150, height: 31, rx: 3, fill: 'rgba(0,0,0,.72)' }),
+        draw('text', { x: lx + 5, y: ly + 24, fill: '#3cdc3c', 'font-size': 26, 'font-weight': 700, 'font-family': 'system-ui, sans-serif' }, `person ${box.score.toFixed(2)}`));
       for (const [a, b] of EDGES) if (points[a]?.[2] >= JOINT_MIN && points[b]?.[2] >= JOINT_MIN) svg.append(draw('line', { x1: points[a][0], y1: points[a][1], x2: points[b][0], y2: points[b][1], stroke: '#ffc800', 'stroke-width': 1.5 }));
       for (const point of points) if (point?.[2] >= JOINT_MIN) svg.append(draw('circle', { cx: point[0], cy: point[1], r: 3, fill: '#00ff66', 'data-den-sim-joint': '1' }));
     }

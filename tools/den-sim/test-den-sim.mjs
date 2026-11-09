@@ -135,6 +135,8 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
     'pressed again, with a break': [r => { r.pressed_again = true; r.stopped = { hop: 3, why: 'frame 7 changed', answer: false }; r.rows[2].word = 'MISSING'; }, 6],
     'pressed again, with a MISSING row': [r => { r.pressed_again = true; r.rows[10].word = 'MISSING'; }, 6],
     'pressed again, with a recorded digest broken': [r => { r.pressed_again = true; r.rows[6].read[0].sha256 = 't2'; }, 2],
+    'a detector tool held to another pin than the table names': [r => { r.rows[5].tools.push({ path: 'stack/services/perception-lab/rtmpose_worker.py', pin: 'HEAD', expected: 'b1', actual: 'b1' }); }, 4],
+    'a detector tool the table pins to nothing': [r => { r.rows[5].tools.push({ path: 'tools/elsewhere/x.py', pin: 'HEAD', expected: 'b1', actual: 'b1' }); }, 4],
   };
   for (const [name, [change, condition]] of Object.entries(controls)) {
     const got = edited(change);
@@ -154,6 +156,12 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
   assert.equal(edited(r => { r.pressed_again = true; stoppedAt(15, 'not on the couch')(r); }).verdict, 'stopped', 'a second press the pipeline answered still says so');
   assert.equal(edited(r => { r.prepare_refusal = { hop: 4, reason: 'check.py: FAIL' }; }).line, 'Prepare stopped at hop 4: check.py: FAIL');
   assert.equal(edited(r => { r.stopped = { hop: 7, why: 'replay.py exit 2', answer: false }; }).verdict, 'not yet', 'a break is never an answer');
+  // Hop 6's pins, by path prefix: each of its real tool kinds held to its own pin reads yes (control for the two above).
+  const pinned = [['tools/den-sim/chain.py', 'HEAD'], ['tools/den-detect/requirements.lock', 'HEAD'], ['tools/den-detect/detect.py, as it ran', 'HEAD'],
+    ['weights yolo26s.pt', 'tools/den-detect/requirements.lock'], ['refs.json tools.rung-2-observe commit', 'refs.json tools.rung-2-observe'],
+    ['stack/services/perception-lab/rtmpose_worker.py', 'refs.json tools.rung-2-observe'], ['tools/den-observe/detections.py', 'refs.json tools.rung-2-observe'],
+    ['tools/den-take/check.py', 'refs.json tools.rung-2-observe']];
+  assert.equal(edited(r => r.rows[5].tools.push(...pinned.map(([file, pin]) => ({ path: file, pin, expected: 'b1', actual: 'b1' })))).verdict, 'yes');
 });
 
 test('a receipt files a break under the hop that broke, and never leaves a hop before a stop unreached', () => {

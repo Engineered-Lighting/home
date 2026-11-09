@@ -75,12 +75,14 @@ function reasonsFor(table, receipt) {
     if (row.word === 'REAL' && named.length) say(3, `${label} reads REAL with a stand-in: ${named[0]}`, row.n);
     if (row.word === 'ADAPTER' && !named.length) say(3, `${label} is an adapter that names no stand-in`, row.n);
     if (row.word === 'ADAPTER') for (const text of named) if (!hop.stand_ins.includes(text)) say(3, `${label} has a stand-in the table doesn't name: ${text}`, row.n);
-    // 4: its tools
+    // 4: its tools, and where the table names pins for a hop, each held to the pin of its longest path prefix
+    const pinOf = file => Object.entries(hop.pins || {}).filter(([prefix]) => file.startsWith(prefix)).sort((a, b) => b[0].length - a[0].length)[0]?.[1] ?? null;
     for (const tool of row.tools || []) {
       if (!tool.expected || tool.actual !== tool.expected) {
         const why = tool.why || (!tool.expected ? 'has no pin' : tool.pin === 'HEAD' ? 'differs from HEAD (an uncommitted edit)' : `differs from ${tool.pin}`);
         say(4, `${label}: ${tool.path} ${why}`, row.n);
       }
+      if (hop.pins && pinOf(tool.path) !== tool.pin) say(4, `${label}: ${tool.path} is held to ${tool.pin}, though the table pins it to ${pinOf(tool.path) || 'nothing'}`, row.n);
     }
     // 6
     if (row.word === 'MISSING') say(6, `${label} is MISSING${row.note ? `: ${row.note}` : ''}`, row.n);

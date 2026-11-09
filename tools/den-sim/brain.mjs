@@ -145,7 +145,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
   let clicks = 0;
 
   // One click: the chain, then the brain on what it produced, then the dry run, then the receipt.
-  function finish({ take, prepared, startRecord, chain, done, work, pressedAgain }) {
+  function finish({ take, prepared, setDir, startRecord, chain, done, work, pressedAgain }) {
     const copy = relabel({ ...geometry, camera_m: null }, { ...inputs, camera: 'none: facing comes from the shoulder labels' });
     const geometryFile = write(work, 'brain-geometry-chain.json', copy);
     const timeline = runPython('brain_run.py', { geometry: geometryFile, person: done.adapter.person, label: done.adapter.label });
@@ -158,7 +158,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
     fs.writeFileSync(path.join(work, 'dry-run.json'), JSON.stringify(command, null, 2) + '\n');
     files.dryRun = { path: 'dry-run.json', sha256: sha256(path.join(work, 'dry-run.json')) };
     const commandInfo = { rows: brain.stop ? [null, null, null] : commandRows({ command, files, refs }) };
-    const receipt = buildReceipt({ click: clicks, takeId: take, setId: prepared.set, prepared, refs, start: startRecord, chain, brain, command: commandInfo, pressedAgain });
+    const receipt = buildReceipt({ click: clicks, takeId: take, setId: prepared.set, setDir, prepared, refs, start: startRecord, chain, brain, command: commandInfo, pressedAgain });
     return { ok: true, timeline, command, command_status: commandStatus(command), receipt, said: brain.said };
   }
   function runClick({ take, prepared, setDir, roomModel, startRecord, pressedAgain }, onRow) {
@@ -182,7 +182,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
       });
       child.on('close', code => {
         const settle = result => {
-          const receipt = result.receipt || buildReceipt({ click: clicks, takeId: take, setId: prepared.set, prepared, refs, start: startRecord, chain, brain: null, command: null, pressedAgain });
+          const receipt = result.receipt || buildReceipt({ click: clicks, takeId: take, setId: prepared.set, setDir, prepared, refs, start: startRecord, chain, brain: null, command: null, pressedAgain });
           fs.writeFileSync(path.join(work, 'run-receipt.json'), JSON.stringify(receipt, null, 1) + '\n');
           resolve({ ...result, receipt, top: topLine(TABLE, receipt), work });
         };
@@ -192,7 +192,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
             chain.stop = chain.stop || { hop: reachedHop(), why: `the pipeline stopped, exit ${code}: ${stderr.trim().split('\n').at(-1) || 'no message'}`, answer: false };
             return settle({ ok: false, reason: chain.stop.why });
           }
-          return settle(finish({ take, prepared, startRecord, chain, done, work, pressedAgain }));
+          return settle(finish({ take, prepared, setDir, startRecord, chain, done, work, pressedAgain }));
         } catch (error) {
           chain.stop = { hop: 17, why: `the brain could not run on the pipeline's output: ${String(error.stderr || error.message).trim().split('\n').at(-1)}`, answer: false };
           return settle({ ok: false, reason: chain.stop.why });

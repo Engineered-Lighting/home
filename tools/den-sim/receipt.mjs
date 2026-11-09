@@ -4,9 +4,11 @@
 // refit-receipt.json. The panel and top_line.mjs read only this.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
 export const TABLE = JSON.parse(fs.readFileSync(path.join(HERE, 'hops.json'), 'utf8'));
@@ -27,6 +29,25 @@ export function blobsAt(commit, paths) {
   return lsTree.get(key);
 }
 export const resolve = ref => git(['rev-parse', `${ref}^{commit}`]).trim();
+const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+const atCommit = new Map();
+// The sha256 of a file's bytes at a commit, or null when the commit has no such file.
+function sha256At(commit, file) {
+  const key = `${commit}:${file}`;
+  if (!atCommit.has(key)) {
+    try { atCommit.set(key, digest(execFileSync('git', ['-C', ROOT, 'cat-file', 'blob', key], { windowsHide: true, maxBuffer: 256 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] }))); } catch { atCommit.set(key, null); }
+  }
+  return atCommit.get(key);
+}
+// The authored room render.mjs drew, rebuilt the way it built it: installPack's collision.glb.
+let roomGlb;
+function authoredRoomDigest() {
+  if (roomGlb === undefined) {
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'den-sim-room-'));
+    try { roomGlb = digest(installPack(scratch, 'den-sim-scene').files['collision.glb']); } catch { roomGlb = null; } finally { fs.rmSync(scratch, { recursive: true, force: true }); }
+  }
+  return roomGlb;
+}
 // This branch's files against their blobs at HEAD, read on each click: an uncommitted edit shows.
 export function headTools(paths) {
   const expected = blobsAt(resolve('HEAD'), paths), actual = git(['hash-object', '--stdin-paths'], paths.join('\n') + '\n').split('\n');
@@ -52,15 +73,22 @@ function kindOf(n, file) {
   return 'unknown';
 }
 
+// What a recorded read holds now, hashed again, never copied from the receipt that recorded it: hop 1's
+// repo files at the commit that prepared the set, and its room rebuilt; hop 5's files in the set itself.
+function rehashed(n, file, harness, setDir) {
+  if (n === 1) return file.path.startsWith('collision.glb') ? authoredRoomDigest() : sha256At(harness.commit, file.path);
+  try { return setDir ? sha256(path.join(setDir, ...file.path.split('/'))) : null; } catch { return null; }
+}
+
 // Hops 1 to 5, as prepare recorded them, with hop 3's re-check by hash and hop 5's re-fit at page start.
-function recordedRows({ prepared, refs, recheck, checkRecheck, takeRead, placement }) {
+function recordedRows({ prepared, refs, recheck, checkRecheck, takeRead, placement, setDir }) {
   const by = `prepare-receipt.json of take ${prepared.take}`, rows = [];
   for (const n of [1, 2, 3, 4, 5]) {
     const hop = prepared.hops[String(n)];
     if (!hop) { rows.push({ n, name: TABLE.hops[n - 1].name, word: 'MISSING', reached: true, ran: 'not recorded', note: 'prepare recorded no such hop', tools: [], read: [], wrote: [], stand_ins: [] }); continue; }
     const row = { n, name: hop.hop, word: hop.word, reached: true, ran: `recorded ${prepared.recorded}`, tool: { path: hop.tool, commit: hop.commit, pin: hop.pin },
       tools: harnessTools(prepared.harness, HARNESS[n]), read: [], wrote: [], stand_ins: [...hop.stand_ins] };
-    const vouched = file => ({ path: file.path, sha256: file.sha256, recorded: { kind: kindOf(n, file.path), by, sha256: file.sha256 } });
+    const vouched = file => ({ path: file.path, sha256: rehashed(n, file, prepared.harness, setDir), recorded: { kind: kindOf(n, file.path), by, sha256: file.sha256 } });
     if (n === 1) {
       row.summary = `render.mjs drew ${new Set(hop.wrote.map(file => file.pose)).size} poses of procedural-1 on ${hop.renderer.split('(')[0].trim()} software GL, three r${hop.three}; ${hop.external_requests} requests left loopback.`;
       row.read = hop.read.map(vouched);
@@ -70,7 +98,7 @@ function recordedRows({ prepared, refs, recheck, checkRecheck, takeRead, placeme
     if (n === 3 || n === 4) {
       row.tools.push(...recordedTools(hop.tool_files ? { commit: hop.commit, files: hop.tool_files } : { commit: hop.commit, files: {} }, refs.tools['den-take'], 'refs.json tools.den-take'));
       row.wrote = hop.wrote.map(file => ({ path: file.path, sha256: file.sha256 }));
-      if (n === 4) row.read = [takeRead];
+      if (n === 4) row.read = takeRead ? [takeRead] : [];
       row.summary = n === 3 ? `take.py recorded ${hop.counts?.kept ?? 0} frames in ${hop.wall_s} s of wall, on a fast clock with its cues silenced.`
         : `check.py: ${hop.verdict}, retained ${hop.retained}, ${hop.usable_s} s usable; the harness answered its second-person prompt.`;
     }
@@ -110,8 +138,8 @@ const missing = (n, note, extra = {}) => ({ n, name: TABLE.hops[n - 1].name, wor
 
 // The whole receipt. start: what run.mjs built at page start; chain: chain.py's rows and stop; brain,
 // command: the older brain's timeline and the dry run; files: this click's own outputs with digests.
-export function buildReceipt({ click, takeId, setId, prepared, refs, start, chain, brain, command, pressedAgain = false }) {
-  const rows = recordedRows({ prepared, refs, recheck: chain.recheck, checkRecheck: chain.checkRecheck, takeRead: chain.takeRead, placement: start.placement });
+export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, start, chain, brain, command, pressedAgain = false }) {
+  const rows = recordedRows({ prepared, refs, recheck: chain.recheck, checkRecheck: chain.checkRecheck, takeRead: chain.takeRead, placement: start.placement, setDir });
   const byN = new Map(chain.rows.map(row => [row.n, row]));
   for (const n of [6, 7, 8, 9, 10, 11, 12, 13]) {
     const row = byN.get(n);

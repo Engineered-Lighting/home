@@ -604,6 +604,7 @@ def refit(args):
     source, marks_take = set_dir / info["fit"]["folder"], set_dir / info["marks_take"]["take"]
     inputs = {"mark": sha256_file(args.mark), "export": sha256_file(args.export), "floor": sha256_file(args.floor),
               "facing": sha256_file(args.facing) if args.facing else None, "set_worksheet": sha256_file(source / "worksheet.json"),
+              "clicks": sha256_file(source / f"clicks-{marks_take.name}.json"), "calibration": sha256_file(source / "camera-calibration.json"),
               "marks_take": info["marks_take"]["digest"]}
     fits = Path(args.fits or data_root() / "private" / "fits").resolve()
     fits.mkdir(parents=True, exist_ok=True)

@@ -25,7 +25,7 @@ import Sofa from '../../app/src/home-lighting-sofa-target.js';
 import { sealRegisteredDeskTarget } from '../../app/src/home-3d/registered-desk-target.mjs';
 import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
-import { finalRow } from './receipt.mjs';
+import { buildReceipt, finalRow } from './receipt.mjs';
 import { topLine } from './top_line.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
@@ -171,6 +171,48 @@ test('a receipt files a break under the hop that broke, and never leaves a hop b
   assert.equal(top.verdict, 'not yet');
   assert.equal(top.count.missing, 1); assert.equal(top.count.not_reached, 19);
   assert.ok(top.reasons.some(reason => reason.condition === 6 && reason.hop === 7), JSON.stringify(top.reasons));
+});
+
+// A copy of a prepared set made of hard links: free, and safe because a changed file is replaced, never written through.
+function linkedCopy(from, to) {
+  fs.mkdirSync(to, { recursive: true });
+  for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+    if (entry.isDirectory()) linkedCopy(path.join(from, entry.name), path.join(to, entry.name)); else fs.linkSync(path.join(from, entry.name), path.join(to, entry.name));
+  }
+}
+const replaceFile = (file, text) => { fs.unlinkSync(file); fs.writeFileSync(file, text); };
+// A receipt for one prepared take, built with no click: hops 1 to 5 as recorded, and a chain stopped at 6.
+function recordedReceipt(setDir, take, prepared = JSON.parse(fs.readFileSync(path.join(setDir, take, 'prepare-receipt.json'), 'utf8'))) {
+  const start = { placement: { registered: true, summary: 'a fixture', read: [], wrote: [], tools: {}, stand_in: TABLE.hops[4].stand_ins[4] },
+    couch: { n: 14, word: 'SCRIPTED', ran: 'built at page start', tools: [], read: [], wrote: [], stand_ins: [] }, home: null };
+  return buildReceipt({ click: 1, takeId: take, setId: prepared.set, setDir, prepared, refs: REFS, start,
+    chain: { rows: [], recheck: null, checkRecheck: null, stop: { hop: 6, why: 'a fixture', answer: true } }, brain: null, command: null });
+}
+
+test('a receipt hashes hop 1\'s and hop 5\'s recorded reads again, never copying the recorded digest', { skip: NEEDS_SET }, t => {
+  const home = scratch('den-sim-rehash-'), copy = path.join(home, path.basename(SET));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  linkedCopy(SET, copy);
+  const info = JSON.parse(fs.readFileSync(path.join(SET, 'set.json'), 'utf8')), take = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes[0].take;
+  const reasonsOn = (receipt, n) => topLine(TABLE, receipt).reasons.filter(reason => reason.hop === n && reason.condition === 2).map(reason => reason.text);
+  // As prepared: every read of hops 1 and 5 hashes now to what prepare recorded.
+  const clean = recordedReceipt(copy, take);
+  for (const n of [1, 5]) {
+    assert.ok(clean.rows[n - 1].read.length >= 4, `hop ${n} lists its reads`);
+    for (const read of clean.rows[n - 1].read) assert.equal(read.sha256, read.recorded.sha256, `${n}: ${read.path}`);
+    assert.deepEqual(reasonsOn(clean, n), []);
+  }
+  // The set's clicks changed after prepare: hop 5 says so.
+  const clicks = path.join(copy, info.fit.folder, `clicks-${info.marks_take.take}.json`);
+  replaceFile(clicks, JSON.stringify(JSON.parse(fs.readFileSync(clicks, 'utf8')), null, 2));
+  assert.match(reasonsOn(recordedReceipt(copy, take), 5).join('\n'), /clicks-[0-9a-f]+\.json, whose digest isn't the one prepare-receipt\.json/);
+  // A receipt whose hop 1 records a shots.json other than the one at the commit that prepared it.
+  const prepared = JSON.parse(fs.readFileSync(path.join(SET, take, 'prepare-receipt.json'), 'utf8'));
+  prepared.hops['1'].read.find(read => read.path.endsWith('shots.json')).sha256 = '0'.repeat(64);
+  assert.match(reasonsOn(recordedReceipt(copy, take, prepared), 1).join('\n'), /shots\.json, whose digest isn't the one/);
+  // And the authored room it drew, rebuilt: a recorded room other than the one installPack builds is caught.
+  prepared.hops['1'].read.find(read => read.path.startsWith('collision.glb')).sha256 = '1'.repeat(64);
+  assert.match(reasonsOn(recordedReceipt(copy, take, prepared), 1).join('\n'), /collision\.glb/);
 });
 
 test('the hop table: 26 hops, each with its pin, and adapters that name their stand-ins', () => {

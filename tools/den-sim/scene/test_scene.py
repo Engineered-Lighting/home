@@ -598,6 +598,10 @@ class Refit(unittest.TestCase):
         self.assertEqual(coordinates_in(done.stdout + done.stderr, position), [])
         receipt = json.loads((folder / "refit-receipt.json").read_text(encoding="utf-8"))
         self.assertEqual(receipt["inputs"]["facing"], None)
+        info = json.loads((SET / "set.json").read_text(encoding="utf-8"))
+        fit = SET / info["fit"]["folder"]
+        self.assertEqual(receipt["inputs"]["clicks"], sha((fit / f"clicks-{info['marks_take']['take']}.json").read_bytes()))
+        self.assertEqual(receipt["inputs"]["calibration"], sha((fit / "camera-calibration.json").read_bytes()))
         # A new facing: the reader turned a quarter left. The camera moves; the set doesn't.
         facing = self.private / "facing.json"
         facing.write_text('{"degrees": 90}', encoding="utf-8")
@@ -610,6 +614,25 @@ class Refit(unittest.TestCase):
         again = self.refit("--facing", str(facing))
         self.assertIn("re-fit unchanged", again.stdout)
         self.assertEqual(set_digests(SET), before, "a re-fit changed a render, a take or a receipt")
+
+    def test_b_changed_clicks_or_calibration_make_a_new_refit(self):
+        """The re-fit copies the set's clicks and calibration and fits from them, so they are among its inputs:
+        a changed one is never answered by an earlier fit. Control: the same files again read unchanged."""
+        info = json.loads((SET / "set.json").read_text(encoding="utf-8"))
+        with scratch() as tmp:
+            copy = Path(tmp) / SET.name          # the set's own name, so an earlier fit of the real set can answer it
+            linked_copy(SET, copy)
+            self.assertEqual(self.refit(set_dir=copy).returncode, 0)
+            same = self.refit(set_dir=copy)
+            self.assertIn("re-fit unchanged", same.stdout)
+            for name in (f"clicks-{info['marks_take']['take']}.json", "camera-calibration.json"):
+                target = copy / info["fit"]["folder"] / name
+                doc = json.loads(target.read_text(encoding="utf-8"))
+                (target.parent / (name + ".new")).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")   # the same values, other bytes
+                os.replace(target.parent / (name + ".new"), target)
+                moved = self.refit(set_dir=copy)
+                self.assertEqual(moved.returncode, 0, moved.stderr)
+                self.assertIn("re-fit registered", moved.stdout, name)
 
     def test_control_a_fit_printing_to_stdout_is_found(self):
         with scratch() as tmp:

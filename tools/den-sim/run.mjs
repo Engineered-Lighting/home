@@ -157,8 +157,11 @@ function placement() {
     export: registration.file && mine ? registration.file : write('stand-in-registration.json', { registration: registration.doc }),
     floor: FLOOR, facing: mine && fs.existsSync(privateFile('facing.json')) ? privateFile('facing.json') : null };
   const fit = setInfo.fit && path.join(SET, setInfo.fit.folder);
+  // Every file the re-fit reads, from the set's fit as well: the clicks and calibration it copies and fits from.
+  const clicks = fit && setInfo.marks_take ? path.join(fit, `clicks-${setInfo.marks_take.take}.json`) : null, calibration = fit ? path.join(fit, 'camera-calibration.json') : null;
   const want = { mark: sha256(files.mark), export: sha256(files.export), floor: sha256(files.floor), facing: files.facing ? sha256(files.facing) : null,
-    set_worksheet: fit ? sha256(path.join(fit, 'worksheet.json')) : null, marks_take: setInfo.marks_take?.digest || null };
+    set_worksheet: fit ? sha256(path.join(fit, 'worksheet.json')) : null, clicks: clicks && fs.existsSync(clicks) ? sha256(clicks) : null,
+    calibration: calibration && fs.existsSync(calibration) ? sha256(calibration) : null, marks_take: setInfo.marks_take?.digest || null };
   const find = () => fs.readdirSync(FITS, { withFileTypes: true }).filter(entry => entry.isDirectory()).flatMap(entry => {
     try { const receipt = readFile(path.join(FITS, entry.name, 'refit-receipt.json')); return receipt.set === setInfo.set && receipt.result === 'registered' && same(receipt.inputs, want) ? [{ folder: entry.name, receipt }] : []; }
     catch { return []; }
@@ -171,8 +174,11 @@ function placement() {
     } catch (error) { refused = String(error.stderr || error.message).trim().split('\n').at(-1).replace(/\s*\(see .*\)$/, ''); }
     found = find();
   }
-  const kinds = { mark: mine ? 'your mark' : 'a stand-in seat', export: registration.source === 'export' ? 'your export' : 'authored sockets', floor: 'floor', facing: 'facing.json' };
-  const labels = { mark: mine ? 'your sofa mark' : 'stand-in-seat.json', export: registration.source === 'export' ? 'registration-revision-3.json' : 'stand-in-registration.json', floor: 'floor.json', facing: 'facing.json' };
+  const kinds = { mark: mine ? 'your mark' : 'a stand-in seat', export: registration.source === 'export' ? 'your export' : 'authored sockets', floor: 'floor', facing: 'facing.json',
+    clicks: 'clicks', calibration: 'calibration' };
+  const labels = { mark: mine ? 'your sofa mark' : 'stand-in-seat.json', export: registration.source === 'export' ? 'registration-revision-3.json' : 'stand-in-registration.json', floor: 'floor.json', facing: 'facing.json',
+    clicks: clicks && `${setInfo.fit.folder}/${path.basename(clicks)}`, calibration: calibration && `${setInfo.fit.folder}/camera-calibration.json` };
+  Object.assign(files, { clicks, calibration });
   const read = Object.keys(kinds).filter(key => files[key]).map(key => ({ path: labels[key], sha256: want[key],
     recorded: { kind: kinds[key], by: found ? `refit-receipt.json of fit ${found.folder}` : 'no re-fit', sha256: found ? found.receipt.inputs[key] : null } }));
   const where = mine ? 'your sofa mark' : `a public stand-in seat at the DECLARED point (${couch.where})`;

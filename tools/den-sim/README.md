@@ -4,15 +4,17 @@ Press a scene and watch the pinned den pipeline tools run on a recorded, rendere
 older lighting brain decide, and a virtual spotlight in the real Home swing to the couch. Then
 read the exact fixture command it would take, which is shown and never sent.
 
-**Status: a simulation, step 2 of the connected plan.** The picture is a rendered, artificial
-person in an authored room, seen by a camera that does not exist. No inference runs: the joints
-and Qwen's answers still come from the figure's truth, and the rows say so. Nothing reaches a
+**Status: a simulation, step 3 of the connected plan.** The picture is a rendered, artificial
+person in an authored room, seen by a camera that does not exist. A real detector, YOLO26s and
+RTMPose-m on this PC's CPU, looked at every usable frame when the set was prepared, and its rows
+are recorded beside each take: pixels decide whether anyone is there. No model runs on a click,
+and Qwen's answers are still typed from the take's truth, which the rows say. Nothing reaches a
 bulb, the camera, the Jetson, the inference host or Home Assistant. The red strip on the page
 says so, and the top line reads "Connected start to finish: not yet" with every reason.
 
 It needs Node, Python with numpy and Pillow, and git, and no npm install to run. It has been
 tested on Node 24 and Python 3.12, and `python` must be on your PATH: the harness stops and says
-so if it isn't.
+so if it isn't. Preparing a set also needs the detector's venv (see `tools\den-detect\README.md`).
 
 ## Run it (PowerShell 5.1)
 
@@ -45,22 +47,35 @@ scene. A click on **Reading on the couch** does this in about 6 seconds:
    click at hop 3. Its check must be the one prepare recorded, alone: `replay.py` reads the newest
    `check-N.json` for its clock, so a second one beside it (another run of `check.py` writes one)
    stops the click at hop 4.
-2. The pinned tools run on the take: observations, tracks and the router, with the joints and
-   the answers taken from the figure's truth.
-3. The older lighting brain judges what they produced, with no camera position, so the reader's
-   facing comes from the shoulder labels. It waits for 3 seconds of reading.
-4. One fixture swings to the reader's hand point at about 30 degrees a second, and the exact
+2. The detector rows prepare recorded beside the take are held to hop 6's checks: their digest and
+   `detector-run.json`'s are the ones prepare recorded, they name the pinned weights, they cover
+   every usable frame, every row names YOLO26s or RTMPose-m, no frame took over 1.0 s, and prepare
+   ran the model again on three frames and got the same person boxes within 1 px. Anything less
+   reads MISSING at hop 6 and stops the click, never "nobody". Rows with no person stop it with
+   "the detector saw nobody, nothing was asked".
+3. The pinned tools run on those rows: observations, tracks and the router. Qwen's answers are
+   typed from the take's truth, which hop 12 finds by the take's folder id.
+4. The older lighting brain judges what they produced, with no camera position, so the reader's
+   facing comes from the shoulder labels of the newest bundle entry that has both. It waits for
+   3 seconds of reading.
+5. One fixture swings to the reader's hand point at about 30 degrees a second, and the exact
    command appears, marked `NOT SENT`.
 
-The panel shows the frame read back out of the take's own picture plane, with no box drawn on
-it, and a marker in the room shows where the invented camera sits. **Holding a phone** ends with
-the brain refusing and the spot off. **Nobody there** stops at the detector: "the detector saw
-nobody, nothing was asked".
+The panel shows the frame read back out of the take's own picture plane, with the model's person
+box, its score and the supported joints from that frame's recorded row drawn on it, and a marker in
+the room shows where the invented camera sits. Under the picture, one line says how far the median
+height of the supported shoulders and hips over the take's last 2 s sits from the "on the couch"
+limit step 5 will test, the seat's top plus 0.45 m: for example "torso 0.09 m under the limit". It
+is said against the limit only, never as a height. The same line goes to the console and to the
+run's `run.json`.
 
-At this step **Standing by the couch with a book** and **Blank frame** light a spot too. No
-detector looks at the picture yet: the scripted detector places the figure's true joints whatever
-the picture shows, and blank's truth is reading's. The older brain's own 1.5 m rule then calls the
-standing figure on the couch. The panel says so on every lit result.
+**Holding a phone** ends with the brain refusing and the spot off. **Nobody there** and **Blank
+frame** stop at the detector: "the detector saw nobody, nothing was asked", with no box, no person
+marker on the floor and no beam. **Standing by the couch with a book** stops there too: on these
+renders YOLO26s gives the standing figure, close to the camera with its legs out of frame, a person
+score of about 0.03, under its 0.25 cut. That is what the model saw, and the page says so. If a
+standing figure ever lights a spot, it's the older brain's own 1.5 m rule calling it on the couch,
+and the panel says that on every lit result.
 
 A second click on the same button swings 0 degrees, because the beam is already there. At this
 step its top line still reads "not yet", because rows are MISSING (see below). **Reset** reloads
@@ -84,20 +99,20 @@ press reads "Pressed again" only when nothing but its aim check could fail.
 
 The list sits under four headings: "Recorded once", "Built when this page started", "Ran on this
 click", and "Not built yet, or not reached on this click". Among the reasons at this step are the
-truth's reads: hop 6 lists every scene's truth record it opened to find its own take's, and hop 12
-types its answers from the truth's held object.
+truth's reads: hop 12 lists every scene's truth record it opened to find its own take's, and types
+its answers from the truth's held object.
 
 | Hop | At this step | What runs |
 |---|---|---|
 | 1, 2 Input image, virtual camera | Scripted on purpose | A rendered figure in an authored room, served by a camera that does not exist. Recorded once |
 | 3, 4 Frames, check | Adapter | The real `take.py` and `check.py`, cues silenced, a fast clock, the harness answering the check's prompt. Recorded once, re-checked by hash on each click |
 | 5 Camera registration | Adapter | The real fit, slots and labels set in memory, re-fit on your mark at page start |
-| 6 Detector and box | Scripted | `fake_detector` places the figure's true joints. No detector looks at the picture yet |
-| 7, 8 Observations, tracks | Real, unscored | `replay.py` and `den_track.py` on open slots' proposed values |
+| 6 Detector and box | Adapter | `tools/den-detect/detect.py` over the Lab's real YOLO26s and RTMPose-m workers, on this PC's CPU, `authorize` answered yes. Recorded once per take, `available_ts` counting compute only, checked against the model at prepare and held to its checks on each click |
+| 7, 8 Observations, tracks | Real, unscored | `replay.py --detections` and `den_track.py` on the recorded rows, on open slots' proposed values. Zero tracks stops before the router, and says what was seen |
 | 9 Bundles and router | Adapter | `den_bundle.py route` with its fake sender, on a method copy that adds this camera's frame size |
-| 10 Occupancy | Scripted | Asserted to the brain |
+| 10 Occupancy | Scripted | The track list decides whether the older brain runs at all; that brain's own occupancy stays typed until step 6 |
 | 11 Bundle to Qwen | Missing | Not built: no model is asked |
-| 12 Qwen reply | Scripted | Answers typed from the figure's truth through the real `fact_line` |
+| 12 Qwen reply | Scripted | Answers typed from the take's truth through the real `fact_line`: the button you pressed typed them |
 | 13 Need | Adapter | need v0 in den-core's runner |
 | 14 Couch | Scripted, or Adapter with your mark | A declared point, or your sofa mark |
 | 15, 16 Person state, light model | Missing | Not built yet |
@@ -151,12 +166,12 @@ agent prepared there would be invisible to your own PowerShell.
 
 | Folder | Holds |
 |---|---|
-| `prepared\<set>` | One prepared set: the renders, the marks take and its fit, five scene takes with their `prepare-receipt.json`, the truth and the display file. About 750 MB |
+| `prepared\<set>` | One prepared set: the renders, the marks take and its fit, five scene takes with their `prepare-receipt.json`, `detections.jsonl` and `detector-run.json`, the truth and the display file. About 750 MB |
 | `prepared\tries.jsonl` | Every try at choosing the picture, append-only. The page counts the Qwen tries in it |
 | `private` | Your optional files, the brain geometry built from them, and `fits\`, your re-fits |
 | `fits` | Re-fits on the authored room's stand-in seat |
 | `runs\<stamp>\click-<n>` | Each click's rows, observations, tracks, bundles, den-core log, brain timeline, dry run, picture and `run-receipt.json`, about 1.2 MB. Nothing cleans these up |
-| `tools\<name>-<sha>` | `git archive` of each pinned ref in `refs.json`, about 1 MB |
+| `tools\<name>-<sha>` | `git archive` of each pinned ref in `refs.json`, about 1 MB. `observe-<sha>` also holds the Lab files the detector imports, so it can be `detect.py`'s `--tools-root` |
 
 To clear the runs:
 
@@ -164,7 +179,12 @@ To clear the runs:
 Remove-Item -Recurse -Force "$env:USERPROFILE\den-sim\runs"
 ```
 
-A set is prepared once, by an agent, in about 2 minutes. It reads nothing in your private folder.
+A set is prepared once, by an agent, in about 3 minutes. It reads nothing in your private folder.
+Hop 6 runs `tools\den-detect\detect.py` in the detector's venv on each scene take, then again on
+three frames of each to check the model reproduces its rows. A missing venv or weights, a digest or
+a mismatch stops prepare at hop 6: nothing fake stands in. The venv is
+`%USERPROFILE%\ml\den-detector`, or the Python `DEN_DETECT_PYTHON` names. Ultralytics' settings and
+caches, and the detector's TEMP, go to a work folder under the data root that prepare deletes.
 If prepare stops, the set still opens: the take it stopped on reads "Prepare stopped at hop N",
 and the default start names a newer refused set it passes over.
 It renders with Playwright's headless Chromium, so `NODE_PATH` must name a `node_modules` holding
@@ -182,7 +202,9 @@ python -B -X utf8 tools\den-sim\scene\prepare.py
 - The page's security policy allows connections to its own origin only, plus `data:` and `blob:`,
   which Home's Photo view needs for local bytes.
 - Every Python process here refuses all sockets, through an audit hook. Only `prepare.py`'s
-  virtual camera may use loopback, while a set is prepared.
+  virtual camera may use loopback, while a set is prepared. `detect.py` also sets Ultralytics
+  offline with no auto-install and turns onnxruntime's telemetry off, because native code can't be
+  hooked.
 - There is no send control, token or route to Home Assistant anywhere.
 
 ## The tests
@@ -195,9 +217,15 @@ reads your private folder or runs, and `DEN_SIM_SET` at a prepared set. Port 181
 $env:DEN_SIM_HOME = "C:\tmp\den-sim-test"; $env:LOCALAPPDATA = "C:\tmp\den-sim-test"
 $env:DEN_SIM_SET = "$env:USERPROFILE\den-sim\prepared\<set>"
 python -B -X utf8 tools\den-sim\scene\test_scene.py
+python -B -X utf8 tools\den-sim\test_chain.py
+python -B -X utf8 tools\den-detect\test_detect.py
 node --test tools\den-sim\scene\test-scene-figure.mjs
 node --test tools\den-sim\test-den-sim.mjs
 ```
+
+`test_detect.py` runs the model in the detector's venv and skips those parts without it. With
+`$env:DEN_SIM_PREPARE_TRACE = "1"`, `test_scene.py` also prepares a whole set in a scratch data root
+under an audit-hook trace, about 3 minutes, and checks no Python process wrote outside it.
 
 The browser test also needs Playwright. Point `NODE_PATH` at a `node_modules` that holds it:
 
@@ -207,8 +235,8 @@ node --test tools\den-sim\test-den-sim-browser.mjs
 
 ## What this does not show
 
-- That anything sees a reader. The joints and answers come from the figure's truth, so this
-  tests the plumbing and the recorded format, not perception.
+- That anything understands a reader. A real detector finds the rendered figure on the couch,
+  but Qwen's answers are typed from the take's truth until step 4.
 - That the real den camera could see a reader on the couch. This camera doesn't exist.
 - That the command would work. The codec on disk is older than the release `origin/main` pins,
   clock exchange is not generated, and no real radio has run this format.
@@ -224,11 +252,12 @@ node --test tools\den-sim\test-den-sim-browser.mjs
 | `receipt.mjs` | Builds each click's `run-receipt.json` |
 | `top_line.mjs` | The top line: a pure function of the table and a receipt |
 | `brain.mjs` | Builds the geometry and runs one click from end to end |
-| `chain.py` | The frame hash, the pinned tools in their own guarded processes, and the adapter |
+| `chain.py` | The frame hash, hop 6's checks on the recorded rows, the pinned tools in their own guarded processes, and the adapter |
 | `brain_run.py` | The real activity loop, publisher and older brain under a fake clock, and the startup line |
 | `feed.mjs` | Replays the brain's timeline into Home and inserts the motion |
 | `dry_run.py` | The fixture command for the brain's target |
 | `panel.js` | The strip and panel on the page |
 | `refs.json` | The pinned refs, and the codec's path and digests |
 | `scene\` | The recorded side: the scenes, renderer, virtual camera, frame hash and `prepare.py` |
-| `test-den-sim.mjs`, `test-den-sim-browser.mjs`, `scene\test_scene.py`, `scene\test-scene-figure.mjs` | The tests |
+| `..\den-detect\` | `detect.py`, hop 6's detector over the Lab's workers, and the venv's `requirements.lock` |
+| `test-den-sim.mjs`, `test-den-sim-browser.mjs`, `test_chain.py`, `scene\test_scene.py`, `scene\test-scene-figure.mjs`, `..\den-detect\test_detect.py` | The tests |

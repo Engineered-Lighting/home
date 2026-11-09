@@ -62,8 +62,9 @@ detector looks at the picture yet: the scripted detector places the figure's tru
 the picture shows, and blank's truth is reading's. The older brain's own 1.5 m rule then calls the
 standing figure on the couch. The panel says so on every lit result.
 
-A second click on the same button swings 0 degrees, because the beam is already there, and its
-top line reads "Pressed again". **Reset** reloads the page and clears the aim.
+A second click on the same button swings 0 degrees, because the beam is already there. At this
+step its top line still reads "not yet", because rows are MISSING (see below). **Reset** reloads
+the page and clears the aim.
 
 ## The top line and the hop list
 
@@ -135,10 +136,9 @@ prints one line in words: which fixtures pass for that facing and the spot, for 
 and an agent writes `facing.json` there: one number of degrees, left positive. The re-fit runs
 only when the mark, the export, `facing.json`, or the set's clicks or calibration changed.
 
-Without a mark, a square stand-in seat around the declared point places the picture's couch. At
-the middle of the floor no edge of it is longest and no side is nearer the floor's centre, so the
-reader's facing there is a tie-break, not the stated rule, and the page's registration line says
-so.
+Without a mark, a square stand-in seat around the declared point places the picture's couch. A
+square has no single longest edge, so wherever the point is, the reader's facing is a tie-break,
+not the stated rule, and the page's registration line says so.
 
 Without a mark you can give a declared point as `couch-declared.json`, holding
 `{"point_m": [x, y, z]}`.

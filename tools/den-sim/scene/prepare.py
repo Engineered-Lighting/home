@@ -579,7 +579,8 @@ def placement(mark, centre, turn_deg, seat_height_m):
     if mark.get("schema") != MARK_SCHEMA or not finite(seat) or type(vertices) is not list or len(vertices) < 3 or not all(map(finite, vertices)):
         raise Stop(5, "the sofa mark has no seat point or zone corners")
     middle = zone.get("centre_m") if finite(zone.get("centre_m")) else [sum(v[i] for v in vertices) / len(vertices) for i in range(3)]
-    a, b = max(zip(vertices, vertices[1:] + vertices[:1]), key=lambda edge: math.dist(*edge))
+    edges = list(zip(vertices, vertices[1:] + vertices[:1]))
+    a, b = max(edges, key=lambda edge: math.dist(*edge))
     length = math.hypot(b[0] - a[0], b[1] - a[1])
     if length < 1e-6:
         raise Stop(5, "the sofa mark's longest edge is vertical")
@@ -587,10 +588,22 @@ def placement(mark, centre, turn_deg, seat_height_m):
     toward = normal[0] * (centre[0] - middle[0]) + normal[1] * (centre[1] - middle[1])
     if toward < 0:
         normal = [-normal[0], -normal[1]]
-    # A seat whose middle is the floor's centre leaves the rule no side to choose: the first longest edge's
-    # normal decides, and the record says so in words, so the page can name it a tie-break.
-    rule = ("a tie-break, not the stated rule: the seat's middle is the floor's centre, so the first longest edge decides"
-            if abs(toward) < 1e-9 else "perpendicular to the longest edge, toward the floor's centre")
+    # Two ways the rule has nothing to go on, and the record says so in words, so the page can name a tie-break:
+    # longest edges (within 1 mm) that point different ways, as in the stand-in square anywhere, or a seat
+    # whose middle is the floor's centre. Then the first longest edge's normal decides.
+    def direction(edge):
+        dx, dy = edge[1][0] - edge[0][0], edge[1][1] - edge[0][1]
+        size = math.hypot(dx, dy) or 1.0
+        return dx / size, dy / size
+    ux, uy = direction((a, b))
+    longest = math.dist(a, b)
+    rival = any(abs(ux * vy - uy * vx) > 1e-3 for vx, vy in (direction(e) for e in edges if math.dist(*e) > longest - 1e-3))
+    if rival:
+        rule = "a tie-break, not the stated rule: no single edge of the seat's zone is longest, so the first of them decides"
+    elif abs(toward) < 1e-9:
+        rule = "a tie-break, not the stated rule: the seat's middle is the floor's centre, so the first longest edge decides"
+    else:
+        rule = "perpendicular to the longest edge, toward the floor's centre"
     angle = math.atan2(normal[0], -normal[1]) + math.radians(turn_deg)      # the picture's reader faces -y
     return {"rotation_z_rad": angle, "facing_unit": [math.sin(angle), -math.cos(angle)],
             "translation_m": [middle[0], middle[1], seat[2] - seat_height_m], "facing_rule": rule}

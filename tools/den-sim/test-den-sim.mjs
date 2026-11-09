@@ -394,8 +394,8 @@ test('the real chain on every prepared take: step 2\'s words, not yet, and nothi
   const first = await status();
   assert.deepEqual(first.scenes, display.map(({ take, label }) => ({ take, label })), 'the buttons carry labels and take ids, never the words');
   for (const key of ['seat_m', 'point']) assert.ok(!JSON.stringify({ couch: first.couch, brain: first.brain }).includes(`"${key}"`), `${key} left the startup record`);
-  // The authored room's stand-in seat sits on the floor's centre, so its facing is a tie-break, and the page says so.
-  assert.match(first.placement.summary, /; the reader faces a tie-break, not the stated rule: the seat's middle is the floor's centre/);
+  // The stand-in seat is a square, which has no single longest edge, so its facing is a tie-break, and the page says so.
+  assert.match(first.placement.summary, /; the reader faces a tie-break, not the stated rule: no single edge of the seat's zone is longest/);
   const clicks = {};
   for (const scene of display) {
     const done = await click(scene.take);

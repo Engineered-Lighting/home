@@ -727,6 +727,15 @@ class Placement(unittest.TestCase):
         tied = prepare.placement(square, [2.0, 2.0], 0.0, 0.44)
         self.assertTrue(tied["facing_rule"].startswith("a tie-break, not the stated rule"))
         self.assertTrue(np.allclose(tied["facing_unit"], [0, 1], atol=1e-12))
+        # Away from the centre the square still has no single longest edge, so it is still a tie-break.
+        for x, y in ((1.5, 1.5), (1.5, -1.4), (-1.2, 1.3)):
+            moved = {**square, "zone": {"vertices_m": [[vx + x, vy + y, vz] for vx, vy, vz in square["zone"]["vertices_m"]],
+                                        "centre_m": [2.0 + x, 2.0 + y, 0.45]}}
+            self.assertTrue(prepare.placement(moved, [2.0, 2.0], 0.0, 0.44)["facing_rule"].startswith("a tie-break"), (x, y))
+        # Control: a rectangle's two longest edges are parallel, so the stated rule holds.
+        oblong = {**square, "zone": {"vertices_m": [[1.4, 1.6, 0.45], [2.6, 1.6, 0.45], [2.6, 2.4, 0.45], [1.4, 2.4, 0.45]],
+                                     "centre_m": [3.0, 3.0, 0.45]}}
+        self.assertEqual(prepare.placement(oblong, [2.0, 2.0], 0.0, 0.44)["facing_rule"], "perpendicular to the longest edge, toward the floor's centre")
 
     def test_a_mark_without_its_shape_is_refused(self):
         for broken in ({**self.MARK, "schema": "something-else"}, {**self.MARK, "zone": {"vertices_m": [[0, 0, 0]]}}, {**self.MARK, "seat": {}}):

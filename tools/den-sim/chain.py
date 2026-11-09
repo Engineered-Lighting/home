@@ -185,12 +185,17 @@ class Click:
         return dict(path=label, sha256=sha256_file(path) if Path(path).is_file() else None, recorded=dict(kind=kind, by=by, sha256=sha256))
 
     def truth(self):
-        """The take's truth folder, found by the take's id, never by a scene's name. Its label in every
-        record is the take's own, so the folder's name (the scene's random word) is never written down."""
+        """The take's truth folder, found by the take's id, never by a scene's name: (folder or None, the
+        other records opened to find it, as reads). Finding it opens every scene's truth/*/take.json, so each
+        of those is a read too. Labels are the take's own or "another take", so a folder's name (a scene's
+        random word) is never written down."""
+        found, others = None, []
         for record in sorted((self.set / 'truth').glob('*/take.json')):
-            if json.loads(record.read_text(encoding='utf-8')).get('take') == self.take.name:
-                return record.parent
-        return None
+            if found is None and json.loads(record.read_text(encoding='utf-8')).get('take') == self.take.name:
+                found = record.parent
+            else:
+                others.append(sha256_file(record))
+        return found, [dict(path='truth/(another take, %d of %d)/take.json' % (i, len(others)), sha256=digest) for i, digest in enumerate(others, 1)]
 
 
 def usable_rows(take, check):
@@ -372,15 +377,16 @@ def chain(request):
     trees = archive_trees(refs, request['tools_root'])
     tools = {key: tree_tools(trees[key], refs[ref_name], ref_name, paths) for key, (ref_name, paths) in TREES.items()}
     observe_tools = [t for t in tools['observe'] if t['path'].startswith('tools/den-observe/')]
-    truth = click.truth()
+    truth, scanned = click.truth()
     if truth is None:
         raise Stop(6, 'no truth folder holds this take, so the scripted detector has nothing to place')
-    # No receipt records the truth's digests, so nothing vouches for these two reads, and the row says so.
+    # No receipt records the truth's digests, so nothing vouches for these reads, nor for the other scenes'
+    # records opened to find this one, and the row says so.
     truth_reads = [dict(path='truth/(this take)/%s' % name, sha256=sha256_file(truth / name)) for name in ('take.json', 'poses.json') if (truth / name).exists()]
     detections = work / 'detections.jsonl'
     found = click.own_step('rows', dict(observe_tree=str(trees['observe']), truth=str(truth), rows=rows, out=str(detections)))
     six = dict(tools=[t for t in observe_tools if t['path'].endswith(('fake_detector.py', 'detections.py'))] + head_tools(*own),
-               read=[take_read, check_read, *truth_reads], wrote=[click.file(detections)],
+               read=[take_read, check_read, *truth_reads, *scanned], wrote=[click.file(detections)],
                stand_ins=["fake_detector places the figure's true joints from the truth folder: no detector looks at the picture"],
                rows=found['rows'], with_person=found['with_person'])
     if not found['with_person']:

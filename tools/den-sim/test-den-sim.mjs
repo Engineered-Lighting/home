@@ -401,6 +401,10 @@ test('the real chain on every prepared take: step 2\'s words, not yet, and nothi
   for (const name of ['frames.csv', 'take.json']) assert.deepEqual(sevenReads.find(([file]) => file === `${take}/${name}`), [`${take}/${name}`, 'take', true], `hop 7 lists ${name}`);
   assert.deepEqual(sevenReads.find(([file]) => file === `${take}/check-1.json`), [`${take}/check-1.json`, 'check', true], 'hop 7 lists the check replay read');
   assert.ok(!reading.view.top_line.reasons.some(reason => reason.hop === 7), 'and hop 7 reads only what it may');
+  // Finding the take's truth opens every scene's truth record: each one is a read of hop 6, and a reason.
+  const scanned = rowOf(6).read.filter(file => /^truth\/\(another take, \d of \d\)\/take\.json$/.test(file.path));
+  assert.equal(scanned.length, display.length - 1, JSON.stringify(rowOf(6).read.map(file => file.path)));
+  assert.equal(reading.view.top_line.reasons.filter(reason => reason.hop === 6 && /read truth\/\(another take/.test(reason.text)).length, display.length - 1);
   const nobody = clicks['Nobody there'].view;
   assert.deepEqual(nobody.stopped, { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true });
   assert.ok(nobody.rows.filter(row => row.n > 6).every(row => !row.reached));

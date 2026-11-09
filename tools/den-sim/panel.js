@@ -281,8 +281,10 @@
         setFeedEnabled(true);
         if (status.click) showCommand(status.click.click);
         const swing = feed.swing, decided = feed.summary, modeled = 'Lighting is on: Home\'s modeled view, not measured.';
+        // Said on every lit result, never chosen by the button: no detector looks at the picture yet.
+        const scripted = 'At this step no detector looks at the picture: the joints come from the figure\'s truth, so a blank picture or a figure standing by the couch lights a spot too.';
         message.textContent = feed.phase === 'holding'
-          ? `The beam is on the reader's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. Nothing was sent. ${modeled}`
+          ? `The beam is on the reader's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. ${scripted} Nothing was sent. ${modeled}`
           : `The brain refused: ${decided.refusal}. All four spots stay off. Nothing was sent. ${modeled}`;
       }, 400);
     }

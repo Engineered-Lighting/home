@@ -153,6 +153,9 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(last.fixture_id, held.feed.summary.fixture_id, 'Home lit the fixture the brain chose');
     assert.ok(Math.abs(last.pan_deg - held.feed.summary.pan_deg) < .05 && Math.abs(last.tilt_deg - held.feed.summary.tilt_deg) < .05, 'Home agrees with the brain');
     assert.deepEqual(last.target, held.feed.swing.final_target_m, 'the beam ends on the brain\'s target');
+    // A lit result says the detector is scripted, so standing and blank lighting too is no surprise.
+    await page.waitForFunction(() => /no detector looks at the picture: the joints come from the figure's truth, so a blank picture or a figure standing by the couch lights a spot too/
+      .test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
     t.diagnostic(`${aims.length} distinct aims, ${aims[0]} to ${aims.at(-1)}, ${held.feed.summary.fixture_id}`);
   });
 

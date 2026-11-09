@@ -40,8 +40,11 @@ Each button is one prepared take: reading on the couch, holding a phone, standin
 with a book, nobody there, and a blank frame. The click is told the take's folder id, never the
 scene. A click on **Reading on the couch** does this in about 6 seconds:
 
-1. Every frame of the take is hashed against its `frames.csv` and the receipt prepare wrote. A
-   frame that changed stops the click at hop 3.
+1. Every frame of the take is hashed against its `frames.csv` and the receipt prepare wrote, and
+   its `take.json` is held to prepare's digest too. A frame or `take.json` that changed stops the
+   click at hop 3. Its check must be the one prepare recorded, alone: `replay.py` reads the newest
+   `check-N.json` for its clock, so a second one beside it (another run of `check.py` writes one)
+   stops the click at hop 4.
 2. The pinned tools run on the take: observations, tracks and the router, with the joints and
    the answers taken from the figure's truth.
 3. The older lighting brain judges what they produced, with no camera position, so the reader's
@@ -53,6 +56,11 @@ The panel shows the frame read back out of the take's own picture plane, with no
 it, and a marker in the room shows where the invented camera sits. **Holding a phone** ends with
 the brain refusing and the spot off. **Nobody there** stops at the detector: "the detector saw
 nobody, nothing was asked".
+
+At this step **Standing by the couch with a book** and **Blank frame** light a spot too. No
+detector looks at the picture yet: the scripted detector places the figure's true joints whatever
+the picture shows, and blank's truth is reading's. The older brain's own 1.5 m rule then calls the
+standing figure on the couch. The panel says so on every lit result.
 
 A second click on the same button swings 0 degrees, because the beam is already there, and its
 top line reads "Pressed again". **Reset** reloads the page and clears the aim.
@@ -69,7 +77,14 @@ pins, and the files it read and wrote with their digests. The recorded hops take
 the receipt that wrote it, every row reads its finished word with only named stand-ins, every
 tool matches its pin, the aim check is within tolerance and no row is MISSING. At this step it
 reads "not yet". A click the pipeline stops (nobody, a refusal) reads "This click stopped at"
-only once the rows up to there hold.
+only once the rows up to there hold. A click that breaks reads MISSING at the hop that broke, with
+why; the rows before it stay as they ran, and only the rows after it read "not reached". A second
+press reads "Pressed again" only when nothing but its aim check could fail.
+
+The list sits under four headings: "Recorded once", "Built when this page started", "Ran on this
+click", and "Not built yet, or not reached on this click". Among the reasons at this step are the
+truth's reads: hop 6 lists every scene's truth record it opened to find its own take's, and hop 12
+types its answers from the truth's held object.
 
 | Hop | At this step | What runs |
 |---|---|---|
@@ -116,9 +131,14 @@ The harness finds the mark by what it holds, not by its name, and uses it only w
 it names, checked by its seal. Once both are there, the start places the picture's couch on your
 mark, the reader facing away from the mark's longest edge toward the middle of the floor, and
 prints one line in words: which fixtures pass for that facing and the spot, for example
-`F1 clear, F2 refused: in front of the reader`. If none passes, say which way to turn the reader,
+`F1 clear, F2 refused: in front of reader`. If none passes, say which way to turn the reader,
 and an agent writes `facing.json` there: one number of degrees, left positive. The re-fit runs
-only when the mark, the export or `facing.json` changed.
+only when the mark, the export, `facing.json`, or the set's clicks or calibration changed.
+
+Without a mark, a square stand-in seat around the declared point places the picture's couch. At
+the middle of the floor no edge of it is longest and no side is nearer the floor's centre, so the
+reader's facing there is a tie-break, not the stated rule, and the page's registration line says
+so.
 
 Without a mark you can give a declared point as `couch-declared.json`, holding
 `{"point_m": [x, y, z]}`.
@@ -145,6 +165,8 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\den-sim\runs"
 ```
 
 A set is prepared once, by an agent, in about 2 minutes. It reads nothing in your private folder.
+If prepare stops, the set still opens: the take it stopped on reads "Prepare stopped at hop N",
+and the default start names a newer refused set it passes over.
 It renders with Playwright's headless Chromium, so `NODE_PATH` must name a `node_modules` holding
 `playwright`:
 

@@ -24,8 +24,13 @@ from pathlib import Path
 sys.dont_write_bytecode = True  # The codec's folder is read only: nothing lands beside it.
 
 
+# prepare.py's list: every connect, bind and send, and every name lookup, which can send DNS on its own.
+NETWORK = ('socket.connect', 'socket.bind', 'socket.sendto', 'socket.sendmsg', 'socket.getaddrinfo',
+           'socket.gethostbyname', 'socket.gethostbyaddr', 'socket.getnameinfo')
+
+
 def refuse_network(event, _args):
-    if event in ('socket.connect', 'socket.bind', 'socket.sendto', 'socket.getaddrinfo'):
+    if event in NETWORK:
         raise RuntimeError('the den simulation dry run has no network')
 
 

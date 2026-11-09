@@ -174,23 +174,32 @@ test('test 19: a file this branch adds holds the site id only through the one co
   assert.deepEqual(holds([...texts, ['tools/den-sim/planted.mjs', `const home = '${SITE[0].toUpperCase()}${SITE.slice(1)}';\n`]]), ['tools/den-sim/planted.mjs'], 'control: a planted new file is found');
 });
 
-test('test 19: every Python process a click starts refuses sockets', () => {
+test('test 19: every Python process a click starts refuses sockets, name lookups included', () => {
+  // The events prepare.py refuses: every Python process here refuses the same list.
+  const events = text => (text.match(/^NETWORK = \(([^)]*)\)/m)?.[1].match(/'[^']+'|"[^"]+"/g) || []).map(event => event.slice(1, -1)).sort();
+  const want = events(read('scene/prepare.py'));
+  assert.ok(want.includes('socket.gethostbyname') && want.includes('socket.getnameinfo') && want.length === 8, want.join(' '));
   for (const name of ['chain.py', 'brain_run.py', 'dry_run.py']) {
     const text = read(name), hook = text.indexOf('sys.addaudithook(refuse_network)');
-    assert.ok(hook > 0 && /'socket\.connect', 'socket\.bind', 'socket\.sendto', 'socket\.getaddrinfo'/.test(text), `${name} installs the refusal`);
+    assert.ok(hook > 0 && /if event in NETWORK:/.test(text), `${name} installs the refusal`);
+    assert.deepEqual(events(text), want, `${name} refuses what prepare.py refuses`);
     const firstOwnImport = text.search(/^from (activity_loop|fixture_execution)|^import frame_hash/m);
     assert.ok(firstOwnImport === -1 || hook < firstOwnImport, `${name} refuses sockets before it imports anything of Home's`);
   }
+  assert.notDeepEqual(events("NETWORK = ('socket.connect', 'socket.bind', 'socket.sendto', 'socket.getaddrinfo')\n"), want, 'control: the old, shorter list is told apart');
   const tmp = scratch('den-sim-socket-');
   try {
-    // A lookup of the loopback address opens no socket, and the refusal still stops it.
+    // Lookups of the loopback address open no socket, and can still send DNS: the refusal stops each one.
     const probe = path.join(tmp, 'tries-a-lookup.py');
-    fs.writeFileSync(probe, "import socket\ntry:\n    socket.getaddrinfo('127.0.0.1', 9)\n    print('NOT REFUSED')\nexcept RuntimeError as error:\n    print('refused: ' + str(error))\n");
-    assert.match(execFileSync('python', ['-B', path.join(HERE, 'chain.py'), '--guarded', probe], { encoding: 'utf8', windowsHide: true }), /^refused: /);
-    // Control: chain.py with its refusal taken out lets the same lookup through.
+    fs.writeFileSync(probe, "import socket\nfor name, call in (('getaddrinfo', lambda: socket.getaddrinfo('127.0.0.1', 9)), ('gethostbyname', lambda: socket.gethostbyname('127.0.0.1')),\n"
+      + "                   ('gethostbyaddr', lambda: socket.gethostbyaddr('127.0.0.1')), ('getnameinfo', lambda: socket.getnameinfo(('127.0.0.1', 9), 0))):\n"
+      + "    try:\n        call()\n        print(name, 'NOT REFUSED')\n    except RuntimeError as error:\n        print(name, 'refused')\n");
+    const guarded = file => execFileSync('python', ['-B', file, '--guarded', probe], { encoding: 'utf8', windowsHide: true }).trim().split(/\r?\n/);
+    assert.deepEqual(guarded(path.join(HERE, 'chain.py')), ['getaddrinfo refused', 'gethostbyname refused', 'gethostbyaddr refused', 'getnameinfo refused']);
+    // Control: chain.py with its refusal taken out lets the same lookups through.
     fs.writeFileSync(path.join(tmp, 'chain.py'), read('chain.py').replace('sys.addaudithook(refuse_network)', 'pass'));
     fs.copyFileSync(path.join(HERE, 'hops.json'), path.join(tmp, 'hops.json'));
-    assert.match(execFileSync('python', ['-B', path.join(tmp, 'chain.py'), '--guarded', probe], { encoding: 'utf8', windowsHide: true }), /^NOT REFUSED/);
+    assert.ok(guarded(path.join(tmp, 'chain.py')).every(line => line.endsWith('NOT REFUSED')));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 });
 

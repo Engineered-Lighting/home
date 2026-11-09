@@ -153,6 +153,15 @@ function recordedRows({ prepared, refs, recheck, checkRecheck, takeRead, placeme
   return rows;
 }
 
+// Hop 6's recorded tools, from its part of prepare-receipt.json: the files detect.py loaded from its tools root,
+// against refs.json tools.rung-2-observe, and detect.py as it ran, against HEAD.
+function detectorTools(hop, refs) {
+  if (!hop?.tool_files) return [{ path: 'the detector\'s tools', pin: 'prepare-receipt.json hop 6', expected: 'recorded', actual: null }];
+  const head = resolve('HEAD'), file = 'tools/den-detect/detect.py';
+  return [...recordedTools({ commit: hop.commit, files: hop.tool_files }, refs.tools['rung-2-observe'], 'refs.json tools.rung-2-observe'),
+    { path: `${file}, as it ran`, pin: 'HEAD', expected: blobsAt(head, [file])[file] || null, actual: ranAs(head, file, hop.detect_py) }];
+}
+
 const missing = (n, note, extra = {}) => ({ n, name: TABLE.hops[n - 1].name, word: 'MISSING', reached: true, ran: 'not built', note, summary: note, tools: [], read: [], wrote: [], stand_ins: [], ...extra });
 
 // The whole receipt. start: what run.mjs built at page start; chain: chain.py's rows and stop; brain,
@@ -162,6 +171,7 @@ export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, sta
   const byN = new Map(chain.rows.map(row => [row.n, row]));
   for (const n of [6, 7, 8, 9, 10, 11, 12, 13]) {
     const row = byN.get(n);
+    if (row && n === 6) row.tools = [...(row.tools || []), ...detectorTools(prepared.hops['6'], refs)];
     rows.push(row ? { name: TABLE.hops[n - 1].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...row } : null);
   }
   rows.push({ ...start.couch, n: 14, name: TABLE.hops[13].name, reached: true });
@@ -175,7 +185,7 @@ export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, sta
   const stop = chain.stop || brain?.stop || null;
   const out = rows.map((row, i) => finalRow(row, i + 1, stop));
   return { schema: SCHEMA, click, take: takeId, set: setId, recorded: prepared.recorded, written_unix: Date.now() / 1000,
-    prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, picture: chain.picture || null, rows: out };
+    prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, picture: chain.picture || null, torso: chain.torso || null, rows: out };
 }
 
 // Each row as the click left it. A hop past where the click stopped keeps its expected word, greyed,
@@ -198,7 +208,7 @@ export function receiptView(receipt) {
   // A row sits under what it did on this click. A row that didn't run (not built yet, not reached, or
   // with no row) sits apart, never under "Ran on this click".
   const group = row => row.reached === false || /^(not |no row)/.test(row.ran) ? 'not run' : row.ran.startsWith('recorded') ? 'recorded' : row.ran.includes('page start') ? 'page' : 'click';
-  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped,
+  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, torso: receipt.torso?.line || null, boxes: receipt.picture?.boxes || [],
     rows: receipt.rows.map(row => ({ n: row.n, name: row.name, word: row.word, reached: row.reached !== false, ran: row.ran, group: group(row),
       summary: row.summary || row.note || '', stand_ins: row.stand_ins || [], tool: row.tool?.path || null })) };
 }

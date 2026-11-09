@@ -108,7 +108,7 @@ function brainRows({ work, summary, files, chainDone }) {
   const row = { n: 17, name: TABLE.hops[16].name, word: 'ADAPTER', adapter: 'stand-in', reached: true, ran: 'ran now', summary: said,
     tool: { path: 'stack/services/lighting-brain/lighting_brain/brain.py', pin: 'HEAD' }, tools: [...headTools(BRAIN_FILES)],
     read: [...chainDone.adapter_reads, { ...files.geometry, from_hop: 17 }], wrote: [files.geometry, files.timeline],
-    stand_ins: ["the older lighting brain decides, not rung 9's coordinator", "person_to_aim joins room-level reading to the only track and takes its newest joints",
+    stand_ins: ["the older lighting brain decides, not rung 9's coordinator", "person_to_aim joins room-level reading to the only track and takes its newest bundle entry with both shoulders",
       'jev and deep_stack health asserted, not measured', 'head pitch unknown, so the brain assumes level'] };
   const feedRow = { n: 18, name: TABLE.hops[17].name, word: 'ADAPTER', reached: true, ran: 'ran now', tool: { path: 'tools/den-sim/feed.mjs', pin: 'HEAD' },
     summary: 'This harness replays the brain\'s timeline into Home, re-timed to now, and keeps re-timing the hold. Home\'s "Brain online" means this harness.',
@@ -179,7 +179,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
       return { promise: Promise.resolve({ ok: false, reason: chain.stop.why, receipt, top: topLine(TABLE, receipt), work }), work, cancel: () => {} };
     }
     const child = spawn('python', ['-B', path.join(HERE, 'chain.py')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    const chain = { rows: [], recheck: null, checkRecheck: null, takeRead: null, picture: null, stop: null };
+    const chain = { rows: [], recheck: null, checkRecheck: null, takeRead: null, picture: null, torso: null, stop: null };
     // Where a chain that died without saying so was: the click hop after the last line it printed.
     const reachedHop = () => { const last = chain.rows.at(-1)?.n ?? (chain.checkRecheck?.ok ? 4 : chain.recheck?.ok ? 3 : 2); return CLICK_HOPS.find(n => n > last) ?? 17; };
     const promise = new Promise(resolve => {
@@ -191,6 +191,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
         if (row.hop === 'done') done = row;
         else if (row.hop === 'stopped') chain.stop = row.stop;
         else if (row.picture) chain.picture = row.picture;
+        else if (row.torso) chain.torso = row.torso;
         else if (row.recheck && row.n === 4) { chain.checkRecheck = { ...row.recheck, read: row.read }; onRow({ n: 4, word: row.recheck.ok ? 'ADAPTER' : 'MISSING', summary: row.recheck.ok ? 'the check prepare recorded, and no other' : row.recheck.reason }); }
         else if (row.recheck) { chain.recheck = { ...row.recheck, tools: row.tools, read: row.read }; chain.takeRead = row.read[0]; onRow({ n: 3, word: row.recheck.ok ? 'ADAPTER' : 'MISSING', summary: row.recheck.ok ? `re-checked ${row.recheck.frames} frames by hash` : row.recheck.reason }); }
         else { chain.rows.push(row); onRow(row); }
@@ -220,6 +221,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
     child.stdin.end(JSON.stringify({ take: path.join(setDir, take), take_digest: prepared.take_digest,
       take_json_sha256: wrote(3).find(file => file.path.endsWith('/take.json'))?.sha256 || null,
       check_file: check ? path.posix.basename(check.path) : null, check_sha256: check?.sha256 || null,
+      detector: prepared.hops['6'] || null, recorded: prepared.recorded, seat_top_m: seat[2],
       set: setDir, room_model: roomModel, refs: refs.tools, tools_root: path.join(outputRoot, 'tools'), work }));
     return { promise, work, cancel: () => child.kill() };
   }

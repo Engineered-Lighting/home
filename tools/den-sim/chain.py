@@ -1,20 +1,22 @@
 """One click of the den simulation: the pinned pipeline tools on a prepared take.
 
-The take was recorded once by scene/prepare.py (hops 1 to 5). On each click this re-checks its frames by
-hash, then runs the tools after it, each from `git archive` of its pinned ref and each in its own process,
-because they share module names (synth, records, method, check). Every process refuses all sockets.
+The take was recorded once by scene/prepare.py (hops 1 to 6). On each click this re-checks its frames by
+hash, holds the detector rows prepare recorded beside it to hop 6's conditions, then runs the tools after
+it on those rows, each from `git archive` of its pinned ref and each in its own process, because they share
+module names (synth, records, method, check). Every process refuses all sockets.
 
-It is never told the scene. It gets a take folder and the set it sits in, and finds the take's truth by
-the take's folder id. Until a real detector is built (step 3), fake_detector places the joints from that
-truth, and until Qwen is asked (step 4) the answers are typed from the truth's held object. Both rows say
-so. The one piece that exists nowhere else is person_to_aim, part of hop 17's row.
+It is never told the scene. It gets a take folder and the set it sits in. Until Qwen is asked (step 4) the
+answers are typed from the take's truth, found by the take's folder id, and hop 12's row says so. The one
+piece that exists nowhere else is person_to_aim, part of hop 17's row.
 
-Reads {"take", "take_digest", "take_json_sha256", "check_file", "check_sha256", "set", "room_model":
-{"path", "sha256", "by"}, "refs", "tools_root", "work"} as JSON on stdin: the digests are the ones the
-take's prepare-receipt.json recorded for frames.csv, take.json and its check. Prints hop 3's re-check by hash ({"n": 3, "recheck": ...}), the
-picture ({"picture": ...}), then one JSON line per hop, each with its word, the files it read and wrote
-with their digests, its tools against their pins, and its stand-ins; then {"hop": "done", ...} for the
-brain, or {"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
+Reads {"take", "take_digest", "take_json_sha256", "check_file", "check_sha256", "detector", "set",
+"room_model": {"path", "sha256", "by"}, "seat_top_m", "refs", "tools_root", "work"} as JSON on stdin: the
+digests are the ones the take's prepare-receipt.json recorded for frames.csv, take.json and its check, and
+detector is its hop 6 part. Prints hop 3's and hop 4's re-checks by hash ({"n": 3, "recheck": ...}), the
+picture with the person boxes of its frame's row ({"picture": ...}), one JSON line per hop, each with its
+word, the files it read and wrote with their digests, its tools against their pins, and its stand-ins, and
+the torso height against the limit ({"torso": ...}); then {"hop": "done", ...} for the brain, or
+{"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
 """
 import csv
 import hashlib
@@ -23,6 +25,8 @@ import json
 import os
 import re
 import runpy
+import shutil
+import statistics
 import subprocess
 import sys
 import tarfile
@@ -47,7 +51,10 @@ sys.addaudithook(refuse_network)
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
-TREES = {'observe': ('rung-2-observe', ['tools/den-observe', 'tools/den-take']),
+sys.path.insert(0, str(ROOT / 'tools' / 'den-detect'))
+import detect  # noqa: E402  its constants and the lock's parser; the models load only in the venv, at prepare
+# observe's tree is also detect.py's --tools-root: den-observe, den-take and the Lab's workers at one pin.
+TREES = {'observe': ('rung-2-observe', ['tools/den-observe', 'tools/den-take', *detect.WORKERS]),
          'track': ('claude/rung-3-track-local-514d6b', ['tools/den-track']),
          'bundle': ('rung-5-bundle', ['tools/den-bundle']),
          'core': ('den-core-live', ['tools/den-core', 'ha-config/custom_components/den_lighting',
@@ -58,6 +65,8 @@ TEMPLATE_FOR_HELD = {'book': 'reading', 'phone': 'phone_held'}
 COCO17 = ('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
           'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle')
 READING_STATES = ('engaged', 'ending')
+TORSO = ('left_shoulder', 'right_shoulder', 'left_hip', 'right_hip')
+ON_COUCH_ABOVE_SEAT_M, TORSO_WINDOW_S = 0.45, 2.0   # hop 15 step 5: the seat's top plus 0.45 m, over 2 s
 TABLE = {hop['n']: hop for hop in json.loads((HERE / 'hops.json').read_text(encoding='utf-8'))['hops']}
 
 
@@ -131,21 +140,23 @@ def head_tools(*paths):
 
 
 def archive_trees(refs, tools_root):
-    """One folder per pinned ref, written once. A folder without its marker is rebuilt."""
+    """One folder per pinned ref, written once. A folder whose marker is missing, or names other paths, is rebuilt."""
     trees = {}
     for key, (ref_name, paths) in TREES.items():
         sha = refs[ref_name]
         tree = Path(tools_root) / ('%s-%s' % (key, sha))
         trees[key] = tree
-        if (tree / '.complete').is_file():
+        marker = '%s %s\n' % (sha, ' '.join(paths))
+        if (tree / '.complete').is_file() and (tree / '.complete').read_text(encoding='utf-8') == marker:
             continue
         done = subprocess.run(['git', '-C', str(ROOT), 'archive', '--format=tar', sha, *paths], capture_output=True)
         if done.returncode:
             raise Stop(AT[0], 'git archive %s (%s): %s' % (ref_name, sha, done.stderr.decode('utf-8', 'replace').strip()[-200:]))
+        shutil.rmtree(tree, ignore_errors=True)
         tree.mkdir(parents=True, exist_ok=True)
         with tarfile.open(fileobj=io.BytesIO(done.stdout)) as archive:
             archive.extractall(tree, filter='data')
-        (tree / '.complete').write_text(sha + '\n', encoding='utf-8')
+        (tree / '.complete').write_text(marker, encoding='utf-8')
     return trees
 
 
@@ -230,34 +241,70 @@ def step_picture(request):
     return dict(width=FRAME_PX[0], height=FRAME_PX[1])
 
 
-def step_rows(request):
-    """Hop 6, SCRIPTED: fake_detector places the figure's true joints, frame by frame, from the truth
-    folder. A truth with no person gives rows with no detection on every usable frame."""
-    tools = Path(request['observe_tree']) / 'tools'
-    sys.path[:0] = [str(tools / 'den-observe'), str(tools / 'den-take')]
-    import detections
-    import fake_detector
-    truth = Path(request['truth'])
-    record = json.loads((truth / 'take.json').read_text(encoding='utf-8'))
-    poses = json.loads((truth / 'poses.json').read_text(encoding='utf-8'))['poses'] if record['person'] else None
-    rows = []
-    for row in request['rows']:
-        t, seq = float(row['t_host_s']), int(row['rgb_seq'])
-        if poses is None:
-            rows.append(detections.validate({'schema': detections.SCHEMA, 'frame': {'capture_ts': t, 'clock': 'host_monotonic', 'rgb_seq': seq,
-                                                                                  'width': FRAME_PX[0], 'height': FRAME_PX[1]},
-                                             'available_ts': t + fake_detector.LATENCY_S,
-                                             'detector': {'boxes': fake_detector.NAME, 'boxes_version': fake_detector.NAME, 'keypoints': fake_detector.NAME,
-                                                          'keypoints_version': fake_detector.NAME, 'keypoint_layout': 'coco17'},
-                                             'detections': []}))
-            continue
-        pixels = {name: tuple(xy) for name, xy in poses[record['pose_of_rgb_seq'][str(seq)]]['rgb_px'].items()}
-        rows.append(fake_detector.row(t, rgb_seq=seq, pixels=pixels, sway_px=0.0))
-    detections.write_rows(request['out'], rows)
-    people = sum(1 for row in rows if row['detections'])
-    last = next((row for row in reversed(rows) if row['detections']), None)
-    return dict(rows=len(rows), with_person=people, detector=fake_detector.NAME,
-                box_xyxy=last['detections'][0]['box_xyxy'] if last else None, keypoints=last['detections'][0]['keypoints'] if last else None)
+def rows_hold(take, rows, hop, pins):
+    """Hop 6's conditions on the rows prepare recorded beside the take (plan line 442): (held, None), or
+    (None, why). Anything less reads MISSING, never "nobody". rows: frames.csv's usable part; hop: the take's
+    prepare-receipt.json hop 6; pins: requirements.lock's weight digests."""
+    if not rows:
+        return None, "the check's usable part is empty, so no rows can cover it"
+    if not hop:
+        return None, 'prepare recorded no detector rows for this take'
+    if not (hop.get('checked') or {}).get('ok'):
+        return None, 'prepare did not check these rows against the model'
+    run_file, rows_file = take / 'detector-run.json', take / 'detections.jsonl'
+    if not run_file.is_file() or sha256_file(run_file) != hop['run']['sha256']:
+        return None, 'detector-run.json is not the one prepare recorded'
+    if not rows_file.is_file() or sha256_file(rows_file) != hop['rows']['sha256']:
+        return None, 'detections.jsonl is not the one prepare recorded'
+    try:
+        run = json.loads(run_file.read_text(encoding='utf-8'))
+        if any(run['weights'].get(name) != pins[name] for name in detect.WEIGHTS):
+            return None, "detector-run.json does not hold both pinned weight digests"
+        recorded = [json.loads(line) for line in rows_file.read_text(encoding='utf-8').splitlines() if line.strip()]
+        if not recorded:
+            return None, 'detections.jsonl holds no rows'
+        seqs, usable = sorted(row['frame']['rgb_seq'] for row in recorded), sorted(int(row['rgb_seq']) for row in rows)
+        if seqs != usable:
+            return None, 'the rows cover %d of the %d usable frames' % (len(set(seqs) & set(usable)), len(usable))
+        people = [row for row in recorded if detect.person_boxes(row)]
+        if (run['counts']['frames'], run['counts']['with_person']) != (len(recorded), len(people)):
+            return None, "the rows' counts are not detector-run.json's"
+        names = {row['detector']['boxes'] for row in recorded} | {row['detector']['keypoints'] for row in recorded if 'keypoints' in row['detector']}
+        if not names <= set(detect.MODELS):
+            return None, 'the rows name %s, not a real model' % ', '.join(sorted(map(str, names - set(detect.MODELS))))
+        late = sum(1 for row in recorded if row['available_ts'] - row['frame']['capture_ts'] > detect.LIMIT_S)
+        if late or run['counts']['over_limit']:
+            return None, '%d frames took over %g s of compute, so den-observe rejects them: prepare again on a quiet PC' % (max(late, run['counts']['over_limit']), detect.LIMIT_S)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None, 'detections.jsonl or detector-run.json is not what detect.py writes'
+    return dict(rows=recorded, run=run, with_person=len(people), names=sorted(names)), None
+
+
+def no_track(with_person, frames, run, output):
+    """Hop 8's sentence when the rows hold a person and no track formed: what was seen, and why no track formed,
+    from replay's run.json counts. It never says nobody."""
+    counts = run['gate']['counts']
+    seen = ', '.join('%s %d' % (key, value) for key, value in sorted(counts['validity'].items())) or 'none'
+    return 'the detector saw a person on %d of %d usable frames, and no track formed: observations %s. %s' % (
+        with_person, frames, seen, ' '.join(output.split('\n')[1:2]) or 'den_track.py made no lines')
+
+
+def torso(observations, seat_top_m):
+    """How far the median height of supported shoulders and hips over the take's last 2 s sits from hop 15's
+    "on the couch" limit, the seat's top plus 0.45 m. Only the difference leaves: an absolute height in a real
+    room is a coordinate."""
+    people = [obs for obs in observations if obs['kind'] == 'keypoints' and obs['validity'] == 'valid']
+    if not people or seat_top_m is None:
+        return None
+    newest = max(obs['capture_ts'] for obs in people)
+    heights = [joint['xyz'][2] for obs in people if obs['capture_ts'] >= newest - TORSO_WINDOW_S
+               for joint in obs['joints_room'] if COCO17[joint['j']] in TORSO and joint['status'] == 'supported']
+    if not heights:
+        return dict(margin_m=None, joints=0, line='torso: no supported shoulder or hip in the last 2 s, so no height against the limit')
+    margin = round(statistics.median(heights) - (seat_top_m + ON_COUCH_ABOVE_SEAT_M), 3)
+    words = '%.2f m %s the limit' % (abs(margin), 'under' if margin <= 0 else 'over')
+    return dict(margin_m=margin, joints=len(heights), line='torso %s (median of %d supported shoulder and hip points over the last 2 s; '
+                'the limit is the seat\'s top plus 0.45 m)' % (words, len(heights)))
 
 
 def step_core(request):
@@ -291,18 +338,22 @@ def step_core(request):
 def person_to_aim(bundles, person):
     """Part of hop 17's row, standing in for rung 6 and K7: PersonState has no shoulders, and nothing in
     the pipeline joins room-level reading to a track. It joins them here because there is exactly one
-    track, and takes the joints from that track's newest bundle. Head pitch is left unknown, because
-    nothing in the chain measures it. It asserts jev and deep_stack health, which brain_run.py passes on."""
+    track, and takes the joints from the newest entry of that track's bundles that has both shoulders, so a
+    real detector's frame that lost a shoulder can't stop the beam. Head pitch is left unknown, because nothing
+    in the chain measures it. It asserts jev and deep_stack health, which brain_run.py passes on."""
     tracks = sorted({bundle['track_id'] for bundle in bundles})
     if len(tracks) != 1:
         return None, 'the adapter joins room reading to the only track, and found %d' % len(tracks)
     series = [entry for bundle in bundles for entry in bundle['keypoint_series']]
     if not series:
         return None, 'the bundles hold no keypoints'
-    newest = max(series, key=lambda entry: entry['ts'])
-    joints = {COCO17[entry['j']] if isinstance(entry['j'], int) else entry['j']: entry.get('xyz') for entry in newest['joints_room']}
-    if not (joints.get('left_shoulder') and joints.get('right_shoulder')):
-        return None, 'the newest bundle has no shoulders in the room frame'
+    def joints_of(entry):
+        return {COCO17[joint['j']] if isinstance(joint['j'], int) else joint['j']: joint.get('xyz') for joint in entry['joints_room']}
+    both = [entry for entry in series if joints_of(entry).get('left_shoulder') and joints_of(entry).get('right_shoulder')]
+    if not both:
+        return None, 'no bundle entry has both shoulders in the room frame'
+    newest = max(both, key=lambda entry: entry['ts'])
+    joints = joints_of(newest)
     reading = person['state'] in READING_STATES and person['kind'] == 'reading' and person['support'] == 'observed'
     return dict(label='reading' if reading else 'other', person=dict(track_id=str(tracks[0]), shoulders_m=dict(left=joints['left_shoulder'], right=joints['right_shoulder']),
                                                                     head_m=joints.get('nose'), head_pitch_deg=None, approximate=True),
@@ -359,58 +410,69 @@ def chain(request):
     if why:
         raise Stop(4, why)
     rows = usable_rows(take, json.loads((take / name).read_text(encoding='utf-8')))
-    if not rows:
-        raise Stop(4, 'the check left no usable part')
 
-    # The picture, before any tool reads the take. A display: if it can't be read back, the click goes on without it.
-    middle = rows[len(rows) // 2]
-    try:
-        picture = click.own_step('picture', dict(frame=str(take / middle['file']), out=str(work / 'picture.png')))
-        picture.update(click.file(work / 'picture.png'), n=int(middle['n']), rgb_seq=int(middle['rgb_seq']))
-    except Stop as failed:
-        picture = dict(error=failed.why)
-    print(json.dumps(dict(picture=picture)), flush=True)
-
-    # Hop 6, SCRIPTED: rows from the truth. The archives are this hop's and every later tool's.
+    # The picture, before any tool reads the take: one usable frame read back out of its own NV12 plane. A
+    # display: if it can't be read back, the click goes on without it. It's printed with its row's boxes below.
     at(6)
-    started = time.monotonic()
-    trees = archive_trees(refs, request['tools_root'])
-    tools = {key: tree_tools(trees[key], refs[ref_name], ref_name, paths) for key, (ref_name, paths) in TREES.items()}
-    observe_tools = [t for t in tools['observe'] if t['path'].startswith('tools/den-observe/')]
-    truth, scanned = click.truth()
-    if truth is None:
-        raise Stop(6, 'no truth folder holds this take, so the scripted detector has nothing to place')
-    # No receipt records the truth's digests, so nothing vouches for these reads, nor for the other scenes'
-    # records opened to find this one, and the row says so.
-    truth_reads = [dict(path='truth/(this take)/%s' % name, sha256=sha256_file(truth / name)) for name in ('take.json', 'poses.json') if (truth / name).exists()]
-    detections = work / 'detections.jsonl'
-    found = click.own_step('rows', dict(observe_tree=str(trees['observe']), truth=str(truth), rows=rows, out=str(detections)))
-    six = dict(tools=[t for t in observe_tools if t['path'].endswith(('fake_detector.py', 'detections.py'))] + head_tools(*own),
-               read=[take_read, check_read, *truth_reads, *scanned], wrote=[click.file(detections)],
-               stand_ins=["fake_detector places the figure's true joints from the truth folder: no detector looks at the picture"],
-               rows=found['rows'], with_person=found['with_person'])
-    if not found['with_person']:
-        emit(6, 'SCRIPTED', 'fake-scripted-1 wrote %d rows over the usable part, none with a person: the truth says nobody is there.' % found['rows'], started, **six)
-        raise Stop(6, 'the detector saw nobody, nothing was asked', answer=True)
-    emit(6, 'SCRIPTED', '%s placed the joints from the truth on %d of %d usable frames, and the box comes from them. No detector ran.'
-         % (found['detector'], found['with_person'], found['rows']), started, frame_px=FRAME_PX, box_xyxy=found['box_xyxy'], keypoints=found['keypoints'], **six)
+    picture, middle = dict(error='the usable part is empty'), rows[len(rows) // 2] if rows else None
+    if middle:
+        try:
+            picture = click.own_step('picture', dict(frame=str(take / middle['file']), out=str(work / 'picture.png')))
+            picture.update(click.file(work / 'picture.png'), n=int(middle['n']), rgb_seq=int(middle['rgb_seq']))
+        except Stop as failed:
+            picture = dict(error=failed.why)
 
-    # Hop 7: observations, on the room model this page placed.
+    # Hop 6, recorded by prepare: the rows YOLO26s and RTMPose-m wrote beside the take, held to its conditions.
+    hop = request.get('detector') or {}
+    pins = detect.lock()['weights']
+    held, why = rows_hold(take, rows, hop, pins)
+    run = held['run'] if held else {}
+    rows_read = click.recorded('%s/detections.jsonl' % take.name, take / 'detections.jsonl', 'rows', by_take, (hop.get('rows') or {}).get('sha256'))
+    run_read = click.recorded('%s/detector-run.json' % take.name, take / 'detector-run.json', 'rows', by_take, (hop.get('run') or {}).get('sha256'))
+    weights = [dict(path='weights %s' % file, pin='tools/den-detect/requirements.lock', expected=pins[file], actual=(run.get('weights') or {}).get(file))
+               for file in (*detect.WEIGHTS, 'artifact.json')]
+    six = dict(tools=head_tools(*own, 'tools/den-detect/detect.py', 'tools/den-detect/requirements.lock') + weights,
+               read=[take_read, check_read, rows_read, run_read], wrote=[], stand_ins=named(6, 0, 1, 2, 3, 4))
+    boxes = [dict(score=round(d['score'], 3), box_xyxy=[round(v, 1) for v in d['box_xyxy']],
+                  keypoints=[None if k is None else [round(k[0], 1), round(k[1], 1), round(k[2], 3)] for k in d['keypoints']] if d['keypoints'] else None)
+             for row in (held['rows'] if held else []) if row['frame']['rgb_seq'] == picture.get('rgb_seq') for d in row['detections'] if d['class'] == 'person']
+    print(json.dumps(dict(picture=dict(picture, boxes=boxes, boxes_from='%s/detections.jsonl' % take.name if held else None))), flush=True)
+    if not held:
+        emit(6, 'MISSING', 'The recorded rows do not hold: %s.' % why, ran='recorded %s' % request.get('recorded'), note=why, **six)
+        raise Stop(6, why)
+    checked, people = hop['checked'], held['with_person']
+    ran = 'recorded %s, rows checked against the model on %s' % (request.get('recorded') or checked['on'], checked['on'])
+    measured = 'median %.0f ms a frame on this PC\'s CPU; rows checked against the model on %s, on %d frames, within %g px' % (
+        run['ms']['median'], checked['on'], len(checked['frames']), checked['max_px'])
+    if not people:
+        emit(6, 'ADAPTER', 'YOLO26s found no person on any of the %d usable frames, so RTMPose-m had nothing to crop; %s.' % (len(held['rows']), measured), ran=ran, **six)
+        raise Stop(6, 'the detector saw nobody, nothing was asked', answer=True)
+    emit(6, 'ADAPTER', 'YOLO26s found a person on %d of %d usable frames, and RTMPose-m placed its joints; %s. Rows name %s.'
+         % (people, len(held['rows']), measured, ' and '.join(held['names'])), ran=ran, rows=len(held['rows']), with_person=people, **six)
+    found = dict(with_person=people, rows=len(held['rows']))
+
+    # Hop 7: observations, on the room model this page placed. The archives are this hop's and every later tool's.
     at(7)
     room = request['room_model']
     started = time.monotonic()
+    trees = archive_trees(refs, request['tools_root'])
+    tools = {key: tree_tools(trees[key], refs[ref_name], ref_name, paths) for key, (ref_name, paths) in TREES.items()}
+    observe_tools = [tool for tool in tools['observe'] if tool['path'].startswith(('tools/den-observe/', 'tools/den-take/'))]
     observe = work / 'observe'
     click.guarded(trees['observe'] / 'tools' / 'den-observe' / 'replay.py', '--take', take, '--room-model', room['path'], '--camera', CAMERA_ID,
-                  '--detections', detections, '--out', observe)
-    run = json.loads((observe / 'run.json').read_text(encoding='utf-8'))
-    if (run.get('take_check') or {}).get('file') != name:
-        raise Stop(7, 'replay read %s, not the check prepare recorded' % ((run.get('take_check') or {}).get('file') or 'no check'))
+                  '--detections', take / 'detections.jsonl', '--out', observe)
+    run_json = json.loads((observe / 'run.json').read_text(encoding='utf-8'))
+    if (run_json.get('take_check') or {}).get('file') != name:
+        raise Stop(7, 'replay read %s, not the check prepare recorded' % ((run_json.get('take_check') or {}).get('file') or 'no check'))
     room_read = dict(path='%s/room-model.jsonl' % Path(room['path']).parent.name, sha256=sha256_file(room['path']),
                      recorded=dict(kind='room model', by=room['by'], sha256=room['sha256']))
     emit(7, 'REAL', 'replay.py wrote %d observations, unscored: %d open slots on proposed values, on rendered depth.'
-         % (run['gate']['records'], len(run['method']['open_slots'])), started,
-         tools=tools['observe'], read=[take_read, record_read, check_read, room_read, click.read(detections, 6)],
+         % (run_json['gate']['records'], len(run_json['method']['open_slots'])), started,
+         tools=observe_tools, read=[take_read, record_read, check_read, room_read, rows_read],
          wrote=[click.file(observe / 'observations.jsonl'), click.file(observe / 'run.json')], stand_ins=[])
+    line = torso(read_jsonl(observe / 'observations.jsonl'), request.get('seat_top_m'))
+    if line:
+        print(json.dumps(dict(torso=line)), flush=True)
 
     # Hop 8: tracks.
     at(8)
@@ -421,8 +483,9 @@ def chain(request):
     emit(8, 'REAL', 'den_track.py wrote %d lines for %d track(s), unscored: %d open slots.' % (len(lines), track_run['counts']['tracks'], len(track_run['method']['open'])), started,
          tools=tools['track'], read=[click.read(observe / 'observations.jsonl', 7)],
          wrote=[click.file(work / 'track' / 'tracks.jsonl'), click.file(work / 'track' / 'track-run.json')], stand_ins=[])
-    if not lines:
-        raise Stop(8, 'a person was seen on %d frames, and no track formed: %s' % (found['with_person'], ' '.join(output.split('\n')[1:2]) or 'den_track.py made no lines'), answer=True)
+    # Zero tracks stops the chain before route, which exits 2 on them. The rows held a person, so never "nobody".
+    if not track_run['counts']['tracks']:
+        raise Stop(8, no_track(people, len(held['rows']), run_json, output), answer=True)
 
     # Hop 9: the real router with its fake sender, on a method copy that knows this camera's frame size.
     at(9)
@@ -442,21 +505,27 @@ def chain(request):
     if not bundles:
         raise Stop(9, 'a person was seen for %d frames, too briefly to ask' % found['with_person'], answer=True)
 
-    emit(10, 'SCRIPTED', 'Asserted: the brain is told the room is occupied. Nothing reads the track list for it yet.',
-         tools=head_tools('tools/den-sim/brain_run.py'), stand_ins=['occupancy asserted to the brain by a typed event'])
+    emit(10, 'SCRIPTED', 'The track list decides whether the older brain runs at all: %d track(s), so it does. That brain\'s own occupancy is still '
+         'typed in brain_run.py until step 6.' % track_run['counts']['tracks'],
+         tools=head_tools('tools/den-sim/brain_run.py'), stand_ins=["the older brain's occupancy typed in brain_run.py; the track list only decides that it runs"])
     emit(11, 'MISSING', 'Not built: the bundles go nowhere, and no model is asked.', ran='not built', note='no request is built from the bundles')
 
     # Hops 12 and 13: typed answers, then need v0, in one process: a failure there is hop 12's.
     at(12)
     started = time.monotonic()
-    held = (json.loads((truth / 'take.json').read_text(encoding='utf-8'))['person'] or {}).get('held')
-    template = TEMPLATE_FOR_HELD.get(held, 'rest')
+    truth, scanned = click.truth()
+    if truth is None:
+        raise Stop(12, 'no truth folder holds this take, so no answer can be typed')
+    # No receipt records the truth's digests, so nothing vouches for this read, nor for the other scenes'
+    # records opened to find it, and the row says so.
+    truth_read = dict(path='truth/(this take)/take.json', sha256=sha256_file(truth / 'take.json'))
+    template = TEMPLATE_FOR_HELD.get((json.loads((truth / 'take.json').read_text(encoding='utf-8'))['person'] or {}).get('held'), 'rest')
     core = click.own_step('core', dict(core_tree=str(trees['core']), template=template, reply_after_s=1.25, facts=str(work / 'facts.jsonl'),
                                        log=str(work / 'den-core-log.jsonl'), observed_at=[bundle['interval'][1] for bundle in bundles]))
     core_tools = tools['core']
     emit(12, 'SCRIPTED', '%d answers typed through the real fact_line, one per bundle. No model ran.' % core['facts'],
          tools=[t for t in core_tools if t['path'].endswith(('synthetic.py', 'la_fact_log.py', 'qwen_scene.py'))] + head_tools(*own),
-         read=[click.read(work / 'bundles.jsonl', 9), *[r for r in truth_reads if r['path'].endswith('take.json')]], wrote=[click.file(work / 'facts.jsonl')],
+         read=[click.read(work / 'bundles.jsonl', 9), truth_read, *scanned], wrote=[click.file(work / 'facts.jsonl')],
          stand_ins=["answers typed from the truth folder's held object (a book reads, a phone is held), through the real fact_line: no model is asked"])
     emit(13, 'ADAPTER', 'need v0 on those lines: %s. Track room, no position.' % (' then '.join(core['states']) or 'no change'), started,
          tools=[t for t in core_tools if t['path'].startswith('tools/den-core/')], read=[click.read(work / 'facts.jsonl', 12)],
@@ -479,7 +548,7 @@ def main():
         runpy.run_path(script, run_name='__main__')
         return
     if len(sys.argv) == 3 and sys.argv[1] == '--step':
-        print(json.dumps(dict(rows=step_rows, core=step_core, picture=step_picture)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
+        print(json.dumps(dict(core=step_core, picture=step_picture)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
         return
     request = json.load(sys.stdin)
     try:

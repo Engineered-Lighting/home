@@ -78,7 +78,7 @@ function recordedRows({ prepared, refs, recheck, takeRead, placement }) {
       row.ran = `recorded ${prepared.recorded}, re-checked by hash now`;
       row.read = recheck ? recheck.read : [];
       row.tools.push(...(recheck?.tools || []));
-      if (recheck && !recheck.ok) { row.word = 'MISSING'; row.note = recheck.reason; }
+      if (recheck && !recheck.ok) { row.word = 'MISSING'; row.note = recheck.reason; row.summary = `The frame hash refused this take: ${recheck.reason}.`; }
       row.recheck = recheck ? { ok: recheck.ok, frames: recheck.frames, reason: recheck.reason } : null;
     }
     if (n === 5) {

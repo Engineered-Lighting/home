@@ -90,7 +90,7 @@ function packRoot() {
   return packs;
 }
 const PACKS = packRoot(), binding = readActiveBinding(PACKS);
-const FLOOR = path.join(PACKS, 'victoria', binding.content_revision, 'floor.json');
+const FLOOR = path.join(PACKS, BRAIN_BASE.split('/').at(-1), binding.content_revision, 'floor.json');
 const privateNotes = [];
 const same = (a, b) => Core.canonicalJson(a) === Core.canonicalJson(b);
 // PowerShell 5.1 writes UTF-16 with `>` and a UTF-8 BOM with Set-Content.

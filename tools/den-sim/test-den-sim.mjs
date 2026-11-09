@@ -525,6 +525,14 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   const three = await click(nobody);
   assert.deepEqual(three.click.stopped, { hop: 3, why: 'take.json is not the one prepare recorded', answer: false });
   assert.deepEqual([three.click.rows[2].word, three.click.rows[5].reached], ['MISSING', false]);
+  // An archived tool edited after its archive was written, here in this test's own data root: its
+  // marker file still vouches for the tree, and the click names the file all the same.
+  const observeTree = fs.readdirSync(path.join(home, 'tools')).find(name => name.startsWith('observe-'));
+  const replay = path.join(home, 'tools', observeTree, 'tools', 'den-observe', 'replay.py');
+  fs.appendFileSync(replay, '\n# edited after the archive was written\n');
+  const archived = await click(phone);
+  assert.ok(archived.click.top_line.reasons.some(reason => reason.condition === 4 && reason.hop === 7 && /tools\/den-observe\/replay\.py differs from refs\.json tools\.rung-2-observe/.test(reason.text)),
+    JSON.stringify(archived.click.top_line.reasons.filter(reason => reason.condition === 4)));
   // A tool that fails on a click: replay, on a room model broken after the page placed it.
   const fits = path.join(home, 'fits'), fit = fs.readdirSync(fits).find(name => fs.existsSync(path.join(fits, name, 'room-model.jsonl')));
   fs.writeFileSync(path.join(fits, fit, 'room-model.jsonl'), '{"not": "a room model"}\n');

@@ -59,7 +59,7 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   let revision = 0, eventId = 0, docsSent = 0, current = null, held = null, timer = null, stepper = null;
   let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null };
 
-  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, no inference ran · brain: ${why}`.slice(0, 240);
+  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, recorded detector rows, typed answers · brain: ${why}`.slice(0, 240);
   // The brain's state, unchanged but for its clocks and honest labels. Re-timing from
   // the row each time means repeating a row never stretches its evidence.
   function present(row, step = null) {

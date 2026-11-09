@@ -1,6 +1,7 @@
 /* Den simulation panel, injected by tools/den-sim/run.mjs into the unchanged Home.
  * A red strip, one button per prepared take, the top line, the picture read back out of the
- * take, and one hop list read from the click's run-receipt.json. It reads Home's real overlay,
+ * take with the detector's person box, score and joints from that frame's recorded row, the torso
+ * height against the on-the-couch limit, and one hop list read from the click's run-receipt.json. It reads Home's real overlay,
  * presses Home's own view buttons, selects the fixture as a person would, and posts only to
  * /__sim/feed on this harness. There is no send control. It prints no coordinate: the aim target
  * and the hand point show only their distance from the seat, and the camera is a marker. */
@@ -34,7 +35,10 @@
     #den-sim-panel [data-den-sim-top-line] { margin: 6px 0; padding: 6px; border: 1px solid #555; border-radius: 6px; background: #1a1d21; }
     #den-sim-panel [data-den-sim-top-line] strong { display: block; font-size: 13px; }
     #den-sim-panel [data-den-sim-top-line][data-verdict="yes"] { border-color: #1f7a3d; }
-    #den-sim-panel [data-den-sim-picture] { display: block; width: 100%; margin: 4px 0; background: #000; border: 1px solid #333; border-radius: 4px; }
+    #den-sim-panel [data-den-sim-picture-box] { position: relative; margin: 4px 0; }
+    #den-sim-panel [data-den-sim-picture] { display: block; width: 100%; box-sizing: border-box; background: #000; border: 1px solid #333; border-radius: 4px; }
+    #den-sim-panel [data-den-sim-boxes] { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    #den-sim-panel [data-den-sim-torso] { margin: 4px 0; padding: 4px 6px; border-left: 3px solid #2a5fa8; background: rgba(42,95,168,.18); }
     #den-sim-panel [data-den-sim-command] { margin: 6px 0; padding-top: 6px; border-top: 1px solid #555; }
     #den-sim-panel [data-den-sim-not-sent] { background: #b00020; color: #fff; font: 700 12px/20px system-ui, sans-serif; text-align: center; border-radius: 4px; margin-bottom: 5px; }
     #den-sim-panel pre { margin: 4px 0; padding: 5px; max-height: 220px; overflow: auto; background: #000; border: 1px solid #333; border-radius: 4px;
@@ -56,7 +60,7 @@
   ` }));
 
   const strip = el('div', { id: 'den-sim-strip', role: 'status', 'data-den-sim-strip': '1',
-    textContent: 'SIMULATION · rendered takes, no inference ran · INVENTED CAMERA: it does not exist · nothing is sent to any fixture' });
+    textContent: 'SIMULATION · rendered takes, a real detector\'s recorded rows, Qwen\'s words typed · INVENTED CAMERA: it does not exist · nothing is sent to any fixture' });
   const sceneButtons = el('div', { 'data-den-sim-scenes': '1' });
   const setFeedEnabled = on => sceneButtons.querySelectorAll('button').forEach(button => { button.disabled = !on; });
   const resetButton = el('button', { type: 'button', 'data-den-sim-reset': '1', textContent: 'Reset (reload)', onclick: () => location.reload() });
@@ -72,8 +76,28 @@
   const inputNotes = el('div', { 'data-den-sim-notes': '1', hidden: true });
   const topLine = el('div', { 'data-den-sim-top-line': '1', hidden: true });
   const picture = el('img', { 'data-den-sim-picture': '1', alt: 'The take\'s own frame, read back out of its NV12 plane', hidden: true });
-  const pictureNote = el('span', { className: 'note', 'data-den-sim-picture-note': '1', hidden: true,
-    textContent: 'The take\'s own frame, read back out of its NV12 plane. No box is drawn: the joints come from the figure\'s truth, so a box would look like detection.' });
+  const pictureBox = el('div', { 'data-den-sim-picture-box': '1', hidden: true }, picture);
+  const pictureNote = el('span', { className: 'note', 'data-den-sim-picture-note': '1', hidden: true });
+  const torsoLine = el('div', { 'data-den-sim-torso': '1', hidden: true });
+  // The model's box, score and joints, drawn in the frame's own pixels from that frame's recorded row.
+  const SVG = 'http://www.w3.org/2000/svg', JOINT_MIN = .4;   // the pose manifest's score_threshold: a joint at or over it is supported
+  const EDGES = [[0, 1], [0, 2], [1, 3], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10], [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16]];
+  const draw = (tag, attrs, text) => { const node = document.createElementNS(SVG, tag); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); if (text) node.textContent = text; return node; };
+  function drawBoxes(boxes) {
+    pictureBox.querySelector('svg')?.remove();
+    pictureNote.textContent = boxes.length ? `The take's own frame, read back out of its NV12 plane, with YOLO26s's person box and score and RTMPose-m's supported joints from this frame's recorded row.`
+      : 'The take\'s own frame, read back out of its NV12 plane. The detector\'s row for this frame holds no person, so no box is drawn.';
+    if (!boxes.length) return;
+    const svg = draw('svg', { viewBox: '0 0 640 360', 'data-den-sim-boxes': String(boxes.length), 'aria-hidden': 'true' });
+    for (const box of boxes) {
+      const [x0, y0, x1, y1] = box.box_xyxy, points = box.keypoints || [];
+      svg.append(draw('rect', { x: x0, y: y0, width: x1 - x0, height: y1 - y0, fill: 'none', stroke: '#3cdc3c', 'stroke-width': 2, 'data-den-sim-box': '1' }),
+        draw('text', { x: x0 + 3, y: Math.max(13, y0 - 4), fill: '#3cdc3c', 'font-size': 14, 'font-family': 'system-ui, sans-serif' }, `person ${box.score.toFixed(2)}`));
+      for (const [a, b] of EDGES) if (points[a]?.[2] >= JOINT_MIN && points[b]?.[2] >= JOINT_MIN) svg.append(draw('line', { x1: points[a][0], y1: points[a][1], x2: points[b][0], y2: points[b][1], stroke: '#ffc800', 'stroke-width': 1.5 }));
+      for (const point of points) if (point?.[2] >= JOINT_MIN) svg.append(draw('circle', { cx: point[0], cy: point[1], r: 3, fill: '#00ff66', 'data-den-sim-joint': '1' }));
+    }
+    pictureBox.append(svg);
+  }
   const brainBox = list([['says', 'Brain says'], ['refusal', 'Spot refused'], ['chose', 'Brain chose'], ['hand', 'Hand point'], ['agree', 'Home vs brain']]);
   const readback = list([['fixture', 'Lit fixture'], ['aim', 'Pan / tilt'], ['spot', 'Spot'], ['target', 'Aim target'], ['camera', 'Camera marker']]);
   const candidateRows = el('ul', { 'data-den-sim-candidates': '1' });
@@ -85,7 +109,7 @@
   const hops = el('details', { open: innerHeight >= 800 }, el('summary', { textContent: 'Each hop, from this click\'s receipt' }), hopRows);
   const commandBox = el('div', { 'data-den-sim-command': '1', hidden: true });
   const choice = el('div', { className: 'note', 'data-den-sim-choice': '1' });
-  const body = el('div', { 'data-den-sim-body': '1' }, topLine, picture, pictureNote, brainBox, readback, commandBox, candidates, hops, proof);
+  const body = el('div', { 'data-den-sim-body': '1' }, topLine, pictureBox, pictureNote, torsoLine, brainBox, readback, commandBox, candidates, hops, proof);
   const panel = el('aside', { id: 'den-sim-panel', 'aria-label': 'Den simulation' }, sceneButtons, el('div', { className: 'row' }, resetButton, hideButton),
     message, choice, startupBox, inputNotes, body);
   document.body.append(strip, panel);
@@ -185,8 +209,10 @@
     const key = click ? `${click.click}:${click.top_line.line}:${click.rows.length}` : 'none';
     if (key === sim.clickShown) return;
     sim.clickShown = key;
-    topLine.hidden = picture.hidden = pictureNote.hidden = !click;
+    topLine.hidden = pictureBox.hidden = pictureNote.hidden = !click;
+    torsoLine.hidden = !click?.torso;
     if (!click) return;
+    torsoLine.textContent = click.torso ? `Against hop 15's on-the-couch limit, which step 5 builds: ${click.torso}.` : '';
     const top = click.top_line;
     topLine.dataset.verdict = top.verdict;
     topLine.replaceChildren(el('strong', { 'data-den-sim-top-line-text': '1', textContent: top.line }), el('span', { className: 'note', 'data-den-sim-count': '1', textContent: top.count_line }));
@@ -194,7 +220,7 @@
       topLine.append(el('details', { 'data-den-sim-reasons': '1' }, el('summary', { textContent: `Why: ${top.reasons.length} reasons` }),
         el('ul', {}, ...top.reasons.map(reason => el('li', { 'data-den-sim-reason': String(reason.condition ?? ''), textContent: reason.condition ? `(${reason.condition}) ${reason.text}` : reason.text })))));
     }
-    if (click.picture) { picture.src = `/__sim/picture?click=${click.click}`; picture.hidden = false; } else picture.hidden = pictureNote.hidden = true;
+    if (click.picture) { picture.src = `/__sim/picture?click=${click.click}`; drawBoxes(click.boxes || []); } else pictureBox.hidden = pictureNote.hidden = true;
     hopRows.replaceChildren(...GROUPS.flatMap(([group, heading]) => {
       const rows = click.rows.filter(row => row.group === group);
       return rows.length ? [el('h4', { textContent: heading }), el('ul', {}, ...rows.map(row => el('li', { 'data-den-sim-hop': String(row.n), 'data-den-sim-name': row.name,
@@ -252,7 +278,7 @@
     if (!sim.running) return;
     if (feed.phase === 'pipeline') {
       const last = feed.pipeline.rows.at(-1);
-      message.textContent = `Running the pinned tools on a prepared take: ${last ? `hop ${last.n} done` : 'checking its frames by hash'}. No inference runs.`;
+      message.textContent = `Running the pinned tools on a prepared take: ${last ? `hop ${last.n} done` : 'checking its frames by hash'}. No model runs on a click.`;
       return;
     }
     if (feed.phase === 'pipeline_failed' || feed.phase === 'stopped') {
@@ -281,8 +307,8 @@
         setFeedEnabled(true);
         if (status.click) showCommand(status.click.click);
         const swing = feed.swing, decided = feed.summary, modeled = 'Lighting is on: Home\'s modeled view, not measured.';
-        // Said on every lit result, never chosen by the button: no detector looks at the picture yet.
-        const scripted = 'At this step no detector looks at the picture: the joints come from the figure\'s truth, so a blank picture or a figure standing by the couch lights a spot too.';
+        // Said on every lit result, never chosen by the button: nothing tests for being on the couch yet.
+        const scripted = 'The older brain\'s own 1.5 m rule decides whether the reader is on the couch, so a figure standing within 1.5 m of the seat lights a spot too, until step 5 builds the test for being on the couch. Qwen\'s answers are still typed from the take\'s truth.';
         message.textContent = feed.phase === 'holding'
           ? `The beam is on the reader's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. ${scripted} Nothing was sent. ${modeled}`
           : `The brain refused: ${decided.refusal}. All four spots stay off. Nothing was sent. ${modeled}`;
@@ -305,7 +331,7 @@
     try { status = await (await fetch('/__sim/status', { cache: 'no-store' })).json(); } catch (_) { return; }
     sim.status = status;
     const room = status.room === 'real' ? 'YOUR SCAN' : 'AUTHORED ROOM';
-    strip.textContent = `SIMULATION · rendered takes, no inference ran · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA: it does not exist · Home's code from this PC's harness, not your deployed Home`;
+    strip.textContent = `SIMULATION · rendered takes, a real detector's recorded rows, Qwen's words typed · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA: it does not exist · Home's code from this PC's harness, not your deployed Home`;
     showScenes(status);
     showBrain(status);
     showClick(status.click);
@@ -364,7 +390,7 @@
     setFeedEnabled(false);
     commandBox.hidden = true;
     sim.seen.clear(); sim.frames.length = 0; sim.longTasks = 0; sim.longestTaskMs = 0; sim.swinging = false; sim.personShown = false; sim.running = true;
-    message.textContent = 'Checking the take\'s frames by hash, then running the pinned tools on it. No inference runs.';
+    message.textContent = 'Checking the take\'s frames by hash and its recorded detector rows, then running the pinned tools on them. No model runs on a click.';
     try {
       const response = await fetch('/__sim/feed', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ take, fixtures: fixtures.map(d => ({ fixture_id: d.fixture_id, display_origin_m: d.display_origin_m,

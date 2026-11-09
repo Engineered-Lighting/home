@@ -263,7 +263,8 @@ const context = { room, registration: { source: registration.source, label: regi
 const feed = createFeed({ emptyRow: brain.empty_row, couchLabel: couch.label });
 
 /* ---------- one click: the pipeline on a prepared take, then the brain, the receipt and the replay into Home ---------- */
-const commands = {}, pressed = new Set();
+const commands = {}, pressed = new Set(), clickLines = [], startedAt = new Date().toISOString();
+const writeRunJson = () => fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: startedAt, origin: ORIGIN, clicks: clickLines }, null, 2) + '\n');
 let activeRun = null, lastClick = null;
 function startClick(body) {
   const take = body?.take;
@@ -281,6 +282,12 @@ function startClick(body) {
     const picture = path.join(result.work, 'picture.png');
     lastClick = { click: result.receipt.click, view: receiptView(result.receipt), top: result.top, receipt: result.receipt, said: result.said || null,
       picture: fs.existsSync(picture) ? picture : null };
+    // The torso line, relative to the limit only: in the console, run.json and the panel.
+    if (result.receipt.torso) {
+      console.log(`Click ${result.receipt.click}: ${result.receipt.torso.line}`);
+      clickLines.push({ click: result.receipt.click, take, torso: result.receipt.torso.line });
+      writeRunJson();
+    }
     if (!result.ok) { feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
     commands[result.receipt.click] = result.command;
     context.brain.command = result.command_status;
@@ -435,12 +442,12 @@ server.on('error', error => {
 server.listen(PORT, HOST, () => {
   const scan = room === 'real' ? `real scan pack ${binding.content_revision}` : 'AUTHORED ROOM';
   console.log([`Den simulation: ${ORIGIN}/`, `Room: ${scan} | Sockets: ${registration.label.replace(' · ', ', ')} | Couch: ${couch.label}`,
-    `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash and runs the pinned tools on it, with an INVENTED CAMERA. No inference runs.`,
+    `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash, holds the detector rows prepare recorded to their checks, and runs the pinned tools on them, with an INVENTED CAMERA. No model runs on a click.`,
     `Camera registration: ${placed.summary}`,
     ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
     ...prepareNotes.map(note => 'Note: ' + note), ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
     `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));
-  fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: new Date().toISOString(), origin: ORIGIN }, null, 2) + '\n');
+  writeRunJson();
   // The pack catalog must resolve before the page asks for it.
   if (!readPackIndex(PACKS).packs.some(item => item.active && item.manifest.siteId === 'victoria')) console.error('No active Victoria pack in ' + PACKS);
 });

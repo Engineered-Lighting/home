@@ -99,7 +99,9 @@ function summarize(timeline, seat) {
 function brainRows({ work, summary, files, chainDone }) {
   const said = summary.lit ? `The older brain chose ${summary.fixture_id}, ${summary.hand_from_seat_m} m from the seat, with facing from the ${plain(summary.facing_source)}.`
     : `The older brain lit nothing: ${summary.refusal || 'no reading'}.`;
-  const row = { n: 17, name: TABLE.hops[16].name, word: 'ADAPTER', reached: true, ran: 'ran now', summary: said,
+  // The older brain is real code (main's lighting brain) with stand-ins inside it, not code written for
+  // this simulation: the count files it as a real tool with a named stand-in until rung 9's coordinator.
+  const row = { n: 17, name: TABLE.hops[16].name, word: 'ADAPTER', adapter: 'stand-in', reached: true, ran: 'ran now', summary: said,
     tool: { path: 'stack/services/lighting-brain/lighting_brain/brain.py', pin: 'HEAD' }, tools: [...headTools(BRAIN_FILES)],
     read: [...chainDone.adapter_reads, { ...files.geometry, from_hop: 17 }], wrote: [files.geometry, files.timeline],
     stand_ins: ["the older lighting brain decides, not rung 9's coordinator", "person_to_aim joins room-level reading to the only track and takes its newest joints",

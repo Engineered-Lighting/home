@@ -382,7 +382,13 @@ test('the real chain on every prepared take: step 2\'s words, not yet, and nothi
   const reading = clicks['Reading on the couch'];
   assert.deepEqual(Object.fromEntries(reading.view.rows.map(row => [row.n, row.word])), Object.fromEntries(Object.entries(STEP2).map(([n, word]) => [Number(n), word])));
   for (const { view } of Object.values(clicks)) assert.deepEqual(view.rows.map(row => row.name), TABLE.hops.map(hop => hop.name), 'every row is named as the table names it');
-  assert.equal(reading.view.top_line.count_line, '3 real, 9 adapter (7 real tools with a named stand-in, 2 written for this simulation), 8 scripted, 6 missing');
+  // Hop 17's older brain is real code with stand-ins inside it; hop 18's replay of its timeline is written here.
+  assert.equal(reading.view.top_line.count_line, '3 real, 9 adapter (8 real tools with a named stand-in, 1 written for this simulation), 8 scripted, 6 missing');
+  assert.equal(reading.receipt.rows[16].adapter, 'stand-in');
+  // Each row under what it did on this click; the rows that did not run sit apart, never under "Ran on this click".
+  const grouped = Object.entries(Object.groupBy(reading.view.rows, row => row.group)).map(([group, rows]) => [group, rows.map(row => row.n)]);
+  assert.deepEqual(Object.fromEntries(grouped), { recorded: [1, 2, 3, 4, 5], page: [14], click: [6, 7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23], 'not run': [11, 15, 16, 24, 25, 26] });
+  assert.equal(reading.view.rows[10].ran, 'not built', 'hop 11 ran nothing');
   assert.ok(!reading.view.rows.some(row => /Person to aim|decide v0/.test(row.name)), "#424's two rows have left the list");
   assert.match(reading.view.rows[5].summary, /joints from the truth/);
   assert.match(reading.view.rows[5].stand_ins[0], /fake_detector places the figure's true joints from the truth folder/);

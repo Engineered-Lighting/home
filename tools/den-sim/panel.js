@@ -19,7 +19,7 @@
   };
   const fmt = (v, digits = 1) => Number.isFinite(v) ? v.toFixed(digits) : '–';
   const PILL = { REAL: '#1f7a3d', ADAPTER: '#a86a00', SCRIPTED: '#2a5fa8', MISSING: '#6b2b2b' };
-  const GROUPS = [['recorded', 'Recorded once'], ['page', 'Built when this page started'], ['click', 'Ran on this click']];
+  const GROUPS = [['recorded', 'Recorded once'], ['page', 'Built when this page started'], ['click', 'Ran on this click'], ['not run', 'Not built yet, or not reached on this click']];
 
   document.head.append(el('style', { textContent: `
     #root { position: fixed !important; top: ${STRIP_PX}px; left: 0; right: 0; bottom: 0; height: auto !important; width: auto !important; }

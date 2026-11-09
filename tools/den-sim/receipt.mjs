@@ -195,9 +195,9 @@ export function finalRow(row, n, stop) {
 
 // The panel's view: the words and notes, without the digests the page has no use for.
 export function receiptView(receipt) {
-  const when = new Map(TABLE.hops.map(hop => [hop.n, hop.when]));
-  // A row sits under what it did on this click; a row that didn't run sits where the table says it will.
-  const group = row => row.reached === false || /^not /.test(row.ran) ? when.get(row.n) : row.ran.startsWith('recorded') ? 'recorded' : row.ran.includes('page start') ? 'page' : 'click';
+  // A row sits under what it did on this click. A row that didn't run (not built yet, not reached, or
+  // with no row) sits apart, never under "Ran on this click".
+  const group = row => row.reached === false || /^(not |no row)/.test(row.ran) ? 'not run' : row.ran.startsWith('recorded') ? 'recorded' : row.ran.includes('page start') ? 'page' : 'click';
   return { click: receipt.click, take: receipt.take, stopped: receipt.stopped,
     rows: receipt.rows.map(row => ({ n: row.n, name: row.name, word: row.word, reached: row.reached !== false, ran: row.ran, group: group(row),
       summary: row.summary || row.note || '', stand_ins: row.stand_ins || [], tool: row.tool?.path || null })) };

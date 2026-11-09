@@ -158,10 +158,14 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
 
   await t.test('the top line reads "not yet", lists why, and every row reads step 2\'s word', async () => {
     assert.equal(await page.textContent('[data-den-sim-top-line-text]'), 'Connected start to finish: not yet');
-    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 9 adapter (7 real tools with a named stand-in, 2 written for this simulation), 8 scripted, 6 missing');
+    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 9 adapter (8 real tools with a named stand-in, 1 written for this simulation), 8 scripted, 6 missing');
     assert.ok(await page.locator('[data-den-sim-reason]').count() > 10, 'the reasons are listed');
     for (const [n, word] of Object.entries(STEP2)) assert.equal(await hopStatus(page, n), word, `hop ${n}`);
-    assert.deepEqual(await page.locator('[data-den-sim-hops] h4').allTextContents(), ['Recorded once', 'Built when this page started', 'Ran on this click']);
+    assert.deepEqual(await page.locator('[data-den-sim-hops] h4').allTextContents(), ['Recorded once', 'Built when this page started', 'Ran on this click', 'Not built yet, or not reached on this click']);
+    // Which rows sit under each heading: a row that didn't run is never under "Ran on this click".
+    const underHeadings = await page.locator('[data-den-sim-hops] h4').evaluateAll(nodes => nodes.map(node => [node.textContent, [...node.nextElementSibling.querySelectorAll('[data-den-sim-hop]')].map(item => Number(item.dataset.denSimHop))]));
+    assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5]], ['Built when this page started', [14]], ['Ran on this click', [6, 7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23]],
+      ['Not built yet, or not reached on this click', [11, 15, 16, 24, 25, 26]]]);
     const names = await page.locator('[data-den-sim-hop]').evaluateAll(nodes => nodes.sort((a, b) => a.dataset.denSimHop - b.dataset.denSimHop).map(node => node.dataset.denSimName));
     assert.deepEqual(names, JSON.parse(fs.readFileSync(path.join(HERE, 'hops.json'), 'utf8')).hops.map(hop => hop.name), 'one row per hop, named as the table names it');
     assert.ok(!names.some(name => /Person to aim|decide v0/.test(name)), '#424\'s two rows left the list');

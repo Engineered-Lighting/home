@@ -116,6 +116,16 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
     'an aim check out of tolerance': [r => { r.aim_check = { within_tolerance: false, why: 'Home did not follow the Decision' }; }, 5],
     'a row reading MISSING': [r => { r.rows[25].word = 'MISSING'; }, 6],
     'a phone click with one recorded digest broken': [r => { stoppedAt(15, 'not reading: Qwen said phone use')(r); r.rows[6].read[0].sha256 = 't2'; }, 2],
+    'two rows for one hop': [r => r.rows.push({ ...r.rows[3] }), 1],
+    'a hop not reached, with nothing stopped': [r => { Object.assign(r.rows[9], { reached: false, ran: 'not reached on this click' }); }, 1],
+    'every hop past 6 not reached, with nothing stopped': [r => r.rows.slice(6).forEach(row => Object.assign(row, { reached: false })), 1],
+    'a hop before the stop not reached': [r => { stoppedAt(15, 'not reading: Qwen said phone use')(r); r.rows[8].reached = false; }, 1],
+    'a stop at a hop the table does not have': [r => stoppedAt(99, 'a hop nobody numbered')(r), 1],
+    'a read of a file a later hop wrote': [r => { r.rows[8].wrote = [{ path: 'later.jsonl', sha256: 'l1' }]; r.rows[6].read.push({ path: 'later.jsonl', sha256: 'l1', from_hop: 9 }); }, 2],
+    'no aim check ran, and nothing else wrong': [r => { r.aim_check = null; }, 5],
+    'pressed again, with a break': [r => { r.pressed_again = true; r.stopped = { hop: 3, why: 'frame 7 changed', answer: false }; r.rows[2].word = 'MISSING'; }, 6],
+    'pressed again, with a MISSING row': [r => { r.pressed_again = true; r.rows[10].word = 'MISSING'; }, 6],
+    'pressed again, with a recorded digest broken': [r => { r.pressed_again = true; r.rows[6].read[0].sha256 = 't2'; }, 2],
   };
   for (const [name, [change, condition]] of Object.entries(controls)) {
     const got = edited(change);
@@ -131,6 +141,8 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
   }
   assert.match(edited(stoppedAt(15, 'x')).count_line, /11 not reached$/);
   assert.equal(edited(r => { r.pressed_again = true; }).line, 'Pressed again: press Reset for a new verdict');
+  assert.equal(edited(r => { r.pressed_again = true; r.aim_check = null; }).verdict, 'pressed again', 'a second press needs no fresh aim check');
+  assert.equal(edited(r => { r.pressed_again = true; stoppedAt(15, 'not on the couch')(r); }).verdict, 'stopped', 'a second press the pipeline answered still says so');
   assert.equal(edited(r => { r.prepare_refusal = { hop: 4, reason: 'check.py: FAIL' }; }).line, 'Prepare stopped at hop 4: check.py: FAIL');
   assert.equal(edited(r => { r.stopped = { hop: 7, why: 'replay.py exit 2', answer: false }; }).verdict, 'not yet', 'a break is never an answer');
 });

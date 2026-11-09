@@ -164,9 +164,9 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
   function runClick({ take, prepared, setDir, roomModel, startRecord, pressedAgain }, onRow) {
     const work = path.join(runDirectory, `click-${++clicks}`);
     const child = spawn('python', ['-B', path.join(HERE, 'chain.py')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    const chain = { rows: [], recheck: null, takeRead: null, picture: null, stop: null };
+    const chain = { rows: [], recheck: null, checkRecheck: null, takeRead: null, picture: null, stop: null };
     // Where a chain that died without saying so was: the click hop after the last line it printed.
-    const reachedHop = () => { const last = chain.rows.at(-1)?.n ?? (chain.recheck?.ok ? 3 : 2); return CLICK_HOPS.find(n => n > last) ?? 17; };
+    const reachedHop = () => { const last = chain.rows.at(-1)?.n ?? (chain.checkRecheck?.ok ? 4 : chain.recheck?.ok ? 3 : 2); return CLICK_HOPS.find(n => n > last) ?? 17; };
     const promise = new Promise(resolve => {
       let done = null, stderr = '';
       child.on('error', error => { chain.stop = chain.stop || { hop: 3, why: `the pipeline could not start: ${error.message}`, answer: false }; });
@@ -176,6 +176,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
         if (row.hop === 'done') done = row;
         else if (row.hop === 'stopped') chain.stop = row.stop;
         else if (row.picture) chain.picture = row.picture;
+        else if (row.recheck && row.n === 4) { chain.checkRecheck = { ...row.recheck, read: row.read }; onRow({ n: 4, word: row.recheck.ok ? 'ADAPTER' : 'MISSING', summary: row.recheck.ok ? 'the check prepare recorded, and no other' : row.recheck.reason }); }
         else if (row.recheck) { chain.recheck = { ...row.recheck, tools: row.tools, read: row.read }; chain.takeRead = row.read[0]; onRow({ n: 3, word: row.recheck.ok ? 'ADAPTER' : 'MISSING', summary: row.recheck.ok ? `re-checked ${row.recheck.frames} frames by hash` : row.recheck.reason }); }
         else { chain.rows.push(row); onRow(row); }
       });
@@ -199,7 +200,11 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
       });
     });
     child.stdin.on('error', () => {}); // The child may be gone already; 'close' reports that.
-    child.stdin.end(JSON.stringify({ take: path.join(setDir, take), take_digest: prepared.take_digest, check_sha256: prepared.hops['4']?.wrote?.[0]?.sha256 || null,
+    // What prepare recorded for this take: frames.csv (the take's digest), take.json and its one check.
+    const wrote = n => prepared.hops[String(n)]?.wrote || [], check = wrote(4).find(file => /\/check-\d+\.json$/.test(file.path));
+    child.stdin.end(JSON.stringify({ take: path.join(setDir, take), take_digest: prepared.take_digest,
+      take_json_sha256: wrote(3).find(file => file.path.endsWith('/take.json'))?.sha256 || null,
+      check_file: check ? path.posix.basename(check.path) : null, check_sha256: check?.sha256 || null,
       set: setDir, room_model: roomModel, refs: refs.tools, tools_root: path.join(outputRoot, 'tools'), work }));
     return { promise, work, cancel: () => child.kill() };
   }

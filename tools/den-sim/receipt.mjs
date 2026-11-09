@@ -53,7 +53,7 @@ function kindOf(n, file) {
 }
 
 // Hops 1 to 5, as prepare recorded them, with hop 3's re-check by hash and hop 5's re-fit at page start.
-function recordedRows({ prepared, refs, recheck, takeRead, placement }) {
+function recordedRows({ prepared, refs, recheck, checkRecheck, takeRead, placement }) {
   const by = `prepare-receipt.json of take ${prepared.take}`, rows = [];
   for (const n of [1, 2, 3, 4, 5]) {
     const hop = prepared.hops[String(n)];
@@ -78,8 +78,15 @@ function recordedRows({ prepared, refs, recheck, takeRead, placement }) {
       row.ran = `recorded ${prepared.recorded}, re-checked by hash now`;
       row.read = recheck ? recheck.read : [];
       row.tools.push(...(recheck?.tools || []));
-      if (recheck && !recheck.ok) { row.word = 'MISSING'; row.note = recheck.reason; row.summary = `The frame hash refused this take: ${recheck.reason}.`; }
+      if (!recheck) row.ran = `recorded ${prepared.recorded}, not re-checked on this click`;
+      if (recheck && !recheck.ok) { row.word = 'MISSING'; row.note = recheck.reason; row.summary = `Re-checked by hash now, and refused: ${recheck.reason}.`; }
       row.recheck = recheck ? { ok: recheck.ok, frames: recheck.frames, reason: recheck.reason } : null;
+    }
+    if (n === 4) {
+      // The check prepare recorded, by its digest, and no other check-N.json beside it.
+      row.ran = checkRecheck ? `recorded ${prepared.recorded}, re-checked by hash now` : `recorded ${prepared.recorded}, not re-checked on this click`;
+      if (checkRecheck && !checkRecheck.ok) { row.word = 'MISSING'; row.note = checkRecheck.reason; row.summary = `Re-checked by hash now, and refused: ${checkRecheck.reason}.`; }
+      row.recheck = checkRecheck ? { ok: checkRecheck.ok, reason: checkRecheck.reason, checked: checkRecheck.read } : null;
     }
     if (n === 5) {
       row.tools.push(...recordedTools({ commit: hop.commit, files: hop.tool_files }, refs.tools['den-register'], 'refs.json tools.den-register'));
@@ -104,7 +111,7 @@ const missing = (n, note, extra = {}) => ({ n, name: TABLE.hops[n - 1].name, wor
 // The whole receipt. start: what run.mjs built at page start; chain: chain.py's rows and stop; brain,
 // command: the older brain's timeline and the dry run; files: this click's own outputs with digests.
 export function buildReceipt({ click, takeId, setId, prepared, refs, start, chain, brain, command, pressedAgain = false }) {
-  const rows = recordedRows({ prepared, refs, recheck: chain.recheck, takeRead: chain.takeRead, placement: start.placement });
+  const rows = recordedRows({ prepared, refs, recheck: chain.recheck, checkRecheck: chain.checkRecheck, takeRead: chain.takeRead, placement: start.placement });
   const byN = new Map(chain.rows.map(row => [row.n, row]));
   for (const n of [6, 7, 8, 9, 10, 11, 12, 13]) {
     const row = byN.get(n);

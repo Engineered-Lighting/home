@@ -9,8 +9,9 @@ the take's folder id. Until a real detector is built (step 3), fake_detector pla
 truth, and until Qwen is asked (step 4) the answers are typed from the truth's held object. Both rows say
 so. The one piece that exists nowhere else is person_to_aim, part of hop 17's row.
 
-Reads {"take", "take_digest", "check_sha256", "set", "room_model": {"path", "sha256", "by"}, "refs",
-"tools_root", "work"} as JSON on stdin. Prints hop 3's re-check by hash ({"n": 3, "recheck": ...}), the
+Reads {"take", "take_digest", "take_json_sha256", "check_file", "check_sha256", "set", "room_model":
+{"path", "sha256", "by"}, "refs", "tools_root", "work"} as JSON on stdin: the digests are the ones the
+take's prepare-receipt.json recorded for frames.csv, take.json and its check. Prints hop 3's re-check by hash ({"n": 3, "recheck": ...}), the
 picture ({"picture": ...}), then one JSON line per hop, each with its word, the files it read and wrote
 with their digests, its tools against their pins, and its stand-ins; then {"hop": "done", ...} for the
 brain, or {"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
@@ -20,6 +21,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import runpy
 import subprocess
 import sys
@@ -179,7 +181,8 @@ class Click:
         return dict(self.file(path), from_hop=from_hop)
 
     def recorded(self, label, path, kind, by, sha256):
-        return dict(path=label, sha256=sha256_file(path), recorded=dict(kind=kind, by=by, sha256=sha256))
+        """A recorded file this click read: its digest now (None when it is gone) beside the one recorded."""
+        return dict(path=label, sha256=sha256_file(path) if Path(path).is_file() else None, recorded=dict(kind=kind, by=by, sha256=sha256))
 
     def truth(self):
         """The take's truth folder, found by the take's id, never by a scene's name. Its label in every
@@ -325,18 +328,32 @@ def chain(request):
     import frame_hash
     hashed = frame_hash.check_take(take, expected_digest=request['take_digest'])
     by_take = 'prepare-receipt.json of take %s' % take.name
-    print(json.dumps(dict(n=3, recheck=dict(ok=hashed['ok'], frames=hashed['frames'], reason=hashed['reason'], ms=round((time.monotonic() - started) * 1000)),
-                          tools=head_tools('tools/den-sim/scene/frame_hash.py'),
-                          read=[click.recorded('%s/frames.csv' % take.name, take / 'frames.csv', 'take', by_take, request['take_digest'])])), flush=True)
-    if not hashed['ok']:
-        raise Stop(3, 'the frame hash refused the take: ' + hashed['reason'])
-
-    at(4)
+    # replay reads take.json too (its times, its cues), so it is held to the digest prepare recorded as well.
     take_read = click.recorded('%s/frames.csv' % take.name, take / 'frames.csv', 'take', by_take, request['take_digest'])
-    check_read = click.recorded('%s/check-1.json' % take.name, take / 'check-1.json', 'check', by_take, request['check_sha256'])
-    if check_read['sha256'] != request['check_sha256']:
-        raise Stop(4, 'check-1.json is not the one prepare recorded')
-    rows = usable_rows(take, json.loads((take / 'check-1.json').read_text(encoding='utf-8')))
+    record_read = click.recorded('%s/take.json' % take.name, take / 'take.json', 'take', by_take, request['take_json_sha256'])
+    why = None if hashed['ok'] else hashed['reason']
+    if not why and record_read['sha256'] != request['take_json_sha256']:
+        why = 'take.json is not the one prepare recorded'
+    print(json.dumps(dict(n=3, recheck=dict(ok=why is None, frames=hashed['frames'], reason=why, ms=round((time.monotonic() - started) * 1000)),
+                          tools=head_tools('tools/den-sim/scene/frame_hash.py'), read=[take_read, record_read])), flush=True)
+    if why:
+        raise Stop(3, why)
+
+    # Hop 4 on this click: the check prepare recorded, and no other. replay reads the NEWEST check-N.json
+    # for its clock, so another one beside it (a second run of check.py writes one) would re-clock the take.
+    at(4)
+    name = request.get('check_file')
+    if not name:
+        raise Stop(4, 'prepare recorded no check for this take')
+    check_read = click.recorded('%s/%s' % (take.name, name), take / name, 'check', by_take, request['check_sha256'])
+    others = sorted(path.name for path in take.glob('check-*.json') if re.fullmatch(r'check-[0-9]+\.json', path.name) and path.name != name)
+    why = '%s is not the one prepare recorded' % name if check_read['sha256'] != request['check_sha256'] else None
+    if not why and others:
+        why = '%s beside the %s prepare recorded, and replay reads the newest check' % (' and '.join(others), name)
+    print(json.dumps(dict(n=4, recheck=dict(ok=why is None, reason=why), read=[check_read])), flush=True)
+    if why:
+        raise Stop(4, why)
+    rows = usable_rows(take, json.loads((take / name).read_text(encoding='utf-8')))
     if not rows:
         raise Stop(4, 'the check left no usable part')
 
@@ -380,11 +397,13 @@ def chain(request):
     click.guarded(trees['observe'] / 'tools' / 'den-observe' / 'replay.py', '--take', take, '--room-model', room['path'], '--camera', CAMERA_ID,
                   '--detections', detections, '--out', observe)
     run = json.loads((observe / 'run.json').read_text(encoding='utf-8'))
+    if (run.get('take_check') or {}).get('file') != name:
+        raise Stop(7, 'replay read %s, not the check prepare recorded' % ((run.get('take_check') or {}).get('file') or 'no check'))
     room_read = dict(path='%s/room-model.jsonl' % Path(room['path']).parent.name, sha256=sha256_file(room['path']),
                      recorded=dict(kind='room model', by=room['by'], sha256=room['sha256']))
     emit(7, 'REAL', 'replay.py wrote %d observations, unscored: %d open slots on proposed values, on rendered depth.'
          % (run['gate']['records'], len(run['method']['open_slots'])), started,
-         tools=tools['observe'], read=[take_read, room_read, click.read(detections, 6)],
+         tools=tools['observe'], read=[take_read, record_read, check_read, room_read, click.read(detections, 6)],
          wrote=[click.file(observe / 'observations.jsonl'), click.file(observe / 'run.json')], stand_ins=[])
 
     # Hop 8: tracks.

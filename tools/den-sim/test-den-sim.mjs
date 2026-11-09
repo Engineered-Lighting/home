@@ -315,6 +315,18 @@ test('the real chain on every prepared take: step 2\'s words, not yet, and nothi
   assert.equal(reading.view.rows[2].ran, `recorded ${JSON.parse(fs.readFileSync(path.join(SET, 'set.json'), 'utf8')).recorded}, re-checked by hash now`);
   assert.ok(reading.view.top_line.reasons.some(reason => reason.condition === 6), 'MISSING rows are among the reasons');
   assert.ok(reading.view.top_line.reasons.some(reason => /Detector and box read truth/.test(reason.text)), 'the truth read is a reason, and stays one until step 4');
+  // Every recorded file of the take that a click reads is held to the digest prepare recorded for it.
+  const recordedFor = n => JSON.parse(fs.readFileSync(path.join(SET, reading.view.take, 'prepare-receipt.json'), 'utf8')).hops[String(n)].wrote;
+  const wroteDigest = Object.fromEntries([...recordedFor(3), ...recordedFor(4)].map(file => [file.path, file.sha256]));
+  const rowOf = n => reading.receipt.rows[n - 1], take = reading.view.take;
+  assert.deepEqual(rowOf(3).read.map(file => [file.path, file.sha256, file.recorded.sha256]),
+    [`${take}/frames.csv`, `${take}/take.json`].map(name => [name, wroteDigest[name], wroteDigest[name]]), 'hop 3 re-checks frames.csv and take.json');
+  assert.equal(rowOf(4).ran, `${rowOf(1).ran.split(',')[0]}, re-checked by hash now`);
+  assert.deepEqual(rowOf(4).recheck.checked.map(file => [file.path, file.sha256]), [[`${take}/check-1.json`, wroteDigest[`${take}/check-1.json`]]]);
+  const sevenReads = rowOf(7).read.filter(file => file.recorded).map(file => [file.path, file.recorded.kind, file.sha256 === file.recorded.sha256]);
+  for (const name of ['frames.csv', 'take.json']) assert.deepEqual(sevenReads.find(([file]) => file === `${take}/${name}`), [`${take}/${name}`, 'take', true], `hop 7 lists ${name}`);
+  assert.deepEqual(sevenReads.find(([file]) => file === `${take}/check-1.json`), [`${take}/check-1.json`, 'check', true], 'hop 7 lists the check replay read');
+  assert.ok(!reading.view.top_line.reasons.some(reason => reason.hop === 7), 'and hop 7 reads only what it may');
   const nobody = clicks['Nobody there'].view;
   assert.deepEqual(nobody.stopped, { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true });
   assert.ok(nobody.rows.filter(row => row.n > 6).every(row => !row.reached));
@@ -375,6 +387,22 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   assert.deepEqual(four.click.rows.slice(0, 4).map(row => [row.word, row.reached]), [['SCRIPTED', true], ['SCRIPTED', true], ['ADAPTER', true], ['MISSING', true]]);
   assert.match(four.click.top_line.count_line, /, 1 missing, 22 not reached$/);
   assert.ok(four.click.top_line.reasons.some(reason => reason.condition === 6 && reason.hop === 4));
+  // replay reads take.json and the NEWEST check-N.json too. A second check beside the recorded one (a
+  // second run of check.py writes one) would re-clock every observation: the click stops at hop 4.
+  const standing = display.find(scene => scene.label.startsWith('Standing')).take, report = JSON.parse(fs.readFileSync(path.join(copy, standing, 'check-1.json'), 'utf8'));
+  report.reported_only.offset_c_mod_period_s[0] += 0.5;
+  fs.writeFileSync(path.join(copy, standing, 'check-2.json'), JSON.stringify(report, null, 1));
+  const second = await click(standing);
+  assert.deepEqual(second.click.stopped, { hop: 4, why: 'check-2.json beside the check-1.json prepare recorded, and replay reads the newest check', answer: false });
+  assert.deepEqual([second.click.rows[3].word, second.click.rows[6].reached], ['MISSING', false]);
+  // A take.json other than the one prepare recorded, its frames.csv digest left alone, stops at hop 3.
+  const nobody = display.find(scene => scene.label === 'Nobody there').take, record = path.join(copy, nobody, 'take.json');
+  const doc = JSON.parse(fs.readFileSync(record, 'utf8'));
+  doc.ended_unix -= 86400;
+  fs.unlinkSync(record); fs.writeFileSync(record, JSON.stringify(doc, null, 1));
+  const three = await click(nobody);
+  assert.deepEqual(three.click.stopped, { hop: 3, why: 'take.json is not the one prepare recorded', answer: false });
+  assert.deepEqual([three.click.rows[2].word, three.click.rows[5].reached], ['MISSING', false]);
   // A tool that fails on a click: replay, on a room model broken after the page placed it.
   const fits = path.join(home, 'fits'), fit = fs.readdirSync(fits).find(name => fs.existsSync(path.join(fits, name, 'room-model.jsonl')));
   fs.writeFileSync(path.join(fits, fit, 'room-model.jsonl'), '{"not": "a room model"}\n');

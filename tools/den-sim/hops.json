@@ -23,7 +23,7 @@
    "tool": {"path": "tools/den-detect/detect.py", "pin": "HEAD"}, "recorded_inputs": ["take", "check", "rows"],
    "stand_ins": ["YOLO26s and RTMPose-m on this PC's CPU, not the live host", "rows recorded once per scene", "available_ts counts compute only", "authorize answered yes"]},
   {"n": 7, "name": "Observations", "word": "REAL", "adapter": null, "when": "click", "step": 3, "reads": [3, 5, 6],
-   "tool": {"path": "tools/den-observe/replay.py", "pin": "refs.json tools.rung-2-observe"}, "recorded_inputs": ["take", "room model", "rows"], "stand_ins": []},
+   "tool": {"path": "tools/den-observe/replay.py", "pin": "refs.json tools.rung-2-observe"}, "recorded_inputs": ["take", "check", "room model", "rows"], "stand_ins": []},
   {"n": 8, "name": "Tracks", "word": "REAL", "adapter": null, "when": "click", "step": 3, "reads": [7],
    "tool": {"path": "tools/den-track/den_track.py", "pin": "refs.json tools.claude/rung-3-track-local-514d6b"}, "recorded_inputs": [], "stand_ins": []},
   {"n": 9, "name": "Bundles and router", "word": "ADAPTER", "adapter": "stand-in", "when": "click", "step": 4, "reads": [7, 8],

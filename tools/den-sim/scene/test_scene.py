@@ -41,6 +41,8 @@ import frame_hash  # noqa: E402
 import prepare  # noqa: E402
 import vcam  # noqa: E402
 
+prepare.guard(loopback=False)   # this process and every Python one it starts refuse sockets
+
 SET = Path(os.environ["DEN_SIM_SET"]).resolve() if os.environ.get("DEN_SIM_SET") else None
 NEEDS_SET = unittest.skipUnless(SET and (SET / "set.json").exists(), "needs DEN_SIM_SET=<a prepared set>")
 SHOTS = json.loads((HERE / "shots.json").read_text(encoding="utf-8"))
@@ -210,7 +212,8 @@ class FrameHash(unittest.TestCase):
             data = git("archive", "--format=tar", REFS["tools"]["rung-2-observe"], "tools/den-observe", "tools/den-take")
             with tarfile.open(fileobj=io.BytesIO(data)) as archive:
                 archive.extractall(tree, filter="data")
-            code = ("import json, sys; sys.path.insert(0, sys.argv[1]); import takes; t = takes.Take(sys.argv[2]); "
+            code = (f"import json, sys; sys.path[:0] = [{str(HERE)!r}, sys.argv[1]]; import prepare; prepare.guard(False); "
+                    "import takes; t = takes.Take(sys.argv[2]); "
                     "i = [r['file'] for r in t.rows].index(sys.argv[3]); meta, depth = t.frame(i); "
                     "print(json.dumps([depth.at(u, v) for u, v in json.loads(sys.argv[4])]))")
             done = subprocess.run([sys.executable, "-B", "-c", code, str(tree / "tools/den-observe"), str(copy), row["file"], json.dumps(pixels)],

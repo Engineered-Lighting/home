@@ -26,7 +26,7 @@
     #den-sim-strip { position: fixed; top: 0; left: 0; right: 0; height: ${STRIP_PX}px; z-index: 2147483000; background: #b00020; color: #fff;
       font: 700 13px/${STRIP_PX}px system-ui, sans-serif; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 8px; box-sizing: border-box; }
     #den-sim-panel { position: fixed; right: 8px; top: ${STRIP_PX + 52}px; width: min(340px, calc(100vw - 16px)); max-height: calc(100vh - ${STRIP_PX + 64}px); overflow: auto;
-      z-index: 2147483000; box-sizing: border-box; padding: 8px; background: rgba(12,14,16,.93); color: #e8e8e8; border: 1px solid #b00020; border-radius: 8px;
+      z-index: 2147483000; box-sizing: border-box; padding: 8px; background: #0c0e10; color: #e8e8e8; border: 1px solid #b00020; border-radius: 8px;
       font: 12px/1.35 system-ui, sans-serif; user-select: text; -webkit-user-select: text; }
     #den-sim-panel button { font: 600 12px system-ui, sans-serif; padding: 6px 8px; border-radius: 6px; border: 1px solid #555; background: #222; color: #fff; cursor: pointer; }
     #den-sim-panel button[data-den-sim-feed] { width: 100%; margin-bottom: 4px; border-color: #e0526a; text-align: left; }

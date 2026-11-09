@@ -1,37 +1,45 @@
-// Den simulation harness: the real Home on loopback, following the real lighting
-// brain on a scripted reader. It binds 127.0.0.1 only; the page's CSP is connect-src
-// 'self'; anything not served here is a logged 503; non-GET is refused except the
-// feed; WebSocket upgrades are destroyed. There is no path to a bulb, the camera,
-// the Jetson, LA, Home Assistant or any LAN host.
+// Den simulation harness: the real Home on loopback, following the older lighting brain on
+// what the pinned pipeline tools made of a prepared, rendered take. It binds 127.0.0.1 only;
+// the page's CSP is connect-src 'self'; anything not served here is a logged 503; non-GET is
+// refused except the feed; WebSocket upgrades are destroyed. There is no path to a bulb, the
+// camera, the Jetson, LA, Home Assistant or any LAN host.
 //
-//   node tools\den-sim\run.mjs                   your real scan pack
-//   node tools\den-sim\run.mjs --room authored   authored room and sockets, no household data
+//   node tools\den-sim\run.mjs                         your real scan pack, the newest prepared set
+//   node tools\den-sim\run.mjs --room authored         authored room and sockets, no household data
+//   node tools\den-sim\run.mjs --prepared <set folder> a prepared set somewhere else
 //
-// Needs python on the PATH for the lighting brain (standard library only).
+// Needs python on the PATH, with numpy and Pillow for the picture.
 //
-// Optional private inputs, read only from <data root>\private (DEN_SIM_HOME, or %USERPROFILE%\den-sim):
-//   registration-revision-3.json       saved from Home; otherwise AUTHORED SOCKETS
-//   victoria-den-sofa-target-v4.json   your sofa mark; otherwise a DECLARED couch point
-//   couch-declared.json                {"point_m":[x,y,z]}, the DECLARED point to use
+// Data root: DEN_SIM_HOME, or else %USERPROFILE%\den-sim. Optional private inputs, read only
+// from its private folder and only for your real scan:
+//   registration-revision-3.json   saved from Home; otherwise AUTHORED SOCKETS
+//   your sofa mark                 any file there whose schema is home-registered-sofa-target-1;
+//                                  used only with the export it names, otherwise a DECLARED point
+//   facing.json                    degrees to turn the reader from the stated facing (left positive)
+//   couch-declared.json            {"point_m":[x,y,z]}, the DECLARED point to use without a mark
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import Core from '../../app/src/home-equipment-registration.js';
+import Sofa from '../../app/src/home-lighting-sofa-target.js';
+import { sealRegisteredDeskTarget } from '../../app/src/home-3d/registered-desk-target.mjs';
 import { readActiveBinding, REGISTRATION_ROUTE } from '../../web-gateway/equipment-registration.mjs';
 import { createContentPackHandler } from '../../web-gateway/content-pack-route.mjs';
 import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs';
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
-import { prepareBrain } from './brain.mjs';
-import { dataRoot } from './data-root.mjs';
-import { BRAIN_BASE, createFeed, hopList } from './feed.mjs';
+import { prepareBrain, standInSofa } from './brain.mjs';
+import { dataRoot, newestPreparedSet } from './data-root.mjs';
+import { BRAIN_BASE, createFeed } from './feed.mjs';
+import { TABLE, headTools, receiptView, sha256 } from './receipt.mjs';
 
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..'), SRC = path.join(ROOT, 'app/src');
 const refs = JSON.parse(fs.readFileSync(path.join(HERE, 'refs.json'), 'utf8'));
-const SEAT_HEIGHT_M = .45;
+const SEAT_HEIGHT_M = .45, SPOT_ABOVE_SEAT_M = .30;   // the spot: 0.30 m above your mark's seat point, the rule hop 14 states
+const MARK_SCHEMA = 'home-registered-sofa-target-1', CAMERA_ID = 'den-virtual';
 
 function option(name, fallback) {
   const at = process.argv.indexOf('--' + name);
@@ -45,6 +53,21 @@ if (!relative.startsWith('..') && !path.isAbsolute(relative)) throw Error('run o
 const run = path.join(OUT, 'runs', new Date().toISOString().replace(/[:.]/g, '-'));
 fs.mkdirSync(run, { recursive: true }); fs.mkdirSync(PRIVATE, { recursive: true });
 
+/* ---------- the prepared set: public renders, takes, receipts, and a display file for the buttons ---------- */
+const SET = option('prepared') ? path.resolve(option('prepared')) : newestPreparedSet(OUT);
+if (!SET || !fs.existsSync(path.join(SET, 'set.json'))) {
+  console.error(`No prepared set in ${path.join(OUT, 'prepared')}. An agent makes one with tools\\den-sim\\scene\\prepare.py.`);
+  process.exit(1);
+}
+const readFile = file => JSON.parse(fs.readFileSync(file, 'utf8'));
+const setInfo = readFile(path.join(SET, 'set.json'));
+// The display file holds each take's label for its button. Only this panel reads it: a click is
+// told a take's folder id, never a scene.
+const scenes = readFile(path.join(SET, 'display.json')).scenes.map(({ take, label }) => ({ take, label }));
+const prepared = Object.fromEntries(scenes.map(({ take }) => [take, readFile(path.join(SET, take, 'prepare-receipt.json'))]));
+// The page's "chosen from N tries": a line is a Qwen try only when root names the served model and body_sha256 is a request's 64 hex.
+const tries = (() => { try { return fs.readFileSync(path.join(path.dirname(SET), 'tries.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(row => typeof row.root === 'string' && /^[0-9a-f]{64}$/.test(row.body_sha256 || '')); } catch { return null; } })();
+
 function packRoot() {
   if (room === 'real') return path.resolve(refs.content_packs);
   const packs = path.join(run, 'packs');
@@ -54,6 +77,7 @@ function packRoot() {
   return packs;
 }
 const PACKS = packRoot(), binding = readActiveBinding(PACKS);
+const FLOOR = path.join(PACKS, 'victoria', binding.content_revision, 'floor.json');
 const privateNotes = [];
 const same = (a, b) => Core.canonicalJson(a) === Core.canonicalJson(b);
 // PowerShell 5.1 writes UTF-16 with `>` and a UTF-8 BOM with Set-Content.
@@ -61,14 +85,15 @@ function readPrivateJson(file) {
   const bytes = fs.readFileSync(file), text = bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.toString('utf16le') : bytes.toString('utf8');
   return JSON.parse(text.replace(/^﻿/, ''));
 }
+const privateFile = name => path.join(PRIVATE, name);
 
 function loadRegistration() {
-  const file = path.join(PRIVATE, 'registration-revision-3.json');
+  const file = privateFile('registration-revision-3.json');
   if (room === 'real' && fs.existsSync(file)) {
     try {
       const raw = readPrivateJson(file), doc = raw.registration || raw;
       const result = Core.validateDocument(doc, { binding });
-      if (doc.revision === 3 && result.ok) return { doc, source: 'export', label: 'REAL SOCKETS · registration revision 3' };
+      if (doc.revision === 3 && result.ok) return { doc, source: 'export', label: 'REAL SOCKETS · registration revision 3', file };
       privateNotes.push(`registration export refused: revision ${doc.revision}, valid ${result.ok}`);
     } catch (error) { privateNotes.push('registration export unreadable: ' + error.message); }
   }
@@ -76,81 +101,175 @@ function loadRegistration() {
   if (!Core.validateDocument(doc, { binding }).ok) throw Error('authored registration is invalid for the active pack');
   return { doc, source: 'authored', label: 'AUTHORED SOCKETS' };
 }
+// Your sofa mark, found by its schema, never by its file's name, and checked by its seal against
+// the export it names.
+function findMark() {
+  let names = [];
+  try { names = fs.readdirSync(PRIVATE, { withFileTypes: true }).filter(entry => entry.isFile() && entry.name.toLowerCase().endsWith('.json')).map(entry => entry.name); } catch { return null; }
+  const marks = names.flatMap(name => {
+    try { const doc = readPrivateJson(privateFile(name)); return doc?.schema === MARK_SCHEMA ? [{ file: privateFile(name), doc, at: fs.statSync(privateFile(name)).mtimeMs }] : []; }
+    catch { return []; }
+  });
+  if (marks.length > 1) privateNotes.push(`${marks.length} sofa marks in the private folder: using the newest`);
+  return marks.sort((a, b) => b.at - a.at)[0] || null;
+}
 function loadCouch() {
-  const file = path.join(PRIVATE, 'victoria-den-sofa-target-v4.json');
-  if (room === 'real' && fs.existsSync(file)) {
+  const found = room === 'real' ? findMark() : null;
+  if (found && registration.source !== 'export') privateNotes.push('your sofa mark needs the registration export it names, so a DECLARED point stands in');
+  else if (found) {
     try {
-      const mark = readPrivateJson(file), point = mark.seat?.point_m;
-      const valid = mark.schema === 'home-registered-sofa-target-1' && same(mark.binding, binding)
-        && Array.isArray(point) && point.length === 3 && point.every(Number.isFinite);
-      if (valid) return { point, source: 'sofa_mark', label: 'YOUR SOFA MARK', mark };
-      privateNotes.push('sofa mark refused: wrong schema, pack binding or seat');
-    } catch (error) { privateNotes.push('sofa mark unreadable: ' + error.message); }
+      Sofa.validateSofaTarget(found.doc, { binding, equipment_ref: { revision: registration.doc.revision, digest: registration.doc.digest } },
+        { sealDesk: sealRegisteredDeskTarget, digest: Core.digest });
+      return { point: found.doc.seat.point_m, source: 'sofa_mark', label: 'YOUR SOFA MARK', mark: found.doc, file: found.file };
+    } catch (error) { privateNotes.push(`sofa mark refused by its seal: ${error.message}`); }
   }
-  return { point: declaredPoint(), source: 'declared', label: 'DECLARED' };
+  const declared = declaredPoint();
+  return { point: declared.point, source: 'declared', label: 'DECLARED', where: declared.where, standIn: standInSofa(declared.point, registration.doc) };
 }
 function floorCentre() {
-  const directory = path.join(PACKS, 'victoria', binding.content_revision);
-  const polygon = JSON.parse(fs.readFileSync(path.join(directory, 'floor.json'), 'utf8')).walkable_polygon;
+  const polygon = JSON.parse(fs.readFileSync(FLOOR, 'utf8')).walkable_polygon;
   return [0, 1].map(axis => Math.round(polygon.reduce((sum, corner) => sum + corner[axis], 0) / polygon.length * 100) / 100);
 }
-// Where the script says the couch is, never read from the sofa mark. A private
-// point if one was declared, or else the middle of this pack's floor, so the
-// beam at least lands inside the room. The page labels it DECLARED either way.
+// Where the script says the couch is, never read from the sofa mark. A private point if one was
+// declared, or else the middle of this pack's floor. The page labels it DECLARED either way.
 function declaredPoint() {
-  const file = path.join(PRIVATE, 'couch-declared.json');
+  const file = privateFile('couch-declared.json');
   if (room === 'real' && fs.existsSync(file)) {
     try {
       const point = readPrivateJson(file).point_m;
-      if (Array.isArray(point) && point.length === 3 && point.every(Number.isFinite)) return point;
+      if (Array.isArray(point) && point.length === 3 && point.every(Number.isFinite)) return { point, where: 'couch-declared.json' };
       privateNotes.push('couch-declared.json refused: point_m must be [x, y, z]');
     } catch (error) { privateNotes.push('couch-declared.json unreadable: ' + error.message); }
   }
-  return [...floorCentre(), SEAT_HEIGHT_M];
+  return { point: [...floorCentre(), SEAT_HEIGHT_M], where: 'the middle of the floor' };
 }
 const registration = loadRegistration(), couch = loadCouch();
+
+/* ---------- hop 5's re-fit: the set's camera placed on your mark, run only when an input's digest changed ---------- */
+// Your mark's fits are private. Without your mark, a public stand-in seat at the DECLARED point
+// places the picture's couch, and its fit is private too in your real scan.
+const FITS = room === 'real' ? path.join(PRIVATE, 'fits') : path.join(OUT, 'fits');
+function placement() {
+  fs.mkdirSync(FITS, { recursive: true });
+  const mine = couch.source === 'sofa_mark';
+  const write = (name, value) => { const file = path.join(FITS, name); fs.writeFileSync(file, JSON.stringify(value) + '\n'); return file; };
+  const files = { mark: mine ? couch.file : write('stand-in-seat.json', couch.standIn),
+    export: registration.file && mine ? registration.file : write('stand-in-registration.json', { registration: registration.doc }),
+    floor: FLOOR, facing: mine && fs.existsSync(privateFile('facing.json')) ? privateFile('facing.json') : null };
+  const fit = setInfo.fit && path.join(SET, setInfo.fit.folder);
+  const want = { mark: sha256(files.mark), export: sha256(files.export), floor: sha256(files.floor), facing: files.facing ? sha256(files.facing) : null,
+    set_worksheet: fit ? sha256(path.join(fit, 'worksheet.json')) : null, marks_take: setInfo.marks_take?.digest || null };
+  const find = () => fs.readdirSync(FITS, { withFileTypes: true }).filter(entry => entry.isDirectory()).flatMap(entry => {
+    try { const receipt = readFile(path.join(FITS, entry.name, 'refit-receipt.json')); return receipt.set === setInfo.set && receipt.result === 'registered' && same(receipt.inputs, want) ? [{ folder: entry.name, receipt }] : []; }
+    catch { return []; }
+  }).sort((a, b) => b.receipt.refit_unix - a.receipt.refit_unix)[0] || null;
+  let found = find(), refused = null, reused = !!found;
+  if (!found) {
+    try {
+      execFileSync('python', ['-B', '-X', 'utf8', path.join(HERE, 'scene', 'prepare.py'), '--refit', '--set', SET, '--mark', files.mark, '--export', files.export,
+        '--floor', files.floor, ...(files.facing ? ['--facing', files.facing] : []), '--fits', FITS], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 120000 });
+    } catch (error) { refused = String(error.stderr || error.message).trim().split('\n').at(-1).replace(/\s*\(see .*\)$/, ''); }
+    found = find();
+  }
+  const kinds = { mark: mine ? 'your mark' : 'a stand-in seat', export: registration.source === 'export' ? 'your export' : 'authored sockets', floor: 'floor', facing: 'facing.json' };
+  const labels = { mark: mine ? 'your sofa mark' : 'stand-in-seat.json', export: registration.source === 'export' ? 'registration-revision-3.json' : 'stand-in-registration.json', floor: 'floor.json', facing: 'facing.json' };
+  const read = Object.keys(kinds).filter(key => files[key]).map(key => ({ path: labels[key], sha256: want[key],
+    recorded: { kind: kinds[key], by: found ? `refit-receipt.json of fit ${found.folder}` : 'no re-fit', sha256: found ? found.receipt.inputs[key] : null } }));
+  const where = mine ? 'your sofa mark' : `a public stand-in seat at the DECLARED point (${couch.where})`;
+  if (!found) return { registered: false, summary: `the re-fit on ${where} was refused: ${refused || 'no fit registered'}`, read, wrote: [], tools: {}, stand_in: TABLE.hops[4].stand_ins[4], files };
+  const roomModel = path.join(FITS, found.folder, 'room-model.jsonl');
+  return { registered: true, folder: found.folder, reused, files, read, tools: found.receipt.tools,
+    summary: `re-fit ${found.receipt.transform_id} on ${where}${reused ? ', unchanged since an earlier start' : ', at this start'}`,
+    wrote: [{ path: `fits/${found.folder}/room-model.jsonl`, sha256: found.receipt.room_model_sha256 }],
+    stand_in: mine ? TABLE.hops[4].stand_ins[4] : `re-fit at page start: the pose placed on a public stand-in seat at the DECLARED point, not your sofa mark`,
+    room_model: { path: roomModel, sha256: found.receipt.room_model_sha256, by: `refit-receipt.json of fit ${found.folder}` },
+    transform: mine ? readFile(path.join(FITS, found.folder, 'transform.json')) : null };
+}
+const placed = placement();
+const roomModel = placed.room_model || { path: path.join(SET, setInfo.fit.folder, 'room-model.jsonl'), sha256: setInfo.fit.room_model_sha256, by: 'set.json' };
+// The invented camera's place in the room model clicks use, for the page's marker. Never printed.
+const cameraM = (() => {
+  const entry = JSON.parse(fs.readFileSync(roomModel.path, 'utf8').trim().split('\n').at(-1));
+  return entry.cameras.filter(item => item.camera_id === CAMERA_ID).at(-1).pose.room_from_camera.slice(0, 3).map(row => row[3]);
+})();
 
 function sourceIsPinned() {
   try { execFileSync('git', ['-C', ROOT, 'diff', '--quiet', refs.base.sha, '--', 'app/src'], { stdio: 'ignore', windowsHide: true }); return true; }
   catch { return false; }
 }
 const pinned = sourceIsPinned();
+// The startup line: with both of your files saved, each fixture against the stated facing and the
+// spot, through the brain's own aim.py, in words only.
+const stated = couch.source === 'sofa_mark' && placed.transform
+  ? { seat_m: couch.mark.seat.point_m, facing_unit: placed.transform.facing_unit, spot_m: couch.mark.seat.point_m.map((v, i) => v + (i === 2 ? SPOT_ABOVE_SEAT_M : 0)) } : null;
 function startBrain() {
   try {
     // An authored room has no household data, so its geometry stays out of the private folder.
-    return prepareBrain({ registration, couch, floorCentre: floorCentre(), geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, outputRoot: OUT, notes: privateNotes, refs });
+    return prepareBrain({ registration, couch, startup: stated, geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, outputRoot: OUT, notes: privateNotes, refs });
   } catch (error) {
     console.error(`The lighting brain could not run, so there is nothing to show. It needs python on the PATH.\n${error.message}`);
     return process.exit(1);
   }
 }
 const brain = startBrain();
+const startup = brain.startup ? `${brain.startup.join(', ')}${brain.startup.some(words => words.endsWith('clear')) ? '' : '. None passes: say which way to turn the reader, and an agent writes facing.json'}` : null;
+
+/* ---------- what this page built when it started: hops 5's re-fit, 14 and 20 ---------- */
+const couchTools = ['tools/den-sim/run.mjs', 'tools/den-sim/brain.mjs', 'tools/den-room/brain-targets.mjs', 'app/src/home-lighting-sofa-target.js'];
+function couchRow() {
+  if (couch.source === 'sofa_mark') {
+    return { n: 14, word: 'ADAPTER', ran: 'built at page start', tool: { path: 'tools/den-room/brain-targets.mjs', pin: 'HEAD' }, tools: headTools(couchTools),
+      summary: 'Your sofa mark, checked by its seal against your registration export, in the older brain\'s geometry.',
+      read: placed.read.filter(file => ['your mark', 'your export'].includes(file.recorded.kind)), wrote: [],
+      stand_ins: ["the older brain's geometry holds the mark: its own 1.5 m rule decides on the couch, and its hand point is the spot"] };
+  }
+  return { n: 14, word: 'SCRIPTED', ran: 'built at page start', tool: { path: 'tools/den-sim/run.mjs', pin: 'HEAD' }, tools: headTools(couchTools),
+    summary: `A DECLARED point (${couch.where}) with a stand-in zone sealed around it. Not your sofa mark.`, read: [], wrote: [],
+    stand_ins: ['a DECLARED point with a stand-in zone, not your sofa mark'] };
+}
+function homeRow() {
+  const now = sourceIsPinned();
+  return { n: 20, word: 'REAL', ran: 'ran now', tool: { path: 'app/src', pin: 'refs.json base' }, read: [], wrote: [], stand_ins: [],
+    tools: [{ path: 'app/src', pin: 'refs.json base', expected: refs.base.sha, actual: now ? refs.base.sha : 'app/src differs from it' }],
+    summary: `${now ? 'Unchanged' : 'EDITED'} Home source at ${refs.base.sha.slice(0, 8)}, served from this PC's harness, which answers sign-in, Lab and registration. The light on the room is Home's modeled view.` };
+}
+const start = { placement: placed, couch: couchRow() };
 const context = { room, registration: { source: registration.source, label: registration.label, revision: registration.doc.revision },
-  couch: { source: couch.source, label: couch.label, point: couch.point }, base: refs.base.sha.slice(0, 8), source_is_pinned: pinned,
+  couch: { source: couch.source, label: couch.label }, base: refs.base.sha.slice(0, 8), source_is_pinned: pinned,
   pack_revision: binding.content_revision, private_notes: privateNotes, tools: refs.tools,
-  brain: { away_from_fixture: brain.away_from_fixture, first_try_refused: brain.first_try_refused, seat_m: brain.seat_m, command: brain.command_status } };
+  set: { id: setInfo.set, recorded: setInfo.recorded, figure: setInfo.figure, way: setInfo.way, takes: scenes.length },
+  placement: { registered: placed.registered, summary: placed.summary }, startup,
+  tries: tries && { count: tries.length, reading: tries.filter(row => row.facts?.activity_hypothesis === 'reading').length },
+  brain: { command: brain.command_status } };
 const feed = createFeed({ emptyRow: brain.empty_row, couchLabel: couch.label });
 
-/* ---------- one click: the pipeline, then the brain, then the replay into Home ---------- */
-const SCENARIOS = ['reading_on_couch', 'not_reading'];
-const commands = {};
-let activeRun = null;
-function startScenario(body) {
-  if (!SCENARIOS.includes(body?.scenario) || !Array.isArray(body.fixtures)) return { ok: false, reason: 'scenario_unknown' };
+/* ---------- one click: the pipeline on a prepared take, then the brain, the receipt and the replay into Home ---------- */
+const commands = {}, pressed = new Set();
+let activeRun = null, lastClick = null;
+function startClick(body) {
+  const take = body?.take;
+  if (!scenes.some(scene => scene.take === take) || !Array.isArray(body.fixtures)) return { ok: false, reason: 'take_unknown' };
   if (activeRun) return { ok: false, reason: 'a_run_is_going' };
-  feed.begin(body.scenario);
-  const current = activeRun = brain.runScenario(body.scenario, row => feed.hop(row));
+  const pressedAgain = pressed.has(take);
+  pressed.add(take);
+  feed.begin(take);
+  lastClick = null;
+  const current = activeRun = brain.runClick({ take, prepared: prepared[take], setDir: SET, roomModel, startRecord: { ...start, home: homeRow() }, pressedAgain },
+    row => feed.hop({ n: row.n, word: row.word, summary: row.summary, ms: row.ms }));
   current.promise.then(result => {
     if (activeRun !== current) return; // Reloaded while it ran: the page has moved on.
     activeRun = null;
-    if (!result.ok) { feed.fail(result.reason); return; }
-    commands[body.scenario] = result.command;
+    const picture = path.join(result.work, 'picture.png');
+    lastClick = { click: result.receipt.click, view: receiptView(result.receipt), top: result.top, receipt: result.receipt, said: result.said || null,
+      picture: fs.existsSync(picture) ? picture : null };
+    if (!result.ok) { feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
+    commands[result.receipt.click] = result.command;
     context.brain.command = result.command_status;
     feed.play(result.timeline, body.fixtures);
   });
   return { ok: true };
 }
-function cancelScenario() {
+function cancelClick() {
   activeRun?.cancel();
   activeRun = null;
 }
@@ -239,23 +358,30 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/__sim/feed' && req.method === 'POST') {
       if (req.headers.origin !== ORIGIN) return refuse(res, req.method, pathname, 403);
       const body = await readJson(req); counters.feed_posts++;
-      return send(res, 200, startScenario(body));
+      return send(res, 200, startClick(body));
     }
     if (req.method !== 'GET') return refuse(res, req.method, pathname, 405);
     if (pathname === '/' && !url.search) { res.writeHead(302, { Location: '/?apartmentRedesign=1&worldZoom=off' }); return res.end(); }
     if (pathname === '/' || pathname === '/index.html') {
-      cancelScenario();
-      feed.reset(); // A page load starts from an empty room, so every load can swing again.
+      cancelClick();
+      feed.reset(); pressed.clear(); lastClick = null; // A page load starts from an empty room, so every load can swing again.
       return send(res, 200, homePage(), { 'Content-Type': TYPES['.html'] });
     }
     if (pathname === '/__sim/panel.js') return send(res, 200, fs.readFileSync(path.join(HERE, 'panel.js')), { 'Content-Type': TYPES['.js'] });
     if (pathname === '/__sim/status') {
-      return send(res, 200, { ...context, hops: hopList(context), feed: feed.readback(), counters, refused: [...refused.values()], run });
+      // The person's point, the target and the camera marker's point reach the page here, because Home's markers need them. The panel prints none.
+      const click = lastClick && { ...lastClick.view, top_line: lastClick.top, picture: !!lastClick.picture, said: lastClick.said };
+      return send(res, 200, { ...context, scenes, camera_m: cameraM, feed: feed.readback(), click, counters, refused: [...refused.values()], run });
+    }
+    if (pathname === '/__sim/receipt') return lastClick ? send(res, 200, lastClick.receipt) : refuse(res, req.method, pathname, 404);
+    if (pathname === '/__sim/picture') {
+      // The last click's frame, read back out of its take's own NV12 plane.
+      return lastClick?.picture ? send(res, 200, fs.readFileSync(lastClick.picture), { 'Content-Type': 'image/png' }) : refuse(res, req.method, pathname, 404);
     }
     if (pathname === '/__sim/command') {
-      // A display, fetched once per run. Nothing on this page or harness can send it.
-      const scenario = url.searchParams.get('scenario');
-      return Object.hasOwn(commands, scenario) ? send(res, 200, commands[scenario]) : refuse(res, req.method, pathname, 404);
+      // A display, fetched once per click. Nothing on this page or harness can send it.
+      const click = Number(url.searchParams.get('click'));
+      return Object.hasOwn(commands, click) ? send(res, 200, commands[click]) : refuse(res, req.method, pathname, 404);
     }
     if (pathname === '/auth/status') return send(res, 200, { authenticated: true, username: 'den-sim' });
     if (pathname === '/api/perception-lab/v1/capabilities') return send(res, 200, LAB_CAPABILITIES, { 'X-Home-Lab-Access': 'read-only' });
@@ -289,14 +415,14 @@ server.on('error', error => {
 });
 server.listen(PORT, HOST, () => {
   const scan = room === 'real' ? `real scan pack ${binding.content_revision}` : 'AUTHORED ROOM';
-  const asciiBrain = text => text.replace(/\s*·\s*/g, ', ');
   console.log([`Den simulation: ${ORIGIN}/`, `Room: ${scan} | Sockets: ${registration.label.replace(' · ', ', ')} | Couch: ${couch.label}`,
-    ...(brain.first_try_refused ? [`Typed joints facing the room: ${asciiBrain(brain.first_try_refused.refusal)}. So the reader faces away from the nearest fixture.`] : []),
-    'Each click runs the pinned pipeline tools on a scripted scene, with an INVENTED CAMERA. No inference runs.',
+    `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash and runs the pinned tools on it, with an INVENTED CAMERA. No inference runs.`,
+    `Camera registration: ${placed.summary}`,
+    ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
     ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
     `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));
   fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: new Date().toISOString(), origin: ORIGIN }, null, 2) + '\n');
   // The pack catalog must resolve before the page asks for it.
   if (!readPackIndex(PACKS).packs.some(item => item.active && item.manifest.siteId === 'victoria')) console.error('No active Victoria pack in ' + PACKS);
 });
-for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cancelScenario(); feed.dispose(); server.closeAllConnections(); server.close(() => process.exit()); });
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cancelClick(); feed.dispose(); server.closeAllConnections(); server.close(() => process.exit()); });

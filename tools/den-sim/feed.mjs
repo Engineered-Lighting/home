@@ -1,5 +1,5 @@
-// Feeds Home the real lighting brain's decisions for the den simulation. The brain
-// ran in brain_run.py on a scripted reader. This adapter replays its timeline to
+// Feeds Home the older lighting brain's decisions for the den simulation. The brain
+// ran in brain_run.py on what the pipeline produced. This adapter replays its timeline to
 // Home's real client, follower and overlay, re-timed to now. Home's follower has no
 // motion model, so the 30 deg/s swing is scripted: documents stepping target_m at
 // 10 Hz are inserted before the brain's own lit state. Do not use sweep:true: the
@@ -9,7 +9,7 @@ import Client from '../../app/src/home-lighting-brain-client.js';
 export const BRAIN_BASE = Client.BASE;
 const STEP_MS = 100, RATE_DEG_S = 30, STEP_DEG = RATE_DEG_S * STEP_MS / 1000;
 // The brain's reading evidence lasts 2.8 s and Home stops a spot when it expires, so
-// the hold is re-timed faster than that, as if the scripted reader keeps reading.
+// the hold is re-timed faster than that, as if the reader keeps reading.
 const HEARTBEAT_MS = 1000;
 const LEVEL_START = .25, MAX_TRAVEL_M = 8;
 const SCRIPTED = 'SIMULATION-scripted';
@@ -57,9 +57,9 @@ const litFixture = row => row.state.fixtures.find(item => item.spot.on) || null;
 export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   const clients = new Set();
   let revision = 0, eventId = 0, docsSent = 0, current = null, held = null, timer = null, stepper = null;
-  let phase = 'idle', scenario = null, swing = null, timeline = null, pipeline = { rows: [], failed: null };
+  let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null };
 
-  const labelled = why => `SIMULATION · scripted scene on the ${couchLabel} couch, no inference ran · brain: ${why}`.slice(0, 240);
+  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, no inference ran · brain: ${why}`.slice(0, 240);
   // The brain's state, unchanged but for its clocks and honest labels. Re-timing from
   // the row each time means repeating a row never stretches its evidence.
   function present(row, step = null) {
@@ -87,8 +87,8 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   }
   function show(row) { held = row; publish(present(row)); }
   function stop() { clearTimeout(timer); clearInterval(stepper); timer = stepper = null; }
-  function clear(nextPhase, nextScenario) {
-    stop(); phase = nextPhase; scenario = nextScenario; swing = null; timeline = null; pipeline = { rows: [], failed: null };
+  function clear(nextPhase, nextTake) {
+    stop(); phase = nextPhase; take = nextTake; swing = null; timeline = null; pipeline = { rows: [], failed: null };
     show(emptyRow);
   }
   const reset = () => clear('idle', null);
@@ -124,7 +124,8 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
     next();
     return undefined;
   }
-  function fail(reason) { stop(); phase = 'pipeline_failed'; pipeline.failed = reason; }
+  // 'stopped' when the pipeline answered (the detector saw nobody, no track formed); 'pipeline_failed' when it broke.
+  function fail(reason, as = 'pipeline_failed') { stop(); phase = as; pipeline.failed = reason; }
   reset();
   const heartbeat = setInterval(() => { if (phase !== 'swinging') show(held); }, HEARTBEAT_MS);
   return {
@@ -135,53 +136,8 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
       res.write(`id: ${++eventId}\nevent: state\ndata: ${JSON.stringify(current)}\n\n`);
       clients.add(res); res.on('close', () => clients.delete(res));
     },
-    readback: () => ({ phase, scenario, docs_sent: docsSent, state_revision: revision, swing, step_ms: STEP_MS, rate_deg_s: RATE_DEG_S, streams: clients.size,
+    readback: () => ({ phase, take, docs_sent: docsSent, state_revision: revision, swing, step_ms: STEP_MS, rate_deg_s: RATE_DEG_S, streams: clients.size,
       live: held && { why: held.state.why, refusal: held.refusal, mode: held.state.mode }, summary: timeline?.summary || null, pipeline }),
     dispose() { stop(); clearInterval(heartbeat); for (const res of clients) res.end(); clients.clear(); },
   };
-}
-
-// The honest list for this stage. A row names what runs on each click, and a row
-// never reads REAL because a doc says so. Skipped hops stay marked as skipped.
-export function hopList({ room, registration, couch, source_is_pinned, pack_revision, base, brain, tools }) {
-  const S = 'SCRIPTED', M = 'MISSING', A = 'ADAPTER', R = 'REAL';
-  const command = brain.command;
-  const noCommand = command.failed || command.ik_reason || 'The brain lit nothing, so nothing was compiled.';
-  const ikOk = command.pending || command.ik_ok;
-  const packetsOk = command.pending ? command.codec_found : command.packets > 0;
-  return [
-    { name: 'Input image', status: S, note: 'No picture is read. The scene is declared.' },
-    { name: 'Frames', status: S, note: 'den-observe synth writes a real-format take with blank RGB. Real capture (den-take) has no synthetic mode.' },
-    { name: 'Camera registration', status: M, note: 'den-observe refuses den-register\'s output, so a synth camera entry at an INVENTED place stands in, marked method synthetic.' },
-    { name: 'Detector and box', status: S, note: 'fake-scripted-1 places the joints, and the box comes from them. No detector ran.' },
-    { name: 'Observations', status: R, note: `replay.py at ${tools['rung-2-observe']}, unscored, on synthetic depth. Runs on each click.` },
-    { name: 'Tracks', status: R, note: `den_track.py at ${tools['claude/rung-3-track-local-514d6b']}, unscored. Runs on each click.` },
-    { name: 'Bundles and router', status: R, note: `den_bundle.py route at ${tools['rung-5-bundle']}, with its fake sender. Practice only. Runs on each click.` },
-    { name: 'Bundle to Qwen', status: M, note: 'Not built. The bundles go nowhere.' },
-    { name: 'Qwen reply', status: S, note: 'Answers typed through the real fact_line. No model ran.' },
-    { name: 'Room-level need', status: R, note: `need v0 at ${tools['den-core-live']}, on those typed lines. Track room, no position. Two replies to engage.` },
-    { name: 'decide v0', status: R, note: `decide v0 at ${tools['den-core-live']}, in den-core's real runner. Log only: four Hue levels, no aim. Nothing reconciles it with the brain.` },
-    { name: 'Person to aim', status: A, note: 'About 40 lines in chain.py stand in for rung 6 and K7: they join room reading to the only track and assert jev and deep_stack health. Nothing measures head pitch, so the brain assumes level.' },
-    { name: 'Activity loop and publisher', status: R, note: 'Real code under a fake clock. Its deep stack is fake, and its events never leave its process.' },
-    { name: 'Couch', status: couch.source === 'sofa_mark' ? R : S,
-      note: couch.source === 'sofa_mark' ? 'Your private sofa mark. "On the couch" is the brain\'s 1.5 m rule, not vision.' : 'DECLARED point. Not your sofa mark, and it may not be on your couch.' },
-    { name: 'Spot decision and aim', status: R, note: 'Real lighting brain under a fake clock, not the deployed one. It chooses the fixture and the hand point, from the adapter\'s output, on a geometry copy with the INVENTED CAMERA.' },
-    { name: 'Feed into Home', status: A, note: 'This harness replays the brain\'s timeline, re-timed to now, and keeps re-timing the hold. Home\'s "Brain online" means this harness.' },
-    { name: '30 deg/s motion', status: S, note: 'Docs stepping target_m at 10 Hz, inserted before the brain\'s lit state. The follower has no motion model.' },
-    { name: 'Home client, follower, overlay, beam', status: source_is_pinned ? R : A,
-      note: `${source_is_pinned ? `Unchanged origin/main ${base} source.` : `app/src differs from ${base}.`} The light on the room is Home's modeled view, not measured.` },
-    { name: 'Scan', status: room === 'real' ? R : S, note: room === 'real' ? `Your pack ${pack_revision}, read-only.` : 'AUTHORED ROOM, no household data.' },
-    { name: 'Sockets', status: registration.source === 'export' ? R : S,
-      note: registration.source === 'export' ? 'Your registration revision 3.' : 'AUTHORED SOCKETS. Their 4x4 m walls do not fit your scan.' },
-    { name: 'Inverse kinematics to motor units', status: ikOk ? R : M,
-      note: ikOk ? 'Real compile_target on a FICTIONAL profile: zero, direction, ratio and limits are invented, and its pivot and basis are the virtual fixture\'s.' : noCommand },
-    { name: 'Plan and packets', status: packetsOk ? R : M,
-      note: packetsOk ? 'Real codec with its public test key, a fictional context and a raw spot duty. This codec is older than the release origin/main pins. Bytes are shown, never sent.'
-        : command.pending || (command.lit && !command.codec_found) ? 'The codec was not found at its path, so nothing is encoded.' : noCommand },
-    { name: 'Home Assistant/ZHA envelope', status: M, note: 'No path exists: no commissioned device and no sender here. Display only: the fields match origin/main\'s list, and the ieee is the placeholder UNCOMMISSIONED.' },
-    { name: 'CAN A4 frames', status: ikOk ? A : M,
-      note: !ikOk ? noCommand : command.pending ? 'Encoded here from the contract\'s byte fields and checked against its literal oracle on each run. The firmware\'s encoder does not run.'
-        : `Encoded here from the contract's byte fields${command.can_oracle_ok ? ', matching its literal oracle on this run' : ', and its oracle could not be checked'}. The firmware's encoder did not run. The motor allowlist has ${command.allowlist_entries ?? 'unknown'} entries.` },
-    { name: 'Aim verification', status: M, note: 'Waits for a gimbal. This only shows Home agrees with the brain.' },
-  ];
 }

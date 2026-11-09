@@ -79,6 +79,8 @@ function commandStatus(command) {
     codec_found: !!command.codec?.found, packets: command.wire?.counts.total || 0, can_oracle_ok: command.can?.oracle_ok ?? null,
     allowlist_entries: command.can?.allowlist_entries ?? null };
 }
+// The hops chain.py runs on a click, in order. A break is filed under one of these, never a hop 0.
+const CLICK_HOPS = [3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 17];
 const litFixture = row => row.state.fixtures.find(item => item.spot.on) || null;
 const plain = text => String(text).replace(/_/g, ' ');
 function summarize(timeline, seat) {
@@ -162,15 +164,18 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
   function runClick({ take, prepared, setDir, roomModel, startRecord, pressedAgain }, onRow) {
     const work = path.join(runDirectory, `click-${++clicks}`);
     const child = spawn('python', ['-B', path.join(HERE, 'chain.py')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    const chain = { rows: [], recheck: null, takeRead: null, stop: null };
+    const chain = { rows: [], recheck: null, takeRead: null, picture: null, stop: null };
+    // Where a chain that died without saying so was: the click hop after the last line it printed.
+    const reachedHop = () => { const last = chain.rows.at(-1)?.n ?? (chain.recheck?.ok ? 3 : 2); return CLICK_HOPS.find(n => n > last) ?? 17; };
     const promise = new Promise(resolve => {
       let done = null, stderr = '';
-      child.on('error', error => { chain.stop = chain.stop || { hop: 0, why: `the pipeline could not start: ${error.message}`, answer: false }; });
+      child.on('error', error => { chain.stop = chain.stop || { hop: 3, why: `the pipeline could not start: ${error.message}`, answer: false }; });
       child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-800); });
       readline.createInterface({ input: child.stdout }).on('line', line => {
         const row = JSON.parse(line);
         if (row.hop === 'done') done = row;
         else if (row.hop === 'stopped') chain.stop = row.stop;
+        else if (row.picture) chain.picture = row.picture;
         else if (row.recheck) { chain.recheck = { ...row.recheck, tools: row.tools, read: row.read }; chain.takeRead = row.read[0]; onRow({ n: 3, word: row.recheck.ok ? 'ADAPTER' : 'MISSING', summary: row.recheck.ok ? `re-checked ${row.recheck.frames} frames by hash` : row.recheck.reason }); }
         else { chain.rows.push(row); onRow(row); }
       });
@@ -183,7 +188,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
         try {
           if (!fs.existsSync(work)) fs.mkdirSync(work, { recursive: true });
           if (!done) {
-            chain.stop = chain.stop || { hop: 0, why: `the pipeline stopped, exit ${code}: ${stderr.trim().split('\n').at(-1) || 'no message'}`, answer: false };
+            chain.stop = chain.stop || { hop: reachedHop(), why: `the pipeline stopped, exit ${code}: ${stderr.trim().split('\n').at(-1) || 'no message'}`, answer: false };
             return settle({ ok: false, reason: chain.stop.why });
           }
           return settle(finish({ take, prepared, startRecord, chain, done, work, pressedAgain }));

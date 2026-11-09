@@ -25,6 +25,7 @@ import Sofa from '../../app/src/home-lighting-sofa-target.js';
 import { sealRegisteredDeskTarget } from '../../app/src/home-3d/registered-desk-target.mjs';
 import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
+import { finalRow } from './receipt.mjs';
 import { topLine } from './top_line.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
@@ -132,6 +133,32 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
   assert.equal(edited(r => { r.pressed_again = true; }).line, 'Pressed again: press Reset for a new verdict');
   assert.equal(edited(r => { r.prepare_refusal = { hop: 4, reason: 'check.py: FAIL' }; }).line, 'Prepare stopped at hop 4: check.py: FAIL');
   assert.equal(edited(r => { r.stopped = { hop: 7, why: 'replay.py exit 2', answer: false }; }).verdict, 'not yet', 'a break is never an answer');
+});
+
+test('a receipt files a break under the hop that broke, and never leaves a hop before a stop unreached', () => {
+  const row = (n, word = TABLE.hops[n - 1].word) => ({ n, name: TABLE.hops[n - 1].name, word, reached: true, ran: 'ran now', summary: 'ran', tools: [], read: [], wrote: [], stand_ins: [] });
+  const broke = { hop: 7, why: 'replay.py exit 2: refused', answer: false };
+  // The hop that broke, with no row of its own: MISSING with why, not "not reached".
+  assert.deepEqual([finalRow(null, 7, broke).word, finalRow(null, 7, broke).reached, finalRow(null, 7, broke).note], ['MISSING', true, broke.why]);
+  // A recorded hop whose re-check refused keeps its row, now MISSING.
+  const four = finalRow(row(4), 4, { hop: 4, why: 'check-2.json sits beside it', answer: false });
+  assert.deepEqual([four.word, four.reached, four.note, four.ran], ['MISSING', true, 'check-2.json sits beside it', 'ran now']);
+  // Rows before the break stay as they ran; rows after it are not reached.
+  assert.deepEqual(finalRow(row(6), 6, broke), row(6));
+  assert.equal(finalRow(row(8), 8, broke).reached, false);
+  // An answer keeps its row's own word.
+  assert.equal(finalRow(row(6, 'SCRIPTED'), 6, { hop: 6, why: 'the detector saw nobody', answer: true }).word, 'SCRIPTED');
+  // No row, though nothing stopped, or before the stop: MISSING, reached.
+  for (const stop of [null, { hop: 9, why: 'too briefly to ask', answer: true }]) {
+    const got = finalRow(null, 8, stop);
+    assert.deepEqual([got.word, got.reached, got.ran], ['MISSING', true, 'no row on this click'], JSON.stringify(stop));
+  }
+  // Through the top line: the count names the MISSING row, and reaches no "26 not reached".
+  const receipt = { rows: TABLE.hops.map(hop => finalRow(hop.n <= 6 ? row(hop.n) : null, hop.n, broke)), stopped: broke, aim_check: null };
+  const top = topLine(TABLE, receipt);
+  assert.equal(top.verdict, 'not yet');
+  assert.equal(top.count.missing, 1); assert.equal(top.count.not_reached, 19);
+  assert.ok(top.reasons.some(reason => reason.condition === 6 && reason.hop === 7), JSON.stringify(top.reasons));
 });
 
 test('the hop table: 26 hops, each with its pin, and adapters that name their stand-ins', () => {
@@ -335,9 +362,31 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   assert.equal(done.feed.phase, 'pipeline_failed', 'no beam');
   assert.equal(done.click.top_line.line, 'Connected start to finish: not yet');
   // Control: the untouched take in the same copy passes the hash and reaches need.
-  const control = await click(display.find(scene => scene.label === 'Holding a phone').take);
+  const phone = display.find(scene => scene.label === 'Holding a phone').take;
+  const control = await click(phone);
   assert.equal(control.click.rows[2].word, 'ADAPTER');
   assert.equal(control.click.rows[12].reached, true);
+  // A break is filed under the hop that broke, which reads MISSING; the rows before it stay as they ran.
+  const blank = display.find(scene => scene.label === 'Blank frame').take, check = path.join(copy, blank, 'check-1.json');
+  const checkBytes = fs.readFileSync(check, 'utf8');
+  fs.unlinkSync(check); fs.writeFileSync(check, checkBytes.replace('{', '{ '));   // one space: the same report, other bytes
+  const four = await click(blank);
+  assert.deepEqual(four.click.stopped, { hop: 4, why: 'check-1.json is not the one prepare recorded', answer: false });
+  assert.deepEqual(four.click.rows.slice(0, 4).map(row => [row.word, row.reached]), [['SCRIPTED', true], ['SCRIPTED', true], ['ADAPTER', true], ['MISSING', true]]);
+  assert.match(four.click.top_line.count_line, /, 1 missing, 22 not reached$/);
+  assert.ok(four.click.top_line.reasons.some(reason => reason.condition === 6 && reason.hop === 4));
+  // A tool that fails on a click: replay, on a room model broken after the page placed it.
+  const fits = path.join(home, 'fits'), fit = fs.readdirSync(fits).find(name => fs.existsSync(path.join(fits, name, 'room-model.jsonl')));
+  fs.writeFileSync(path.join(fits, fit, 'room-model.jsonl'), '{"not": "a room model"}\n');
+  const seven = await click(phone);
+  assert.equal(seven.click.stopped.hop, 7, JSON.stringify(seven.click.stopped));
+  assert.match(seven.click.stopped.why, /^replay\.py exit \d+: /);
+  const byN = Object.fromEntries(seven.click.rows.map(row => [row.n, row]));
+  assert.deepEqual([byN[7].word, byN[7].reached], ['MISSING', true]);
+  assert.ok([1, 2, 3, 4, 5, 6].every(n => byN[n].reached), 'the rows up to the break ran');
+  assert.equal(byN[6].word, 'SCRIPTED');
+  assert.ok([8, 9, 13, 17].every(n => !byN[n].reached));
+  assert.equal(seven.feed.phase, 'pipeline_failed');
 });
 
 /* ---------- tests 9, 12 and 19 on a sealed invented export and mark, in your real scan's frame ---------- */

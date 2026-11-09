@@ -118,15 +118,25 @@ export function buildReceipt({ click, takeId, setId, prepared, refs, start, chai
   rows.push(...(command?.rows || [null, null, null]));
   rows.push(missing(24, 'Not built: nothing compares where Home points with where the Decision said.'),
     missing(25, 'Not built: no virtual meter reads Home\'s modeled light.'), missing(26, 'Not built: den-verify does not run.'));
-  // A hop past where the click stopped keeps its expected word, greyed, "not reached on this click".
   const stop = chain.stop || brain?.stop || null;
-  const out = rows.map((row, i) => {
-    const n = i + 1, hop = TABLE.hops[i];
-    if (row && !(stop && n > stop.hop)) return row;
-    return { n, name: hop.name, word: hop.word, reached: false, ran: 'not reached on this click', note: 'not reached on this click', tools: [], read: [], wrote: [], stand_ins: [] };
-  });
+  const out = rows.map((row, i) => finalRow(row, i + 1, stop));
   return { schema: SCHEMA, click, take: takeId, set: setId, recorded: prepared.recorded, written_unix: Date.now() / 1000,
-    prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, rows: out };
+    prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, picture: chain.picture || null, rows: out };
+}
+
+// Each row as the click left it. A hop past where the click stopped keeps its expected word, greyed,
+// "not reached on this click". The hop where it broke reads MISSING with why, and rows before it stay as
+// they ran. A hop with no row, though nothing stopped before it, reads MISSING: never "not reached".
+export function finalRow(row, n, stop) {
+  const hop = TABLE.hops[n - 1], empty = { tools: [], read: [], wrote: [], stand_ins: [] };
+  if (stop && n > stop.hop) return { n, name: hop.name, word: hop.word, reached: false, ran: 'not reached on this click', note: 'not reached on this click', ...empty };
+  if (stop && n === stop.hop && !stop.answer) {
+    return { ...empty, n, name: hop.name, ran: 'ran now', ...row, word: 'MISSING', reached: true, note: stop.why,
+      summary: row?.word === 'MISSING' && row.summary ? row.summary : `The click broke here: ${stop.why}.` };
+  }
+  if (row) return row;
+  const why = stop ? 'this click has no row for it, though it went on past it' : 'this click has no row for it, and nothing stopped it';
+  return { ...empty, n, name: hop.name, word: 'MISSING', reached: true, ran: 'no row on this click', note: why, summary: `No row: ${why}.` };
 }
 
 // The panel's view: the words and notes, without the digests the page has no use for.

@@ -10,9 +10,10 @@ truth, and until Qwen is asked (step 4) the answers are typed from the truth's h
 so. The one piece that exists nowhere else is person_to_aim, part of hop 17's row.
 
 Reads {"take", "take_digest", "check_sha256", "set", "room_model": {"path", "sha256", "by"}, "refs",
-"tools_root", "work"} as JSON on stdin. Prints one JSON line per hop, each with its word, the files it
-read and wrote with their digests, its tools against their pins, and its stand-ins; then
-{"hop": "done", ...} for the brain, or {"hop": "stopped", ...} where the click stopped.
+"tools_root", "work"} as JSON on stdin. Prints hop 3's re-check by hash ({"n": 3, "recheck": ...}), the
+picture ({"picture": ...}), then one JSON line per hop, each with its word, the files it read and wrote
+with their digests, its tools against their pins, and its stand-ins; then {"hop": "done", ...} for the
+brain, or {"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
 """
 import csv
 import hashlib
@@ -71,12 +72,19 @@ class Stop(Exception):
         self.hop, self.why, self.answer = hop, why, answer
 
 
+AT = [3]  # the hop this click is at: a tool or helper that fails stops the click there, never at a hop 0
+
+
+def at(n):
+    AT[0] = n
+
+
 def sha256_file(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def emit(n, word, summary, started=None, **extra):
-    row = dict(n=n, word=word, summary=summary, ran='ran now', **extra)
+def emit(n, word, summary, started=None, ran='ran now', **extra):
+    row = dict(n=n, word=word, summary=summary, ran=ran, **extra)
     if started is not None:
         row['ms'] = round((time.monotonic() - started) * 1000)
     print(json.dumps(row, allow_nan=False), flush=True)
@@ -85,7 +93,7 @@ def emit(n, word, summary, started=None, **extra):
 def git_lines(*args):
     done = subprocess.run(['git', '-C', str(ROOT), *args], capture_output=True, encoding='utf-8')
     if done.returncode:
-        raise Stop(0, 'git %s: %s' % (args[0], done.stderr.strip()[-200:]))
+        raise Stop(AT[0], 'git %s: %s' % (args[0], done.stderr.strip()[-200:]))
     return [line for line in done.stdout.splitlines() if line]
 
 
@@ -131,7 +139,7 @@ def archive_trees(refs, tools_root):
             continue
         done = subprocess.run(['git', '-C', str(ROOT), 'archive', '--format=tar', sha, *paths], capture_output=True)
         if done.returncode:
-            raise Stop(0, 'git archive %s (%s): %s' % (ref_name, sha, done.stderr.decode('utf-8', 'replace').strip()[-200:]))
+            raise Stop(AT[0], 'git archive %s (%s): %s' % (ref_name, sha, done.stderr.decode('utf-8', 'replace').strip()[-200:]))
         tree.mkdir(parents=True, exist_ok=True)
         with tarfile.open(fileobj=io.BytesIO(done.stdout)) as archive:
             archive.extractall(tree, filter='data')
@@ -152,7 +160,7 @@ class Click:
         env = {**os.environ, 'PYTHONIOENCODING': 'utf-8', 'PYTHONDONTWRITEBYTECODE': '1'}
         done = subprocess.run(argv, capture_output=True, encoding='utf-8', errors='replace', env=env, timeout=120)
         if done.returncode:
-            raise Stop(0, '%s exit %d: %s' % (Path(script).name, done.returncode, (done.stderr or done.stdout).strip().split('\n')[-1][:300]))
+            raise Stop(AT[0], '%s exit %d: %s' % (Path(script).name, done.returncode, (done.stderr or done.stdout).strip().split('\n')[-1][:300]))
         return done.stdout
 
     def own_step(self, name, request):
@@ -160,7 +168,7 @@ class Click:
         done = subprocess.run([sys.executable, '-B', __file__, '--step', name], input=json.dumps(request), capture_output=True,
                               encoding='utf-8', errors='replace', env=env, timeout=120)
         if done.returncode:
-            raise Stop(0, '%s: %s' % (name, (done.stderr or done.stdout).strip().split('\n')[-1][:300]))
+            raise Stop(AT[0], '%s: %s' % (name, (done.stderr or done.stdout).strip().split('\n')[-1][:300]))
         return json.loads(done.stdout)
 
     def file(self, path):
@@ -309,12 +317,10 @@ def chain(request):
     work, take, refs = click.work, click.take, request['refs']
     work.mkdir(parents=True, exist_ok=False)
     started = time.monotonic()
-    trees = archive_trees(refs, request['tools_root'])
     own = ['tools/den-sim/chain.py', 'tools/den-sim/hops.json']
-    tools = {key: tree_tools(trees[key], refs[ref_name], ref_name, paths) for key, (ref_name, paths) in TREES.items()}
-    observe_tools = [t for t in tools['observe'] if t['path'].startswith('tools/den-observe/')]
 
     # Hop 3 on this click: is this still the take prepare recorded?
+    at(3)
     sys.path.insert(0, str(HERE / 'scene'))
     import frame_hash
     hashed = frame_hash.check_take(take, expected_digest=request['take_digest'])
@@ -325,6 +331,7 @@ def chain(request):
     if not hashed['ok']:
         raise Stop(3, 'the frame hash refused the take: ' + hashed['reason'])
 
+    at(4)
     take_read = click.recorded('%s/frames.csv' % take.name, take / 'frames.csv', 'take', by_take, request['take_digest'])
     check_read = click.recorded('%s/check-1.json' % take.name, take / 'check-1.json', 'check', by_take, request['check_sha256'])
     if check_read['sha256'] != request['check_sha256']:
@@ -333,13 +340,21 @@ def chain(request):
     if not rows:
         raise Stop(4, 'the check left no usable part')
 
-    # The picture, before any tool reads the take.
+    # The picture, before any tool reads the take. A display: if it can't be read back, the click goes on without it.
     middle = rows[len(rows) // 2]
-    picture = click.own_step('picture', dict(frame=str(take / middle['file']), out=str(work / 'picture.png')))
-    picture.update(click.file(work / 'picture.png'), n=int(middle['n']), rgb_seq=int(middle['rgb_seq']))
+    try:
+        picture = click.own_step('picture', dict(frame=str(take / middle['file']), out=str(work / 'picture.png')))
+        picture.update(click.file(work / 'picture.png'), n=int(middle['n']), rgb_seq=int(middle['rgb_seq']))
+    except Stop as failed:
+        picture = dict(error=failed.why)
+    print(json.dumps(dict(picture=picture)), flush=True)
 
-    # Hop 6, SCRIPTED: rows from the truth.
+    # Hop 6, SCRIPTED: rows from the truth. The archives are this hop's and every later tool's.
+    at(6)
     started = time.monotonic()
+    trees = archive_trees(refs, request['tools_root'])
+    tools = {key: tree_tools(trees[key], refs[ref_name], ref_name, paths) for key, (ref_name, paths) in TREES.items()}
+    observe_tools = [t for t in tools['observe'] if t['path'].startswith('tools/den-observe/')]
     truth = click.truth()
     if truth is None:
         raise Stop(6, 'no truth folder holds this take, so the scripted detector has nothing to place')
@@ -358,6 +373,7 @@ def chain(request):
          % (found['detector'], found['with_person'], found['rows']), started, frame_px=FRAME_PX, box_xyxy=found['box_xyxy'], keypoints=found['keypoints'], **six)
 
     # Hop 7: observations, on the room model this page placed.
+    at(7)
     room = request['room_model']
     started = time.monotonic()
     observe = work / 'observe'
@@ -372,6 +388,7 @@ def chain(request):
          wrote=[click.file(observe / 'observations.jsonl'), click.file(observe / 'run.json')], stand_ins=[])
 
     # Hop 8: tracks.
+    at(8)
     started = time.monotonic()
     output = click.guarded(trees['track'] / 'tools' / 'den-track' / 'den_track.py', 'track', '--observations', observe / 'observations.jsonl', '--out', work / 'track')
     lines = read_jsonl(work / 'track' / 'tracks.jsonl')
@@ -383,6 +400,7 @@ def chain(request):
         raise Stop(8, 'a person was seen on %d frames, and no track formed: %s' % (found['with_person'], ' '.join(output.split('\n')[1:2]) or 'den_track.py made no lines'), answer=True)
 
     # Hop 9: the real router with its fake sender, on a method copy that knows this camera's frame size.
+    at(9)
     started = time.monotonic()
     method = trees['bundle'] / 'tools' / 'den-bundle' / 'METHOD-V1.md'
     text = method.read_text(encoding='utf-8')
@@ -401,9 +419,10 @@ def chain(request):
 
     emit(10, 'SCRIPTED', 'Asserted: the brain is told the room is occupied. Nothing reads the track list for it yet.',
          tools=head_tools('tools/den-sim/brain_run.py'), stand_ins=['occupancy asserted to the brain by a typed event'])
-    emit(11, 'MISSING', 'Not built: the bundles go nowhere, and no model is asked.', note='no request is built from the bundles')
+    emit(11, 'MISSING', 'Not built: the bundles go nowhere, and no model is asked.', ran='not built', note='no request is built from the bundles')
 
-    # Hops 12 and 13: typed answers, then need v0.
+    # Hops 12 and 13: typed answers, then need v0, in one process: a failure there is hop 12's.
+    at(12)
     started = time.monotonic()
     held = (json.loads((truth / 'take.json').read_text(encoding='utf-8'))['person'] or {}).get('held')
     template = TEMPLATE_FOR_HELD.get(held, 'rest')
@@ -418,10 +437,11 @@ def chain(request):
          tools=[t for t in core_tools if t['path'].startswith('tools/den-core/')], read=[click.read(work / 'facts.jsonl', 12)],
          wrote=[click.file(work / 'den-core-log.jsonl')], stand_ins=named(13, 0), person=core['person'])
 
+    at(17)
     adapter, problem = person_to_aim(bundles, core['person'])
     if problem:
         raise Stop(17, problem)
-    print(json.dumps(dict(hop='done', ok=True, adapter=adapter, picture=picture, camera_m=camera_position(room['path']),
+    print(json.dumps(dict(hop='done', ok=True, adapter=adapter, camera_m=camera_position(room['path']),
                           adapter_reads=[click.read(work / 'bundles.jsonl', 9), click.read(work / 'den-core-log.jsonl', 13)],
                           adapter_tools=head_tools(*own), work=str(work)), allow_nan=False), flush=True)
 
@@ -441,8 +461,8 @@ def main():
         chain(request)
     except Stop as stop:
         print(json.dumps(dict(hop='stopped', ok=False, stop=dict(hop=stop.hop, why=stop.why[:600], answer=stop.answer))), flush=True)
-    except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
-        print(json.dumps(dict(hop='stopped', ok=False, stop=dict(hop=0, why=('%s: %s' % (type(error).__name__, error))[:600], answer=False))), flush=True)
+    except Exception as error:  # noqa: BLE001  anything else breaks the click at the hop it was at
+        print(json.dumps(dict(hop='stopped', ok=False, stop=dict(hop=AT[0], why=('%s: %s' % (type(error).__name__, error))[:600], answer=False))), flush=True)
 
 
 if __name__ == '__main__':

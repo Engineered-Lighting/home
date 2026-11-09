@@ -223,6 +223,16 @@ test('a receipt hashes hop 1\'s and hop 5\'s recorded reads again, never copying
   assert.match(reasonsOn(recordedReceipt(copy, take, prepared), 1).join('\n'), /collision\.glb/);
 });
 
+test('a refused re-fit makes hop 5 MISSING with why', { skip: NEEDS_SET }, () => {
+  const take = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes[0].take;
+  const prepared = JSON.parse(fs.readFileSync(path.join(SET, take, 'prepare-receipt.json'), 'utf8'));
+  const start = { placement: { registered: false, summary: 'the re-fit on your sofa mark was refused: placement_refused', read: [], wrote: [], tools: {}, stand_in: TABLE.hops[4].stand_ins[4] },
+    couch: { n: 14, word: 'SCRIPTED', ran: 'built at page start', tools: [], read: [], wrote: [], stand_ins: [] }, home: null };
+  const receipt = buildReceipt({ click: 1, takeId: take, setId: prepared.set, setDir: SET, prepared, refs: REFS, start, chain: { rows: [], stop: { hop: 6, why: 'a fixture', answer: true } }, brain: null, command: null });
+  assert.deepEqual([receipt.rows[4].word, receipt.rows[4].note], ['MISSING', start.placement.summary]);
+  assert.equal(recordedReceipt(SET, take).rows[4].word, 'ADAPTER', 'control: a registered re-fit keeps hop 5 ADAPTER');
+});
+
 test('a receipt holds each recorded tool to its pinned bytes, and the prepare commit to this branch', { skip: NEEDS_SET }, () => {
   const take = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes[0].take;
   const fresh = () => JSON.parse(fs.readFileSync(path.join(SET, take, 'prepare-receipt.json'), 'utf8'));
@@ -428,6 +438,17 @@ test('the real chain on every prepared take: step 2\'s words, not yet, and nothi
   const scanned = rowOf(6).read.filter(file => /^truth\/\(another take, \d of \d\)\/take\.json$/.test(file.path));
   assert.equal(scanned.length, display.length - 1, JSON.stringify(rowOf(6).read.map(file => file.path)));
   assert.equal(reading.view.top_line.reasons.filter(reason => reason.hop === 6 && /read truth\/\(another take/.test(reason.text)).length, display.length - 1);
+  // Every reason the reading click gives at step 2, as (condition, hop): each one true now, and a new or a
+  // lost one shows. Hop 5: the stand-in seat and sockets; 6 and 12: the truth; 17, 18, 21: the older brain.
+  const want = ['2:5', '2:5', '3:5', '2:6', '2:6', '2:6', '2:6', '2:6', '2:6', '3:6', '3:10', '3:11', '6:11', '2:12', '3:12', '3:14', '3:15', '6:15', '3:16', '6:16',
+    '3:17', '3:17', '3:17', '3:17', '3:18', '3:18', '3:21', '3:24', '6:24', '5:24', '3:25', '6:25', '3:26', '6:26'];
+  assert.deepEqual(reading.view.top_line.reasons.map(reason => `${reason.condition}:${reason.hop}`).sort(), want.sort());
+  assert.equal(reading.receipt.aim_check, null, 'no aim check is claimed');
+  assert.ok(rowOf(1).read.every(file => ['shots.json', 'render'].includes(file.recorded.kind)), 'hop 1 reads only shots.json and the render\'s inputs');
+  assert.deepEqual(rowOf(4).read.map(file => file.path), [`${take}/frames.csv`], 'hop 4 read the take');
+  const phone = clicks['Holding a phone'].view;
+  assert.deepEqual([phone.stopped.hop, phone.stopped.answer], [17, true], 'the brain refusing is the pipeline answering at hop 17');
+  assert.ok(phone.rows.filter(row => row.n > 17).every(row => !row.reached));
   const nobody = clicks['Nobody there'].view;
   assert.deepEqual(nobody.stopped, { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true });
   assert.ok(nobody.rows.filter(row => row.n > 6).every(row => !row.reached));

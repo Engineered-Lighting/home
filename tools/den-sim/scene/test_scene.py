@@ -180,6 +180,14 @@ class FrameHash(unittest.TestCase):
             rederive(take, take_json=True)
             self.assertEqual(frame_hash.check_take(take)["word"], "MISSING")
 
+    def test_an_empty_take_is_missing(self):
+        """A frames.csv with a header and no rows hashes clean against take.json, and still reads MISSING."""
+        with scratch() as tmp:
+            take = mini_take(Path(tmp) / "take", frames=0)
+            got = frame_hash.check_take(take)
+            self.assertEqual((got["ok"], got["word"], got["reason"]), (False, "MISSING", "the take has no frames"))
+            self.assertTrue(frame_hash.check_take(mini_take(Path(tmp) / "control", frames=1))["ok"], "control: one frame passes")
+
     @NEEDS_SET
     def test_reading_pixels_with_standing_depth(self):
         """On the real takes. Control: with the hash off, den-observe's own reader takes the swapped frame,
@@ -758,6 +766,44 @@ class Refused(unittest.TestCase):
             display = json.loads((sets[0] / "display.json").read_text(encoding="utf-8"))
             self.assertEqual((display["schema"], display["scenes"]), (prepare.SCHEMA_DISPLAY, []))
             self.assertFalse((Path(tmp) / "prepared" / "tries.jsonl").exists(), "a refused set is no try")
+
+
+class ReceiptParts(unittest.TestCase):
+    """prepare.py's receipt pieces on hand-made inputs, so they are tested without preparing a set."""
+
+    def test_a_receipt_is_keyed_by_the_digest_of_frames_csv(self):
+        with scratch() as tmp:
+            take = mini_take(Path(tmp) / "take")
+            got = prepare.receipt(take, "scene", {}, None, Path(tmp), 1, "2026-11-09", 0.0, {"commit": "x"})
+            self.assertEqual(got["take_digest"], sha((take / "frames.csv").read_bytes()))
+            self.assertNotEqual(got["take_digest"], sha((take / "take.json").read_bytes()))
+
+    def test_a_registered_fit_reads_adapter_and_a_refused_one_missing(self):
+        with scratch() as tmp:
+            marks, fit = mini_take(Path(tmp) / "marks", frames=2), Path(tmp) / "fit"
+            fit.mkdir()
+            for name in ("worksheet.json", "camera-calibration.json", f"clicks-{marks.name}.json", "room-model.jsonl", "fit-1.json", "fit.log"):
+                (fit / name).write_text("{}\n", encoding="utf-8")
+            tools = {"den-register": {"commit": "c", "pin": "refs.json tools.den-register", "files": {}}}
+            hop = prepare.fit_hop(fit, marks, {"result": "registered", "transform_id": "den-virtual@x.1", "fit": {"error_bound_m": 0.0066}, "reasons": []}, {}, 1, tools)
+            self.assertEqual((hop["word"], hop["error_bound_mm"]), ("ADAPTER", 6.6))
+            self.assertEqual({read["path"].split("/")[-1] for read in hop["read"]},
+                             {"000001-501.npz", "worksheet.json", "camera-calibration.json", f"clicks-{marks.name}.json"})
+            refused = prepare.fit_hop(fit, marks, {"result": "refused", "reasons": [{"reason": "slots_open"}]}, {}, 1, tools)
+            self.assertEqual((refused["word"], refused["reasons"]), ("MISSING", ["slots_open"]))
+
+    def test_an_uncommitted_harness_file_is_recorded_as_one(self):
+        real = prepare.git
+
+        def edited(*args):
+            if args[0] == "hash-object" and args[1].endswith("vcam.py"):
+                return b"0" * 40 + b"\n"
+            return real(*args)
+        with mock.patch.object(prepare, "git", edited):
+            got = prepare.harness_files()
+        self.assertEqual(got["uncommitted"], ["tools/den-sim/scene/vcam.py"])
+        self.assertEqual(got["files"]["tools/den-sim/scene/vcam.py"]["blob"], "0" * 40)
+        self.assertEqual(prepare.harness_files()["uncommitted"], [], "control: this branch's committed files")
 
 
 class Archive(unittest.TestCase):

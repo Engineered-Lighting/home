@@ -294,7 +294,8 @@
     sim.scenesShown = true;
     sceneButtons.replaceChildren(...status.scenes.map(scene => el('button', { type: 'button', disabled: true, 'data-den-sim-feed': scene.take, textContent: scene.label, onclick: () => runTake(scene.take) })));
     const tries = status.tries ? `, chosen from ${status.tries.count} ${status.tries.count === 1 ? 'try' : 'tries'}: Qwen said reading on ${status.tries.reading}` : '';
-    choice.textContent = `Prepared set ${status.set.id}, recorded ${status.set.recorded}: ${status.set.figure}, book ${plain(status.set.way)}${tries}. ${status.placement.summary}.`;
+    const stopped = (status.set.notes || []).map(note => ` Note: ${note}.`).join('');
+    choice.textContent = `Prepared set ${status.set.id}, recorded ${status.set.recorded}: ${status.set.figure}, book ${plain(status.set.way)}${tries}. ${status.placement.summary}.${stopped}`;
   }
   let markerShown = false;
   async function refresh() {

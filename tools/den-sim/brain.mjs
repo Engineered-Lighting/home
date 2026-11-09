@@ -169,6 +169,15 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
   }
   function runClick({ take, prepared, setDir, roomModel, startRecord, pressedAgain }, onRow) {
     const work = path.join(runDirectory, `click-${++clicks}`);
+    if (prepared.refusal) {
+      // Prepare stopped on this take: the click shows where and why, and stops there. Nothing runs.
+      fs.mkdirSync(work, { recursive: true });
+      const chain = { rows: [], recheck: null, checkRecheck: null, takeRead: null, picture: null,
+        stop: { hop: prepared.refusal.hop, why: `prepare stopped here: ${prepared.refusal.reason}`, answer: false } };
+      const receipt = buildReceipt({ click: clicks, takeId: take, setId: prepared.set, setDir, prepared, refs, start: startRecord, chain, brain: null, command: null, pressedAgain });
+      fs.writeFileSync(path.join(work, 'run-receipt.json'), JSON.stringify(receipt, null, 1) + '\n');
+      return { promise: Promise.resolve({ ok: false, reason: chain.stop.why, receipt, top: topLine(TABLE, receipt), work }), work, cancel: () => {} };
+    }
     const child = spawn('python', ['-B', path.join(HERE, 'chain.py')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     const chain = { rows: [], recheck: null, checkRecheck: null, takeRead: null, picture: null, stop: null };
     // Where a chain that died without saying so was: the click hop after the last line it printed.

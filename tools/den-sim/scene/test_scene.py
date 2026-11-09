@@ -731,6 +731,26 @@ class Guard(unittest.TestCase):
         self.assertIn("PermissionError", self.run_guarded(False, bind).stderr)
 
 
+class Refused(unittest.TestCase):
+    def test_a_refused_prepare_still_writes_its_display_file(self):
+        """A set prepare stops on keeps a display file of the takes it recorded, so the page can open it and
+        show the refusal. Here the render refuses at once: no Playwright can be found."""
+        with scratch() as tmp:
+            empty = Path(tmp) / "no-node-modules"
+            empty.mkdir()
+            env = {**ENV, "NODE_PATH": str(empty), "DEN_SIM_HOME": tmp, "LOCALAPPDATA": tmp}
+            done = subprocess.run([sys.executable, "-B", "-X", "utf8", str(HERE / "prepare.py"), "--out", str(Path(tmp) / "prepared")],
+                                  capture_output=True, text=True, env=env, timeout=300)
+            self.assertEqual(done.returncode, 1, done.stdout + done.stderr)
+            sets = [p for p in (Path(tmp) / "prepared").iterdir() if p.is_dir() and not p.name.startswith(".")]
+            self.assertEqual(len(sets), 1)
+            info = json.loads((sets[0] / "set.json").read_text(encoding="utf-8"))
+            self.assertEqual(info["refusal"]["hop"], 1)
+            display = json.loads((sets[0] / "display.json").read_text(encoding="utf-8"))
+            self.assertEqual((display["schema"], display["scenes"]), (prepare.SCHEMA_DISPLAY, []))
+            self.assertFalse((Path(tmp) / "prepared" / "tries.jsonl").exists(), "a refused set is no try")
+
+
 class Archive(unittest.TestCase):
     def test_each_archived_file_is_recorded_by_the_bytes_that_were_extracted(self):
         """A receipt's blob for an archived tool comes from the file that runs, not from ls-tree, so a click

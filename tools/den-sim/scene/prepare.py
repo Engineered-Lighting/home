@@ -403,7 +403,7 @@ def prepare(args):
     work.mkdir()
     log = Log(set_dir)
     started, date = time.time(), time.strftime("%Y-%m-%d")
-    takes, refusal, receipts, fit_info, tools_head = [], None, {}, None, None
+    takes, refusal, receipts, fit_info, tools_head, display = [], None, {}, None, None, {}
     try:
         tools_head = harness_files()
         tools = archive(work / "tools", pins(), log)
@@ -479,7 +479,6 @@ def prepare(args):
         # The scene takes, in a random order, so nothing reads the scene from when its take was recorded.
         order = list(range(len(shots["scenes"])))
         secrets.SystemRandom().shuffle(order)
-        display = {}
         for count, i in enumerate(order, 1):
             scene = shots["scenes"][i]
             poses = shots["poses"]
@@ -494,14 +493,16 @@ def prepare(args):
                     f"{hops['4'].get('verdict') or 'not checked'}, {hops['4'].get('usable_s', 0)} s usable")
             if problem:
                 raise Stop(3 if hops["3"]["word"] == "MISSING" else 4, problem)
-        write_json(set_dir / "display.json", {"schema": SCHEMA_DISPLAY, "note": "The display file: read only by the panel. "
-                                              "A scene's word is its only name, also in the render's file names and the truth folder.",
-                                              "scenes": [display[i] for i in sorted(display)]})
     except Stop as stop:
         refusal = {"hop": stop.hop, "reason": stop.reason}
         log.say(f"Stopped at hop {stop.hop}: {stop.reason}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    # The display file holds every scene take recorded, the one prepare stopped on included, so a refused
+    # set still opens: that take's button shows the refusal its receipt holds.
+    write_json(set_dir / "display.json", {"schema": SCHEMA_DISPLAY, "note": "The display file: read only by the panel. "
+                                          "A scene's word is its only name, also in the render's file names and the truth folder.",
+                                          "scenes": [display[i] for i in sorted(display)]})
     for folder, (kind, hops) in receipts.items():
         failed = refusal if refusal and folder.name == takes[-1]["take"] else None
         write_json(folder / "prepare-receipt.json", receipt(folder, kind, hops, failed, set_dir, seed, date, started, tools_head))

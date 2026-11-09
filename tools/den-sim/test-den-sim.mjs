@@ -70,6 +70,14 @@ test('the data root is DEN_SIM_HOME, or else the home folder, and never %LOCALAP
     `const m = await import(${JSON.stringify(pathToFileURL(path.join(HERE, 'data-root.mjs')).href)}); console.log(JSON.stringify(m.dataRoot()));`],
   { env: { ...env, DEN_SIM_HOME: path.join(tmp, 'elsewhere') }, encoding: 'utf8' }));
   assert.equal(custom, path.join(tmp, 'elsewhere'));
+  // A newer set that prepare refused is passed over, and named, so the page can say why it shows an older one.
+  fs.mkdirSync(path.join(home, 'den-sim', 'prepared', 'cccccccccccc'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'den-sim', 'prepared', 'cccccccccccc', 'set.json'),
+    JSON.stringify({ schema: 'den-sim-prepared-set-1', set: 'cccccccccccc', refusal: { hop: 4, reason: 'check.py: FAIL' }, ended_unix: 2 }));
+  const refused = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e',
+    `const m = await import(${JSON.stringify(pathToFileURL(path.join(HERE, 'data-root.mjs')).href)}); const root = m.dataRoot(); const set = m.newestPreparedSet(root);`
+    + 'console.log(JSON.stringify({ set, since: m.refusedSince(root, set).map(row => [row.id, row.refusal.hop]) }));'], { env, encoding: 'utf8' }));
+  assert.deepEqual(refused, { set: path.join(home, 'den-sim', 'prepared', 'bbbbbbbbbbbb'), since: [['cccccccccccc', 4]] });
 });
 
 /* ---------- test 7 on fixtures: the six conditions ---------- */
@@ -499,6 +507,37 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   assert.equal(byN[6].word, 'SCRIPTED');
   assert.ok([8, 9, 13, 17].every(n => !byN[n].reached));
   assert.equal(seven.feed.phase, 'pipeline_failed');
+});
+
+test('a set prepare refused still opens, and its refused take says where prepare stopped', { skip: NEEDS_SET, timeout: 300000 }, async t => {
+  const home = scratch('den-sim-refused-'), copy = path.join(home, 'prepared', path.basename(SET));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  linkedCopy(SET, copy);
+  const display = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes;
+  const phone = display.find(scene => scene.label === 'Holding a phone').take, refusal = { hop: 4, reason: 'check.py: FAIL, retained False, 0 usable segments' };
+  const edit = (file, change) => { const doc = JSON.parse(fs.readFileSync(file, 'utf8')); change(doc); replaceFile(file, JSON.stringify(doc, null, 1)); };
+  edit(path.join(copy, 'set.json'), doc => { doc.refusal = refusal; });
+  edit(path.join(copy, phone, 'prepare-receipt.json'), doc => { doc.refusal = refusal; });
+  const run = harness(['--room', 'authored', '--prepared', copy], scratchEnv(home));
+  try {
+    await run.ready;
+    assert.match(run.output(), /^Note: prepare stopped at hop 4 on this set: check\.py: FAIL, retained False, 0 usable segments$/m);
+    assert.deepEqual((await status()).set.refusal, refusal);
+    const stopped = await click(phone);
+    assert.equal(stopped.click.top_line.line, 'Prepare stopped at hop 4: check.py: FAIL, retained False, 0 usable segments');
+    assert.equal(stopped.click.stopped.hop, 4);
+    assert.deepEqual([stopped.click.rows[3].word, stopped.click.rows[6].reached], ['MISSING', false]);
+    assert.ok(!fs.existsSync(path.join(stopped.run, `click-${stopped.click.click}`, 'argv.jsonl')), 'nothing ran on the refused take');
+    // Control: a take prepare finished, in the same set, runs as ever.
+    const reading = await click(display.find(scene => scene.label === 'Reading on the couch').take);
+    assert.equal(reading.click.top_line.line, 'Connected start to finish: not yet');
+    assert.equal(reading.click.rows[12].reached, true);
+  } finally { await run.stop(); }
+  // A set with no display file says so in one line, with no stack trace.
+  fs.unlinkSync(path.join(copy, 'display.json'));
+  const bare = harness(['--room', 'authored', '--prepared', copy], scratchEnv(home));
+  await assert.rejects(bare.ready, error => /has no display\.json, so it has no buttons: prepare stopped at hop 4/.test(error.message) && !/\n\s+at /.test(error.message));
+  await bare.stop();
 });
 
 /* ---------- tests 9, 12 and 19 on a sealed invented export and mark, in your real scan's frame ---------- */

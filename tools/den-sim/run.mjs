@@ -31,7 +31,7 @@ import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import { prepareBrain, privateReason, standInSofa } from './brain.mjs';
-import { dataRoot, newestPreparedSet } from './data-root.mjs';
+import { dataRoot, newestPreparedSet, refusedSince } from './data-root.mjs';
 import { BRAIN_BASE, createFeed } from './feed.mjs';
 import { TABLE, headTools, receiptView, sha256 } from './receipt.mjs';
 
@@ -61,9 +61,22 @@ if (!SET || !fs.existsSync(path.join(SET, 'set.json'))) {
 }
 const readFile = file => JSON.parse(fs.readFileSync(file, 'utf8'));
 const setInfo = readFile(path.join(SET, 'set.json'));
+// Where prepare stopped, for the page: on this set, and on any newer set the default start passed over.
+const prepareNotes = [
+  ...(setInfo.refusal ? [`prepare stopped at hop ${setInfo.refusal.hop} on this set: ${setInfo.refusal.reason}`] : []),
+  ...(option('prepared') ? [] : refusedSince(OUT, SET).map(set => `the newest set ${set.id} was refused at hop ${set.refusal.hop} (${set.refusal.reason}), so set ${setInfo.set} is shown`)),
+];
 // The display file holds each take's label for its button. Only this panel reads it: a click is
 // told a take's folder id, never a scene.
+if (!fs.existsSync(path.join(SET, 'display.json'))) {
+  console.error(`Prepared set ${setInfo.set} has no display.json, so it has no buttons${setInfo.refusal ? `: prepare stopped at hop ${setInfo.refusal.hop}: ${setInfo.refusal.reason}` : ''}. Prepare a new set.`);
+  process.exit(1);
+}
 const scenes = readFile(path.join(SET, 'display.json')).scenes.map(({ take, label }) => ({ take, label }));
+if (!scenes.length) {
+  console.error(`Prepared set ${setInfo.set} holds no scene take to press${setInfo.refusal ? `: prepare stopped at hop ${setInfo.refusal.hop}: ${setInfo.refusal.reason}` : ''}. Prepare a new set.`);
+  process.exit(1);
+}
 const prepared = Object.fromEntries(scenes.map(({ take }) => [take, readFile(path.join(SET, take, 'prepare-receipt.json'))]));
 // The page's "chosen from N tries": a line is a Qwen try only when root names the served model and body_sha256 is a request's 64 hex.
 const tries = (() => { try { return fs.readFileSync(path.join(path.dirname(SET), 'tries.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(row => typeof row.root === 'string' && /^[0-9a-f]{64}$/.test(row.body_sha256 || '')); } catch { return null; } })();
@@ -243,7 +256,7 @@ const start = { placement: placed, couch: couchRow() };
 const context = { room, registration: { source: registration.source, label: registration.label, revision: registration.doc.revision },
   couch: { source: couch.source, label: couch.label }, base: refs.base.sha.slice(0, 8), source_is_pinned: pinned,
   pack_revision: binding.content_revision, private_notes: privateNotes, tools: refs.tools,
-  set: { id: setInfo.set, recorded: setInfo.recorded, figure: setInfo.figure, way: setInfo.way, takes: scenes.length },
+  set: { id: setInfo.set, recorded: setInfo.recorded, figure: setInfo.figure, way: setInfo.way, takes: scenes.length, refusal: setInfo.refusal || null, notes: prepareNotes },
   placement: { registered: placed.registered, summary: placed.summary }, startup,
   tries: tries && { count: tries.length, reading: tries.filter(row => row.facts?.activity_hypothesis === 'reading').length },
   brain: { command: brain.command_status } };
@@ -425,7 +438,7 @@ server.listen(PORT, HOST, () => {
     `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash and runs the pinned tools on it, with an INVENTED CAMERA. No inference runs.`,
     `Camera registration: ${placed.summary}`,
     ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
-    ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
+    ...prepareNotes.map(note => 'Note: ' + note), ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
     `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));
   fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: new Date().toISOString(), origin: ORIGIN }, null, 2) + '\n');
   // The pack catalog must resolve before the page asks for it.

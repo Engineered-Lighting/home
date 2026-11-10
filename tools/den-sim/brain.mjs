@@ -85,7 +85,15 @@ function commandStatus(command) {
     allowlist_entries: command.can?.allowlist_entries ?? null };
 }
 // The hops chain.py runs on a click, in order. A break is filed under one of these, never a hop 0.
-const CLICK_HOPS = [3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 17];
+const CLICK_HOPS = [3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 15, 17];
+// What chain.py is told for a click on this take: what prepare recorded for it (frames.csv as the take's digest, take.json
+// and its one check), the room model hop 14 wrote the couch into, and where its files go. Never the scene.
+export function chainRequest({ take, prepared, setDir, roomModel, refs, outputRoot, work, replies, lastAsk }) {
+  const wrote = n => prepared.hops[String(n)]?.wrote || [], check = wrote(4).find(file => /\/check-\d+\.json$/.test(file.path));
+  return { take: path.join(setDir, take), take_digest: prepared.take_digest, take_json_sha256: wrote(3).find(file => file.path.endsWith('/take.json'))?.sha256 || null,
+    check_file: check ? path.posix.basename(check.path) : null, check_sha256: check?.sha256 || null, detector: prepared.hops['6'] || null, recorded: prepared.recorded,
+    set: setDir, room_model: roomModel, refs: refs.tools, tools_root: path.join(outputRoot, 'tools'), work, replies, last_ask: lastAsk };
+}
 const litFixture = row => row.state.fixtures.find(item => item.spot.on) || null;
 const plain = text => String(text).replace(/_/g, ' ');
 function summarize(timeline, seat) {
@@ -182,7 +190,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
       return { promise: Promise.resolve({ ok: false, reason: chain.stop.why, receipt, top: topLine(TABLE, receipt), work }), work, cancel: () => {} };
     }
     const child = spawn('python', ['-B', path.join(HERE, 'chain.py')], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
-    const chain = { rows: [], recheck: null, checkRecheck: null, takeRead: null, picture: null, torso: null, stop: null };
+    const chain = { rows: [], recheck: null, checkRecheck: null, takeRead: null, picture: null, stop: null };
     // Where a chain that died without saying so was: the click hop after the last line it printed.
     const reachedHop = () => { const last = chain.rows.at(-1)?.n ?? (chain.checkRecheck?.ok ? 4 : chain.recheck?.ok ? 3 : 2); return CLICK_HOPS.find(n => n > last) ?? 17; };
     const promise = new Promise(resolve => {
@@ -194,7 +202,6 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
         if (row.hop === 'done') done = row;
         else if (row.hop === 'stopped') chain.stop = row.stop;
         else if (row.picture) chain.picture = row.picture;
-        else if (row.torso) chain.torso = row.torso;
         else if (row.recheck && row.n === 4) { chain.checkRecheck = { ...row.recheck, read: row.read }; onRow({ n: 4, word: row.recheck.ok ? 'ADAPTER' : 'MISSING', summary: row.recheck.ok ? 'the check prepare recorded, and no other' : row.recheck.reason }); }
         else if (row.recheck) { chain.recheck = { ...row.recheck, tools: row.tools, read: row.read }; chain.takeRead = row.read[0]; onRow({ n: 3, word: row.recheck.ok ? 'ADAPTER' : 'MISSING', summary: row.recheck.ok ? `re-checked ${row.recheck.frames} frames by hash` : row.recheck.reason }); }
         else { chain.rows.push(row); onRow(row); }
@@ -219,13 +226,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
       });
     });
     child.stdin.on('error', () => {}); // The child may be gone already; 'close' reports that.
-    // What prepare recorded for this take: frames.csv (the take's digest), take.json and its one check.
-    const wrote = n => prepared.hops[String(n)]?.wrote || [], check = wrote(4).find(file => /\/check-\d+\.json$/.test(file.path));
-    child.stdin.end(JSON.stringify({ take: path.join(setDir, take), take_digest: prepared.take_digest,
-      take_json_sha256: wrote(3).find(file => file.path.endsWith('/take.json'))?.sha256 || null,
-      check_file: check ? path.posix.basename(check.path) : null, check_sha256: check?.sha256 || null,
-      detector: prepared.hops['6'] || null, recorded: prepared.recorded, seat_top_m: seat[2],
-      set: setDir, room_model: roomModel, refs: refs.tools, tools_root: path.join(outputRoot, 'tools'), work, replies, last_ask: lastAsk }));
+    child.stdin.end(JSON.stringify(chainRequest({ take, prepared, setDir, roomModel, refs, outputRoot, work, replies, lastAsk })));
     return { promise, work, cancel: () => child.kill() };
   }
   return { empty_row: start.empty_row, startup: start.startup, runClick, seat_m: seat,

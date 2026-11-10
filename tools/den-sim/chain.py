@@ -7,18 +7,19 @@ module names (synth, records, method, check). Every process refuses all sockets.
 
 It is never told the scene. It gets a take folder, the set it sits in, and the reply store. Hops 11 and 12
 rebuild each router request's exact body from the take's own pixels and look Qwen's recorded reply up by
-the body's sha256 (step_ask); nothing here opens the truth folder or the display file. The one piece that
-exists nowhere else is person_to_aim, part of hop 17's row.
+the body's sha256 (step_ask); nothing here opens the truth folder or the display file. Hop 15 is person.py
+(step_person), which feeds nothing until step 6: the older brain still decides, through person_to_aim, part
+of hop 17's row and the one piece that exists nowhere else.
 
 Reads {"take", "take_digest", "take_json_sha256", "check_file", "check_sha256", "detector", "set",
-"room_model": {"path", "sha256", "by"}, "seat_top_m", "refs", "tools_root", "work", "replies", "last_ask"}
+"room_model": {"path", "sha256", "by", "label"}, "refs", "tools_root", "work", "replies", "last_ask"}
 as JSON on stdin, and "owed" for prepare.py --owed: the digests are the ones the take's prepare-receipt.json
-recorded for frames.csv, take.json and its check, and detector is its hop 6 part. Prints hop 3's and hop 4's
-re-checks by hash ({"n": 3, "recheck": ...}), the picture with the person boxes of its frame's row
-({"picture": ...}), one JSON line per hop, each with its word, the files it read and wrote with their
-digests, its tools against their pins, and its stand-ins, and the torso height against the limit
-({"torso": ...}); then {"hop": "done", ...} for the brain, {"hop": "owed", ...} for --owed, or
-{"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
+recorded for frames.csv, take.json and its check, and detector is its hop 6 part. The room model is the one
+hop 14 wrote the couch into at page start. Prints hop 3's and hop 4's re-checks by hash ({"n": 3, "recheck": ...}),
+the picture with the person boxes of its frame's row ({"picture": ...}), one JSON line per hop, each with its
+word, the files it read and wrote with their digests, its tools against their pins, and its stand-ins; then
+{"hop": "done", ...} for the brain, {"hop": "owed", ...} for --owed, or {"hop": "stopped", ...} at the hop the
+click was at when it stopped, never a hop 0.
 """
 import base64
 import csv
@@ -29,7 +30,6 @@ import os
 import re
 import runpy
 import shutil
-import statistics
 import subprocess
 import sys
 import tarfile
@@ -75,8 +75,6 @@ REPLY_FIELDS = {'asked_unix', 'host', 'root', 'http_status', 'raw', 'elapsed_s'}
 COCO17 =('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
           'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle')
 READING_STATES = ('engaged', 'ending')
-TORSO = ('left_shoulder', 'right_shoulder', 'left_hip', 'right_hip')
-ON_COUCH_ABOVE_SEAT_M, TORSO_WINDOW_S = 0.45, 2.0   # hop 15 step 5: the seat's top plus 0.45 m, over 2 s
 TABLE = {hop['n']: hop for hop in json.loads((HERE / 'hops.json').read_text(encoding='utf-8'))['hops']}
 
 
@@ -506,22 +504,33 @@ def no_track(with_person, frames, observations, output):
         with_person, frames, seen, ' '.join(output.split('\n')[1:2]) or 'den_track.py made no lines')
 
 
-def torso(observations, seat_top_m):
-    """How far the median height of supported shoulders and hips over the take's last 2 s sits from hop 15's
-    "on the couch" limit, the seat's top plus 0.45 m. Only the difference leaves: an absolute height in a real
-    room is a coordinate."""
-    people = [obs for obs in observations if obs['kind'] == 'keypoints' and obs['validity'] == 'valid']
-    if not people or seat_top_m is None:
-        return None
-    newest = max(obs['capture_ts'] for obs in people)
-    heights = [joint['xyz'][2] for obs in people if obs['capture_ts'] >= newest - TORSO_WINDOW_S
-               for joint in obs['joints_room'] if COCO17[joint['j']] in TORSO and joint['status'] == 'supported']
-    if not heights:
-        return dict(margin_m=None, joints=0, line='torso: no supported shoulder or hip in the last 2 s, so no height against the limit')
-    margin = round(statistics.median(heights) - (seat_top_m + ON_COUCH_ABOVE_SEAT_M), 3)
-    words = '%.2f m %s the limit' % (abs(margin), 'under' if margin <= 0 else 'over')
-    return dict(margin_m=margin, joints=len(heights), line='torso %s (median of %d supported shoulder and hip points over the last 2 s; '
-                'the limit is the seat\'s top plus 0.45 m)' % (words, len(heights)))
+def step_person(request):
+    """Hop 15: person.py on this click's files, need v0 loaded by file path from den-core's archive, one per track.
+    A room model with no couch reads MISSING, with why."""
+    import person
+    work = Path(request['work'])
+    need = person.load_need(Path(request['core_tree']) / 'tools' / 'den-core' / 'need.py')
+    try:
+        records, cards = person.states(read_jsonl(work / 'asks.jsonl'), read_jsonl(work / 'bundles.jsonl'), read_jsonl(work / 'facts.jsonl'),
+                                       read_jsonl(work / 'track' / 'tracks.jsonl'), read_jsonl(work / 'observe' / 'observations.jsonl'),
+                                       read_jsonl(request['room_model']), need)
+    except person.NoCouch as why:
+        return dict(missing=str(why))
+    person.write(work / 'person_states.jsonl', records)
+    return dict(missing=None, states=len(records), tracks=cards)
+
+
+def person_words(card):
+    """One track's card in words, with no coordinate: hop 15's row and the console say this."""
+    if card['on_couch'] is None:
+        couch = 'on the couch: not tested, %s' % ('the bundle was not safe to tie to one person' if card['held'] else 'no position')
+    elif card['on_couch']:
+        couch = 'on the couch: yes'
+    else:
+        couch = 'on the couch: no, the %s failed' % ' and '.join({'position': 'position half', 'height': 'height half', 'torso': 'height half (no supported shoulder or hip)'}[f]
+                                                              for f in card['failed'])
+    distance = '%.2f m from the seat point' % card['seat_distance_m'] if card['seat_distance_m'] is not None else 'no position'
+    return '%s %s, %s, spot %s, engagement %s' % (card['track_id'], distance, couch, card['region'] or 'none', card['engagement'])
 
 
 def step_core(request):
@@ -676,15 +685,12 @@ def chain(request):
     run_json = json.loads((observe / 'run.json').read_text(encoding='utf-8'))
     if (run_json.get('take_check') or {}).get('file') != name:
         raise Stop(7, 'replay read %s, not the check prepare recorded' % ((run_json.get('take_check') or {}).get('file') or 'no check'))
-    room_read = dict(path='%s/room-model.jsonl' % Path(room['path']).parent.name, sha256=sha256_file(room['path']),
+    room_read = dict(path=room.get('label') or '%s/room-model.jsonl' % Path(room['path']).parent.name, sha256=sha256_file(room['path']),
                      recorded=dict(kind='room model', by=room['by'], sha256=room['sha256']))
     emit(7, 'REAL', 'replay.py wrote %d observations, unscored: %d open slots on proposed values, on rendered depth.'
          % (run_json['gate']['records'], len(run_json['method']['open_slots'])), started,
          tools=observe_tools, read=[take_read, record_read, check_read, room_read, rows_read],
          wrote=[click.file(observe / 'observations.jsonl'), click.file(observe / 'run.json')], stand_ins=[])
-    line = torso(read_jsonl(observe / 'observations.jsonl'), request.get('seat_top_m'))
-    if line:
-        print(json.dumps(dict(torso=line)), flush=True)
 
     # Hop 8: tracks.
     at(8)
@@ -780,13 +786,33 @@ def chain(request):
              'the chain\'s and its source id rewritten, and a re-ask could differ.' % (root, ', '.join(days) or 'an unknown day', said), root=root, reply='real',
              ran='recorded %s, looked up now' % ', '.join(days) if days else 'looked up now', **twelve, stand_ins=named(12, 0, 1))
 
-    # Hop 13: need v0 on those lines, in den-core's real runner.
+    # Hop 13: need v0 on those lines, in den-core's real runner, which feeds the older brain until step 6. Hop 15:
+    # person.py, with one need per track. It feeds nothing yet, so whatever it says, the beam is decided as before.
     at(13)
     started = time.monotonic()
     core = click.own_step('core', dict(core_tree=str(trees['core']), facts=str(work / 'facts.jsonl'), log=str(work / 'den-core-log.jsonl')))
-    emit(13, 'ADAPTER', 'need v0 on those lines: %s. Track room, no position.' % (' then '.join(core['states']) or 'no change'), started,
-         tools=[t for t in tools['core'] if t['path'].startswith('tools/den-core/')], read=[click.read(work / 'facts.jsonl', 12)],
+    core_ms, core_tools = round((time.monotonic() - started) * 1000), [t for t in tools['core'] if t['path'].startswith('tools/den-core/')]
+    at(15)
+    started = time.monotonic()
+    try:
+        person = click.own_step('person', dict(core_tree=str(trees['core']), work=str(work), room_model=room['path']))
+    except Stop as failed:
+        person = dict(missing=failed.why)
+    per_track = '; '.join('%s %s' % (card['track_id'], ' then '.join(card['need_states']) or 'no change') for card in person.get('tracks') or []) or 'not run'
+    emit(13, 'ADAPTER', 'need v0 on those lines in den-core\'s runner: %s; that pass feeds the older brain until step 6. One need per track in '
+         'person.py (hop 15), on the replies its bundle was safe to take: %s.' % (' then '.join(core['states']) or 'no change', per_track), ms=core_ms,
+         tools=core_tools + head_tools('tools/den-sim/person.py'), read=[click.read(work / 'facts.jsonl', 12)],
          wrote=[click.file(work / 'den-core-log.jsonl')], stand_ins=named(13, 0), person=core['person'])
+    fifteen = dict(tools=head_tools(*own, 'tools/den-sim/person.py') + [t for t in core_tools if t['path'] == 'tools/den-core/need.py'],
+                   read=[click.read(observe / 'observations.jsonl', 7), click.read(work / 'track' / 'tracks.jsonl', 8), click.read(work / 'bundles.jsonl', 9),
+                         click.read(work / 'asks.jsonl', 12), click.read(work / 'facts.jsonl', 12), room_read])
+    later = 'Nothing reads it until step 6: the older brain still decides the beam, under its own 1.5 m rule.'
+    if person['missing']:
+        emit(15, 'MISSING', 'No person state: %s. %s' % (person['missing'], later), started, note=person['missing'], wrote=[], stand_ins=[], **fifteen)
+    else:
+        emit(15, 'ADAPTER', 'person.py wrote %d person states in canon\'s names, from need v0 per track and rules on the bundles\' joints, unscored: %s. %s'
+             % (person['states'], '; '.join(map(person_words, person['tracks'])) or 'no reply to state', later), started,
+             wrote=[click.file(work / 'person_states.jsonl')], stand_ins=named(15, 0, 1), person=person['tracks'], **fifteen)
 
     at(17)
     adapter, problem = person_to_aim(bundles, core['person'])
@@ -862,7 +888,7 @@ def main():
         runpy.run_path(script, run_name='__main__')
         return
     if len(sys.argv) == 3 and sys.argv[1] == '--step':
-        print(json.dumps(dict(ask=step_ask, core=step_core, picture=step_picture)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
+        print(json.dumps(dict(ask=step_ask, core=step_core, person=step_person, picture=step_picture)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
         return
     request = json.load(sys.stdin)
     try:

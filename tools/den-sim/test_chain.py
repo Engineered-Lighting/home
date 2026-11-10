@@ -8,7 +8,7 @@
 - weight_tools: the weights are read from detector-run.json whenever it parses, so rows that fail another
   condition never read as changed weights;
 - no_track: a person box with no track never reads nobody, and only person observations are counted;
-- torso: said relative to the limit only, the median of the supported, valid points of the last 2 s;
+- person_words: hop 15's row says a distance, which half of the couch test failed, the spot and the engagement;
 - person_to_aim takes the newest entry with both shoulders;
 - the click path calls no fake_detector.
 
@@ -194,43 +194,17 @@ class NoTrack(unittest.TestCase):
         self.assertIsNotNone(never.search("the detector saw nobody, nothing was asked"), "control: the nobody sentence is caught")
 
 
-def joint(j, z, status="supported"):
-    return {"j": j, "xyz": [1.0, 2.0, z], "status": status}
+class PersonWords(unittest.TestCase):
+    """Hop 15's row in words: a distance, yes or no and which half failed, the spot and the engagement. The rule itself
+    is test_person.py's."""
 
-
-class Torso(unittest.TestCase):
-    def observations(self, heights, at=100.0):
-        return [{"kind": "keypoints", "validity": "valid", "capture_ts": at + i * 0.25,
-                 "joints_room": [joint(5, heights[0]), joint(6, heights[1]), joint(11, heights[2]), joint(12, heights[3]), joint(0, 1.5)]}
-                for i in range(9)]
-
-    def test_said_relative_to_the_limit_only(self):
-        line = chain.torso(self.observations([0.92, 0.90, 0.76, 0.74]), seat_top_m=0.45)
-        self.assertEqual(line["margin_m"], -0.07)
-        self.assertTrue(line["line"].startswith("torso 0.07 m under the limit (median of 36 supported"), line["line"])
-        absolute = re.compile(r"(?<![0-9])(0\.83|0\.90|0\.45)(?![0-9])")
-        self.assertIsNone(absolute.search(line["line"].replace("0.45 m)", "")), "no absolute height, seat or limit")
-        self.assertIsNotNone(absolute.search("torso at 0.83 m"), "control: an absolute height is caught")
-        self.assertTrue(chain.torso(self.observations([1.4, 1.4, 1.0, 1.0]), seat_top_m=0.45)["line"].startswith("torso 0.30 m over the limit"))
-        uncertain = self.observations([0.8] * 4)
-        for obs in uncertain:
-            for entry in obs["joints_room"]:
-                entry["status"] = "uncertain"
-        self.assertIsNone(chain.torso(uncertain, 0.45)["margin_m"], "only supported joints count")
-        self.assertIsNone(chain.torso([], 0.45))
-
-    def test_the_median_of_valid_points_over_the_last_two_seconds(self):
-        newest = self.observations([0.80, 0.80, 0.80, 0.80], at=200.0)    # 9 entries, 200.0 to 202.0 s
-        older = self.observations([1.60, 1.60, 1.60, 1.60], at=190.0)     # 10 s earlier: outside the window
-        self.assertEqual(chain.torso(newest, 0.45)["margin_m"], -0.1)
-        self.assertEqual(chain.torso(newest + older, 0.45)["margin_m"], -0.1, "only the last 2 s count")
-        skewed = self.observations([0.80, 0.80, 0.80, 2.00])    # one hip far off: the median holds, a mean would not
-        self.assertEqual(chain.torso(skewed, 0.45)["margin_m"], -0.1)
-        invalid = self.observations([1.60, 1.60, 1.60, 1.60], at=201.0)
-        for obs in invalid:
-            obs["validity"] = "rejected:no_room_position:depth_absent"
-        self.assertEqual(chain.torso(newest + invalid, 0.45)["margin_m"], -0.1, "rejected observations don't count")
-        self.assertNotEqual(chain.torso(newest + self.observations([1.6] * 4, at=201.0), 0.45)["margin_m"], -0.1, "control: valid ones in the window do")
+    def test_which_half_failed_and_no_coordinate(self):
+        card = dict(track_id="trk-1", seat_distance_m=0.12, on_couch=True, failed=[], region="sofa-book", engagement="engaged", held=False)
+        self.assertEqual(chain.person_words(card), "trk-1 0.12 m from the seat point, on the couch: yes, spot sofa-book, engagement engaged")
+        off = dict(card, seat_distance_m=1.04, on_couch=False, failed=["position", "height"], region="handheld", engagement="none")
+        self.assertEqual(chain.person_words(off), "trk-1 1.04 m from the seat point, on the couch: no, the position half and height half failed, spot handheld, engagement none")
+        self.assertIn("not tested, the bundle was not safe", chain.person_words(dict(card, on_couch=None, held=True)))
+        self.assertNotEqual(chain.person_words(off), chain.person_words(dict(off, failed=["height"])), "control: the half named follows the result")
 
 
 class PersonToAim(unittest.TestCase):

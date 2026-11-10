@@ -31,6 +31,7 @@ import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import { prepareBrain, privateReason, standInSofa } from './brain.mjs';
+import { SPOT_ABOVE_SEAT_M, writeCouch } from './couch_to_room.mjs';
 import { dataRoot, newestPreparedSet, refusedSince } from './data-root.mjs';
 import { BRAIN_BASE, createFeed } from './feed.mjs';
 import { TABLE, headTools, receiptView, sha256 } from './receipt.mjs';
@@ -38,7 +39,7 @@ import { TABLE, headTools, receiptView, sha256 } from './receipt.mjs';
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..'), SRC = path.join(ROOT, 'app/src');
 const refs = JSON.parse(fs.readFileSync(path.join(HERE, 'refs.json'), 'utf8'));
-const SEAT_HEIGHT_M = .45, SPOT_ABOVE_SEAT_M = .30;   // the spot: 0.30 m above your mark's seat point, the rule hop 14 states
+const SEAT_HEIGHT_M = .45;
 const MARK_SCHEMA = 'home-registered-sofa-target-1', CAMERA_ID = 'den-virtual';
 
 function option(name, fallback) {
@@ -242,7 +243,17 @@ function placement() {
     transform: mine ? readFile(path.join(FITS, found.folder, 'transform.json')) : null };
 }
 const placed = placement();
-const roomModel = placed.room_model || { path: path.join(SET, setInfo.fit.folder, 'room-model.jsonl'), sha256: setInfo.fit.room_model_sha256, by: 'set.json' };
+// Hop 14, after the re-fit: the couch and its spot appended as one revision to a copy of the fit's private room model,
+// beside it, so the fit's own file still matches its receipt. Never into the prepared set's. Digests and labels only.
+const couchIn = (() => {
+  if (!placed.registered) return { error: 'the re-fit was refused, so no private room model holds the couch' };
+  const label = `fits/${placed.folder}/couch/room-model.jsonl`, file = path.join(FITS, placed.folder, 'couch', 'room-model.jsonl');
+  try {
+    return { label, file, ...writeCouch({ seatFile: placed.files.mark, registration: registration.doc, from: placed.room_model.path, to: file, source: couch.source }) };
+  } catch (error) { return { error: `couch_to_room.mjs refused the ${couch.source === 'sofa_mark' ? 'mark' : 'stand-in seat'}: ${privateReason(error)}` }; }
+})();
+const roomModel = couchIn.sha256 ? { path: couchIn.file, sha256: couchIn.sha256, by: 'couch_to_room.mjs at page start', label: couchIn.label }
+  : placed.room_model || { path: path.join(SET, setInfo.fit.folder, 'room-model.jsonl'), sha256: setInfo.fit.room_model_sha256, by: 'set.json' };
 // The invented camera's place in the room model clicks use, for the page's marker. Never printed.
 const cameraM = (() => {
   const entry = JSON.parse(fs.readFileSync(roomModel.path, 'utf8').trim().split('\n').at(-1));
@@ -271,17 +282,20 @@ const brain = startBrain();
 const startup = brain.startup ? `${brain.startup.join(', ')}${brain.startup.some(words => words.endsWith('clear')) ? '' : '. None passes: say which way to turn the reader, and an agent writes facing.json'}` : null;
 
 /* ---------- what this page built when it started: hops 5's re-fit, 14 and 20 ---------- */
-const couchTools = ['tools/den-sim/run.mjs', 'tools/den-sim/brain.mjs', 'tools/den-room/brain-targets.mjs', 'app/src/home-lighting-sofa-target.js'];
+const couchTools = ['tools/den-sim/couch_to_room.mjs', 'tools/den-sim/run.mjs', 'tools/den-sim/brain.mjs', 'app/src/home-lighting-sofa-target.js'];
 function couchRow() {
-  if (couch.source === 'sofa_mark') {
-    return { n: 14, word: 'ADAPTER', ran: 'built at page start', tool: { path: 'tools/den-room/brain-targets.mjs', pin: 'HEAD' }, tools: headTools(couchTools),
-      summary: 'Your sofa mark, checked by its seal against your registration export, in the older brain\'s geometry.',
-      read: placed.read.filter(file => ['your mark', 'your export'].includes(file.recorded.kind)), wrote: [],
-      stand_ins: ["the older brain's geometry holds the mark: its own 1.5 m rule decides on the couch, and its hand point is the spot"] };
-  }
-  return { n: 14, word: 'SCRIPTED', ran: 'built at page start', tool: { path: 'tools/den-sim/run.mjs', pin: 'HEAD' }, tools: headTools(couchTools),
-    summary: `A DECLARED point (${couch.where}) with a stand-in zone sealed around it. Not your sofa mark.`, read: [], wrote: [],
-    stand_ins: ['a DECLARED point with a stand-in zone, not your sofa mark'] };
+  const mine = couch.source === 'sofa_mark', fit = placed.registered && { path: `fits/${placed.folder}/room-model.jsonl`, sha256: couchIn.from_sha256 || null,
+    recorded: { kind: 'room model', by: `refit-receipt.json of fit ${placed.folder}`, sha256: placed.room_model.sha256 } };
+  // Your mark and export as the re-fit read them; the stand-in seat run.mjs sealed is no recorded input, so the row says so.
+  const seat = mine ? placed.read.filter(file => ['your mark', 'your export'].includes(file.recorded.kind))
+    : [{ path: 'stand-in-seat.json', sha256: couchIn.seat_sha256 || null, recorded: { kind: 'a stand-in seat', by: 'run.mjs at page start', sha256: couchIn.seat_sha256 || null } }];
+  const row = { n: 14, word: mine ? 'ADAPTER' : 'SCRIPTED', couch: couch.source, ran: 'built at page start', tool: { path: 'tools/den-sim/couch_to_room.mjs', pin: 'HEAD' },
+    tools: headTools(couchTools), read: [...seat, ...(fit ? [fit] : [])], wrote: couchIn.sha256 ? [{ path: couchIn.label, sha256: couchIn.sha256 }] : [],
+    stand_ins: mine ? TABLE.hops[13].stand_ins.slice() : ['a DECLARED point with a stand-in zone, not your sofa mark'] };
+  const where = mine ? 'Your sofa mark, checked by its seal against your registration export,' : `A DECLARED point (${couch.where}) with a stand-in seat sealed around it, not your sofa mark,`;
+  if (couchIn.error) return { ...row, word: 'MISSING', note: couchIn.error, summary: `${where} is in no room model: ${couchIn.error}.` };
+  return { ...row, summary: `${where} written by couch_to_room.mjs into the pipeline's own RoomModel as revision ${couchIn.version}: surface sofa, landmark sofa-seat, `
+    + `and the spot sofa-book ${SPOT_ABOVE_SEAT_M.toFixed(2)} m above the seat point by a stated rule. The fit's own file is unchanged.` };
 }
 function homeRow() {
   const now = sourceIsPinned();
@@ -312,7 +326,9 @@ function everyRow(take, result) {
   const said = {};
   for (const ask of view.qwen?.asks || []) if (ask.said) said[ask.said.split(',')[0]] = (said[ask.said.split(',')[0]] || 0) + 1;
   const words = Object.entries(said).map(([word, n]) => `${word} x${n}`).join(', ');
+  const tracks = view.person?.tracks || [];
   every.rows.push({ take, click: view.click, box: boxes.length ? boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ') : view.boxes ? 'none' : 'rows did not hold',
+    person: tracks.length ? tracks.map(row => row.on_couch === true ? 'on the couch' : row.on_couch === false ? 'not on the couch' : 'none').join(', ') : 'none',
     qwen: !twelve.reached ? 'not asked' : twelve.word === 'MISSING' ? `MISSING: ${twelve.summary.split(':')[0]}` : `${twelve.word === 'SCRIPTED' ? 'fake vLLM, scripted: ' : 'asked: '}${words}`,
     root: view.qwen?.root || null, beam: lit ? `lit, ${result.timeline.summary.fixture_id.match(/mount-\d+/)?.[0] || result.timeline.summary.fixture_id}` : 'off',
     why: result.receipt.stopped ? `hop ${result.receipt.stopped.hop}: ${result.receipt.stopped.why.replace(/^Qwen has not seen these exact frames: /, '')}` : lit ? '' : result.timeline?.summary.refusal || '' });
@@ -338,10 +354,11 @@ function startClick(body) {
     const picture = path.join(result.work, 'picture.png');
     lastClick = { click: result.receipt.click, run: runId, view: receiptView(result.receipt), top: result.top, receipt: result.receipt, said: result.said || null,
       picture: fs.existsSync(picture) ? picture : null, stills: path.join(result.work, 'stills') };
-    // The torso line, relative to the limit only: in the console, run.json and the panel.
-    if (result.receipt.torso) {
-      console.log(`Click ${result.receipt.click}: ${result.receipt.torso.line}`);
-      clickLines.push({ click: result.receipt.click, take, torso: result.receipt.torso.line });
+    // The person card's words, distances only: in the console, run.json and the panel.
+    if (lastClick.view.person) {
+      const { lines, tracks } = lastClick.view.person, words = (tracks.length ? lines.slice(0, -2) : lines).join(' ');
+      console.log(`Click ${result.receipt.click}: person: ${words}`);
+      clickLines.push({ click: result.receipt.click, take, person: words });
       writeRunJson();
     }
     if (!result.ok) { feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
@@ -511,6 +528,7 @@ server.listen(PORT, HOST, () => {
     ...(qwen.owed ? [`Qwen still owes ${qwen.owed} replies. In a new PowerShell window, paste: ${PASTE}`] : []),
     ...(qwen.owed_set && qwen.owed_set !== setInfo.set ? [`The owed list on file is for set ${qwen.owed_set}, not this one: an agent runs prepare.py --owed for set ${setInfo.set}.`] : []),
     `Camera registration: ${placed.summary}`,
+    `Couch in the click's room model: ${couchIn.error || `revision ${couchIn.version}, from ${couch.source === 'sofa_mark' ? 'your sofa mark' : 'the DECLARED stand-in seat'}`}`,
     ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
     ...prepareNotes.map(note => 'Note: ' + note), ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
     `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));

@@ -175,7 +175,7 @@ export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, sta
     rows.push(row ? { name: TABLE.hops[n - 1].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...row } : null);
   }
   rows.push({ ...start.couch, n: 14, name: TABLE.hops[13].name, reached: true });
-  rows.push(missing(15, "Not built: rung 6 isn't, so nothing joins the person's state to a track; hop 17's adapter does it."));
+  rows.push(byN.get(15) ? { name: TABLE.hops[14].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...byN.get(15) } : null);
   rows.push(missing(16, 'Not built: no light model exists before any picture yet.', { ran: 'not built at page start' }));
   rows.push(brain?.row || null);
   rows.push(brain?.feedRow || null, brain?.motionRow || null, start.home && { ...start.home, name: TABLE.hops[19].name, reached: true });
@@ -185,7 +185,31 @@ export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, sta
   const stop = chain.stop || brain?.stop || null;
   const out = rows.map((row, i) => finalRow(row, i + 1, stop));
   return { schema: SCHEMA, click, take: takeId, set: setId, recorded: prepared.recorded, written_unix: Date.now() / 1000,
-    prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, picture: chain.picture || null, torso: chain.torso || null, rows: out };
+    prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, picture: chain.picture || null, rows: out };
+}
+
+// The person card (hop 15), in words from what this click's row recorded, never from the button: per track how far it
+// is from the seat point, on the couch or not and which half failed, the spot by name and the engagement. No coordinate.
+const metres = v => `${v.toFixed(2)} m`;
+export function personCard(receipt) {
+  const row = receipt.rows.find(item => item.n === 15), couch = receipt.rows.find(item => item.n === 14);
+  if (!row || row.reached === false) return null;
+  if (row.word === 'MISSING' || !Array.isArray(row.person)) return { tracks: [], lines: [`Person state: MISSING: ${row.note || row.summary}.`] };
+  const placed = couch?.couch === 'sofa_mark' ? 'On the picture\'s couch, which this simulation placed on your mark.'
+    : 'On the picture\'s couch, which this simulation placed on a DECLARED stand-in seat, not your sofa mark.';
+  const lines = row.person.flatMap(card => {
+    const half = { position: `the position half failed: ${metres(card.footprint_m)} outside the couch's footprint, past its 0.15 m reach`,
+      height: `the height half failed: torso ${metres(card.torso_margin_m)} over the limit, from the ${card.torso_from}`,
+      torso: 'the height half failed: no supported shoulder or hip in the bundle\'s last 2 s' };
+    const couchWords = card.on_couch === true ? 'On the couch: yes.' : card.on_couch === false ? `On the couch: no: ${card.failed.map(name => half[name]).join('; ')}.`
+      : `On the couch: not tested yet: ${card.held ? 'its bundle was not safe to tie to one person, so the reply was held' : 'no position'}.`;
+    const spot = card.region === 'sofa-book' ? 'The spot: sofa-book, the book spot 0.30 m above the seat point. Its marker in the room comes at step 7.'
+      : card.region === 'handheld' ? 'The spot: handheld, which isn\'t in the model, so no target.' : 'The spot: none yet.';
+    return [`Track ${card.track_id}: ${card.seat_distance_m === null ? 'no position' : `${metres(card.seat_distance_m)} from the seat point, across the floor`}.`, couchWords, spot,
+      `Engagement: ${card.engagement}, support ${card.support}, from need v0 on this track's replies.`];
+  });
+  return { tracks: row.person.map(card => ({ track_id: card.track_id, on_couch: card.on_couch })), lines: [...lines, placed,
+    'The older brain still decides the beam until step 6, under its own 1.5 m rule, so a figure standing within 1.5 m of the seat would still light.'] };
 }
 
 // Each row as the click left it. A hop past where the click stopped keeps its expected word, greyed,
@@ -226,7 +250,7 @@ export function receiptView(receipt) {
   // Qwen on this click, from hop 12's row: its word, the model's served root, and what it said per request.
   const twelve = receipt.rows.find(row => row.n === 12);
   const qwen = twelve?.reached !== false && twelve?.asks ? { word: twelve.word, root: twelve.root || null, reply: twelve.reply || null, said: twelve.said || null, asks: twelve.asks } : null;
-  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, torso: receipt.torso?.line || null, qwen,
+  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, person: personCard(receipt), qwen,
     boxes: Array.isArray(receipt.picture?.boxes) ? receipt.picture.boxes : null, picture_note: pictureNote(receipt.picture),
     rows: receipt.rows.map(row => ({ n: row.n, name: row.name, word: row.word, reached: row.reached !== false, ran: row.ran, group: group(row),
       summary: row.summary || row.note || '', stand_ins: row.stand_ins || [], tool: row.tool?.path || null })) };

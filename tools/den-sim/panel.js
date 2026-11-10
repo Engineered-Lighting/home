@@ -1,7 +1,7 @@
 /* Den simulation panel, injected by tools/den-sim/run.mjs into the unchanged Home.
  * A red strip, one button per prepared take, the top line, the picture read back out of the
- * take with the detector's person box, score and joints from that frame's recorded row, the torso
- * height against the on-the-couch limit, and one hop list read from the click's run-receipt.json. It reads Home's real overlay,
+ * take with the detector's person box, score and joints from that frame's recorded row, the person
+ * card (hop 15), and one hop list read from the click's run-receipt.json. It reads Home's real overlay,
  * presses Home's own view buttons, selects the fixture as a person would, and posts only to
  * /__sim/feed on this harness. There is no send control. It prints no coordinate: the aim target
  * and the hand point show only their distance from the seat, and the camera is a marker. */
@@ -38,7 +38,8 @@
     #den-sim-panel [data-den-sim-picture-box] { position: relative; margin: 4px 0; }
     #den-sim-panel [data-den-sim-picture] { display: block; width: 100%; box-sizing: border-box; background: #000; border: 1px solid #333; border-radius: 4px; }
     #den-sim-panel [data-den-sim-boxes] { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-    #den-sim-panel [data-den-sim-torso] { margin: 4px 0; padding: 4px 6px; border-left: 3px solid #2a5fa8; background: rgba(42,95,168,.18); }
+    #den-sim-panel [data-den-sim-person] { margin: 4px 0; padding: 4px 6px; border-left: 3px solid #2a5fa8; background: rgba(42,95,168,.18); }
+    #den-sim-panel [data-den-sim-person] span { display: block; }
     #den-sim-panel [data-den-sim-command] { margin: 6px 0; padding-top: 6px; border-top: 1px solid #555; }
     #den-sim-panel [data-den-sim-not-sent] { background: #b00020; color: #fff; font: 700 12px/20px system-ui, sans-serif; text-align: center; border-radius: 4px; margin-bottom: 5px; }
     #den-sim-panel pre { margin: 4px 0; padding: 5px; max-height: 220px; overflow: auto; background: #000; border: 1px solid #333; border-radius: 4px;
@@ -61,7 +62,8 @@
     #den-sim-panel [data-den-sim-owed] { border-left-color: #b00020; background: rgba(176,0,32,.18); }
     #den-sim-panel code { display: block; margin: 4px 0; padding: 4px; background: #000; border: 1px solid #333; border-radius: 4px; font: 10.5px/1.35 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
     #den-sim-panel table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 10.5px; table-layout: fixed; }
-    #den-sim-panel th:nth-child(1) { width: 27%; } #den-sim-panel th:nth-child(2) { width: 15%; } #den-sim-panel th:nth-child(3) { width: 25%; } #den-sim-panel th:nth-child(4) { width: 14%; }
+    #den-sim-panel th:nth-child(1) { width: 22%; } #den-sim-panel th:nth-child(2) { width: 13%; } #den-sim-panel th:nth-child(3) { width: 20%; } #den-sim-panel th:nth-child(4) { width: 14%; }
+    #den-sim-panel th:nth-child(5) { width: 12%; }
     #den-sim-panel th, #den-sim-panel td { border: 1px solid #333; padding: 2px 4px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
   ` }));
 
@@ -85,7 +87,7 @@
   const picture = el('img', { 'data-den-sim-picture': '1', alt: 'The take\'s own frame, read back out of its NV12 plane', hidden: true });
   const pictureBox = el('div', { 'data-den-sim-picture-box': '1', hidden: true }, picture);
   const pictureNote = el('span', { className: 'note', 'data-den-sim-picture-note': '1', hidden: true });
-  const torsoLine = el('div', { 'data-den-sim-torso': '1', hidden: true });
+  const personCard = el('div', { 'data-den-sim-person': '1', hidden: true });
   // The model's box, score and joints, drawn in the frame's own pixels from that frame's recorded row.
   const SVG = 'http://www.w3.org/2000/svg', JOINT_MIN = .4;   // the pose manifest's score_threshold: a joint at or over it is supported
   const EDGES = [[0, 1], [0, 2], [1, 3], [2, 4], [5, 6], [5, 7], [7, 9], [6, 8], [8, 10], [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16]];
@@ -127,7 +129,7 @@
   const owedBox = el('div', { 'data-den-sim-owed': '1', hidden: true }, owedText, pasteCode, copyButton);
   const lastAskBox = el('div', { 'data-den-sim-last-ask': '1', hidden: true });
   const everyBox = el('div', { 'data-den-sim-every': '1', hidden: true });
-  const body = el('div', { 'data-den-sim-body': '1' }, topLine, pictureBox, pictureNote, torsoLine, qwenBox, brainBox, readback, commandBox, candidates, hops, proof);
+  const body = el('div', { 'data-den-sim-body': '1' }, topLine, pictureBox, pictureNote, personCard, qwenBox, brainBox, readback, commandBox, candidates, hops, proof);
   const panel = el('aside', { id: 'den-sim-panel', 'aria-label': 'Den simulation' }, sceneButtons, everyButton, el('div', { className: 'row' }, resetButton, hideButton),
     message, choice, owedBox, lastAskBox, everyBox, startupBox, inputNotes, body);
   document.body.append(strip, panel);
@@ -231,9 +233,11 @@
     if (key === sim.clickShown) return;
     sim.clickShown = key;
     topLine.hidden = pictureBox.hidden = pictureNote.hidden = !click;
-    torsoLine.hidden = !click?.torso;
+    personCard.hidden = !click?.person;
     if (!click) return;
-    torsoLine.textContent = click.torso ? `Against hop 15's on-the-couch limit, which step 5 builds: ${click.torso}.` : '';
+    // The person card: hop 15's words, rebuilt from what this click's row recorded, never from the button.
+    personCard.replaceChildren(...(click.person ? [el('strong', { textContent: 'Person state (hop 15)' }),
+      ...click.person.lines.map(line => el('span', { 'data-den-sim-person-line': '1', textContent: line }))] : []));
     const top = click.top_line;
     topLine.dataset.verdict = top.verdict;
     topLine.replaceChildren(el('strong', { 'data-den-sim-top-line-text': '1', textContent: top.line }), el('span', { className: 'note', 'data-den-sim-count': '1', textContent: top.count_line }));
@@ -350,11 +354,11 @@
         setFeedEnabled(true);
         if (status.click) showCommand(status.click.click);
         const swing = feed.swing, decided = feed.summary, modeled = 'Lighting is on: Home\'s modeled view, not measured.';
-        // Said on every lit result, never chosen by the button: nothing tests for being on the couch yet.
+        // Said on every lit result, never chosen by the button: hop 15's test for being on the couch drives nothing until step 6.
         const qwen = status.click?.qwen, asked = (qwen?.asks || []).filter(ask => ask.said);
         const counted = [...new Set(asked.map(ask => ask.said))].map(said => `${said} on ${asked.filter(ask => ask.said === said).length} of ${asked.length}`).join('; ');
         const words = qwen?.word === 'SCRIPTED' ? `The words were a fake vLLM's, scripted for a test: ${counted}.` : qwen ? `Qwen's words, recorded once from ${qwen.root}: ${counted}.` : '';
-        const scripted = `The older brain's own 1.5 m rule decides whether the reader is on the couch, so a figure standing within 1.5 m of the seat lights a spot too, until step 5 builds the test for being on the couch. ${words}`;
+        const scripted = `The older brain's own 1.5 m rule decides whether the reader is on the couch, so a figure standing within 1.5 m of the seat lights a spot too, until step 6: hop 15's own test, on the person card, drives nothing yet. ${words}`;
         message.textContent = feed.phase === 'holding'
           ? `The beam is on the reader's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. ${scripted} Nothing was sent. ${modeled}`
           : `The brain refused: ${decided.refusal}. ${words} All four spots stay off. Nothing was sent. ${modeled}`;
@@ -405,8 +409,8 @@
     const label = take => status.scenes.find(scene => scene.take === take)?.label || take;
     const cells = (tag, values) => el('tr', {}, ...values.map(value => el(tag, { textContent: value })));
     everyBox.replaceChildren(el('strong', { textContent: `Run every scene: ${table.rows.length} of ${status.scenes.length}` }),
-      el('table', { 'data-den-sim-every-table': '1' }, cells('th', ['Scene', 'Box', 'Qwen', 'Beam', 'Why it stopped']),
-        ...table.rows.map(row => cells('td', [label(row.take), row.box, row.qwen, row.beam, row.why || '–']))),
+      el('table', { 'data-den-sim-every-table': '1' }, cells('th', ['Scene', 'Box', 'Qwen', 'Person', 'Beam', 'Why it stopped']),
+        ...table.rows.map(row => cells('td', [label(row.take), row.box, row.qwen, row.person, row.beam, row.why || '–']))),
       el('span', { className: 'note', 'data-den-sim-every-note': '1', textContent: `No meter on this run. The top line stays as the last single click set it. ${table.verdict ? `MISSING: ${table.verdict}.`
         : table.roots.length ? `Every reply on this table came from one model root, ${table.roots[0]}.` : 'No reply was used on this table.'}` }));
   }

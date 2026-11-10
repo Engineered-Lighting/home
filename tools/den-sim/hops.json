@@ -48,7 +48,7 @@
   {"n": 14, "name": "Couch", "word": "ADAPTER", "adapter": "written", "when": "page", "step": 5, "reads": ["your mark", "your export"],
    "tool": {"path": "tools/den-sim/couch_to_room.mjs", "pin": "HEAD"}, "recorded_inputs": ["your mark", "your export", "room model"],
    "stand_ins": ["the spot placed 0.30 m above your mark's seat point by a stated rule", "the picture's couch is authored, and placed on your mark"]},
-  {"n": 15, "name": "Person state", "word": "ADAPTER", "adapter": "written", "when": "click", "step": 5, "reads": [8, 9, 12, 13, 14],
+  {"n": 15, "name": "Person state", "word": "ADAPTER", "adapter": "written", "when": "click", "step": 5, "reads": [7, 8, 9, 12, 13, 14],
    "tool": {"path": "tools/den-sim/person.py", "pin": "HEAD"}, "recorded_inputs": ["room model"],
    "stand_ins": ["engagement is room-level words joined to the only track; rung 6 isn't built", "geometry real and unscored"]},
   {"n": 16, "name": "Light model", "word": "ADAPTER", "adapter": "written", "when": "page", "step": 6, "reads": [14, "your sockets"],

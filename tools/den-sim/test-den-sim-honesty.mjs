@@ -148,8 +148,9 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
   });
 
   await t.test('the honesty flags on a model\'s words: inference ran on the activity, and the inputs stay scripted while occupancy is typed', async () => {
-    const real = await rewritten(owedOf()[reading], reply => ({ ...reply, root: 'test-root-not-a-model' }), async () => {
-      const done = await click(reading);
+    // Phone: a timeline that lights nothing plays with no fixture report, which these clicks don't send.
+    const real = await rewritten(owedOf()[phone], reply => ({ ...reply, root: 'test-root-not-a-model' }), async () => {
+      const done = await click(phone);
       return { ...done, state: await (await fetch(ORIGIN + Client.BASE + '/state')).json() };
     });
     assert.deepEqual([real.click.rows[11].word, real.click.qwen.reply], ['ADAPTER', 'real']);
@@ -157,7 +158,7 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     assert.deepEqual([inputs.inference_ran, inputs.activity_scripted, activity.source], [true, false, 'den_sim_la_direct'], 'the activity is the model\'s');
     assert.deepEqual([inputs.scripted, occupancy.source], [true, 'SIMULATION-scripted'], 'and the document still says its inputs are scripted, since occupancy is typed');
     assert.match(real.state.why, /Qwen's recorded words/);
-    const fake = await click(reading), state = await (await fetch(ORIGIN + Client.BASE + '/state')).json();
+    const fake = await click(phone), state = await (await fetch(ORIGIN + Client.BASE + '/state')).json();
     assert.deepEqual([fake.click.qwen.reply, state.inputs.inference_ran, state.inputs.activity_scripted, state.activity.source], ['fake', false, true, 'SIMULATION-scripted'], 'control: a fake vLLM\'s words are no inference');
   });
 

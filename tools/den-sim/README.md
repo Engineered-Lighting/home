@@ -75,12 +75,17 @@ to the click's receipt, measured, then the brain's 3 s wait and the swing):
 6. Beside it, `person.py` (hop 15) writes `person_states.jsonl` in the field names of the
    architecture's `person_state` record: one unchanged need v0 per track, fed only the replies whose
    bundle was safe to tie to that track, and rules on the track's own joints, each using only what
-   was known when the reply arrived. It tests whether the person is on the couch: their position
-   within 0.15 m of the couch's footprint, and the median height of their supported shoulders and
-   hips over 2 s at most the seat's top plus 0.45 m, or with no hip, shoulders at most 1.20 m above
-   the floor. Seated, the spot is `sofa-book`; otherwise `handheld`, which has no target. Nothing
-   reads these states until step 6: **the older brain still decides the beam**, under its own 1.5 m
-   rule, exactly as before.
+   was known when the reply arrived. Besides the bundles, replies and room model, it reads hop 7's
+   observations, only to date each Track line, which carries no time of its own. It tests whether
+   the person is on the couch: their position within 0.15 m of the couch's footprint, and the median
+   height of their supported shoulders and hips over 2 s at most the seat's top plus 0.45 m, or with
+   no hip, shoulders at most 1.20 m above the floor, both compared in whole millimetres. Seated, the
+   spot is `sofa-book`; otherwise `handheld`, which has no target. Each field's support time is the
+   capture time of the newest evidence it rests on, and a state is written when a value or its
+   support status changes. Nothing reads these states until step 6: **the older brain still decides
+   the beam**, under its own 1.5 m rule, exactly as before. The two need v0 passes can part: the
+   runner's takes every reply, `person.py`'s only the safe ones, so on the real takes, whose first
+   bundle isn't safe, it engages one reply later. Hop 13's row says where.
 7. One fixture swings to the reader's hand point at about 30 degrees a second, and the exact
    command appears, marked `NOT SENT`.
 
@@ -88,9 +93,11 @@ At page start, after the re-fit, `couch_to_room.mjs` (hop 14) checks the couch's
 Home's own validator and appends one revision to a copy of the fit's private `room-model.jsonl`, by
 den-register's own rule: a seat surface `sofa`, its landmark `sofa-seat`, and the spot `sofa-book`
 0.30 m above the seat point. The fit's own file is left as its receipt names it. That copy is the room
-model every click reads, held to the digest written at page start. With your sofa mark (below) the
-couch is your mark, and hop 14 reads ADAPTER. Without it, the couch is the public stand-in seat sealed
-around the DECLARED point, and hop 14 stays SCRIPTED.
+model every click reads, held to the digest written at page start, and the couch is placed from the
+very seat bytes the re-fit read. With your sofa mark (below) the couch is your mark, and hop 14 reads
+ADAPTER. Without it, the couch is the public stand-in seat sealed around the DECLARED point, and hop
+14 stays SCRIPTED. On a click that stops before hop 14, its row keeps the word it was built with,
+greyed.
 
 The click is told the take's folder id and Home's report of the fixtures, never the scene. The
 button labels live in the set's `display.json`, which only the panel reads (without it, the
@@ -104,8 +111,10 @@ fail hop 6's checks, no box is drawn and the note says the rows did not pass, ne
 holds no person. Under the picture, the person card says what hop 15 found, per track: how far the
 person is from the seat point across the floor, "on the couch: yes" or "no" with which half of the
 test failed, the spot by name (the `sofa-book` spot's marker in the room comes at step 7) and the
-track's engagement. It says the couch is the picture's couch, placed on your mark or on a DECLARED
-stand-in seat, and that the older brain still decides the beam until step 6, so a figure standing
+track's engagement. A track whose replies were all held reads "not tested yet", and one with no
+supported shoulder or hip says that half failed. It says the couch is the picture's couch, placed on
+your mark or on a DECLARED stand-in seat, says the facing is yours when `facing.json` turned the
+reader, and that the older brain still decides the beam until step 6, so a figure standing
 within 1.5 m of the seat would still light. It holds distances and words only, never a coordinate.
 The same words go to the console and to the run's `run.json`.
 
@@ -135,7 +144,8 @@ the page and clears the aim.
 
 **Run every scene** presses all five in turn with no reload, swings the beam where each lights,
 and fills a plain table: scene, box, Qwen (asked or not, and its words), person (on the couch, not on
-the couch, or none), beam, and why it stopped. It checks that every reply on the table came from one model, says "no meter on this
+the couch, not tested when every reply was held, MISSING with why, or none when no track reached hop
+15), beam, and why it stopped. It checks that every reply on the table came from one model, says "no meter on this
 run", and leaves the top line as your last single click set it.
 
 ## Qwen's words: the one paste
@@ -246,8 +256,9 @@ it names, checked by its seal. Once both are there, the start places the picture
 mark, the reader facing away from the mark's longest edge toward the middle of the floor, and
 prints one line in words: which fixtures pass for that facing and the spot, for example
 `F1 clear, F2 refused: in front of reader`. If none passes, say which way to turn the reader,
-and an agent writes `facing.json` there: one number of degrees, left positive. The re-fit runs
-only when the mark, the export, `facing.json`, or the set's clicks or calibration changed.
+and an agent writes `facing.json` there: one number of degrees, left positive. The start then
+names the turn, and the person card says the facing is yours. The re-fit runs only when the mark,
+the export, `facing.json`, or the set's clicks or calibration changed.
 
 Without a mark, a square stand-in seat around the declared point places the picture's couch. A
 square has no single longest edge, so wherever the point is, the reader's facing is a tie-break,

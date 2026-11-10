@@ -140,7 +140,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
   await t.test('the page says what it is before anything runs', async () => {
     await openHome(page);
     const strip = await page.textContent('[data-den-sim-strip]');
-    for (const words of ['SIMULATION', 'rendered takes', 'a real detector\'s recorded rows', 'Qwen\'s words recorded once and looked up by exact bytes', 'nothing is sent', 'AUTHORED ROOM', 'AUTHORED SOCKETS', 'DECLARED',
+    for (const words of ['SIMULATION', 'rendered takes', 'a real detector\'s recorded rows', 'no Qwen reply on file yet', 'nothing is sent', 'AUTHORED ROOM', 'AUTHORED SOCKETS', 'DECLARED',
       'INVENTED CAMERA: it does not exist', 'Home\'s code from this PC\'s harness, not your deployed Home']) assert.ok(strip.includes(words), `the strip says ${words}: ${strip}`);
     assert.deepEqual(await page.locator('[data-den-sim-feed]').allTextContents(), display.map(scene => scene.label), 'one button per prepared take, labelled from the display file');
     assert.deepEqual(await page.locator('[data-den-sim-feed]').evaluateAll(nodes => nodes.map(node => node.dataset.denSimFeed)), display.map(scene => scene.take), 'a button carries a take id, never a word');
@@ -175,6 +175,17 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(await page.isVisible('[data-den-sim-owed]'), true, 'the paste line stays in view');
     assert.equal(await page.locator('[data-den-sim-ask]').count(), 5, 'each request, its stills and "no reply on file"');
     assert.match(await page.textContent('[data-den-sim-ask="rq-00002"]'), /^rq-00002: frames \d+, \d+, \d+ \([0-9.]+, [0-9.]+, 0 s before the newest\): no reply on file$/);
+    // The Brain card says why the brain never ran: Qwen hasn't seen the frames, not a broken pipeline.
+    await page.waitForFunction(() => document.querySelector('[data-den-sim-value="says"]')?.textContent === 'not run: Qwen has not seen these frames', null, { timeout: 10000 });
+    // The stills each body would send, shown as the very JPEGs: rq-00001 has 2, the others 3, each 640x360, served by their sha256.
+    const asks = (await statusOf()).click.qwen.asks;
+    const stills = page.locator('[data-den-sim-still]');
+    assert.equal(await stills.count(), asks.reduce((n, ask) => n + ask.jpegs.length, 0));
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-den-sim-still]')].every(img => img.complete && img.naturalWidth === 640 && img.naturalHeight === 360), null, { timeout: 15000 });
+    const sha = await stills.first().getAttribute('data-den-sim-still');
+    const bytes = Buffer.from(await (await fetch(`${ORIGIN}/__sim/still?sha=${sha}`)).arrayBuffer());
+    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), sha, 'a still is the JPEG its hash names');
+    assert.equal((await fetch(`${ORIGIN}/__sim/still?sha=${'0'.repeat(64)}`)).status, 404, 'control: a hash the click did not send is not served');
   });
 
   await t.test('after the fake paste the page shows what it said, and owes nothing', async () => {
@@ -184,6 +195,8 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     await page.waitForSelector('[data-den-sim-last-ask]:not([hidden])');
     assert.match(await page.textContent('[data-den-sim-last-ask]'), new RegExp(`^Your last paste, .+: ${owed} of ${owed} replies came back, 0 still needed; model root fake-vllm\\.$`));
     assert.equal(await page.isVisible('[data-den-sim-owed]'), false);
+    await page.waitForFunction(() => document.querySelector('[data-den-sim-strip]').textContent.includes("a fake vLLM's scripted words on file, not Qwen's"), null, { timeout: 10000 });
+    assert.doesNotMatch(await page.textContent('[data-den-sim-strip]'), /no Qwen reply on file yet|Qwen's words recorded once/, 'the strip says whose words are on file');
   });
 
   await t.test('reading: the beam passes through at least 5 intermediate aims and lands where the brain chose', async () => {

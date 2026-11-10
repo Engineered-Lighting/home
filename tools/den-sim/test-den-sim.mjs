@@ -415,11 +415,22 @@ const scratchEnv = home => ({ ...process.env, DEN_SIM_HOME: home, LOCALAPPDATA: 
 
 test('the real chain on every prepared take with no reply on file: step 4\'s words to hop 12, not yet, and nothing told the scene', { skip: NEEDS_SET, timeout: 400000 }, async t => {
   const home = scratch('den-sim-click-');
+  // An owed list filed for another set: the page shown here must not count it, nor ask for a paste of its bodies.
+  const owedList = path.join(home, 'prepared', 'owed', 'owed.json'), other = 'aaaaaaaaaaaa', bodies = ['1', '2', '3'].map(c => c.repeat(64));
+  fs.mkdirSync(path.dirname(owedList), { recursive: true });
+  fs.writeFileSync(owedList, JSON.stringify({ schema: 'den-sim-owed-1', set: other, bodies }));
   const run = harness(['--room', 'authored', '--prepared', SET], scratchEnv(home));
   t.after(async () => { await run.stop(); fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
   await run.ready;
   const display = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes;
   const first = await status();
+  assert.deepEqual([first.qwen.owed, first.qwen.owed_set, first.qwen.words], [null, other, 'no Qwen reply on file yet']);
+  assert.ok(run.output().includes(`The owed list on file is for set ${other}, not this one: an agent runs prepare.py --owed for set ${first.set.id}.`), run.output());
+  assert.ok(!run.output().includes('Qwen still owes'), 'no paste is asked for another set\'s bodies');
+  assert.ok(run.output().includes('On file now: no Qwen reply on file yet.'), 'the startup line says no reply is on file');
+  fs.writeFileSync(owedList, JSON.stringify({ schema: 'den-sim-owed-1', set: first.set.id, bodies }));
+  assert.equal((await status()).qwen.owed, 3, 'control: the same list filed for this set is counted');
+  fs.rmSync(owedList);
   assert.deepEqual(first.scenes, display.map(({ take, label }) => ({ take, label })), 'the buttons carry labels and take ids, never the words');
   for (const key of ['seat_m', 'point']) assert.ok(!JSON.stringify({ couch: first.couch, brain: first.brain }).includes(`"${key}"`), `${key} left the startup record`);
   // The stand-in seat is a square, which has no single longest edge, so its facing is a tie-break, and the page says so.

@@ -66,7 +66,7 @@
   ` }));
 
   const strip = el('div', { id: 'den-sim-strip', role: 'status', 'data-den-sim-strip': '1',
-    textContent: 'SIMULATION · rendered takes, a real detector\'s recorded rows, Qwen\'s words recorded once and looked up by exact bytes · INVENTED CAMERA: it does not exist · nothing is sent to any fixture' });
+    textContent: 'SIMULATION · rendered takes, a real detector\'s recorded rows, Qwen asked only by your paste · INVENTED CAMERA: it does not exist · nothing is sent to any fixture' });
   const sceneButtons = el('div', { 'data-den-sim-scenes': '1' });
   const everyButton = el('button', { type: 'button', 'data-den-sim-every-run': '1', textContent: 'Run every scene', disabled: true, style: 'width:100%;margin-bottom:4px', onclick: () => runEvery() });
   const setFeedEnabled = on => [...sceneButtons.querySelectorAll('button'), everyButton].forEach(button => { button.disabled = !on; });
@@ -212,7 +212,8 @@
     startupBox.hidden = !status.startup;
     startupBox.textContent = status.startup ? `Fixtures for the stated facing, at the spot: ${status.startup}.` : '';
     // A broken or stopped click never reaches the brain: Home's off document's reason isn't the brain's word.
-    values.says.textContent = feed.phase === 'pipeline_failed' ? 'not run: the pipeline broke'
+    const unseen = /^Qwen has not seen these exact frames/.test(feed.pipeline?.failed || '');
+    values.says.textContent = feed.phase === 'pipeline_failed' ? (unseen ? 'not run: Qwen has not seen these frames' : 'not run: the pipeline broke')
       : feed.phase === 'stopped' ? 'not run: the click stopped before it' : feed.live?.why || '–';
     values.refusal.textContent = feed.live?.refusal || '–';
     values.events.textContent = decided ? `${decided.events}, from the adapter, into the real activity loop` : '–';
@@ -377,7 +378,8 @@
     pasteCode.textContent = qwen.paste;
     owedText.textContent = qwen.owed > 0 ? `Qwen still owes ${qwen.owed} ${qwen.owed === 1 ? 'reply' : 'replies'}. Paste this line into a new PowerShell window (run.mjs holds this one), then press a scene again:`
       : qwen.owed === 0 ? 'Qwen has no reply for this click\'s exact frames, and none is filed as owed: an agent runs prepare.py --owed, then you paste this line in a new PowerShell window:'
-        : 'Qwen has no reply for this click\'s exact frames, and no owed list is filed yet: an agent runs prepare.py --owed, then you paste this line in a new PowerShell window:';
+        : qwen.owed_set ? `Qwen has no reply for this click's exact frames, and the owed list on file is for set ${qwen.owed_set}, not this one: an agent runs prepare.py --owed for this set, then you paste this line in a new PowerShell window:`
+          : 'Qwen has no reply for this click\'s exact frames, and no owed list is filed yet: an agent runs prepare.py --owed, then you paste this line in a new PowerShell window:';
     const last = qwen.last_ask;
     lastAskBox.hidden = !last;
     if (last) {
@@ -437,7 +439,8 @@
     try { status = await (await fetch('/__sim/status', { cache: 'no-store' })).json(); } catch (_) { return; }
     sim.status = status;
     const room = status.room === 'real' ? 'YOUR SCAN' : 'AUTHORED ROOM';
-    strip.textContent = `SIMULATION · rendered takes, a real detector's recorded rows, Qwen's words recorded once and looked up by exact bytes · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA: it does not exist · Home's code from this PC's harness, not your deployed Home`;
+    // Whose words are on file, from the store: none before the paste, a test's on a fake vLLM's root, or Qwen's after.
+    strip.textContent = `SIMULATION · rendered takes, a real detector's recorded rows, ${status.qwen.words} · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA: it does not exist · Home's code from this PC's harness, not your deployed Home`;
     showScenes(status);
     showBrain(status);
     showClick(status.click);

@@ -1,9 +1,11 @@
 # den-sim: the den lighting pipeline on a rendered take
 
-Press a scene and watch the pinned den pipeline tools run on a recorded, rendered take, Qwen's
-recorded words on that take's exact frames decide whether the person is reading, the older
-lighting brain decide, and a virtual spotlight in the real Home swing to the couch. Then read the
-exact fixture command it would take, which is shown and never sent.
+Press a scene and watch the pinned den pipeline tools run on a recorded, rendered take. Once your
+one paste has recorded Qwen's words on that take's exact frames, they decide whether the person is
+reading, the older lighting brain decides, and a virtual spotlight in the real Home swings to the
+couch; then read the exact fixture command it would take, which is shown and never sent. Until
+that paste, no Qwen reply is on file: a click with a person stops at the reply, the beam stays off,
+and the page shows the line to paste.
 
 **Status: a simulation, step 4 of the connected plan.** The picture is a rendered, artificial
 person in an authored room, seen by a camera that does not exist. A real detector, YOLO26s and
@@ -123,7 +125,8 @@ Qwen is asked once per set, by you, never by a click. An agent first runs
 `python -B -X utf8 tools\den-sim\scene\prepare.py --owed`, which runs every scene take through
 the same walk a click does and files each body that has no reply as
 `prepared\owed\<body_sha256>.body`: hashes only, no scene name. While any is owed, the page says
-"Qwen still owes N replies" and shows this line with a Copy button. Paste it into a new
+"Qwen still owes N replies" and shows this line with a Copy button. It counts only an owed list
+filed for the set it shows; a list for another set is named, and not counted. Paste it into a new
 PowerShell window, since `run.mjs` holds its own; it works from any folder:
 
 ```powershell

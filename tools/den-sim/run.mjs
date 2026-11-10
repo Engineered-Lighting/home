@@ -84,14 +84,38 @@ const tries = (() => { try { return fs.readFileSync(path.join(path.dirname(SET),
 // as still owed, and what the owner's last paste said. Hashes only: none of these names a scene.
 const PREPARED = path.join(OUT, 'prepared'), REPLIES = path.join(PREPARED, 'replies'), LAST_ASK = path.join(PREPARED, 'last-ask.json');
 const PASTE = `python -B ${path.join(HERE, 'ask_la.py')}`;
+// The model roots of the replies on file, read again only when the store's files change: the strip says whose words they are.
+let rootsSeen = { key: null, roots: [] };
+function replyRoots() {
+  let names = [];
+  try { names = fs.readdirSync(REPLIES).filter(name => /^[0-9a-f]{64}\.json$/.test(name)); } catch { /* no store yet */ }
+  const key = names.map(name => { try { const stat = fs.statSync(path.join(REPLIES, name)); return `${name}:${stat.size}:${stat.mtimeMs}`; } catch { return name; } }).join('|');
+  if (key !== rootsSeen.key) {
+    const roots = new Set(names.flatMap(name => { try { const root = readFile(path.join(REPLIES, name)).root; return typeof root === 'string' && root ? [root] : []; } catch { return []; } }));
+    rootsSeen = { key, roots: [...roots].sort() };
+  }
+  return rootsSeen.roots;
+}
+// owed counts only an owed list filed for the set this page shows: a list for another set names its set instead.
 function qwenStatus() {
-  let owed = null, last = null;
-  try { owed = readFile(path.join(PREPARED, 'owed', 'owed.json')).bodies.filter(name => !fs.existsSync(path.join(REPLIES, `${name}.json`))).length; } catch { /* nothing filed yet */ }
+  let owed = null, owedSet = null, last = null;
+  try {
+    const list = readFile(path.join(PREPARED, 'owed', 'owed.json'));
+    owedSet = list.set || null;
+    if (owedSet === setInfo.set) owed = list.bodies.filter(name => !fs.existsSync(path.join(REPLIES, `${name}.json`))).length;
+  } catch { /* nothing filed yet */ }
   try {
     const doc = readFile(LAST_ASK);
     last = { finished_unix: doc.finished_unix, stopped_at: doc.stopped_at, reason: doc.reason, step: doc.step, needed: doc.needed, answered: doc.answered, still_needed: doc.still_needed, root: doc.root };
   } catch { /* no paste yet */ }
-  return { owed, last_ask: last, paste: PASTE };
+  const roots = replyRoots();
+  return { owed, owed_set: owedSet, last_ask: last, paste: PASTE, roots, words: qwenWords(roots) };
+}
+// What the strip and the startup line say about Qwen's words: none yet, a test's, or recorded once by your paste.
+function qwenWords(roots) {
+  if (!roots.length) return 'no Qwen reply on file yet';
+  if (roots.every(root => root === 'fake-vllm')) return "a fake vLLM's scripted words on file, not Qwen's";
+  return 'Qwen\'s words recorded once by your paste and looked up by exact bytes';
 }
 
 function packRoot() {
@@ -481,10 +505,11 @@ server.on('error', error => {
   process.exit(1);
 });
 server.listen(PORT, HOST, () => {
-  const scan = room === 'real' ? `real scan pack ${binding.content_revision}` : 'AUTHORED ROOM';
+  const scan = room === 'real' ? `real scan pack ${binding.content_revision}` : 'AUTHORED ROOM', qwen = qwenStatus();
   console.log([`Den simulation: ${ORIGIN}/`, `Room: ${scan} | Sockets: ${registration.label.replace(' · ', ', ')} | Couch: ${couch.label}`,
-    `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash, holds the detector rows prepare recorded to their checks, and runs the pinned tools on them, with an INVENTED CAMERA. No model runs on a click: Qwen's words are recorded replies, looked up by each request's exact bytes.`,
-    ...(qwenStatus().owed ? [`Qwen still owes ${qwenStatus().owed} replies. In a new PowerShell window, paste: ${PASTE}`] : []),
+    `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash, holds the detector rows prepare recorded to their checks, and runs the pinned tools on them, with an INVENTED CAMERA. No model runs on a click: Qwen is asked only by your paste, and a click looks its reply up by each request's exact bytes. On file now: ${qwen.words}.`,
+    ...(qwen.owed ? [`Qwen still owes ${qwen.owed} replies. In a new PowerShell window, paste: ${PASTE}`] : []),
+    ...(qwen.owed_set && qwen.owed_set !== setInfo.set ? [`The owed list on file is for set ${qwen.owed_set}, not this one: an agent runs prepare.py --owed for set ${setInfo.set}.`] : []),
     `Camera registration: ${placed.summary}`,
     ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
     ...prepareNotes.map(note => 'Note: ' + note), ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,

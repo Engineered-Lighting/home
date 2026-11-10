@@ -74,9 +74,10 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
     doc.generated_at = now; doc.state_revision = ++revision;
     doc.why = labelled(step ? `${doc.why} · beam swinging, motion scripted` : doc.why);
     doc.decisions = doc.decisions.map(item => ({ ...item, at: item.at + shift, why: `SIMULATION · ${item.why}`.slice(0, 240) }));
-    // Occupancy stays typed until step 6. The activity is the model's only when a real reply was used.
+    // Occupancy stays typed until step 6, so the inputs stay scripted: only the activity is the model's, and only
+    // when a real reply was used.
     doc.occupancy.source = SCRIPTED; doc.activity.source = reply() === 'real' ? LA_DIRECT : SCRIPTED;
-    doc.inputs = { ...doc.inputs, scripted: reply() !== 'real', inference_ran: reply() === 'real' };
+    doc.inputs = { ...doc.inputs, scripted: true, activity_scripted: reply() !== 'real', inference_ran: reply() === 'real' };
     if (step) {
       const lit = doc.fixtures.find(item => item.spot.on);
       lit.spot = { ...lit.spot, level: step.level, target_m: step.target_m, fade_s: 0 };

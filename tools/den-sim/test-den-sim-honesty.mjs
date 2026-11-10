@@ -127,16 +127,36 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     assert.ok(lines.length > tries.length, 'control: prepare\'s lines are on file and not counted');
   });
 
+  // Each control rewrites replies in the scratch store, and puts every byte back after.
+  const store = path.join(home, 'prepared', 'replies');
+  const rewritten = async (names, change, during) => {
+    const kept = Object.fromEntries(names.map(name => [name, fs.readFileSync(path.join(store, `${name}.json`))]));
+    try {
+      for (const name of names) fs.writeFileSync(path.join(store, `${name}.json`), JSON.stringify(change(JSON.parse(kept[name].toString('utf8')))));
+      return await during();
+    } finally { for (const [name, bytes] of Object.entries(kept)) fs.writeFileSync(path.join(store, `${name}.json`), bytes); }
+  };
+  const owedOf = () => JSON.parse(fs.readFileSync(path.join(home, 'test-fill.json'), 'utf8'));
+
   await t.test('test 1\'s control: reading\'s facts filed under phone\'s body hashes make phone light', async () => {
-    const store = path.join(home, 'prepared', 'replies'), owed = JSON.parse(fs.readFileSync(path.join(home, 'test-fill.json'), 'utf8'));
-    const readingRaw = JSON.parse(fs.readFileSync(path.join(store, `${owed[reading][1]}.json`), 'utf8')).raw;
-    for (const name of owed[phone]) {
-      const file = path.join(store, `${name}.json`);
-      fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), raw: readingRaw }));
-    }
-    const swapped = await click(phone);
+    const owed = owedOf(), readingRaw = JSON.parse(fs.readFileSync(path.join(store, `${owed[reading][1]}.json`), 'utf8')).raw;
+    const swapped = await rewritten(owed[phone], reply => ({ ...reply, raw: readingRaw }), () => click(phone));
     assert.ok(lit(swapped), 'phone lights on reading\'s words: the words decide, so test 1 would fail on them');
     assert.ok(swapped.click.top_line.reasons.some(reason => reason.condition === 2 && reason.hop === 12), 'and the replies no longer match the digests last-ask.json holds');
+  });
+
+  await t.test('the honesty flags on a model\'s words: inference ran on the activity, and the inputs stay scripted while occupancy is typed', async () => {
+    const real = await rewritten(owedOf()[reading], reply => ({ ...reply, root: 'test-root-not-a-model' }), async () => {
+      const done = await click(reading);
+      return { ...done, state: await (await fetch(ORIGIN + Client.BASE + '/state')).json() };
+    });
+    assert.deepEqual([real.click.rows[11].word, real.click.qwen.reply], ['ADAPTER', 'real']);
+    const { inputs, activity, occupancy } = real.state;
+    assert.deepEqual([inputs.inference_ran, inputs.activity_scripted, activity.source], [true, false, 'den_sim_la_direct'], 'the activity is the model\'s');
+    assert.deepEqual([inputs.scripted, occupancy.source], [true, 'SIMULATION-scripted'], 'and the document still says its inputs are scripted, since occupancy is typed');
+    assert.match(real.state.why, /Qwen's recorded words/);
+    const fake = await click(reading), state = await (await fetch(ORIGIN + Client.BASE + '/state')).json();
+    assert.deepEqual([fake.click.qwen.reply, state.inputs.inference_ran, state.inputs.activity_scripted, state.activity.source], ['fake', false, true, 'SIMULATION-scripted'], 'control: a fake vLLM\'s words are no inference');
   });
 
   await t.test('test 2: no scene word or display string, and no key scene or scenario, in anything a click read, wrote or was served', async () => {

@@ -970,7 +970,7 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
   await run.stop();
   assert.match(text, /on your sofa mark, unchanged since an earlier start/);
   assert.equal(fitFolders().length, 1);
-  assert.doesNotMatch(text, /facing\.json/, 'control: no facing.json, no turn named');
+  assert.doesNotMatch(text, /turned \d+ degrees/, 'control: no facing.json, no turn named');
   fs.writeFileSync(path.join(privateFolder, 'facing.json'), '{"degrees": 90}');
   ({ run, text } = await start());
   await run.stop();

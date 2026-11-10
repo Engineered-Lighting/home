@@ -75,8 +75,10 @@ run's `run.json`.
 **Holding a phone** ends with the brain refusing and the spot off. **Nobody there** and **Blank
 frame** stop at the detector: "the detector saw nobody, nothing was asked", with no box, no person
 marker on the floor and no beam. **Standing by the couch with a book** stops there too: on these
-renders YOLO26s gives the standing figure, close to the camera with its legs out of frame, person
-scores of 0.02 to 0.09, under its 0.25 cut. That is what the model saw, and the page says so. If a
+renders YOLO26s does not find the standing figure, close to the camera with its legs out of frame.
+Run as the Lab's worker runs it, its best person score on each of the take's 82 usable frames is
+0.006 to 0.049 (median 0.015), far under its 0.25 cut; with Ultralytics' default rectangular
+letterbox instead, 0.01 to 0.10. That is what the model saw, and the page says so. If a
 standing figure ever lights a spot, it's the older brain's own 1.5 m rule calling it on the couch,
 and the panel says that on every lit result.
 

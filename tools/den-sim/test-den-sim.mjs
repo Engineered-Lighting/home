@@ -1,6 +1,7 @@
 // The den simulation's click side, without a browser (plan, "Done means"): the data root; test 7,
 // the top line, on fixtures under all six conditions and on the real chain; the hop table's count;
-// test 1's outcomes on all five takes; test 2's searches over click-path code, what clicks wrote and
+// all five takes with no reply on file (test 1's outcomes on a fake vLLM's replies are in
+// test-den-sim-honesty.mjs); test 2's searches over click-path code, what clicks wrote and
 // what the harness served; test 6 on real clicks (the argv, the models' names, an edited rows file);
 // test 5's frame hash on a click; test 9's stdout half, test 12 and test 19's private half on a
 // sealed invented export and mark in a scratch data root; and the site id. Each check has a control
@@ -42,10 +43,11 @@ const SITE = Client.BASE.split('/').at(-1);
 // Click-path code: what a click runs or what serves it. The display file and the recorded side aside.
 const CLICK_PATH = ['run.mjs', 'brain.mjs', 'feed.mjs', 'panel.js', 'receipt.mjs', 'top_line.mjs', 'data-root.mjs', 'hops.json', 'chain.py', 'brain_run.py',
   'dry_run.py', 'scene/frame_hash.py'];
-// The plan's step 3 words, hop by hop, with no sofa mark saved.
-const STEP3 = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
-  11: 'MISSING', 12: 'SCRIPTED', 13: 'ADAPTER', 14: 'SCRIPTED', 15: 'MISSING', 16: 'MISSING', 17: 'ADAPTER', 18: 'ADAPTER', 19: 'SCRIPTED', 20: 'REAL',
-  21: 'ADAPTER', 22: 'ADAPTER', 23: 'SCRIPTED', 24: 'MISSING', 25: 'MISSING', 26: 'MISSING' };
+// The plan's step 4 words up to hop 12, with no sofa mark saved and no reply on file: a click with a
+// person stops at hop 12, "Qwen has not seen these exact frames".
+const STEP4_UNASKED = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
+  11: 'ADAPTER', 12: 'MISSING' };
+const NOT_SEEN = /^Qwen has not seen these exact frames: 5 of 5 bodies have no reply on file$/;
 
 test('the data root is DEN_SIM_HOME, or else the home folder, and never %LOCALAPPDATA%', t => {
   const tmp = scratch('den-sim-root-');
@@ -411,7 +413,7 @@ function filesUnder(folder) {
 }
 const scratchEnv = home => ({ ...process.env, DEN_SIM_HOME: home, LOCALAPPDATA: home });
 
-test('the real chain on every prepared take: step 3\'s words, test 1\'s outcomes, not yet, and nothing told the scene', { skip: NEEDS_SET, timeout: 400000 }, async t => {
+test('the real chain on every prepared take with no reply on file: step 4\'s words to hop 12, not yet, and nothing told the scene', { skip: NEEDS_SET, timeout: 400000 }, async t => {
   const home = scratch('den-sim-click-');
   const run = harness(['--room', 'authored', '--prepared', SET], scratchEnv(home));
   t.after(async () => { await run.stop(); fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
@@ -433,15 +435,23 @@ test('the real chain on every prepared take: step 3\'s words, test 1\'s outcomes
     assert.ok(view.top_line.reasons.length > 0, label);
   }
   const reading = clicks['Reading on the couch'];
-  assert.deepEqual(Object.fromEntries(reading.view.rows.map(row => [row.n, row.word])), Object.fromEntries(Object.entries(STEP3).map(([n, word]) => [Number(n), word])));
+  assert.deepEqual(Object.fromEntries(reading.view.rows.filter(row => row.reached).map(row => [row.n, row.word])), Object.fromEntries(Object.entries(STEP4_UNASKED).map(([n, word]) => [Number(n), word])));
   for (const { view } of Object.values(clicks)) assert.deepEqual(view.rows.map(row => row.name), TABLE.hops.map(hop => hop.name), 'every row is named as the table names it');
-  // Hop 17's older brain is real code with stand-ins inside it; hop 18's replay of its timeline is written here.
-  assert.equal(reading.view.top_line.count_line, '3 real, 10 adapter (9 real tools with a named stand-in, 1 written for this simulation), 7 scripted, 6 missing');
-  assert.equal(reading.receipt.rows[16].adapter, 'stand-in');
+  assert.equal(reading.view.top_line.count_line, '2 real, 6 adapter (5 real tools with a named stand-in, 1 written for this simulation), 3 scripted, 1 missing, 14 not reached');
   // Each row under what it did on this click; the rows that did not run sit apart, never under "Ran on this click".
   const grouped = Object.entries(Object.groupBy(reading.view.rows, row => row.group)).map(([group, rows]) => [group, rows.map(row => row.n)]);
-  assert.deepEqual(Object.fromEntries(grouped), { recorded: [1, 2, 3, 4, 5, 6], page: [14], click: [7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23], 'not run': [11, 15, 16, 24, 25, 26] });
-  assert.equal(reading.view.rows[10].ran, 'not built', 'hop 11 ran nothing');
+  assert.deepEqual(Object.fromEntries(grouped), { recorded: [1, 2, 3, 4, 5, 6], click: [7, 8, 9, 10, 11, 12], 'not run': [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26] });
+  assert.equal(reading.view.rows[10].ran, 'bodies rebuilt now; Qwen not asked about all of them yet', 'hop 11 built the bodies on this click');
+  // Reading and phone stop at hop 12: Qwen has not seen these exact frames, need gets no input, and the beam stays off.
+  for (const label of ['Reading on the couch', 'Holding a phone']) {
+    const { view, status: now } = clicks[label];
+    assert.deepEqual([view.stopped.hop, view.stopped.answer, NOT_SEEN.test(view.stopped.why)], [12, false, true], label);
+    assert.equal(view.rows[11].word, 'MISSING');
+    assert.ok(view.rows.filter(row => row.n > 12).every(row => !row.reached), `${label}: no need input`);
+    assert.deepEqual([now.feed.phase, now.feed.summary], ['pipeline_failed', null], `${label}: no brain, no beam`);
+    assert.equal(view.qwen.asks.length, 5);
+    assert.ok(view.qwen.asks.every(ask => ask.said === 'no reply on file' && /^[0-9a-f]{12}$/.test(ask.body)));
+  }
   assert.ok(!reading.view.rows.some(row => /Person to aim|decide v0/.test(row.name)), "#424's two rows have left the list");
   const recorded = JSON.parse(fs.readFileSync(path.join(SET, 'set.json'), 'utf8')).recorded;
   assert.match(reading.view.rows[5].summary, /^YOLO26s found a person on \d+ of \d+ usable frames, and RTMPose-m placed joints on \d+ of them; median \d+ ms a frame on this PC's CPU; rows checked against the model on \S+, on 3 frames, within [0-9.]+ px\. Rows name rtmpose-m and yolo26s\.$/);
@@ -449,8 +459,8 @@ test('the real chain on every prepared take: step 3\'s words, test 1\'s outcomes
   assert.deepEqual(reading.view.rows[5].stand_ins, TABLE.hops[5].stand_ins, 'hop 6 names every stand-in the table names');
   assert.equal(reading.view.rows[2].ran, `recorded ${recorded}, re-checked by hash now`);
   assert.ok(reading.view.top_line.reasons.some(reason => reason.condition === 6), 'MISSING rows are among the reasons');
-  assert.deepEqual(reading.view.top_line.reasons.filter(reason => reason.hop === 6), [], 'hop 6 reads ADAPTER with nothing against it: no truth read, every digest and pin holds');
-  assert.ok(reading.view.top_line.reasons.some(reason => /Qwen reply read truth\/\(this take\)/.test(reason.text)), 'hop 12\'s truth read is a reason, and stays one until step 4');
+  assert.deepEqual(reading.view.top_line.reasons.filter(reason => reason.hop === 6), [], 'hop 6 reads ADAPTER with nothing against it: every digest and pin holds');
+  assert.ok(!reading.view.top_line.reasons.some(reason => /truth/.test(reason.text)), 'nothing reads the truth folder any more');
   // Every recorded file of the take that a click reads is held to the digest prepare recorded for it.
   const recordedFor = n => JSON.parse(fs.readFileSync(path.join(SET, reading.view.take, 'prepare-receipt.json'), 'utf8')).hops[String(n)].wrote;
   const wroteDigest = Object.fromEntries([...recordedFor(3), ...recordedFor(4)].map(file => [file.path, file.sha256]));
@@ -466,28 +476,21 @@ test('the real chain on every prepared take: step 3\'s words, test 1\'s outcomes
   for (const name of ['frames.csv', 'take.json']) assert.deepEqual(sevenReads.find(([file]) => file === `${take}/${name}`), [`${take}/${name}`, 'take', true], `hop 7 lists ${name}`);
   assert.deepEqual(sevenReads.find(([file]) => file === `${take}/check-1.json`), [`${take}/check-1.json`, 'check', true], 'hop 7 lists the check replay read');
   assert.ok(!reading.view.top_line.reasons.some(reason => reason.hop === 7), 'and hop 7 reads only what it may');
-  // Finding the take's truth opens every scene's truth record: each one is a read of hop 12 now, and a reason.
-  const scanned = rowOf(12).read.filter(file => /^truth\/\(another take, \d of \d\)\/take\.json$/.test(file.path));
-  assert.equal(scanned.length, display.length - 1, JSON.stringify(rowOf(12).read.map(file => file.path)));
-  assert.equal(reading.view.top_line.reasons.filter(reason => reason.hop === 12 && /read truth\/\(another take/.test(reason.text)).length, display.length - 1);
-  // Every reason the reading click gives at step 3, as (condition, hop): each one true now, and a new or a
-  // lost one shows. Hop 5: the stand-in seat and sockets; 12: the truth; 17, 18, 21: the older brain.
-  const want = ['2:5', '2:5', '3:5', '3:10', '3:11', '6:11', '2:12', '2:12', '2:12', '2:12', '2:12', '3:12', '3:14', '3:15', '6:15', '3:16', '6:16',
-    '3:17', '3:17', '3:17', '3:17', '3:18', '3:18', '3:21', '3:24', '6:24', '5:24', '3:25', '6:25', '3:26', '6:26'];
+  // Hop 11 reads the take, replay's run.json and the router's two files; hop 12 the requests, and no reply, none being on file.
+  assert.deepEqual(rowOf(11).read.map(file => file.path), [`${take}/frames.csv`, `${take}/take.json`, 'observe/run.json', 'requests.jsonl', 'bundles.jsonl']);
+  assert.deepEqual(rowOf(12).read.map(file => file.path), ['requests.jsonl']);
+  assert.deepEqual(rowOf(12).owed.length, 5);
+  // Every reason the reading click gives at step 4 with no reply on file, as (condition, hop): each one true
+  // now, and a new or a lost one shows. Hop 5: the stand-in seat and sockets; 10: occupancy still typed; 12: the miss.
+  const want = ['2:5', '2:5', '3:5', '3:10', '3:12', '6:12', 'null:12'];
   assert.deepEqual(reading.view.top_line.reasons.map(reason => `${reason.condition}:${reason.hop}`).sort(), want.sort());
   assert.equal(reading.receipt.aim_check, null, 'no aim check is claimed');
   assert.ok(rowOf(1).read.every(file => ['shots.json', 'render'].includes(file.recorded.kind)), 'hop 1 reads only shots.json and the render\'s inputs');
   assert.deepEqual(rowOf(4).read.map(file => file.path), [`${take}/frames.csv`], 'hop 4 read the take');
-  const phone = clicks['Holding a phone'].view;
-  assert.deepEqual([phone.stopped.hop, phone.stopped.answer], [17, true], 'the brain refusing is the pipeline answering at hop 17');
-  assert.ok(phone.rows.filter(row => row.n > 17).every(row => !row.reached));
-  // Test 1, the parts step 3 reaches: reading lights, phone stays off, nobody and blank light nothing and stop
-  // at hop 6, where the real detector's rows hold no person, with no box, no torso line and no beam.
-  // The tests post no fixture report, so Home is never fed: the brain's own word, in its row, says what lit.
-  assert.deepEqual([reading.view.stopped, /^The older brain chose \S+, \d\.\d+ m from the seat/.test(reading.receipt.rows[16].summary)], [null, true], 'reading lights');
+  // Nobody and blank light nothing and stop at hop 6, where the real detector's rows hold no person, with no
+  // box, no torso line and no beam. Reading's frame has the model's box and joints, though no reply is on file.
   assert.ok(reading.view.boxes.length >= 1 && reading.view.boxes.every(box => box.score >= .5 && box.keypoints.length === 17), 'reading\'s frame has the model\'s box and joints');
   assert.equal(reading.view.picture_note, `The take's own frame, read back out of its NV12 plane, with YOLO26s's person box and score (${reading.view.boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ')}) and RTMPose-m's supported joints from this frame's recorded row.`);
-  assert.match(clicks['Holding a phone'].receipt.rows[16].summary, /^The older brain lit nothing: /, 'phone stays off');
   for (const label of ['Nobody there', 'Blank frame']) {
     const { view, status: now } = clicks[label];
     assert.deepEqual(view.stopped, { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true }, label);
@@ -575,11 +578,11 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   assert.equal(rowsByN[13].reached, false, 'no need input');
   assert.equal(done.feed.phase, 'pipeline_failed', 'no beam');
   assert.equal(done.click.top_line.line, 'Connected start to finish: not yet');
-  // Control: the untouched take in the same copy passes the hash and reaches need.
+  // Control: the untouched take in the same copy passes the hash and reaches the reply lookup.
   const phone = display.find(scene => scene.label === 'Holding a phone').take;
   const control = await click(phone);
   assert.equal(control.click.rows[2].word, 'ADAPTER');
-  assert.equal(control.click.rows[12].reached, true);
+  assert.equal(control.click.rows[11].reached, true);
   // A break is filed under the hop that broke, which reads MISSING; the rows before it stay as they ran.
   const blank = display.find(scene => scene.label === 'Blank frame').take, check = path.join(copy, blank, 'check-1.json');
   const checkBytes = fs.readFileSync(check, 'utf8');
@@ -667,13 +670,17 @@ test('a set prepare refused still opens, and its refused take says where prepare
     // Control: a take prepare finished, in the same set, runs as ever.
     const reading = await click(display.find(scene => scene.label === 'Reading on the couch').take);
     assert.equal(reading.click.top_line.line, 'Connected start to finish: not yet');
-    assert.equal(reading.click.rows[12].reached, true);
+    assert.equal(reading.click.rows[11].reached, true);
   } finally { await run.stop(); }
-  // A set with no display file says so in one line, with no stack trace.
+  // A set with no display file opens with its takes' folder ids, and says so: only the panel reads that file.
   fs.unlinkSync(path.join(copy, 'display.json'));
   const bare = harness(['--room', 'authored', '--prepared', copy], scratchEnv(home));
-  await assert.rejects(bare.ready, error => /has no display\.json, so it has no buttons: prepare stopped at hop 4/.test(error.message) && !/\n\s+at /.test(error.message));
-  await bare.stop();
+  try {
+    await bare.ready;
+    assert.match(bare.output(), /^Note: set \S+ has no display file, so its buttons show folder ids$/m);
+    const scenes = (await status()).scenes;
+    assert.deepEqual(scenes.map(scene => scene.label).sort(), display.map(scene => `take ${scene.take}`).sort());
+  } finally { await bare.stop(); }
 });
 
 /* ---------- tests 9, 12 and 19 on a sealed invented export and mark, in your real scan's frame ---------- */
@@ -705,6 +712,11 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
   const corners = [[1.137, 2.291, 0.463], [2.937, 2.291, 0.463], [2.937, 3.183, 0.463], [1.137, 3.183, 0.463]];
   const mark = invent(privateFolder, corners);
   const markNumbers = [...corners.flat(), ...mark.seat.point_m, ...mark.zone.centre_m];
+  // A fake vLLM's replies for the reading take in this scratch data root, so its click reaches the couch: the
+  // bodies a re-fit on a mark builds are the ones --owed filed on the set's own fit.
+  const readingTake = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes[0].take;
+  execFileSync('python', ['-B', '-X', 'utf8', path.join(HERE, 'test_ask.py'), '--fill', home, '--set', SET, '--facts', `reading=${readingTake}`],
+    { encoding: 'utf8', windowsHide: true, timeout: 600000, env: { ...process.env, DEN_SIM_HOME: home } });
   const start = async () => {
     const run = harness(['--room', 'real', '--prepared', SET], scratchEnv(home));
     try { await run.ready; return { run, text: run.output() + run.errors() }; } catch (error) { await run.stop(); throw error; }
@@ -724,7 +736,7 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
     assert.deepEqual(coordinatesIn(text, camera), []);
     assert.deepEqual(coordinatesIn(text, markNumbers), []);
     const now = await click(JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes[0].take);
-    assert.equal(now.click.rows[13].word, 'ADAPTER', 'the couch is your mark');
+    assert.deepEqual([now.click.rows[11].word, now.click.rows[13].word, now.click.rows[13].reached], ['SCRIPTED', 'ADAPTER', true], 'the replies were found, and the couch is your mark');
     assert.equal(now.click.top_line.line, 'Connected start to finish: not yet');
     assert.ok(!now.click.top_line.reasons.some(reason => /stand-in seat|authored sockets/.test(reason.text)), 'hop 5 read your files, not the stand-ins');
     const shown = panelText(now);

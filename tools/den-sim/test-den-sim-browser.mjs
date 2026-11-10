@@ -1,6 +1,9 @@
 // The den simulation's honesty and safety test, in a real browser against the real harness, on a
-// prepared set: the beam travels, a refusal leaves the spot off, a take with nobody and a blank one
-// stop at the detector with no box, the top line reads "not yet" with step 3's words hop by hop, the
+// prepared set: with no reply on file, reading stops at hop 12 and the page shows what Qwen still owes
+// and the paste line with a Copy button; after a fake vLLM's replies are filed (test_ask.py --fill, a
+// local transport, nothing reaches LA) the page shows the last paste, the beam travels, a refusal
+// leaves the spot off, a take with nobody and a blank one stop at the detector with no box, "Run every
+// scene" fills its table, the top line reads "not yet" with step 4's words hop by hop, the
 // picture is the take's own frame with the model's box and joints from that frame's row, the torso
 // line is said against the limit only, no coordinate is printed, and nothing leaves the page. It uses --room
 // authored and a scratch data root (DEN_SIM_HOME and LOCALAPPDATA), so no household data or
@@ -33,10 +36,15 @@ const EXPECTED_CSP_BLOCKS = new Set(['http://127.0.0.1:8765/healthz']);
 const FEED_POST = 'POST /__sim/feed';
 const SET = process.env.DEN_SIM_SET ? path.resolve(process.env.DEN_SIM_SET) : null;
 const SKIP = SET && fs.existsSync(path.join(SET, 'display.json')) ? false : 'needs DEN_SIM_SET=<a prepared set>';
-// The plan's step 3 words ("Labels that change"), hop by hop, with no sofa mark saved.
-const STEP3 = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
-  11: 'MISSING', 12: 'SCRIPTED', 13: 'ADAPTER', 14: 'SCRIPTED', 15: 'MISSING', 16: 'MISSING', 17: 'ADAPTER', 18: 'ADAPTER', 19: 'SCRIPTED', 20: 'REAL',
+// The plan's step 4 words ("Labels that change"), hop by hop, with no sofa mark saved, on a fake vLLM's
+// replies: hop 12 reads SCRIPTED, because a fake root is no model.
+const STEP4 = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
+  11: 'ADAPTER', 12: 'SCRIPTED', 13: 'ADAPTER', 14: 'SCRIPTED', 15: 'MISSING', 16: 'MISSING', 17: 'ADAPTER', 18: 'ADAPTER', 19: 'SCRIPTED', 20: 'REAL',
   21: 'ADAPTER', 22: 'ADAPTER', 23: 'SCRIPTED', 24: 'MISSING', 25: 'MISSING', 26: 'MISSING' };
+const PASTE = `python -B ${path.join(HERE, 'ask_la.py')}`;
+// The fake paste, in stages: the owed bodies first, then a fake vLLM's replies, through test_ask.py.
+const fill = (root, stage, facts) => JSON.parse(execFileSync('python', ['-B', '-X', 'utf8', path.join(HERE, 'test_ask.py'), '--fill', root, '--set', SET, '--facts', facts, '--stage', stage],
+  { encoding: 'utf8', windowsHide: true, timeout: 600000 }).trim().split('\n').at(-1));
 
 const until = async (check, what, ms = 60000) => {
   for (const end = Date.now() + ms; ; await new Promise(done => setTimeout(done, 100))) {
@@ -100,9 +108,11 @@ const coordinatesIn = (text, point) => point.flatMap(value => [3, 2].map(places 
 
 test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t => {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'den-sim-test-'));
+  const display = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes;
+  const facts = ['Reading on the couch', 'Holding a phone'].map((label, i) => `${['reading', 'phone'][i]}=${display.find(scene => scene.label === label).take}`).join(',');
+  const owed = Object.values(fill(scratch, 'owed', facts).owed).flat().length;
   const harness = startHarness(scratch);
   const seen = { external: [], writes: [], sockets: [] }, reports = {};
-  const display = JSON.parse(fs.readFileSync(path.join(SET, 'display.json'), 'utf8')).scenes;
   let browser;
   t.after(async () => {
     await browser?.close();
@@ -112,7 +122,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
   await harness.ready;
 
   browser = await chromium.launch({ headless: true, args: ['--use-angle=d3d11', '--disable-background-networking', '--renderer-process-limit=2'] });
-  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'block' });
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
   // Anything that gets past the page's own policy stops here, so a failing test sends nothing either.
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -130,7 +140,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
   await t.test('the page says what it is before anything runs', async () => {
     await openHome(page);
     const strip = await page.textContent('[data-den-sim-strip]');
-    for (const words of ['SIMULATION', 'rendered takes', 'a real detector\'s recorded rows', 'Qwen\'s words typed', 'nothing is sent', 'AUTHORED ROOM', 'AUTHORED SOCKETS', 'DECLARED',
+    for (const words of ['SIMULATION', 'rendered takes', 'a real detector\'s recorded rows', 'Qwen\'s words recorded once and looked up by exact bytes', 'nothing is sent', 'AUTHORED ROOM', 'AUTHORED SOCKETS', 'DECLARED',
       'INVENTED CAMERA: it does not exist', 'Home\'s code from this PC\'s harness, not your deployed Home']) assert.ok(strip.includes(words), `the strip says ${words}: ${strip}`);
     assert.deepEqual(await page.locator('[data-den-sim-feed]').allTextContents(), display.map(scene => scene.label), 'one button per prepared take, labelled from the display file');
     assert.deepEqual(await page.locator('[data-den-sim-feed]').evaluateAll(nodes => nodes.map(node => node.dataset.denSimFeed)), display.map(scene => scene.take), 'a button carries a take id, never a word');
@@ -141,6 +151,39 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     const state = await (await fetch(ORIGIN + BRAIN_STATE)).json();
     assert.match(state.why, /^SIMULATION · /);
     assert.equal(state.inputs.inference_ran, false);
+    // What Qwen still owes, and the owner's one paste, with a Copy button that copies exactly that line.
+    assert.equal(await page.textContent('[data-den-sim-owed-text]'), `Qwen still owes ${owed} replies. Paste this line into a new PowerShell window (run.mjs holds this one), then press a scene again:`);
+    assert.equal(await page.textContent('[data-den-sim-paste]'), PASTE);
+    await page.click('[data-den-sim-copy]');
+    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), PASTE);
+    assert.equal(await page.isVisible('[data-den-sim-last-ask]'), false, 'no paste yet');
+  });
+
+  await t.test('reading with no reply on file: hop 12 reads MISSING, need gets no input and the beam stays off', async () => {
+    await startSampler(page);
+    await press(page, 'Reading on the couch');
+    const broke = await phase('pipeline_failed');
+    const { everLit } = await stopSampler(page);
+    assert.equal(everLit, 0);
+    assert.deepEqual([broke.click.stopped.hop, broke.click.stopped.answer], [12, false]);
+    assert.equal(await hopStatus(page, 12), 'MISSING');
+    assert.equal(await hopStatus(page, 11), 'ADAPTER', 'the bodies were built');
+    assert.match(await page.textContent('[data-den-sim-hop="12"]'), /Qwen has not seen these exact frames: 5 of 5 bodies have no reply on file/);
+    assert.equal(await page.getAttribute('[data-den-sim-hop="13"]', 'data-reached'), '0', 'no need input');
+    await page.waitForFunction(() => /Qwen has not seen these exact frames/.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
+    assert.equal(await page.textContent('[data-den-sim-top-line-text]'), 'Connected start to finish: not yet');
+    assert.equal(await page.isVisible('[data-den-sim-owed]'), true, 'the paste line stays in view');
+    assert.equal(await page.locator('[data-den-sim-ask]').count(), 5, 'each request, its stills and "no reply on file"');
+    assert.match(await page.textContent('[data-den-sim-ask="rq-00002"]'), /^rq-00002: frames \d+, \d+, \d+ \([0-9.]+, [0-9.]+, 0 s before the newest\): no reply on file$/);
+  });
+
+  await t.test('after the fake paste the page shows what it said, and owes nothing', async () => {
+    const paste = fill(scratch, 'paste', facts);
+    assert.deepEqual([paste.code, paste.answered, paste.still_needed], [0, owed, 0]);
+    await openHome(page);
+    await page.waitForSelector('[data-den-sim-last-ask]:not([hidden])');
+    assert.match(await page.textContent('[data-den-sim-last-ask]'), new RegExp(`^Your last paste, .+: ${owed} of ${owed} replies came back, 0 still needed; model root fake-vllm\\.$`));
+    assert.equal(await page.isVisible('[data-den-sim-owed]'), false);
   });
 
   await t.test('reading: the beam passes through at least 5 intermediate aims and lands where the brain chose', async () => {
@@ -157,19 +200,24 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     // A lit result says the older brain's own rule decides on the couch, so a standing figure lighting is no surprise.
     await page.waitForFunction(() => /The older brain's own 1\.5 m rule decides whether the reader is on the couch, so a figure standing within 1\.5 m of the seat lights a spot too/
       .test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
+    assert.match(await page.textContent('[data-den-sim-message]'), /The words were a fake vLLM's, scripted for a test: reading, holding book, people one on 5 of 5\./);
+    // The honesty flags follow the reply used: a fake vLLM's words are no inference.
+    const state = await (await fetch(ORIGIN + BRAIN_STATE)).json();
+    assert.deepEqual([state.inputs.inference_ran, state.inputs.scripted, state.activity.source], [false, true, 'SIMULATION-scripted']);
+    assert.match(state.why, /a fake vLLM's scripted words/);
     t.diagnostic(`${aims.length} distinct aims, ${aims[0]} to ${aims.at(-1)}, ${held.feed.summary.fixture_id}`);
   });
 
-  await t.test('the top line reads "not yet", lists why, and every row reads step 3\'s word', async () => {
+  await t.test('the top line reads "not yet", lists why, and every row reads step 4\'s word', async () => {
     assert.equal(await page.textContent('[data-den-sim-top-line-text]'), 'Connected start to finish: not yet');
-    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 10 adapter (9 real tools with a named stand-in, 1 written for this simulation), 7 scripted, 6 missing');
+    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 11 adapter (9 real tools with a named stand-in, 2 written for this simulation), 7 scripted, 5 missing');
     assert.ok(await page.locator('[data-den-sim-reason]').count() > 10, 'the reasons are listed');
-    for (const [n, word] of Object.entries(STEP3)) assert.equal(await hopStatus(page, n), word, `hop ${n}`);
+    for (const [n, word] of Object.entries(STEP4)) assert.equal(await hopStatus(page, n), word, `hop ${n}`);
     assert.deepEqual(await page.locator('[data-den-sim-hops] h4').allTextContents(), ['Recorded once', 'Built when this page started', 'Ran on this click', 'Not built yet, or not reached on this click']);
-    // Which rows sit under each heading: a row that didn't run is never under "Ran on this click".
+    // Which rows sit under each heading: a row that didn't run is never under "Ran on this click". Hop 11's ask is recorded.
     const underHeadings = await page.locator('[data-den-sim-hops] h4').evaluateAll(nodes => nodes.map(node => [node.textContent, [...node.nextElementSibling.querySelectorAll('[data-den-sim-hop]')].map(item => Number(item.dataset.denSimHop))]));
-    assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5, 6]], ['Built when this page started', [14]], ['Ran on this click', [7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23]],
-      ['Not built yet, or not reached on this click', [11, 15, 16, 24, 25, 26]]]);
+    assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5, 6, 11]], ['Built when this page started', [14]], ['Ran on this click', [7, 8, 9, 10, 12, 13, 17, 18, 19, 20, 21, 22, 23]],
+      ['Not built yet, or not reached on this click', [15, 16, 24, 25, 26]]]);
     const names = await page.locator('[data-den-sim-hop]').evaluateAll(nodes => nodes.sort((a, b) => a.dataset.denSimHop - b.dataset.denSimHop).map(node => node.dataset.denSimName));
     assert.deepEqual(names, JSON.parse(fs.readFileSync(path.join(HERE, 'hops.json'), 'utf8')).hops.map(hop => hop.name), 'one row per hop, named as the table names it');
     assert.ok(!names.some(name => /Person to aim|decide v0/.test(name)), '#424\'s two rows left the list');
@@ -179,7 +227,9 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
       assert.ok(six.includes(stand), `hop 6 names its stand-in: ${stand}`);
     assert.doesNotMatch(six, /truth|fake_detector/);
     assert.match(await page.textContent('[data-den-sim-hop="10"]'), /The track list decides whether the older brain runs at all.*still typed in brain_run\.py until step 6/);
-    assert.match(await page.textContent('[data-den-sim-hop="12"]'), /answers typed from the truth folder's held object/);
+    assert.match(await page.textContent('[data-den-sim-hop="12"]'), /Scripted words from a fake vLLM \(root fake-vllm\), not Qwen: rq-00001 reading, holding book/);
+    assert.match(await page.textContent('[data-den-sim-hop="11"]'), /recorded \S+, bodies rebuilt now.*5 of 5 requests built into exact bodies/);
+    assert.match(await page.textContent('[data-den-sim-qwen]'), /^Qwen \(SCRIPTED: a fake vLLM, not Qwen\): model root fake-vllm, ran now\./);
     assert.match(await page.textContent('[data-den-sim-hop="3"]'), /re-checked by hash now/);
   });
 
@@ -226,7 +276,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(command.sent, false); assert.equal(command.send_path, null);
     assert.equal(command.ik.status, 'FICTIONAL'); assert.equal(command.ik.physical_eligible, false);
     const controls = await page.locator('#den-sim-panel button').allTextContents();
-    assert.deepEqual(controls.sort(), [...display.map(scene => scene.label), 'Hide details', 'Reset (reload)'].sort(), 'no send control');
+    assert.deepEqual(controls.sort(), [...display.map(scene => scene.label), 'Run every scene', 'Copy', 'Hide details', 'Reset (reload)'].sort(), 'no send control');
     assert.equal(await page.locator('#den-sim-panel form, #den-sim-panel a[href], #den-sim-panel input').count(), 0, 'no other control');
   });
 
@@ -243,6 +293,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(refused.feed.summary.refusal, 'Not reading · no spotlight');
     assert.equal(await page.textContent('[data-den-sim-value="spot"]'), 'all four off');
     assert.match(await page.textContent('[data-den-sim-command]'), /No fixture command: the brain refused/);
+    await page.waitForFunction(() => /The brain refused: .* The words were a fake vLLM's, scripted for a test: phone_use, holding phone, people one on 5 of 5\./.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
     assert.equal(await page.textContent('[data-den-sim-top-line-text]'), 'Connected start to finish: not yet');
     assert.equal(await page.getAttribute('[data-den-sim-hop="21"]', 'data-reached'), '0', 'hops past the refusal are not reached');
   });
@@ -269,6 +320,25 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     });
   }
 
+  await t.test('Run every scene: all five with no reload, a plain table, one root, no meter, and the top line left alone', async () => {
+    const before = await page.textContent('[data-den-sim-top-line-text]'), shown = await page.getAttribute('[data-den-sim-top-line]', 'data-verdict');
+    await page.click('[data-den-sim-every-run]');
+    await until(async () => { const now = await statusOf(); return now.every.rows.length === display.length && !now.every.running && ['holding', 'refused', 'stopped'].includes(now.feed.phase); }, 'every scene', 400000);
+    await page.waitForFunction(n => document.querySelectorAll('[data-den-sim-every-table] tr').length === n + 1, display.length, { timeout: 10000 });
+    const table = await page.$$eval('[data-den-sim-every-table] tr', rows => rows.map(row => [...row.children].map(cell => cell.textContent)));
+    assert.deepEqual(table[0], ['Scene', 'Box', 'Qwen', 'Beam', 'Why it stopped']);
+    const byScene = Object.fromEntries(table.slice(1).map(([scene, ...cells]) => [scene, cells]));
+    assert.deepEqual(Object.keys(byScene), display.map(scene => scene.label));
+    assert.match(byScene['Reading on the couch'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: reading x5 \| lit, \S+ \| –$/);
+    assert.match(byScene['Holding a phone'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: phone_use x5 \| off \| Not reading · no spotlight$/);
+    for (const label of ['Standing by the couch with a book', 'Nobody there', 'Blank frame']) {
+      assert.deepEqual(byScene[label], ['none', 'not asked', 'off', 'the detector saw nobody, nothing was asked'], label);
+    }
+    assert.equal(await page.textContent('[data-den-sim-every-note]'), 'No meter on this run. The top line stays as the last single click set it. Every reply on this table came from one model root, fake-vllm.');
+    assert.equal(await page.textContent('[data-den-sim-top-line-text]'), before, 'the top line is the last single click\'s');
+    assert.equal(await page.getAttribute('[data-den-sim-top-line]', 'data-verdict'), shown);
+  });
+
   await t.test('Home\'s fixture report is the same across scenes on a fresh page', () => {
     assert.ok(reports.reading.length === 4, JSON.stringify(reports.reading));
     assert.deepEqual(reports.phone, reports.reading);
@@ -282,7 +352,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
   await t.test('after every run: nothing left the page, and the only write was the feed', async () => {
     assert.deepEqual(seen.external, [], 'zero external requests');
     assert.deepEqual([...new Set(seen.writes)], [FEED_POST], 'zero non-GET except the feed');
-    assert.equal(seen.writes.length, 4, 'one feed post per click');
+    assert.equal(seen.writes.length, 5 + display.length, 'one feed post per click: five single clicks, and one per scene in Run every scene');
     assert.deepEqual(seen.sockets, [], 'no WebSocket opened');
     const blocked = await page.evaluate(() => (window.__denSimCsp || []).map(row => row.uri));
     assert.deepEqual(blocked.filter(uri => !EXPECTED_CSP_BLOCKS.has(uri)), [], 'nothing unexpected was stopped by the page policy');

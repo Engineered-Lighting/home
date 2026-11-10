@@ -253,9 +253,10 @@ class NoFake(unittest.TestCase):
         code = {path.relative_to(HERE).as_posix(): path.read_text(encoding="utf-8") for path in sorted(HERE.rglob("*"))
                 if path.suffix in (".py", ".mjs", ".js", ".json") and not path.name.startswith("test")}
         self.assertTrue({"chain.py", "brain.mjs", "run.mjs", "scene/prepare.py"} <= set(code))
-        calls = re.compile(r"fake_detector|--fake\b")
+        calls = re.compile(r"fake_detector|--fake(?![\w-])")   # replay's --fake flag, not ask_one.py's --fake-vllm, a test's vLLM
         self.assertEqual([name for name, text in code.items() if calls.search(text)], [])
         self.assertTrue(calls.search("import fake_detector\n"), "control: a planted import is found")
+        self.assertTrue(calls.search("'--fake', rows"), "control: a planted --fake is found")
 
 
 if __name__ == "__main__":

@@ -1,8 +1,10 @@
 // The honesty test through the real harness (plan, "Done means"): test 1's outcomes on all five takes with
 // a fake vLLM's replies in a scratch store, test 2's searches over everything a click read, wrote or was
-// served, and test 19 on a click. Tests 2's delete-the-truth control, 3, 5's body-hash half, 8 and 10
-// are in test_ask.py, which also files the fake replies here: prepare.py --owed into the scratch data root,
-// then ask_la.py through a local transport against a fake vLLM on 127.0.0.1. Nothing reaches LA.
+// served, test 2's delete at page level (the brain's timeline compared with its random decision_id masked),
+// the brain document's flags on a model's words, and test 19 on a click. Test 2's patched-chain control, 3,
+// 5's body-hash half, 8 and 10 are in test_ask.py, which also files the fake replies here: prepare.py --owed
+// into the scratch data root, then ask_la.py through a local transport against a fake vLLM on 127.0.0.1.
+// Nothing reaches LA.
 //
 //   set DEN_SIM_SET=<a prepared set>, DEN_SIM_HOME, LOCALAPPDATA, TEMP and TMP to scratch folders, then
 //   node --test tools\den-sim\test-den-sim-honesty.mjs
@@ -22,8 +24,8 @@ const ORIGIN = 'http://127.0.0.1:18180';
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 const status = async () => (await fetch(ORIGIN + '/__sim/status')).json();
 
-function harness(home) {
-  const child = spawn(process.execPath, [path.join(HERE, 'run.mjs'), '--room', 'authored', '--prepared', SET], { env: { ...process.env, DEN_SIM_HOME: home, LOCALAPPDATA: home }, windowsHide: true });
+function harness(home, set = SET) {
+  const child = spawn(process.execPath, [path.join(HERE, 'run.mjs'), '--room', 'authored', '--prepared', set], { env: { ...process.env, DEN_SIM_HOME: home, LOCALAPPDATA: home }, windowsHide: true });
   let output = '';
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { output += chunk; });
@@ -194,5 +196,36 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     const routes = /import ask_la|ask_la\.main|\[["'](ssh|scp)["']|http\.client|urllib|socket\.create_connection/;
     for (const name of ['chain.py', 'brain.mjs', 'run.mjs']) assert.doesNotMatch(fs.readFileSync(path.join(HERE, name), 'utf8'), routes, `${name}: no route to LA from a click`);
     assert.match("subprocess.run(['ssh', 'x'])", routes, 'control: a planted route is found');
+  });
+
+  await t.test('test 2\'s delete through the harness: with the truth folder and the display file gone, the brain decides alike, its random decision_id aside', async () => {
+    await run.stop();
+    // A copy of hard links, without the truth folder or the display file: nothing in it is written through.
+    const copy = path.join(home, 'no-truth', path.basename(SET));
+    (function link(from, to, top) {
+      fs.mkdirSync(to, { recursive: true });
+      for (const entry of fs.readdirSync(from, { withFileTypes: true })) {
+        if (top && ['truth', 'display.json'].includes(entry.name)) continue;
+        if (entry.isDirectory()) link(path.join(from, entry.name), path.join(to, entry.name), false); else fs.linkSync(path.join(from, entry.name), path.join(to, entry.name));
+      }
+    })(SET, copy, true);
+    assert.ok(!fs.existsSync(path.join(copy, 'truth')) && !fs.existsSync(path.join(copy, 'display.json')));
+    const second = harness(home, copy);
+    try {
+      await second.ready;
+      const masked = file => JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8')), (key, value) => key === 'decision_id' ? 'masked' : value);
+      const folder = done => path.join(done.run, `click-${done.click.click}`);
+      const files = ['observe/observations.jsonl', 'track/tracks.jsonl', 'requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'den-core-log.jsonl'];
+      const timelines = {};
+      for (const label of ['Reading on the couch', 'Holding a phone']) {
+        const before = clicks[label], after = await click(before.click.take);
+        for (const name of files) assert.ok(fs.readFileSync(path.join(folder(before), name)).equals(fs.readFileSync(path.join(folder(after), name))), `${label}: ${name}`);
+        const [was, now] = [folder(before), folder(after)].map(dir => path.join(dir, 'brain-timeline.json'));
+        assert.equal(masked(now), masked(was), `${label}: the brain's timeline, decision_id masked`);
+        assert.notEqual(fs.readFileSync(now, 'utf8'), fs.readFileSync(was, 'utf8'), `${label}: control: unmasked, the random decision_id differs, so the mask is what lets them match`);
+        timelines[label] = masked(now);
+      }
+      assert.notEqual(timelines['Reading on the couch'], timelines['Holding a phone'], 'control: the masked comparison still tells two decisions apart');
+    } finally { await second.stop(); }
   });
 });

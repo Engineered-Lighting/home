@@ -155,6 +155,9 @@ class Compare(unittest.TestCase):
         moved = [list(p) for p in joints]
         moved[9][0] += 1.5
         self.assertEqual(detect.compare(recorded, [same(keypoints=moved)])[:2], (False, 1.5))
+        lower = [list(p) for p in joints]
+        lower[9][1] += 1.5
+        self.assertEqual(detect.compare(recorded, [same(keypoints=lower)])[:2], (False, 1.5), "a joint moved in y only")
         faint = [list(p) for p in joints]
         faint[3][2] = 0.5
         self.assertIn("a joint's score moved", detect.compare(recorded, [same(keypoints=faint)])[2])

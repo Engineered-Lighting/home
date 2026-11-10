@@ -205,12 +205,16 @@ export function finalRow(row, n, stop) {
 
 // What the panel says under the picture. Boxes are the shown frame's person boxes when hop 6's rows hold,
 // and null when they don't: then no row is drawn, and the note never says the frame holds no person.
+const JOINT_MIN = .4; // the pose manifest's score_threshold, the panel's too: a joint at or over it is drawn
+
 export function pictureNote(picture) {
   if (!picture || picture.error) return null;
   const frame = 'The take\'s own frame, read back out of its NV12 plane';
   if (!Array.isArray(picture.boxes)) return `${frame}. The detector's recorded rows did not pass hop 6's checks, so no box is drawn.`;
   if (!picture.boxes.length) return `${frame}. The detector's row for this frame holds no person, so no box is drawn.`;
   const scores = picture.boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ');
+  const joints = picture.boxes.some(box => (box.keypoints || []).some(point => point?.[2] >= JOINT_MIN));
+  if (!joints) return `${frame}, with YOLO26s's person box and score (${scores}) from this frame's recorded row: box only, RTMPose-m placed no supported joint on it.`;
   return `${frame}, with YOLO26s's person box and score (${scores}) and RTMPose-m's supported joints from this frame's recorded row.`;
 }
 

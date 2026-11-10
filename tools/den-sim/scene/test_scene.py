@@ -830,8 +830,8 @@ class ReceiptParts(unittest.TestCase):
 
 
 TRACER = r"""
-import json, os, sys
-_sink = open(os.path.join(os.environ["DEN_SIM_TRACE"], "%d.jsonl" % os.getpid()), "a", encoding="utf-8")
+import json, os, sys, uuid
+_sink = open(os.path.join(os.environ["DEN_SIM_TRACE"], "%d-%s.jsonl" % (os.getpid(), uuid.uuid4().hex)), "x", encoding="utf-8")
 _sink.write(json.dumps({"argv": sys.argv}) + "\n")
 _busy, _WRITES = [False], {"os.mkdir", "os.rename", "os.replace", "os.remove", "os.rmdir", "os.link", "os.symlink", "os.truncate",
                            "shutil.copyfile", "shutil.copytree", "shutil.rmtree", "shutil.move", "tempfile.mkstemp", "tempfile.mkdtemp"}

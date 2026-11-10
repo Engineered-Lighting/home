@@ -26,7 +26,7 @@ import Sofa from '../../app/src/home-lighting-sofa-target.js';
 import { sealRegisteredDeskTarget } from '../../app/src/home-3d/registered-desk-target.mjs';
 import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
-import { buildReceipt, finalRow } from './receipt.mjs';
+import { buildReceipt, finalRow, pictureNote } from './receipt.mjs';
 import { topLine } from './top_line.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
@@ -260,6 +260,21 @@ test('a receipt holds each recorded tool to its pinned bytes, and the prepare co
   assert.throws(() => execFileSync('git', ['-C', ROOT, 'merge-base', '--is-ancestor', other, 'HEAD'], { stdio: 'ignore' }), 'the control commit is not on this branch');
   elsewhere.harness.commit = other;
   assert.match(toolReasons(elsewhere).join('\n'), /^5 Camera registration: the commit that prepared it \([0-9a-f]{8}\) is not on this branch: HEAD does not descend from it$/m);
+});
+
+test('the picture note says what the drawn row holds: rows that failed, no person, box only, box and joints', () => {
+  const frame = 'The take\'s own frame, read back out of its NV12 plane';
+  const person = keypoints => ({ box_xyxy: [10, 20, 110, 300], score: .91, keypoints });
+  assert.equal(pictureNote({ boxes: null }), `${frame}. The detector's recorded rows did not pass hop 6's checks, so no box is drawn.`);
+  assert.equal(pictureNote({ boxes: [] }), `${frame}. The detector's row for this frame holds no person, so no box is drawn.`);
+  const boxOnly = `${frame}, with YOLO26s's person box and score (person 0.91) from this frame's recorded row: box only, RTMPose-m placed no supported joint on it.`;
+  assert.equal(pictureNote({ boxes: [person(Array(17).fill(null))] }), boxOnly, 'every joint null');
+  assert.equal(pictureNote({ boxes: [person(undefined)] }), boxOnly, 'no keypoints at all');
+  assert.equal(pictureNote({ boxes: [person(Array.from({ length: 17 }, (_, j) => [100 + j, 50 + j, .39]))] }), boxOnly, 'every joint under 0.4: none is drawn');
+  const one = Array.from({ length: 17 }, (_, j) => [100 + j, 50 + j, j === 5 ? .4 : .2]);
+  assert.equal(pictureNote({ boxes: [person(one)] }), `${frame}, with YOLO26s's person box and score (person 0.91) and RTMPose-m's supported joints from this frame's recorded row.`,
+    'control: one joint at 0.4 is drawn, so the note names the joints');
+  assert.equal(pictureNote({ error: 'no frame' }), null);
 });
 
 test('the hop table: 26 hops, each with its pin, and adapters that name their stand-ins', () => {

@@ -196,7 +196,9 @@
     inputNotes.textContent = status.private_notes.join(' ');
     startupBox.hidden = !status.startup;
     startupBox.textContent = status.startup ? `Fixtures for the stated facing, at the spot: ${status.startup}.` : '';
-    values.says.textContent = feed.live?.why || '–';
+    // A broken or stopped click never reaches the brain: Home's off document's reason isn't the brain's word.
+    values.says.textContent = feed.phase === 'pipeline_failed' ? 'not run: the pipeline broke'
+      : feed.phase === 'stopped' ? 'not run: the click stopped before it' : feed.live?.why || '–';
     values.refusal.textContent = feed.live?.refusal || '–';
     values.events.textContent = decided ? `${decided.events}, from the adapter, into the real activity loop` : '–';
     values.camera.textContent = status.camera_m ? 'shown in the room: a green dot where the invented camera sits' : '–';

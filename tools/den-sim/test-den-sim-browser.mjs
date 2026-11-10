@@ -265,6 +265,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
       assert.equal(await page.locator('[data-den-sim-boxes]').count(), 0, 'no box');
       assert.equal(await page.isVisible('[data-den-sim-torso]'), false, 'no torso line');
       assert.equal(stopped.feed.summary, null, 'no person point reached the page, so no person marker on the floor');
+      await page.waitForFunction(() => document.querySelector('[data-den-sim-value="says"]')?.textContent === 'not run: the click stopped before it', null, { timeout: 10000 });
     });
   }
 

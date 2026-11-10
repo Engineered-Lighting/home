@@ -327,6 +327,8 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
         return response;
       };
     });
+    // Polls go out every 250 ms: after a second, two or three held-back ones are always on their way at the press.
+    await page.waitForTimeout(1000);
     await press(page, 'Reading on the couch');
     await phase('holding');
     await page.waitForFunction(() => /^The beam is on the reader's hands/.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 30000 });

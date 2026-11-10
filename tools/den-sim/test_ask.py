@@ -6,12 +6,15 @@ Stdlib unittest. Each check has a control that must make it fail.
     python -B -X utf8 tools\\den-sim\\test_ask.py --fill HOME --set SET --facts reading=TAKE,phone=TAKE [--stage owed|paste|both]
 
 Run it with DEN_SIM_HOME, LOCALAPPDATA, TEMP and TMP in scratch, and DEN_SIM_SET at a prepared set for the parts
-that need one; every folder a test writes is a new one under TEMP. No test can start ssh or scp: the audit hook
-below, installed before anything else, refuses either executable, and its control proves it. ask_la.py's visits run
-through LocalTransport: a scratch folder stands in for /dev/shm, and ask_one.py runs as a local process against a
-fake vLLM on 127.0.0.1 (this file with --fake-vllm), which serves root fake-vllm and writes only under its own
-temporary folder. --fill is the Node tests' way to the same fake paste: prepare.py --owed into HOME, then ask_la.py
-through the local transport, with the facts named per take; it prints one JSON line.
+that need one; every folder a test writes is a new one under TEMP. No test process can start ssh or scp: the audit
+hook below, installed before anything else, refuses a process whose executable or command line names either, which
+covers a direct start, shell=True, cmd /c, powershell -Command, bash -c and python -c, and its control shows a
+stand-in named ssh starting without the hook. A child Python running a script file of its own is not watched by it;
+no test runs one that could start ssh, and ask_la.py's own SSH class runs in a test's process, under the hook.
+ask_la.py's visits run through LocalTransport: a scratch folder stands in for /dev/shm, and ask_one.py runs as a
+local process against a fake vLLM on 127.0.0.1 (this file with --fake-vllm), which serves root fake-vllm and writes
+only under its own temporary folder. --fill is the Node tests' way to the same fake paste: prepare.py --owed into
+HOME, then ask_la.py through the local transport, with the facts named per take; it prints one JSON line.
 """
 import contextlib
 import hashlib
@@ -26,19 +29,28 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.dont_write_bytecode = True
 
+SSH_WORD = re.compile(r'(?<![\w-])(ssh|scp)(?![\w-])', re.IGNORECASE)
+
+
+def starts_ssh(event, args):
+    """Whether a process start names ssh or scp: as its executable, or anywhere in its command line, which is where
+    shell=True, cmd /c, powershell -Command, bash -c and python -c carry it."""
+    if event == 'subprocess.Popen':
+        words = [args[0], *(args[1] if isinstance(args[1], (list, tuple)) else [args[1]])]
+    elif event in ('os.system', 'os.spawn', 'os.exec', 'os.posix_spawn', 'os.startfile'):
+        words = [part for arg in args for part in (arg if isinstance(arg, (list, tuple)) else [arg])]
+    else:
+        return False
+    return any(word is not None and SSH_WORD.search(str(word)) for word in words)
+
 
 def no_ssh(event, args):
-    """No process this test starts may be ssh or scp, by any spelling CreateProcess or a shell would run."""
-    if event == 'subprocess.Popen':
-        executable, argv = args[0], args[1]
-        first = argv[0] if isinstance(argv, (list, tuple)) and argv else (str(argv).split() or [''])[0]
-        for name in (executable, first):
-            if name and Path(str(name).strip('"')).stem.lower() in ('ssh', 'scp'):
-                raise PermissionError('a test may not start %s' % Path(str(name)).stem)
-    elif event in ('os.system', 'os.spawn', 'os.exec', 'os.posix_spawn', 'os.startfile') and re.search(r'\b(ssh|scp)\b', ' '.join(map(str, args)).lower()):
+    """No process this test starts may be ssh or scp."""
+    if starts_ssh(event, args):
         raise PermissionError('a test may not start ssh or scp')
 
 
@@ -294,13 +306,44 @@ def scratch(prefix):
 
 
 class NoSSH(unittest.TestCase):
+    SPELLINGS = (dict(args=['ssh', '-V']), dict(args=['scp', '-V']), dict(args=['C:\\Windows\\System32\\OpenSSH\\SSH.EXE', '-V']), dict(args='ssh -V'),
+                 dict(args='ssh -V', shell=True), dict(args=['cmd', '/c', 'ssh', '-V']), dict(args=['powershell', '-NoProfile', '-Command', 'ssh -V']),
+                 dict(args=['pwsh', '-Command', 'scp -V']), dict(args=['bash', '-c', 'ssh -V']),
+                 dict(args=[sys.executable, '-c', "import subprocess; subprocess.run(['ssh', '-V'])"]))
+
     def test_no_test_can_start_ssh_or_scp(self):
-        for argv in (['ssh', '-V'], ['scp', '-V'], ['C:\\Windows\\System32\\OpenSSH\\ssh.exe', '-V'], 'ssh -V'):
-            with self.assertRaises(PermissionError, msg=repr(argv)):
-                subprocess.run(argv, capture_output=True)
+        # The rule first, as a pure decision, so a broken hook fails here before any start is tried.
+        for spelling in self.SPELLINGS:
+            self.assertTrue(starts_ssh('subprocess.Popen', (None, spelling['args'], None, None)), spelling)
+        self.assertFalse(starts_ssh('subprocess.Popen', (None, [sys.executable, '-B', 'ask_one.py', '--fake-vllm', '8000'], None, None)), 'control: another start passes')
+        self.assertFalse(starts_ssh('subprocess.Popen', (None, ['git', 'archive', 'den-sim-shm-ssh_x'], None, None)), 'control: a word inside a name passes')
+        for spelling in self.SPELLINGS:
+            with self.assertRaises(PermissionError, msg=repr(spelling)):
+                subprocess.run(capture_output=True, **spelling)
         with self.assertRaises(PermissionError):
             os.system('ssh -V')
         self.assertEqual(subprocess.run([sys.executable, '-c', 'pass']).returncode, 0, 'control: any other process starts')
+
+    def test_control_without_the_hook_a_stand_in_named_ssh_starts(self):
+        """The hook is what stops it: a stand-in named ssh (a batch file, never OpenSSH) starts from a process without
+        it, and is refused from one with it."""
+        folder = scratch('den-sim-nossh-')
+        try:
+            stand_in = folder / 'ssh.bat'
+            stand_in.write_text('@echo stand-in ran\r\n', encoding='ascii')
+            # The stand-in's path goes by the environment: this process's own hook would refuse a command line naming it.
+            start = "import os, subprocess; print(subprocess.run(['cmd', '/c', os.environ['DEN_SIM_STAND_IN']], capture_output=True, encoding='ascii').stdout.strip())"
+            hooked = "import sys; sys.path.insert(0, %r); import test_ask; " % str(HERE)
+            run = lambda code: subprocess.run([sys.executable, '-B', '-c', code], capture_output=True, encoding='utf-8',
+                                              env={**os.environ, 'PYTHONDONTWRITEBYTECODE': '1', 'DEN_SIM_STAND_IN': str(stand_in)}, timeout=120)
+            plain = run(start)
+            self.assertEqual((plain.returncode, plain.stdout.strip()), (0, 'stand-in ran'), plain.stderr)
+            refused = run(hooked + start)
+            self.assertNotEqual(refused.returncode, 0)
+            self.assertIn('PermissionError: a test may not start ssh or scp', refused.stderr)
+            self.assertNotIn('stand-in ran', refused.stdout)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 class Lifted(unittest.TestCase):

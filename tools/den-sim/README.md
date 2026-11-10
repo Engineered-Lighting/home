@@ -298,8 +298,11 @@ node --test tools\den-sim\test-den-sim-honesty.mjs
 
 `test_ask.py` and `test-den-sim-honesty.mjs` never reach the inference host. Their replies come from
 a fake vLLM on `127.0.0.1` that serves the root `fake-vllm`, through a local transport in place of
-ssh and scp, into a scratch data root; an audit hook in each test process refuses to start `ssh` or
-`scp` at all.
+ssh and scp, into a scratch data root. An audit hook in each test process refuses to start any
+process whose executable or command line names `ssh` or `scp`: directly, or through `shell=True`,
+`cmd /c`, `powershell -Command`, `bash -c` or `python -c`. A child Python running a script file of
+its own isn't watched by it; no test runs one that could start ssh, and `ask_la.py`'s own ssh class
+runs inside a test's process, under the hook.
 
 `test_detect.py` runs the model in the detector's venv and skips those parts without it. With
 `$env:DEN_SIM_PREPARE_TRACE = "1"`, `test_scene.py` also prepares a whole set in a scratch data root

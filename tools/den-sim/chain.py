@@ -523,7 +523,7 @@ def step_person(request):
 def person_words(card):
     """One track's card in words, with no coordinate: hop 15's row and the console say this."""
     if card['on_couch'] is None:
-        couch = 'on the couch: not tested, %s' % ('the bundle was not safe to tie to one person' if card['held'] else 'no position')
+        couch = 'on the couch: not tested, %s' % (('the Track was not confident' if card.get('held_why') == 'track' else 'the bundle was not safe to tie to one person') if card['held'] else 'no position')
     elif card['on_couch']:
         couch = 'on the couch: yes'
     else:

@@ -110,7 +110,9 @@ class Test11(unittest.TestCase):
                          (['association_uncertain'], None, 'held_ambiguous', 'association', 'none'))
         self.assertEqual(len(card['need_states']), 2, 'need saw four replies, not five: starting then engaged')
         self.assertEqual((card['replies'], card['need_replies'], card['engaged_reply']), (5, 4, 3), 'the first held, so it engaged at the third')
-        held, _ = run(scene(confident=False, safe=(True,) * 5))
+        held, cards = run(scene(confident=False, safe=(True,) * 5))
+        self.assertEqual((cards[0]['held'], cards[0]['held_why']), (True, 'track'), 'the card says the Track held it, not the bundle')
+        self.assertEqual(run(scene(safe=(False,) * 5))[1][0]['held_why'], 'bundle', 'control: an unsafe bundle')
         self.assertTrue(all(r['flags'] == ['association_uncertain'] and r['working_region'] is None for r in held), 'a Track not confident holds too')
         records, [card] = run(scene(safe=(True,) * 5))   # control: every bundle safe, nothing held
         self.assertEqual((records[0]['flags'], records[0]['working_region']['surface_id']), ([], 'sofa-book'))

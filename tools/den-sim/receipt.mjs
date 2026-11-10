@@ -192,10 +192,12 @@ export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, sta
 // is from the seat point, on the couch or not and which half failed, the spot by name and the engagement. No coordinate.
 // A distance hop 15 left null (a held reply, no torso joint) reads in words: a card never throws on what person.py writes.
 const metres = v => Number.isFinite(v) ? `${v.toFixed(2)} m` : 'an unmeasured distance';
+// A failing distance in millimetres: hop 15 compares at 3 places, so 2 places could print a failure as the limit itself.
+const fine = v => Number.isFinite(v) ? `${v.toFixed(3)} m` : 'an unmeasured distance';
 // Each half that failed, in words, built only for the halves card.failed names.
 const HALVES = {
-  position: card => `the position half failed: ${metres(card.footprint_m)} outside the couch's footprint, past its 0.15 m reach`,
-  height: card => `the height half failed: torso ${metres(card.torso_margin_m)} over the limit, from the ${card.torso_from}`,
+  position: card => `the position half failed: ${fine(card.footprint_m)} outside the couch's footprint, past its 0.15 m reach`,
+  height: card => `the height half failed: torso ${fine(card.torso_margin_m)} over the limit, from the ${card.torso_from}`,
   torso: () => 'the height half failed: no supported shoulder or hip in the bundle\'s last 2 s',
 };
 export function personCard(receipt) {
@@ -211,7 +213,7 @@ export function personCard(receipt) {
   const lines = row.person.flatMap(card => {
     const couchWords = card.on_couch === true ? 'On the couch: yes.'
       : card.on_couch === false ? `On the couch: no: ${(card.failed || []).map(name => (HALVES[name] || (() => `the ${name} half failed`))(card)).join('; ')}.`
-      : `On the couch: not tested yet: ${card.held ? 'its bundle was not safe to tie to one person, so the reply was held' : 'no position'}.`;
+      : `On the couch: not tested yet: ${card.held ? `${card.held_why === 'track' ? 'its Track was not confident' : 'its bundle was not safe to tie to one person'}, so the reply was held` : 'no position'}.`;
     const spot = card.region === 'sofa-book' ? 'The spot: sofa-book, the book spot 0.30 m above the seat point. Its marker in the room comes at step 7.'
       : card.region === 'handheld' ? 'The spot: handheld, which isn\'t in the model, so no target.' : 'The spot: none yet.';
     const need = card.need_replies === 0 ? `Engagement: ${card.engagement}, support ${card.support}: every reply was held, so need v0 had none of this track's replies.`
@@ -234,10 +236,10 @@ export function personColumn(card) {
 // "not reached on this click". The hop where it broke reads MISSING with why, and rows before it stay as
 // they ran. A hop with no row, though nothing stopped before it, reads MISSING: never "not reached".
 // A hop built at page start (hops.json's when "page") keeps the word it was built with, greyed: this click didn't reach it,
-// but it is not the table's word to claim.
+// but it is not the table's word to claim. A page hop that wasn't built (hop 16) takes the table's word, as 24 to 26 do.
 export function finalRow(row, n, stop) {
   const hop = TABLE.hops[n - 1], empty = { tools: [], read: [], wrote: [], stand_ins: [] };
-  if (stop && n > stop.hop && hop.when === 'page' && row) {
+  if (stop && n > stop.hop && hop.when === 'page' && row && !/^not built/.test(row.ran)) {
     return { ...row, n, name: hop.name, reached: false, ran: `${row.ran}; not reached on this click`, note: 'not reached on this click' };
   }
   if (stop && n > stop.hop) return { n, name: hop.name, word: hop.word, reached: false, ran: 'not reached on this click', note: 'not reached on this click', ...empty };

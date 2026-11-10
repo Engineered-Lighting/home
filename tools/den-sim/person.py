@@ -24,7 +24,8 @@ known by the reply's available_at (plan, hop 15 steps 1 to 8):
    emitted when a field's value or support status changed, as need v0's own _changes keys it.
 
 Left null on purpose: head_dir, head_cov, every confidence, visual_demand.level, embedding, episodes, motion,
-affected. posture is canon's "unknown": nothing here has evidence for it. It reads no clock, file or environment
+affected. posture is canon's "unknown": hop 15's list doesn't name it, and Qwen's subject_posture is one word for the
+whole picture, not tied to this track, so it isn't carried here. It reads no clock, file or environment
 of its own beyond what it is handed.
 """
 import importlib.util
@@ -41,7 +42,7 @@ SHOULDERS, HIPS, FACE = (5, 6), (11, 12), (0, 1, 2, 3, 4)   # COCO-17
 COCO17 = ('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
           'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle')
 PLACES, CARD_PLACES = 6, 2   # records in micrometres, as den-register rounds metres; the card in centimetres
-COMPARE_PLACES = 3           # step 5's two halves compare in millimetres
+COMPARE_PLACES = 3           # step 5's two halves compare in millimetres, and the card's failing distances use them
 INTERPRETER = {'path': 'rules', 'version': 'den-sim-person-1'}
 NULL_REGION = {'center': None, 'extent_m': None, 'normal': None, 'confidence': None}
 
@@ -113,7 +114,7 @@ def seated(xy, bundle, couch, t):
         torso, limit, basis = None, None, None
     over = None if torso is None else round(torso - limit, COMPARE_PLACES)
     failed = (['position'] if round(away, COMPARE_PLACES) > REACH_M else []) + (['torso'] if torso is None else ['height'] if over > 0 else [])
-    return dict(on=not failed, failed=failed, footprint_m=round(away, CARD_PLACES), torso_margin_m=None if torso is None else round(torso - limit, CARD_PLACES),
+    return dict(on=not failed, failed=failed, footprint_m=round(away, COMPARE_PLACES), torso_margin_m=over,
                 torso_from=basis, captured=max((ts for ts, _ in hips + shoulders), default=None))
 
 
@@ -166,9 +167,12 @@ class Person:
         self.region_times, self.head_times = (None, None), (None, None)
         self.need_states, self.last_key = [], None
         self.replies, self.taken, self.engaged_reply = 0, 0, None   # this track's replies, those need was handed, and when it engaged
+        self.held_why = None
 
     def update(self, t, row, fact, bundle, known, couch):
-        safe = bool(row.get('association_safe')) and bool(known) and (known[-1][1].get('association') or {}).get('status') == 'confident'
+        bundle_safe = bool(row.get('association_safe'))
+        safe = bundle_safe and bool(known) and (known[-1][1].get('association') or {}).get('status') == 'confident'
+        self.held_why = None if safe else 'bundle' if not bundle_safe else 'track'   # which of the two held it, for the card
         self.replies += 1
         if safe:   # step 3: this track's own need
             self.taken += 1
@@ -252,7 +256,7 @@ def card(person, record, safe, couch):
     return dict(track_id=person.track_id, seat_distance_m=round(math.hypot(position['xyz'][0] - seat[0], position['xyz'][1] - seat[1]), CARD_PLACES) if position else None,
                 on_couch=test.get('on'), failed=test.get('failed'), footprint_m=test.get('footprint_m'), torso_margin_m=test.get('torso_margin_m'),
                 torso_from=test.get('torso_from'), region=(record['working_region'] or {}).get('surface_id'), engagement=record['focused_engagement']['state'],
-                support=record['field_support']['focused_engagement']['support_status'], held=not safe, need_states=person.need_states,
+                support=record['field_support']['focused_engagement']['support_status'], held=not safe, held_why=person.held_why, need_states=person.need_states,
                 replies=person.replies, need_replies=person.taken, engaged_reply=person.engaged_reply)
 
 

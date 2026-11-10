@@ -3,8 +3,9 @@
 // all five takes with no reply on file (test 1's outcomes on a fake vLLM's replies are in
 // test-den-sim-honesty.mjs); test 2's searches over click-path code, what clicks wrote and
 // what the harness served; test 6 on real clicks (the argv, the models' names, an edited rows file);
-// test 5's frame hash on a click; test 9's stdout half, test 12 and test 19's private half on a
-// sealed invented export and mark in a scratch data root; and the site id. Each check has a control
+// test 5's frame hash on a click; test 9's step-5 parts (bodies unchanged under re-fits, a fit 1 m off
+// the mark not on the couch, nothing printed), test 12 and test 19's private half on a sealed invented
+// export and mark in a scratch data root; and the site id. Each check has a control
 // that must make it fail. Hop 6's own conditions, one by one, are in test_chain.py.
 //
 //   set DEN_SIM_SET=<a prepared set>, DEN_SIM_HOME and LOCALAPPDATA to scratch folders, then
@@ -27,7 +28,9 @@ import Sofa from '../../app/src/home-lighting-sofa-target.js';
 import { sealRegisteredDeskTarget } from '../../app/src/home-3d/registered-desk-target.mjs';
 import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
-import { buildReceipt, finalRow, pictureNote } from './receipt.mjs';
+import { chainRequest } from './brain.mjs';
+import { nextVersion, writeCouch } from './couch_to_room.mjs';
+import { buildReceipt, finalRow, pictureNote, sha256 } from './receipt.mjs';
 import { topLine } from './top_line.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
@@ -42,7 +45,7 @@ const sleep = ms => new Promise(done => setTimeout(done, ms));
 const SITE = Client.BASE.split('/').at(-1);
 // Click-path code: what a click runs or what serves it. The display file and the recorded side aside.
 const CLICK_PATH = ['run.mjs', 'brain.mjs', 'feed.mjs', 'panel.js', 'receipt.mjs', 'top_line.mjs', 'data-root.mjs', 'hops.json', 'chain.py', 'brain_run.py',
-  'dry_run.py', 'scene/frame_hash.py'];
+  'dry_run.py', 'scene/frame_hash.py', 'couch_to_room.mjs', 'person.py'];
 // The plan's step 4 words up to hop 12, with no sofa mark saved and no reply on file: a click with a
 // person stops at hop 12, "Qwen has not seen these exact frames".
 const STEP4_UNASKED = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
@@ -153,6 +156,25 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
     assert.notEqual(got.verdict, 'yes');
   }
   assert.match(edited(stoppedAt(15, 'x')).count_line, /11 not reached$/);
+  // Step 5 as built: hop 15 reads ADAPTER and stops nothing, and the older brain still decides. A click whose person is
+  // not on the couch, the brain lighting anyway under its 1.5 m rule, reads "not yet": hops 16 and 24 to 26 aren't built,
+  // and hop 10 is still typed. Never "stopped at Person state": hop 15 feeds nothing until step 6.
+  const stepFive = r => {
+    Object.assign(r.rows[14], { person: [{ track_id: 'trk-1', on_couch: false, failed: ['position'] }] });
+    for (const n of [16, 24, 25, 26]) Object.assign(r.rows[n - 1], { word: 'MISSING', stand_ins: [], tools: [] });
+    Object.assign(r.rows[9], { word: 'SCRIPTED', stand_ins: ["the older brain's occupancy typed in brain_run.py; the track list only decides that it runs"] });
+    r.aim_check = null;
+  };
+  const off = edited(stepFive);
+  assert.equal(off.line, 'Connected start to finish: not yet');
+  assert.deepEqual(off.reasons.filter(reason => reason.hop === 15), [], 'hop 15 itself holds');
+  assert.deepEqual([...new Set(off.reasons.filter(reason => reason.condition === 6).map(reason => reason.hop))], [16, 24, 25, 26]);
+  assert.equal(off.count_line, '3 real, 14 adapter (9 real tools with a named stand-in, 5 written for this simulation), 5 scripted, 4 missing');
+  // The count follows hop 15's word: the same click with hop 15 MISSING counts one written adapter fewer (control).
+  assert.equal(edited(r => { stepFive(r); Object.assign(r.rows[14], { word: 'MISSING', stand_ins: [] }); }).count_line,
+    '3 real, 13 adapter (9 real tools with a named stand-in, 4 written for this simulation), 5 scripted, 5 missing');
+  // If the older brain refuses on that click, the rows before its stop don't hold (16 isn't built), so still "not yet".
+  assert.equal(edited(r => { stepFive(r); stoppedAt(17, 'Not reading · no spotlight')(r); }).verdict, 'not yet');
   assert.equal(edited(r => { r.pressed_again = true; }).line, 'Pressed again: press Reset for a new verdict');
   assert.equal(edited(r => { r.pressed_again = true; r.aim_check = null; }).verdict, 'pressed again', 'a second press needs no fresh aim check');
   assert.equal(edited(r => { r.pressed_again = true; stoppedAt(15, 'not on the couch')(r); }).verdict, 'stopped', 'a second press the pipeline answered still says so');
@@ -499,7 +521,7 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
   assert.ok(rowOf(1).read.every(file => ['shots.json', 'render'].includes(file.recorded.kind)), 'hop 1 reads only shots.json and the render\'s inputs');
   assert.deepEqual(rowOf(4).read.map(file => file.path), [`${take}/frames.csv`], 'hop 4 read the take');
   // Nobody and blank light nothing and stop at hop 6, where the real detector's rows hold no person, with no
-  // box, no torso line and no beam. Reading's frame has the model's box and joints, though no reply is on file.
+  // box, no person card and no beam. Reading's frame has the model's box and joints, though no reply is on file.
   assert.ok(reading.view.boxes.length >= 1 && reading.view.boxes.every(box => box.score >= .5 && box.keypoints.length === 17), 'reading\'s frame has the model\'s box and joints');
   assert.equal(reading.view.picture_note, `The take's own frame, read back out of its NV12 plane, with YOLO26s's person box and score (${reading.view.boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ')}) and RTMPose-m's supported joints from this frame's recorded row.`);
   for (const label of ['Nobody there', 'Blank frame']) {
@@ -508,24 +530,20 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
     assert.match(view.top_line.line, /^(This click stopped at Detector and box: the detector saw nobody, nothing was asked|Connected start to finish: not yet)/, label);
     assert.equal(view.rows[5].word, 'ADAPTER', `${label}: the detector ran and saw nobody, it didn't break`);
     assert.ok(view.rows.filter(row => row.n > 6).every(row => !row.reached), label);
-    assert.deepEqual([view.boxes, view.torso, now.feed.summary, now.feed.phase], [[], null, null, 'stopped'], `${label}: no box, no torso line, no brain, no beam`);
+    assert.deepEqual([view.boxes, view.person, now.feed.summary, now.feed.phase], [[], null, null, 'stopped'], `${label}: no box, no person card, no brain, no beam`);
     assert.match(view.picture_note, /The detector's row for this frame holds no person, so no box is drawn\.$/, label);
   }
   // Standing, reported: what the click did and why.
   const standing = clicks['Standing by the couch with a book'];
   t.diagnostic(`standing: ${standing.view.stopped ? `stopped at hop ${standing.view.stopped.hop}: ${standing.view.stopped.why}` : 'reached the brain'}; ${standing.view.rows[5].summary}`
     + `${standing.view.rows[16].reached ? `; ${standing.view.rows[16].summary}` : ''}`);
-  // The torso line, relative to the limit only, on each click with a person: in the console and run.json too.
+  // With no reply on file no click reaches hop 15, so no person card, in the panel, the console or run.json.
   const runJson = JSON.parse(fs.readFileSync(path.join(first.run, 'run.json'), 'utf8'));
-  for (const [label, { view }] of Object.entries(clicks)) {
-    const withPerson = view.rows[5].reached && /found a person/.test(view.rows[5].summary) && view.rows[6].reached;
-    assert.equal(view.torso !== null, withPerson, `${label}: a torso line exactly when the rows hold a person`);
-    if (!view.torso) continue;
-    assert.match(view.torso, /^torso \d\.\d\d m (under|over) the limit \(median of \d+ supported shoulder and hip points over the last 2 s; the limit is the seat's top plus 0\.45 m\)$/);
-    assert.ok(run.output().includes(`Click ${view.click}: ${view.torso}`), `${label}: the console says it`);
-    assert.deepEqual(runJson.clicks.find(row => row.click === view.click), { click: view.click, take: view.take, torso: view.torso });
-    t.diagnostic(`${label}: ${view.torso}`);
-  }
+  for (const [label, { view }] of Object.entries(clicks)) assert.deepEqual([view.person, view.rows[14].reached], [null, false], label);
+  assert.deepEqual([runJson.clicks, /: person: /.test(run.output())], [[], false]);
+  // The click's room model is the copy of the re-fit's that hop 14 wrote the couch into at page start, its digest held.
+  assert.deepEqual(rowOf(7).read.filter(file => file.recorded?.kind === 'room model').map(file => [file.path.replace(/fits\/[0-9a-f]+\//, 'fits/<fit>/'), file.recorded.by, file.sha256 === file.recorded.sha256]),
+    [['fits/<fit>/couch/room-model.jsonl', 'couch_to_room.mjs at page start', true]]);
   // Test 6 on the real clicks: replay ran on the recorded rows (--detections, never --fake), and every
   // observation names a real model. Test 1: the clicks' command lines differ only by folder ids.
   const clickDirs = fs.readdirSync(first.run).filter(name => /^click-\d+$/.test(name)).map(name => path.join(first.run, name));
@@ -627,9 +645,9 @@ test('test 5 on a click: a frame changed in a copy of a take reads MISSING at ho
   const archived = await click(phone);
   assert.ok(archived.click.top_line.reasons.some(reason => reason.condition === 4 && reason.hop === 7 && /tools\/den-observe\/replay\.py differs from refs\.json tools\.rung-2-observe/.test(reason.text)),
     JSON.stringify(archived.click.top_line.reasons.filter(reason => reason.condition === 4)));
-  // A tool that fails on a click: replay, on a room model broken after the page placed it.
-  const fits = path.join(home, 'fits'), fit = fs.readdirSync(fits).find(name => fs.existsSync(path.join(fits, name, 'room-model.jsonl')));
-  fs.writeFileSync(path.join(fits, fit, 'room-model.jsonl'), '{"not": "a room model"}\n');
+  // A tool that fails on a click: replay, on the click's room model (the couch's copy) broken after the page placed it.
+  const fits = path.join(home, 'fits'), fit = fs.readdirSync(fits).find(name => fs.existsSync(path.join(fits, name, 'couch', 'room-model.jsonl')));
+  fs.writeFileSync(path.join(fits, fit, 'couch', 'room-model.jsonl'), '{"not": "a room model"}\n');
   const seven = await click(phone);
   assert.equal(seven.click.stopped.hop, 7, JSON.stringify(seven.click.stopped));
   assert.match(seven.click.stopped.why, /^replay\.py exit \d+: /);
@@ -714,10 +732,100 @@ function coordinatesIn(text, values) {
     .filter(token => new RegExp(`(?<![0-9])${token.replace('.', '\\.')}(?![0-9])`).test(text));
 }
 const panelText = now => [now.startup, ...now.private_notes, now.placement.summary, now.feed.live?.why, now.feed.live?.refusal, ...(now.feed.summary?.candidates || []).map(row => row.reason),
-  ...(now.click ? [now.click.top_line.line, now.click.top_line.count_line, ...now.click.top_line.reasons.map(reason => reason.text), now.click.said, now.click.torso,
+  ...(now.click ? [now.click.top_line.line, now.click.top_line.count_line, ...now.click.top_line.reasons.map(reason => reason.text), now.click.said, ...(now.click.person?.lines || []),
     ...now.click.rows.flatMap(row => [row.ran, row.summary, ...row.stand_ins])] : [])].filter(Boolean).join('\n');
 
-test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no number of it or the camera is printed', { skip: NEEDS_SET, timeout: 400000 }, async t => {
+// Python run beside the chain for test 9's controls and test 12's revisions, from files in the test's own scratch folder.
+const PATCHED_STILLS = `import json, sys
+sys.path.insert(0, sys.argv[1])
+import chain
+request = json.load(sys.stdin)
+pose = json.loads(open(request['room_model'], encoding='utf-8').read().strip().split('\\n')[-1])['cameras'][-1]['pose']
+chain.JPEG['comment'] = json.dumps(pose)   # a picture patched to take the placement as an input
+print(json.dumps([row['body_sha256'] for row in chain.step_ask(request)['asks']]))
+`;
+const OUT_TO_STDOUT = `import io, os, runpy, sys
+class Tee(io.StringIO):   # the fit's private log, planted back onto stdout
+    def write(self, text):
+        sys.__stdout__.write(text)
+        return super().write(text)
+io.StringIO = Tee
+sys.argv = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(sys.argv[0]))
+runpy.run_path(sys.argv[0], run_name='__main__')
+`;
+const LATER_REVISIONS = `import json, sys
+sys.path.insert(0, sys.argv[1])
+import prepare
+prepare.archive(prepare.Path(sys.argv[2]), prepare.pins())   # den-register and den-take at their pins, on sys.path
+import records
+latest = records.current(records.read_jsonl(sys.argv[3], 'room_model_unreadable'), 'den')
+camera = latest['cameras'][-1]
+moved = records.with_camera(latest, dict(camera, version='2099-01-01.1'), {'method': 'probe', 'ts': None, 'confidence': None})
+dropped = records.invalidated_revision(moved, camera['camera_id'], {'reason': 'probe'})
+print(json.dumps([[s['surface_id'] for s in r['surfaces']] + [m['landmark_id'] for m in r['landmarks']] for r in (moved, dropped, records.new_room_model('den'))]))
+`;
+// Test 9 on the chain itself, run as a click runs it (brain.mjs's chainRequest), on room models couch_to_room.mjs writes
+// with your mark's couch: re-fits on a new facing.json and on a mark 1 m across the couch from yours leave every request
+// body's hash unchanged, and the person reads "on the couch" only on the fit placed on your mark. Test 12's other half:
+// den-observe loads each of them, and den-register's own rule keeps the surface through later revisions.
+async function pictureIndependence(t, { home, privateFolder, fits, corners, readingTake, markNumbers }) {
+  const work = path.join(home, 'test9'), exportFile = path.join(privateFolder, 'registration-revision-3.json'), markFile = path.join(privateFolder, 'a-couch.json');
+  const registration = JSON.parse(fs.readFileSync(exportFile, 'utf8')).registration, binding = readActiveBinding(path.resolve(REFS.content_packs));
+  const floor = path.join(path.resolve(REFS.content_packs), SITE, binding.content_revision, 'floor.json');
+  fs.mkdirSync(work, { recursive: true });
+  const script = (name, text) => { fs.writeFileSync(path.join(work, name), text); return path.join(work, name); };
+  const python = (args, input) => execFileSync('python', ['-B', '-X', 'utf8', ...args], { input, encoding: 'utf8', windowsHide: true, timeout: 300000, maxBuffer: 64 << 20, env: scratchEnv(home) });
+  // A sealed mark 1 m across the couch's short side from yours, outside the private folder, and a re-fit placed on it.
+  const across = Sofa.sealSofaTarget({ binding: registration.binding, equipment_ref: { revision: registration.revision, digest: registration.digest },
+    corners: corners.map(([x, y, z]) => ({ point_m: [x, y + 1, z], normal_unit: [0, 0, 1] })), confirmed: true }, { sealDesk: sealRegisteredDeskTarget, digest: Core.digest });
+  fs.writeFileSync(path.join(work, 'across.json'), JSON.stringify(across));
+  const refitArgs = folder => [path.join(HERE, 'scene', 'prepare.py'), '--refit', '--set', SET, '--mark', path.join(work, 'across.json'), '--export', exportFile, '--floor', floor, '--fits', folder];
+  const said = python(refitArgs(path.join(work, 'fits')));
+  const folderIn = folder => fs.readdirSync(folder, { withFileTypes: true }).find(entry => entry.isDirectory()).name;
+  const cameraOf = file => JSON.parse(fs.readFileSync(file, 'utf8').trim().split('\n').at(-1)).cameras.at(-1).pose.room_from_camera.slice(0, 3).map(row => row[3]);
+  const acrossFile = path.join(work, 'fits', folderIn(path.join(work, 'fits')), 'room-model.jsonl');
+  assert.deepEqual(coordinatesIn(said, [...cameraOf(acrossFile), ...markNumbers]), [], 'the re-fit prints no camera and no number of a mark');
+  const leaked = python([script('leak.py', OUT_TO_STDOUT), ...refitArgs(path.join(work, 'fits-leaked'))]);
+  assert.ok(coordinatesIn(leaked, cameraOf(path.join(work, 'fits-leaked', folderIn(path.join(work, 'fits-leaked')), 'room-model.jsonl'))).length > 0, 'control: out=sys.stdout planted back is found');
+  // The three fits: yours, yours turned by facing.json, and the one across. The couch is your mark's in each.
+  const yours = fs.readdirSync(fits, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name)
+    .sort((a, b) => (JSON.parse(fs.readFileSync(path.join(fits, a, 'refit-receipt.json'), 'utf8')).inputs.facing ? 1 : 0) - (JSON.parse(fs.readFileSync(path.join(fits, b, 'refit-receipt.json'), 'utf8')).inputs.facing ? 1 : 0));
+  const prepared = JSON.parse(fs.readFileSync(path.join(SET, readingTake, 'prepare-receipt.json'), 'utf8'));
+  const chainOn = (fitFile, name) => {
+    const room = path.join(work, name, 'room-model.jsonl'), wrote = writeCouch({ seatFile: markFile, registration, from: fitFile, to: room, source: 'sofa_mark' });
+    const request = chainRequest({ take: readingTake, prepared, setDir: SET, roomModel: { path: room, sha256: wrote.sha256, by: 'couch_to_room.mjs in this test', label: `${name}/room-model.jsonl` },
+      refs: REFS, outputRoot: home, work: path.join(work, name, 'click'), replies: path.join(home, 'prepared', 'replies'), lastAsk: path.join(home, 'prepared', 'last-ask.json') });
+    const rows = Object.fromEntries(python([path.join(HERE, 'chain.py')], JSON.stringify(request)).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(row => row.word).map(row => [row.n, row]));
+    const bodies = fs.readFileSync(path.join(request.work, 'asks.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).body_sha256);
+    return { rows, bodies, request, room };
+  };
+  const filled = JSON.parse(fs.readFileSync(path.join(home, 'test-fill.json'), 'utf8'))[readingTake];
+  const runs = { on: chainOn(path.join(fits, yours[0], 'room-model.jsonl'), 'on'), turned: chainOn(path.join(fits, yours[1], 'room-model.jsonl'), 'turned'), across: chainOn(acrossFile, 'across') };
+  for (const [name, done] of Object.entries(runs)) {
+    assert.deepEqual(done.bodies, filled, `${name}: every body is the one --owed filed on the set's own fit`);
+    assert.deepEqual([done.rows[7].word, done.rows[12].word], ['REAL', 'SCRIPTED'], `${name}: den-observe loads the room model, and every reply is found`);
+  }
+  assert.deepEqual(runs.on.rows[15].person.map(card => card.on_couch), [true], `the fit on your mark: ${runs.on.rows[15].summary}`);
+  assert.deepEqual(runs.across.rows[15].person.map(card => [card.on_couch, card.failed.includes('position')]), [[false, true]], `the fit 1 m across: ${runs.across.rows[15].summary}`);
+  t.diagnostic(`test 9, on your mark: ${runs.on.rows[15].person.map(chainWords).join('; ')}; across: ${runs.across.rows[15].person.map(chainWords).join('; ')}`);
+  // Control: a picture patched to take the placement as an input changes the hashes, and the comparison above fails on it.
+  const patched = name => JSON.parse(python([script('patched.py', PATCHED_STILLS), HERE], JSON.stringify({ core_tree: path.join(home, 'tools', `core-${REFS.tools['den-core-live']}`), take: runs[name].request.take,
+    take_digest: runs[name].request.take_digest, run_json: path.join(runs[name].request.work, 'observe', 'run.json'), requests: path.join(runs[name].request.work, 'requests.jsonl'),
+    bundles: path.join(runs[name].request.work, 'bundles.jsonl'), replies: runs[name].request.replies, work: fs.mkdtempSync(path.join(work, 'patched-')), owed: null, room_model: runs[name].room })).trim().split('\n').at(-1));
+  assert.notDeepEqual(patched('on'), patched('across'), 'control: a seat-dependent picture moves the hashes');
+  // Test 12: den-register's own rule, a later camera revision and an invalidation, keeps the surface and its landmark.
+  const kept = JSON.parse(python([script('later.py', LATER_REVISIONS), path.join(HERE, 'scene'), path.join(work, 'register-tree'), runs.on.room]).trim().split('\n').at(-1));
+  assert.deepEqual(kept, [['sofa', 'sofa-seat'], ['sofa', 'sofa-seat'], []], 'the surface survives revisions; control: a fresh room model has none');
+  // Test 12's control at couch_to_room.mjs itself: one edited byte of the mark is refused by its seal, and nothing is written.
+  const edited = path.join(work, 'edited.json'), digest = JSON.parse(fs.readFileSync(markFile, 'utf8')).digest;
+  fs.writeFileSync(edited, fs.readFileSync(markFile, 'utf8').replace(digest, `${digest.slice(0, -1)}${digest.endsWith('0') ? '1' : '0'}`));
+  assert.throws(() => writeCouch({ seatFile: edited, registration, from: acrossFile, to: path.join(work, 'edited', 'room-model.jsonl'), source: 'sofa_mark' }), /^TypeError: sofa_target_changed$/);
+  assert.equal(fs.existsSync(path.join(work, 'edited')), false);
+}
+const chainWords = card => `${card.seat_distance_m} m from the seat point, on the couch ${card.on_couch ? 'yes' : `no (${card.failed.join(', ')})`}`;
+
+test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no number of it or the camera is printed', { skip: NEEDS_SET, timeout: 900000 }, async t => {
   const home = scratch('den-sim-mark-'), privateFolder = path.join(home, 'private'), fits = path.join(home, 'private', 'fits');
   t.after(() => fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
   const corners = [[1.137, 2.291, 0.463], [2.937, 2.291, 0.463], [2.937, 3.183, 0.463], [1.137, 3.183, 0.463]];
@@ -750,9 +858,27 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
     assert.deepEqual([now.click.rows[11].word, now.click.rows[13].word, now.click.rows[13].reached], ['SCRIPTED', 'ADAPTER', true], 'the replies were found, and the couch is your mark');
     assert.equal(now.click.top_line.line, 'Connected start to finish: not yet');
     assert.ok(!now.click.top_line.reasons.some(reason => /stand-in seat|authored sockets/.test(reason.text)), 'hop 5 read your files, not the stand-ins');
-    const shown = panelText(now);
+    assert.deepEqual(now.click.top_line.reasons.filter(reason => [14, 15].includes(reason.hop)), [], 'hops 14 and 15 hold: ADAPTER, named stand-ins, digests vouched');
+    // Test 12: the couch in the pipeline's own RoomModel, one revision appended by den-register's rule to a copy of the
+    // fit's file, which still matches its receipt: the surface, its landmark, the spot 0.30 m up, named after the mark.
+    const fit = fitFolders()[0], fitText = fs.readFileSync(path.join(fits, fit, 'room-model.jsonl'), 'utf8'), couchText = fs.readFileSync(path.join(fits, fit, 'couch', 'room-model.jsonl'), 'utf8');
+    assert.equal(sha256(path.join(fits, fit, 'room-model.jsonl')), JSON.parse(fs.readFileSync(path.join(fits, fit, 'refit-receipt.json'), 'utf8')).room_model_sha256, 'the fit\'s own file is unchanged');
+    assert.ok(couchText.startsWith(fitText) && couchText.trim().split('\n').length === fitText.trim().split('\n').length + 1, 'one revision appended, the rest byte for byte');
+    const [before, after] = [fitText, couchText].map(text => JSON.parse(text.trim().split('\n').at(-1)));
+    const sofa = after.surfaces.find(surface => surface.surface_id === 'sofa');
+    assert.deepEqual([after.version, after.cameras, sofa.kind, sofa.geometry.form, after.landmarks, after.provenance.surfaces.mark_digest],
+      [nextVersion(before.version, before.room_id), before.cameras, 'seat', 'polygon-3d/1', [{ landmark_id: 'sofa-seat', kind: 'seat', surface_id: 'sofa' }], mark.digest]);
+    assert.deepEqual(sofa.geometry.book_point_m.map((v, i) => Math.round((v - sofa.geometry.seat_point_m[i]) * 1000) / 1000), [0, 0, .3], 'the spot 0.30 m above the seat point');
+    assert.match(now.click.rows[13].summary, new RegExp(`as revision ${after.version}: surface sofa, landmark sofa-seat`));
+    // The same fit, on the mark: the person card reads on the couch, on the picture's couch placed on your mark.
+    assert.deepEqual([now.click.rows[14].word, now.click.person.tracks.map(row => row.on_couch)], ['ADAPTER', [true]], now.click.rows[14].summary);
+    assert.ok(now.click.person.lines.includes('On the picture\'s couch, which this simulation placed on your mark.'));
+    // Tests 19 and 9: no number of the mark or the camera in any panel text, the console or the harness's logs.
+    const shown = panelText(now), logs = ['run.json', 'requests.jsonl', `click-${now.click.click}/argv.jsonl`].filter(name => fs.existsSync(path.join(now.run, name)))
+      .map(name => fs.readFileSync(path.join(now.run, name), 'utf8')).join('\n') + run.output() + run.errors();
     assert.deepEqual(coordinatesIn(shown, markNumbers), [], 'no number of the mark in any panel text');
     assert.deepEqual(coordinatesIn(shown, camera), [], 'nor the camera');
+    assert.deepEqual([coordinatesIn(logs, markNumbers), coordinatesIn(logs, camera)], [[], []], 'nor in a console line or a log');
     assert.ok(coordinatesIn(`${text}\ncamera at ${now.camera_m.map(v => v.toFixed(3)).join(', ')}`, camera).length > 0, 'control: the camera as a fit prints it, from what the page gets for its marker, is found');
     assert.ok(coordinatesIn(`${shown}\nseat at ${mark.seat.point_m[0].toFixed(2)}`, markNumbers).length > 0, 'control: a planted number is found');
     const runJson = JSON.parse(fs.readFileSync(path.join(now.run, 'run.json'), 'utf8'));
@@ -769,6 +895,7 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
   await run.stop();
   assert.match(text, /on your sofa mark, at this start/);
   assert.equal(fitFolders().length, 2);
+  await pictureIndependence(t, { home, privateFolder, fits, corners, readingTake, markNumbers });
   // Controls for test 12: an edited byte is refused by the seal, and a mark with no export is not used.
   const file = path.join(privateFolder, 'a-couch.json');
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace(/"confirmed":true/, '"confirmed":false'));

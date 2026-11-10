@@ -174,8 +174,13 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     assert.ok(prepared.filter(([label]) => /replies/.test(label)).length >= 10, 'the reply store is searched');
     const written = filesUnder(path.join(home, 'runs')).map(([label, text]) => [`runs/${label}`, text]);
     assert.ok(written.some(([label]) => /asks\.jsonl$/.test(label)) && written.some(([label]) => /argv\.jsonl$/.test(label)));
+    // Step 5's outputs join the search: the person states, the couch's room-model revision and the person card's served words.
+    assert.ok(written.filter(([label]) => /person_states\.jsonl$/.test(label)).length === 2, 'reading\'s and phone\'s person states are searched');
+    assert.ok(roomModels.some(([label, text]) => /couch[\\/]room-model\.jsonl$/.test(label) && text.includes('"surface_id":"sofa"')), 'the couch\'s revision is searched');
+    const cards = Object.values(clicks).filter(done => done.click.person).map(done => [`person card ${done.click.take}`, done.click.person.lines.join('\n')]);
+    assert.equal(cards.length, 2, 'reading\'s and phone\'s person cards are searched');
     const served = [['status', JSON.stringify({ ...(await status()), scenes: '(the display file, for the buttons)' })],
-      ...Object.values(clicks).map(done => [`receipt ${done.click.take}`, JSON.stringify(done.receipt)]),
+      ...Object.values(clicks).map(done => [`receipt ${done.click.take}`, JSON.stringify(done.receipt)]), ...cards,
       ['brain state', await (await fetch(ORIGIN + Client.BASE + '/state')).text()]];
     const everything = [...takeFiles, ...roomModels, ...prepared, ...written, ...served];
     assert.deepEqual(search(everything, needles), []);
@@ -216,7 +221,7 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
       await second.ready;
       const masked = file => JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8')), (key, value) => key === 'decision_id' ? 'masked' : value);
       const folder = done => path.join(done.run, `click-${done.click.click}`);
-      const files = ['observe/observations.jsonl', 'track/tracks.jsonl', 'requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'den-core-log.jsonl'];
+      const files = ['observe/observations.jsonl', 'track/tracks.jsonl', 'requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'den-core-log.jsonl', 'person_states.jsonl'];
       const timelines = {};
       for (const label of ['Reading on the couch', 'Holding a phone']) {
         const before = clicks[label], after = await click(before.click.take);

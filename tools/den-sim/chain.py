@@ -341,11 +341,22 @@ def reply_line(scene, la_fact_log, row, stills, reply, session, take_digest):
     return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False), receipt
 
 
+def well_formed(reply):
+    """The rule a reply file must meet, here and in ask_la.py's accept(), which files only what meets it: the six
+    fields, a root that names a model, and the seconds it took. test_ask.py holds the two to the same cases."""
+    return (isinstance(reply, dict) and set(reply) == REPLY_FIELDS and isinstance(reply['root'], str) and reply['root'] != ''
+            and type(reply['elapsed_s']) in (int, float) and reply['elapsed_s'] >= 0)
+
+
 def read_reply(path):
-    reply = json.loads(Path(path).read_text(encoding='utf-8'))
-    if not isinstance(reply, dict) or set(reply) != REPLY_FIELDS or not isinstance(reply['root'], str) or type(reply['elapsed_s']) not in (int, float) or reply['elapsed_s'] < 0:
+    try:
+        reply = json.loads(Path(path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        reply = None
+    if not well_formed(reply):
         raise Refused('the reply on file for body %s is not the six fields ask_la.py files' % Path(path).stem[:12])
     return reply
+
 
 
 def step_ask(request):
@@ -361,7 +372,7 @@ def step_ask(request):
     import qwen_live
     import qwen_scene as scene
     work, replies = Path(request['work']), Path(request['replies'])
-    asks, lines, missing, filed, roots, days = [], [], [], [], set(), set()
+    asks, lines, missing, malformed, filed, roots, days = [], [], [], [], [], set(), set()
     try:
         session = session_of(request['take'])
         for row, body, stills in bodies(request, np, Image, qwen_live, scene):
@@ -380,7 +391,12 @@ def step_ask(request):
                         os.replace(owed.with_suffix('.part'), owed)
                     filed.append(row['body_sha256'])
                 continue
-            reply = read_reply(path)
+            try:
+                reply = read_reply(path)
+            except Refused:   # hop 12's to say: the bodies were built, and this file is not a reply ask_la.py files
+                row.update(status='malformed')
+                malformed.append(row['body_sha256'])
+                continue
             line, receipt = reply_line(scene, la_fact_log, row, stills, reply, session, request['take_digest'])
             row.update(root=reply['root'], status=receipt['status'], facts=receipt['facts'], invalid_reason=receipt['invalid_reason'], elapsed_s=reply['elapsed_s'])
             roots.add(reply['root'])
@@ -389,9 +405,9 @@ def step_ask(request):
     except Refused as why:
         return dict(refused=str(why), asks=asks)
     (work / 'asks.jsonl').write_text(''.join(json.dumps(row, sort_keys=True, allow_nan=False) + '\n' for row in asks), encoding='utf-8', newline='\n')
-    if lines and not missing:
+    if lines and not missing and not malformed:
         (work / 'facts.jsonl').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
-    return dict(refused=None, asks=asks, missing=missing, filed=filed, roots=sorted(roots), days=sorted(days), lines=len(lines), pillow=PIL.__version__,
+    return dict(refused=None, asks=asks, missing=missing, malformed=malformed, filed=filed, roots=sorted(roots), days=sorted(days), lines=len(lines), pillow=PIL.__version__,
                 read=[dict(path='replies/%s.json' % row['body_sha256'], sha256=sha256_file(replies / (row['body_sha256'] + '.json')))
                       for row in asks if row['root'] is not None])
 
@@ -702,7 +718,12 @@ def chain(request):
                                        requests=str(work / 'requests.jsonl'), bundles=str(work / 'bundles.jsonl'), replies=request['replies'],
                                        work=str(work), owed=request.get('owed')))
     qwen_tools = [tool for tool in tools['core'] if tool['path'].startswith(LAB)]
-    eleven = dict(tools=head_tools(*own, 'tools/den-sim/ask_la.py', 'tools/den-sim/ask_one.py') + qwen_tools, wrote=[], stand_ins=named(11, 0, 1, 2),
+    # The ask itself is recorded: once replies are used, ask_la.py and ask_one.py are the ones the paste that filed them
+    # ran, as last-ask.json recorded them. Before that they are this branch's, at HEAD, the ones a paste would run.
+    last = read_last_ask(request.get('last_ask'))
+    used = [row['body_sha256'] for row in asked.get('asks') or [] if row.get('root') is not None]
+    asking = paste_tools(last, used) if used and not asked.get('missing') else head_tools(*PASTE_TOOLS)
+    eleven = dict(tools=head_tools(*own) + asking + qwen_tools, wrote=[], stand_ins=named(11, 0, 1, 2),
                   read=[take_read, record_read, click.read(observe / 'run.json', 7), click.read(work / 'requests.jsonl', 9), click.read(work / 'bundles.jsonl', 9)])
     if asked['refused']:
         emit(11, 'MISSING', 'No body was built: %s.' % asked['refused'], started, note=asked['refused'], **eleven)
@@ -713,7 +734,7 @@ def chain(request):
     if request.get('owed'):
         print(json.dumps(dict(hop='owed', requests=len(rows), built=len(built), owed=asked['filed'], not_asked=thin)), flush=True)
         return
-    last, days = read_last_ask(request.get('last_ask')), asked['days']
+    days = asked['days']
     eleven['ran'] = 'recorded %s, bodies rebuilt now' % ', '.join(days) if days and not asked['missing'] else 'bodies rebuilt now; Qwen not asked about all of them yet'
     counts = ' or '.join(map(str, sorted({len(row['stills']) for row in built}))) or 'no'
     emit(11, 'ADAPTER', '%d of %d requests built into exact bodies: whole frames, %s stills each chosen by qwen_live.spread, JPEG by Pillow %s at '
@@ -729,6 +750,11 @@ def chain(request):
     if asked['missing']:
         why = '%s: %d of %d bodies have no reply on file' % (NOT_SEEN, len(asked['missing']), len(built))
         emit(12, 'MISSING', why + '. Need gets no input, so the beam stays off.', note=why, owed=asked['missing'], **twelve, stand_ins=[])
+        raise Stop(12, why)
+    if asked['malformed']:
+        why = 'the reply on file for body %s is not the six fields ask_la.py files' % asked['malformed'][0][:12]
+        emit(12, 'MISSING', '%s%s: an agent removes it, and the paste asks again. Need gets no input, so the beam stays off.' % (
+             why[0].upper() + why[1:], ' (and %d more)' % (len(asked['malformed']) - 1) if len(asked['malformed']) > 1 else ''), note=why, **twelve, stand_ins=[])
         raise Stop(12, why)
     if len(asked['roots']) > 1:
         emit(12, 'MISSING', 'Replies from two models (%s): a click uses one.' % ', '.join(asked['roots']), note='replies from two models', **twelve, stand_ins=[])
@@ -762,7 +788,8 @@ def chain(request):
 
 
 def read_last_ask(path):
-    """last-ask.json, which ask_la.py writes: what each paste filed, by body hash, with each reply's digest."""
+    """last-ask.json, which ask_la.py writes: what each paste filed, by body hash, with each reply's digest and the
+    commit and blobs of ask_la.py and ask_one.py the paste that filed it ran."""
     try:
         last = json.loads(Path(path).read_text(encoding='utf-8'))
         return last if isinstance(last.get('filed'), dict) else None
@@ -770,10 +797,36 @@ def read_last_ask(path):
         return None
 
 
+PASTE_TOOLS = ('tools/den-sim/ask_la.py', 'tools/den-sim/ask_one.py')
+
+
+def paste_tools(last, names):
+    """Hop 11's recorded tools: for the pastes that filed these replies, the blobs of ask_la.py and ask_one.py each ran,
+    as last-ask.json recorded them, against their blobs at the commit it ran at, which must be on this branch. An
+    uncommitted edit at the paste, or a paste that recorded none, shows."""
+    runs = {}
+    for name in names:
+        entry = ((last or {}).get('filed') or {}).get(name) or {}
+        runs.setdefault((entry.get('head') or '', json.dumps(entry.get('blobs'), sort_keys=True)), entry)
+    out = []
+    for (head, _), entry in sorted(runs.items()):
+        if not re.fullmatch(r'[0-9a-f]{40}', head):
+            out += [dict(path=path, pin='last-ask.json', expected=None, actual=None, why='was not recorded by the paste that filed a reply') for path in PASTE_TOOLS]
+            continue
+        ours = subprocess.run(['git', '-C', str(ROOT), 'merge-base', '--is-ancestor', head, 'HEAD'], capture_output=True).returncode == 0
+        expected = {line.split('\t', 1)[1]: line.split()[2] for line in git_lines('ls-tree', head, '--', *PASTE_TOOLS)} if ours else {}
+        blobs = entry.get('blobs') if isinstance(entry.get('blobs'), dict) else {}
+        out += [dict(path=path, pin='the commit the paste ran at (%s)' % head[:8], expected=expected.get(path), actual=blobs.get(path),
+                     **({} if ours else dict(why='ran at %s, which is not on this branch' % head[:8]))) for path in PASTE_TOOLS]
+    return out
+
+
 def said_by(row):
     facts = row['facts'] or {}
     if row['status'] == 'valid':
         return '%s, holding %s, people %s' % (facts['activity_hypothesis'], facts['held_object'], facts['people_visible'])
+    if row['status'] == 'malformed':
+        return 'a reply file that is not the six fields ask_la.py files'
     return 'invalid (%s)' % row['invalid_reason'] if row['status'] else 'no reply on file' if row['body_sha256'] else None
 
 

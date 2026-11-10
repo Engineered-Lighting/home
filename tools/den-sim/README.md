@@ -124,23 +124,28 @@ PowerShell window, since `run.mjs` holds its own; it works from any folder:
 python -B C:\claude\home\.claude\worktrees\den-sim-connected\tools\den-sim\ask_la.py
 ```
 
-It refuses to start without a console. It lifts the sofa look's `la.py` and `ask.py` and the
-Lab's `qwen_scene.py` with `git archive` at the commits `refs.json` pins under `lifted`, each held
-to its blob. Then two visits to the inference host over ssh, as the model test's paste did: a check
-visit (the served name `qwen3-vl-30b`, the GPU under 77 C with 8 GiB free; no image is sent), and
-only if that passes, an ask visit in a fresh private `/dev/shm` folder, removed afterwards: one
-request per owed body, 4 s apart, a 20 s timeout, one re-send on no answer, a stop after two
-misses, and never more requests than the bodies plus 2. The replies come back to
+It refuses to start without a console, and then writes nothing. It lifts the sofa look's `la.py`
+and `ask.py` and the Lab's `qwen_scene.py` with `git archive` at the commits `refs.json` pins under
+`lifted`, each held to its blob. With nothing owed, and no folder an earlier paste left behind, it
+says so and doesn't contact the inference host at all. Otherwise, two visits over ssh, as the model
+test's paste did: a check visit (the served name `qwen3-vl-30b`, the GPU under 77 C with 8 GiB free;
+no image is sent), and only if that passes, an ask visit in a fresh private `/dev/shm` folder,
+removed afterwards: one request per owed body, 4 s apart, a 20 s timeout, one re-send on no answer,
+a stop after two misses, and never more requests than the bodies plus 2. Every ssh and scp has a
+local timeout, so a stalled link stops the paste at its step. The replies come back to
 `prepared\replies\<body_sha256>.json`: the time it was asked, the host, the served root, the HTTP
-status, vLLM's whole response and the seconds it took. Nothing it prints holds a body, a reply or
-an error's text. It writes `prepared\last-ask.json`: where it stopped and why, how many came back,
-how many are still needed, and each reply's digest, which a click's receipt is held to; the page
-shows it. It adds one line to `prepared\tries.jsonl`. If the inference host's vLLM is down,
-nothing is sent and it says where its start line is documented.
+status, vLLM's whole response and the seconds it took. Only a reply with all six fields, a root that
+names a model and its seconds is filed; anything else leaves its body owed. Nothing it prints holds
+a body, a reply or an error's text. It writes `prepared\last-ask.json`: where it stopped and why,
+how many came back, how many are still needed, each reply's digest, which a click's receipt is held
+to, and the commit and blobs of `ask_la.py` and `ask_one.py` it ran, which hop 11's row cites once
+replies are used; the page shows it. It adds one line to `prepared\tries.jsonl`. If the inference
+host's vLLM is down, nothing is sent and it says where its start line is documented.
 
 Before the paste, reading and phone stop at hop 12. After it, a click reads Qwen's words, and hop
 12 reads "real words, recorded once": its clocks moved onto the chain's, its source id rewritten,
-and a re-ask could differ. Replies from two models read MISSING. A reply whose served root is
+and a re-ask could differ. Replies from two models read MISSING, and so does a reply file short of
+the six fields. A reply whose served root is
 `fake-vllm` is a test's, and reads SCRIPTED. A body the click builds that differs from the one
 asked about (other stills, another Pillow, a changed prompt) is a lookup miss, and the page shows
 the paste line again.

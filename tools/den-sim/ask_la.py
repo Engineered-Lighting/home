@@ -15,10 +15,13 @@ ask.py, and qwen_scene.py. The model test's look_la.py, proved on LA, in two vis
    timeout (at most the bodies plus 2 requests, 4 s apart), copy replies back through a .part folder, file each
    well-formed one as <data root>\\prepared\\replies\\<body_sha256>.json, remove the folder.
 
-Before both, a paste cut short may have left replies on LA: they come back first. Any failed step stops the run;
-then, if a visit had made the LA folder, it copies back what LA holds and removes the folder, and a failed copy
-stops before that removal, so no reply is lost. last-ask.json under prepared\\ says where it stopped and why, what
-came back, what is still needed, and each reply's digest, which a click's receipt is held to. One line goes to
+Before both, a paste cut short may have left replies on LA: they come back first. With nothing owed, and no folder
+an earlier paste left on LA, it contacts LA not at all. Any failed step stops the run; then, if a visit had made the
+LA folder, it copies back what LA holds and removes the folder, and a failed copy stops before that removal, so no
+reply is lost. Every ssh and scp has a local timeout, so a stalled link stops the run instead of hanging it.
+last-ask.json under prepared\\ says where it stopped and why, what came back, what is still needed, each reply's
+digest, which a click's receipt is held to, and the commit and blobs of ask_la.py and ask_one.py this paste ran,
+which hop 11's row cites. A start refused for having no console writes nothing. One line goes to
 prepared\\tries.jsonl per paste. Nothing here prints a body, a reply or exception text (type names only), and the
 output is ASCII.
 """
@@ -39,6 +42,10 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 REMOTE = "/dev/shm/den-sim-ask"
 CHECK_TIMEOUT, MARGIN = "2m", 2
+# Local timeouts, in seconds: a short command, a copy, the check visit (its remote 2 minutes plus one), and the ask
+# visit's remote minutes plus one.
+SHORT_S, COPY_S, CHECK_S, SLACK_S = 60, 300, 180, 60
+PASTE_TOOLS = ("tools/den-sim/ask_la.py", "tools/den-sim/ask_one.py")
 REPLY_FIELDS = {"asked_unix", "host", "root", "http_status", "raw", "elapsed_s"}
 VLLM_DOC = r"docs\VLLM-QWEN36-SWAP.md"
 PREFLIGHT = {10: "vLLM on LA is not answering", 11: "LA's vLLM does not serve qwen3-vl-30b",
@@ -103,19 +110,39 @@ def load(path, name):
 
 
 class SSH:
-    """The only route to LA: the sofa look's la.py host and its ssh and scp argument lists."""
+    """The only route to LA: the sofa look's la.py host and its ssh and scp argument lists, each call under a local
+    timeout (subprocess.TimeoutExpired stops the paste at its step)."""
 
     def __init__(self, la, runner=subprocess.run):
         self.la, self.runner = la, runner
 
-    def shell(self, text, capture=False, timeout=None):
-        return self.runner(self.la.SSH + [text], **(dict(capture_output=True, encoding="ascii", errors="replace") if capture else {}))
+    def shell(self, text, capture=False, timeout=SHORT_S):
+        return self.runner(self.la.SSH + [text], timeout=timeout, **(dict(capture_output=True, encoding="ascii", errors="replace") if capture else {}))
 
-    def put(self, paths, remote):
-        return self.runner(self.la.SCP + [str(path) for path in paths] + ["%s:%s/" % (self.la.LA, remote)])
+    def put(self, paths, remote, timeout=COPY_S):
+        return self.runner(self.la.SCP + [str(path) for path in paths] + ["%s:%s/" % (self.la.LA, remote)], timeout=timeout)
 
-    def get(self, remote, local):
-        return self.runner(self.la.SCP + ["-r", "%s:%s" % (self.la.LA, remote), str(local)])
+    def get(self, remote, local, timeout=COPY_S):
+        return self.runner(self.la.SCP + ["-r", "%s:%s" % (self.la.LA, remote), str(local)], timeout=timeout)
+
+
+def blob(data):
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def paste_tools():
+    """The commit this paste runs at and the blobs of the two files it runs, for last-ask.json: hop 11's row holds
+    them to their blobs at that commit, so an uncommitted edit shows there as it does for any tool."""
+    done = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, encoding="ascii", errors="replace")
+    head = done.stdout.strip() if done.returncode == 0 else None
+    return {"head": head, "blobs": {path: blob((ROOT / path).read_bytes()) for path in PASTE_TOOLS}}
+
+
+def well_formed(reply):
+    """chain.py's rule for a reply file, which a click refuses anything short of: the six fields, a root that names a
+    model, and the seconds it took. Only a reply that meets it is filed."""
+    return (isinstance(reply, dict) and set(reply) == REPLY_FIELDS and isinstance(reply["root"], str) and reply["root"] != ""
+            and type(reply["elapsed_s"]) in (int, float) and reply["elapsed_s"] >= 0)
 
 
 def needed(prepared):
@@ -136,25 +163,27 @@ def needed(prepared):
     return paths, len(names)
 
 
-def accept(part, folder, names, filed):
-    """Move each well-formed reply for a body we sent from the .part folder into replies/, noting its digest."""
+def accept(part, folder, names, filed, tools):
+    """Move each well-formed reply for a body we sent from the .part folder into replies/, noting its digest and the
+    commit and blobs this paste ran. Anything else stays out, and its body stays owed."""
     folder.mkdir(parents=True, exist_ok=True)
     moved = 0
     for path in sorted(part.glob("*.json")):
         name = path.name[:-5]
         try:
-            ok = name in names and re.fullmatch(r"[0-9a-f]{64}", name) and set(json.loads(path.read_text(encoding="utf-8"))) == REPLY_FIELDS
+            ok = name in names and re.fullmatch(r"[0-9a-f]{64}", name) and well_formed(json.loads(path.read_text(encoding="utf-8")))
         except ValueError:
             ok = False
         if ok and not (folder / path.name).exists():   # a reply already here is never replaced or counted twice
-            filed[name] = {"sha256": sha256(path.read_bytes())}
+            filed[name] = {"sha256": sha256(path.read_bytes()), **tools}
             os.replace(path, folder / path.name)
             moved += 1
     shutil.rmtree(part)
     return moved
 
 
-def run(prepared, transport, tools, record):
+def run(prepared, transport, tools, record, left=False):
+    """left: the last paste's record says it may have left the LA folder behind."""
     replies = prepared / "replies"
 
     def step(name, call, ok=(0,)):
@@ -166,25 +195,28 @@ def run(prepared, transport, tools, record):
 
     def fresh_folder_with_tools():
         record["la_folder"] = "made"
-        step("making the LA folder", lambda: transport.shell("rm -rf %s && umask 077 && mkdir %s" % (REMOTE, REMOTE)))
-        step("copying the tools", lambda: transport.put([HERE / "ask_one.py", tools["ask.py"], tools["qwen_scene.py"]], REMOTE))
+        step("making the LA folder", lambda: transport.shell("rm -rf %s && umask 077 && mkdir %s" % (REMOTE, REMOTE), timeout=SHORT_S))
+        step("copying the tools", lambda: transport.put([HERE / "ask_one.py", tools["ask.py"], tools["qwen_scene.py"]], REMOTE, timeout=COPY_S))
 
     def copy_back(label="looking for replies"):
         """LA's replies/ comes back through replies.part; the well-formed ones still owed move into replies/."""
-        if names and step(label, lambda: transport.shell("test -d %s/replies" % REMOTE), ok=(0, 1)).returncode == 0:
+        if names and step(label, lambda: transport.shell("test -d %s/replies" % REMOTE, timeout=SHORT_S), ok=(0, 1)).returncode == 0:
             part = prepared / "replies.part"
             if part.exists():
                 shutil.rmtree(part)
-            step("copying replies back", lambda: transport.get(REMOTE + "/replies", part))
-            record["answered"] += accept(part, replies, names, record["filed"])
+            step("copying replies back", lambda: transport.get(REMOTE + "/replies", part, timeout=COPY_S))
+            record["answered"] += accept(part, replies, names, record["filed"], record["tools"])
 
     def remove():
-        step("removing the LA folder", lambda: transport.shell("rm -rf %s" % REMOTE))
+        step("removing the LA folder", lambda: transport.shell("rm -rf %s" % REMOTE, timeout=SHORT_S))
         record["la_folder"] = "removed"
 
     paths, total = needed(prepared)
     record["needed"] = len(paths)
     names = {path.stem for path in paths}
+    if not paths and not left:   # nothing to ask, and no folder left on LA to remove: LA is not contacted at all
+        say("ask: all %d replies are already here; nothing to ask." % total)
+        return 0
     try:
         copy_back("looking for replies left on LA")   # a paste cut short may have left some: back before any folder goes
         paths = [path for path in paths if not (replies / (path.stem + ".json")).exists()]
@@ -198,7 +230,7 @@ def run(prepared, transport, tools, record):
             return 0
         fresh_folder_with_tools()
         record["step"] = "preflight"
-        check = transport.shell("timeout %s python3 -B %s/ask_one.py --check" % (CHECK_TIMEOUT, REMOTE), capture=True)
+        check = transport.shell("timeout %s python3 -B %s/ask_one.py --check" % (CHECK_TIMEOUT, REMOTE), capture=True, timeout=CHECK_S)
         for line in (check.stdout or "").splitlines():
             if line.startswith("preflight ok "):
                 try:
@@ -214,11 +246,12 @@ def run(prepared, transport, tools, record):
             say("ask: %s, so no image was sent." % record["reason"])
             return 3
         fresh_folder_with_tools()
-        step("making the bodies folder", lambda: transport.shell("umask 077 && mkdir %s/bodies" % REMOTE))
-        step("copying the bodies still needed", lambda: transport.put(paths, REMOTE + "/bodies"))
+        step("making the bodies folder", lambda: transport.shell("umask 077 && mkdir %s/bodies" % REMOTE, timeout=SHORT_S))
+        step("copying the bodies still needed", lambda: transport.put(paths, REMOTE + "/bodies", timeout=COPY_S))
         record.update(step="asking", sent=sorted(path.stem for path in paths), cap=len(paths) + MARGIN)
         say("ask: %d bodies, at most %d requests" % (len(paths), len(paths) + MARGIN))
-        code = transport.shell("timeout %dm python3 -B %s/ask_one.py" % (3 + len(paths), REMOTE)).returncode
+        minutes = 3 + len(paths)
+        code = transport.shell("timeout %dm python3 -B %s/ask_one.py" % (minutes, REMOTE), timeout=minutes * 60 + SLACK_S).returncode
         record["ask_exit"] = code
         copy_back()
         remove()
@@ -271,44 +304,46 @@ def try_line(prepared, record, clock):
 def main(argv=None, *, root=None, transport=None, console=has_console, clock=time.time):
     root = Path(root) if root else data_root()
     prepared = root / "prepared"
+    if not console():   # a background run is refused before anything: no ssh, and no record over the owner's last paste
+        say("ask: refused, no console. Paste the line into PowerShell yourself.")
+        return 2
     record = {"schema": "den-sim-last-ask-1", "started_unix": round(clock(), 3), "stopped_at": None, "reason": None, "step": None,
               "needed": None, "answered": 0, "still_needed": None, "cap": None, "root": None, "ask_exit": None, "vllm": None,
-              "la_folder": None, "filed": {}}
-    finished, started = False, False
-    if not console():
-        record.update(stopped_at="start", reason="no console: run it yourself in PowerShell")
+              "la_folder": None, "tools": paste_tools(), "filed": {}}
+    try:
+        previous = json.loads((prepared / "last-ask.json").read_text(encoding="utf-8"))
+        previous = previous if isinstance(previous, dict) else {}
+    except (OSError, ValueError):
+        previous = {}
+    finished = False
+    part = prepared / "replies.part"
+    if part.exists():
+        shutil.rmtree(part)
+    try:
+        tools = lift(root / "tools" / "lifted")
+        code = run(prepared, transport or SSH(load(tools["la.py"], "den_sim_la")), tools, record,
+                   left=previous.get("la_folder") not in (None, "removed"))
+        finished = True
+    except Stop as exc:
+        record.update(stopped_at=record["step"] or "start", reason=str(exc))
+        say("ask: stopped: %s%s. %s" % (exc, came_back(record), AGAIN))
         code = 2
-        say("ask: refused, no console. Paste the line into PowerShell yourself.")
-    else:
-        started = True
-        part = prepared / "replies.part"
-        if part.exists():
-            shutil.rmtree(part)
-        try:
-            tools = lift(root / "tools" / "lifted")
-            code = run(prepared, transport or SSH(load(tools["la.py"], "den_sim_la")), tools, record)
-            finished = True
-        except Stop as exc:
-            record.update(stopped_at=record["step"] or "start", reason=str(exc))
-            say("ask: stopped: %s%s. %s" % (exc, came_back(record), AGAIN))
-            code = 2
-        except KeyboardInterrupt:
-            record.update(stopped_at=record["step"] or "start", reason="interrupted")
-            say("ask: interrupted%s. %s" % (came_back(record), AGAIN))
-            code = 130
-        except Exception as exc:  # type name only
-            record.update(stopped_at=record["step"] or "start", reason=type(exc).__name__)
-            say("ask: stopped at %s (%s)%s. %s" % (record["step"] or "start", type(exc).__name__, came_back(record), AGAIN))
-            code = 2
+    except KeyboardInterrupt:
+        record.update(stopped_at=record["step"] or "start", reason="interrupted")
+        say("ask: interrupted%s. %s" % (came_back(record), AGAIN))
+        code = 130
+    except Exception as exc:  # type name only
+        record.update(stopped_at=record["step"] or "start", reason=type(exc).__name__)
+        say("ask: stopped at %s (%s)%s. %s" % (record["step"] or "start", type(exc).__name__, came_back(record), AGAIN))
+        code = 2
     record.update(finished_unix=round(clock(), 3), still_needed=still_needed(prepared))
-    try:   # every reply on file keeps the digest the paste that filed it took
-        record["filed"] = {**json.loads((prepared / "last-ask.json").read_text(encoding="utf-8")).get("filed", {}), **record["filed"]}
-    except (OSError, ValueError, AttributeError, TypeError):
-        pass
+    if record["la_folder"] is None and previous.get("la_folder") not in (None, "removed"):
+        record["la_folder"] = previous["la_folder"]   # this paste never reached LA, so a folder an earlier one left is still there
+    filed = previous.get("filed")   # every reply on file keeps the digest the paste that filed it took
+    record["filed"] = {**(filed if isinstance(filed, dict) else {}), **record["filed"]}
     prepared.mkdir(parents=True, exist_ok=True)
     (prepared / "last-ask.json").write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
-    if started:
-        try_line(prepared, record, clock)
+    try_line(prepared, record, clock)
     if finished and record["stopped_at"] in (None, "asking") and record["needed"]:
         say("ask: %d of %d replies came back%s. %s" % (record["answered"], record["needed"],
                                                       "" if not record["stopped_at"] else " (stopped: %s)" % record["reason"],

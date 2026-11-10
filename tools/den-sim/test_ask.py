@@ -110,7 +110,7 @@ def serve_fake(state):
             if read('down.json', False):
                 return self.answer(503, {})
             if self.path == '/v1/models':
-                return self.answer(200, {'object': 'list', 'data': [{'id': read('served.json', SERVED), 'object': 'model', 'root': FAKE_ROOT}]})
+                return self.answer(200, {'object': 'list', 'data': [{'id': read('served.json', SERVED), 'object': 'model', 'root': read('root.json', FAKE_ROOT)}]})
             if self.path == '/fake/gpu':
                 return self.answer(200, read('gpu.json', {'temperature_c': 40, 'free_mib': 30000}))
             return self.answer(404, {})
@@ -204,7 +204,7 @@ class LocalTransport:
             return done(ran.returncode, ran.stdout if capture else None)
         return done(127)
 
-    def put(self, paths, remote):
+    def put(self, paths, remote, timeout=None):
         self.calls.append(('put', [Path(p).name for p in paths], remote))
         target = self.local(remote)
         if not target.is_dir():
@@ -213,7 +213,7 @@ class LocalTransport:
             shutil.copyfile(path, target / Path(path).name)
         return subprocess.CompletedProcess('put', 0)
 
-    def get(self, remote, local):
+    def get(self, remote, local, timeout=None):
         self.calls.append(('get', remote))
         source = self.local(remote)
         if not source.is_dir():
@@ -232,7 +232,7 @@ class Recording:
         self.calls.append(text)
         return subprocess.CompletedProcess(text, 1)
 
-    put = get = lambda self, *args: self.calls.append(args) or subprocess.CompletedProcess('x', 1)
+    put = get = lambda self, *args, **kwargs: self.calls.append(args) or subprocess.CompletedProcess('x', 1)
 
 
 def owed_home(home, bodies):
@@ -360,11 +360,23 @@ class Lifted(unittest.TestCase):
             la = ask_la.load(tools['la.py'], 'den_sim_la_test')
             for name in ('ask_la.py', 'ask_one.py', 'chain.py', 'run.mjs', 'panel.js'):
                 self.assertNotIn(la.LA, (HERE / name).read_text(encoding='utf-8'), name)
-            calls = []
-            ssh = ask_la.SSH(la, runner=lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(argv, 0))
+            calls, waits = [], []
+            ssh = ask_la.SSH(la, runner=lambda argv, **kw: calls.append(argv) or waits.append(kw.get('timeout')) or subprocess.CompletedProcess(argv, 0))
             ssh.shell('test -d x'), ssh.put([Path('a.body')], '/dev/shm/den-sim-ask/bodies'), ssh.get('/dev/shm/den-sim-ask/replies', Path('part'))
             self.assertEqual(calls, [la.SSH + ['test -d x'], la.SCP + ['a.body', '%s:/dev/shm/den-sim-ask/bodies/' % la.LA],
                                      la.SCP + ['-r', '%s:/dev/shm/den-sim-ask/replies' % la.LA, 'part']], 'the argument lists are la.py\'s')
+            self.assertEqual(waits, [ask_la.SHORT_S, ask_la.COPY_S, ask_la.COPY_S], 'every ssh and scp has a local timeout')
+            ssh.shell('x', timeout=7)
+            self.assertEqual(waits[-1], 7)
+            # A stalled link stops the paste at its step, named by type: the runner raises as subprocess.run does on its timeout.
+            def stalls(argv, **kw):
+                raise subprocess.TimeoutExpired(argv, kw['timeout'])
+            home = folder / 'home'
+            owed_home(home, [b'{"z": 3}'])
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                code = ask_la.main(root=home, transport=ask_la.SSH(la, runner=stalls), console=lambda: True)
+            last = json.loads((home / 'prepared' / 'last-ask.json').read_text(encoding='utf-8'))
+            self.assertEqual((code, last['stopped_at'], last['reason']), (2, 'looking for replies left on LA', 'TimeoutExpired'), out.getvalue())
             (tools['la.py']).write_text('LA = "elsewhere"\n', encoding='utf-8')
             with self.assertRaises(ask_la.Stop, msg='control: an edited lifted file is refused'):
                 ask_la.lift(folder)
@@ -386,7 +398,7 @@ class Paste(unittest.TestCase):
     def setUp(self):
         self.home = scratch('den-sim-paste-')
         self.fake.set('replies.json', {})
-        for name in ('down.json', 'served.json'):
+        for name in ('down.json', 'served.json', 'root.json', 'gpu.json'):
             (self.fake.state / name).unlink(missing_ok=True)
         (self.fake.state / 'requests.jsonl').unlink(missing_ok=True)
 
@@ -401,8 +413,8 @@ class Paste(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             code = ask_la.main(root=self.home, transport=recording, console=lambda: False)
         self.assertEqual((code, recording.calls), (2, []))
-        last = json.loads((self.home / 'prepared' / 'last-ask.json').read_text(encoding='utf-8'))
-        self.assertEqual((last['stopped_at'], last['reason']), ('start', 'no console: run it yourself in PowerShell'))
+        self.assertIn('refused, no console', out.getvalue())
+        self.assertFalse((self.home / 'prepared' / 'last-ask.json').exists(), 'a refused start writes no record over the owner\'s last paste')
         # The same as a process with no console at all: its stdin is not a terminal, under this file's ssh refusal.
         launcher = 'import runpy, sys; sys.path.insert(0, %r); import test_ask; sys.argv = [%r]; runpy.run_path(%r, run_name="__main__")' % (str(HERE), 'ask_la.py', str(HERE / 'ask_la.py'))
         done = subprocess.run([sys.executable, '-B', '-X', 'utf8', '-c', launcher], stdin=subprocess.DEVNULL, capture_output=True, encoding='utf-8',
@@ -411,8 +423,10 @@ class Paste(unittest.TestCase):
         self.assertIn('refused, no console', done.stdout)
         self.assertNotIn('PermissionError', done.stderr, 'it never tried ssh')
         self.assertFalse((self.home / 'prepared' / 'tries.jsonl').exists(), 'a refused start is no paste')
+        self.assertFalse((self.home / 'prepared' / 'last-ask.json').exists())
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(ask_la.main(root=self.home, transport=Recording(), console=lambda: True), 2, 'control: with a console it goes on to the transport')
+        self.assertTrue((self.home / 'prepared' / 'last-ask.json').exists(), 'control: and a paste that started writes its record')
 
     def test_the_paste_files_six_field_replies_once_and_removes_the_folder(self):
         bodies = [json.dumps({'body': n}).encode() for n in range(3)]
@@ -441,10 +455,65 @@ class Paste(unittest.TestCase):
         self.assertTrue(out.isascii())
         for text in ('this is not json', 'reading', '"raw"'):
             self.assertNotIn(text, out, 'no reply text is printed')
+        # The paste records the commit it ran at and the blobs of the two files it ran, for hop 11's row.
+        import ask_la
+        head = subprocess.run(['git', '-C', str(HERE), 'rev-parse', 'HEAD'], capture_output=True, encoding='ascii').stdout.strip()
+        tools = {'head': head, 'blobs': {path: ask_la.blob((HERE.parents[1] / path).read_bytes()) for path in ask_la.PASTE_TOOLS}}
+        self.assertEqual(last['tools'], tools)
+        self.assertTrue(all(entry['head'] == head and entry['blobs'] == tools['blobs'] for entry in last['filed'].values()), 'each reply names the paste that filed it')
         code, out, again, transport = paste(self.home, self.fake)
         self.assertEqual((code, again['needed'], len(self.fake.asked())), (0, 0, 3), 'a second paste asks nothing')
         self.assertIn('nothing to ask', out)
+        self.assertEqual(transport.calls, [], 'and with no folder left on LA, contacts it not at all')
         self.assertEqual(again['filed'], last['filed'], 'and keeps the digests the first paste took')
+        # Control: when the last paste says it left the LA folder, the next one removes it, though nothing is owed.
+        lastfile = self.home / 'prepared' / 'last-ask.json'
+        lastfile.write_text(json.dumps(dict(again, la_folder='left; the next paste copies back what it holds, then removes it')), encoding='utf-8')
+        code, out, cleared, transport = paste(self.home, self.fake)
+        self.assertEqual((code, transport.calls, cleared['la_folder']), (0, [('shell', 'rm -rf %s' % ask_la.REMOTE)], 'removed'))
+
+    def test_only_a_well_formed_reply_is_filed_and_the_click_holds_the_same_rule(self):
+        import ask_la
+        good = {'asked_unix': 1.8e9, 'host': 'h', 'root': 'some-root', 'http_status': 200, 'raw': '{}', 'elapsed_s': 0.5}
+        cases = [(good, True), (dict(good, elapsed_s=0), True), (dict(good, root=None), False), (dict(good, root=''), False), (dict(good, root=7), False),
+                 (dict(good, elapsed_s=None), False), (dict(good, elapsed_s=-1), False), (dict(good, elapsed_s=True), False), (dict(good, elapsed_s='1'), False),
+                 ({k: v for k, v in good.items() if k != 'host'}, False), (dict(good, extra=1), False), ([good], False), (None, False)]
+        folder = scratch('den-sim-rule-')
+        try:
+            for i, (reply, ok) in enumerate(cases):
+                self.assertEqual(ask_la.well_formed(reply), ok, reply)
+                path = folder / ('%064x.json' % i)
+                path.write_text(json.dumps(reply), encoding='utf-8')
+                if ok:
+                    self.assertEqual(chain.read_reply(path), reply)
+                else:
+                    with self.assertRaises(chain.Refused, msg=repr(reply)):
+                        chain.read_reply(path)
+            # accept(): only a well-formed reply for a body this paste sent moves into replies/, with its digest and the paste's tools.
+            part, store, filed = folder / 'replies.part', folder / 'replies', {}
+            part.mkdir()
+            sent, other, bad = 'a' * 64, 'b' * 64, 'c' * 64
+            for name, reply in ((sent, good), (other, good), (bad, dict(good, root=None))):
+                (part / (name + '.json')).write_text(json.dumps(reply), encoding='utf-8')
+            moved = ask_la.accept(part, store, {sent, bad}, filed, {'head': 'h' * 40, 'blobs': {}})
+            self.assertEqual((moved, sorted(path.stem for path in store.glob('*.json')), sorted(filed)), (1, [sent], [sent]), 'not a body it did not send, nor a null root')
+            self.assertEqual(filed[sent]['head'], 'h' * 40)
+            self.assertFalse(part.exists())
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_a_null_root_is_not_filed_and_its_body_stays_owed(self):
+        names = owed_home(self.home, [b'{"r": 1}', b'{"r": 2}'])
+        self.fake.set('root.json', None)
+        try:
+            code, out, last, _ = paste(self.home, self.fake)
+        finally:
+            (self.fake.state / 'root.json').unlink()
+        self.assertEqual(sorted(self.fake.asked()), sorted(names), 'Qwen was asked')
+        self.assertFalse(any((self.home / 'prepared' / 'replies').glob('*.json')), 'and nothing it said was filed')
+        self.assertEqual((last['answered'], last['still_needed'], last['filed']), (0, 2, {}))
+        code, out, last, _ = paste(self.home, self.fake)
+        self.assertEqual((last['answered'], last['still_needed']), (2, 0), 'control: with a root, the same paste files them')
 
     def test_vllm_down_or_a_wrong_name_sends_no_image(self):
         names = owed_home(self.home, [b'{"x": 1}'])
@@ -504,6 +573,58 @@ class Paste(unittest.TestCase):
             shutil.rmtree(folder, ignore_errors=True)
 
 
+ASK_ALL = r'''
+import hashlib, json, sys
+from pathlib import Path
+sys.path.insert(0, '.')
+import ask_one
+now, sent, seen = [0.0], [], set()
+raw = json.dumps({'id': 'x', 'object': 'chat.completion', 'model': 'qwen3-vl-30b', 'choices': [{'index': 0, 'finish_reason': 'stop',
+                  'message': {'role': 'assistant', 'content': 'not json'}}]}).encode()
+def sleep(seconds):
+    now[0] += max(0.0, seconds)
+def request(method, path, body):
+    name = hashlib.sha256(body).hexdigest()
+    sent.append(round(now[0], 3))
+    now[0] += 0.5
+    first = name not in seen
+    seen.add(name)
+    return (503, b'', None) if first and sys.argv[1] == 'miss-once' else (200, raw, None)
+bodies = [(hashlib.sha256(b).hexdigest(), b) for b in (b'{"n": 1}', b'{"n": 2}', b'{"n": 3}')]
+Path('replies').mkdir(exist_ok=True)
+stop, counts = ask_one.ask_all(bodies, 'fake-vllm', Path('replies'), request=request, sleep=sleep, clock=lambda: now[0], wall=lambda: 1.8e9, host='h')
+print(json.dumps({'stop': stop, 'requests': counts['requests'], 'sent': sent}))
+'''
+
+
+class AskOne(unittest.TestCase):
+    """ask_one.py's pacing and cap, on an injected clock, from a folder holding only the copied files."""
+
+    def test_requests_are_4_s_apart_and_never_more_than_the_bodies_plus_2(self):
+        import ask_la
+        folder = scratch('den-sim-askall-')
+        try:
+            tools = ask_la.lift(folder / 'lift')
+            run = folder / 'run'
+            run.mkdir()
+            for path in (HERE / 'ask_one.py', tools['ask.py'], tools['qwen_scene.py']):
+                shutil.copyfile(path, run / Path(path).name)
+            (run / 'probe.py').write_text(ASK_ALL, encoding='utf-8')
+            def ask_all(mode):
+                done = subprocess.run([sys.executable, '-B', 'probe.py', mode], cwd=str(run), capture_output=True, encoding='utf-8', timeout=120)
+                self.assertEqual(done.returncode, 0, done.stderr)
+                return json.loads(done.stdout.strip().split('\n')[-1])
+            answered = ask_all('answer')
+            self.assertEqual((answered['stop'], answered['requests']), (None, 3))
+            gaps = [b - a for a, b in zip(answered['sent'], answered['sent'][1:])]
+            self.assertTrue(all(gap >= 4.0 for gap in gaps), 'each request at least 4 s after the one before: %s' % gaps)
+            # Each body missing once: two requests a body would be 6, and the cap of 3 + 2 stops it at 5.
+            capped = ask_all('miss-once')
+            self.assertEqual((capped['stop'], capped['requests']), ('request_cap', 5))
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
 def synthetic_take(folder, session='virtual-' + 'ab' * 16, frames=30, same=False):
     """A tiny take of invented NV12 frames, 0.2 s apart, with the files hop 11 reads."""
     import numpy as np
@@ -518,7 +639,7 @@ def synthetic_take(folder, session='virtual-' + 'ab' * 16, frames=30, same=False
     (folder / 'run.json').write_text(json.dumps({'clock': {'offset_s': 5000.0}}), encoding='utf-8')
 
 
-def routed(folder, requests):
+def routed(folder, requests, off=0.0002):
     """requests.jsonl and bundles.jsonl: each (request id, frame indices or None for no bundle), sent just after its newest frame."""
     rows, bundles = [], []
     for request_id, indices in requests:
@@ -526,9 +647,18 @@ def routed(folder, requests):
         bundle_id = 'pb-%s' % request_id
         rows.append({'request_id': request_id, 'track_id': 'trk-1', 'sent_ts': newest + 0.1, 'bundle_id': bundle_id, 'association_safe': True})
         if indices is not None:   # 0.2 ms off each frame's own time: the join is never exact
-            bundles.append({'bundle_id': bundle_id, 'frames': [{'camera_id': 'den-virtual', 'ts': 6000.0 + 0.2 * i + 0.0002} for i in indices]})
+            bundles.append({'bundle_id': bundle_id, 'frames': [{'camera_id': 'den-virtual', 'ts': 6000.0 + 0.2 * i + off} for i in indices]})
     for name, lines in (('requests.jsonl', rows), ('bundles.jsonl', bundles)):
         (folder / name).write_text(''.join(json.dumps(line) + '\n' for line in lines), encoding='utf-8')
+
+
+GOLDEN_BODY = '736785ef8969be191ba100b9cf07a18aaaaaf7ed61d0e21bd007bd016bae3ae0'   # measured at Pillow 11.3.0
+
+
+def epoch(text):
+    """A fact line's time, ISO or already seconds, in seconds since the epoch."""
+    from datetime import datetime
+    return float(text) if type(text) in (int, float) else datetime.fromisoformat(text.replace('Z', '+00:00')).timestamp()
 
 
 class Walk(unittest.TestCase):
@@ -577,6 +707,9 @@ class Walk(unittest.TestCase):
         self.assertIn('evening 20:00', doc['messages'][1]['content'][0]['text'])
         seqs = [still['rgb_seq'] for still in result['asks'][0]['stills']]
         self.assertEqual((seqs[0], seqs[2], seqs[1] in (512, 513)), (505, 520, True), 'newest, then nearest 1.5 s and 3 s before it: %s' % seqs)
+        # Pinned: the stills chosen, the join, the encoder's settings, this Pillow and the prompt all go into these bytes,
+        # and any change to one means another paste. A deliberate change re-pins it, and runs prepare.py --owed again.
+        self.assertEqual(name, GOLDEN_BODY, 'the invented take\'s body is the one pinned (Pillow %s)' % __import__('PIL').__version__)
         self.reply(name)
         again, work = self.ask()
         self.assertEqual((again['missing'], again['lines'], again['asks'][0]['body_sha256']), ([], 1, name), 'control: the reply on file is found by the same hash')
@@ -596,6 +729,15 @@ class Walk(unittest.TestCase):
         observation = line['observation']
         self.assertEqual((observation['text_scope'], observation['artifact_sha256'], observation['body_sha256'], observation['site_id'], observation['camera_id']),
                          ('reply_kept_render_only', None, a, 'den-sim', 'den-virtual'))
+        # Hop 12's clocks: sent at the router's sent_ts, available that plus the measured seconds, observed at the newest still.
+        rows = [json.loads(row) for row in (work / 'asks.jsonl').read_text(encoding='utf-8').splitlines()]
+        sent, newest = rows[0]['sent_ts'], rows[0]['stills'][-1]['observed_at']
+        self.assertEqual((rows[0]['elapsed_s'], rows[0]['root']), (0.7, '/models/real'), 'asks.jsonl carries the seconds and the root')
+        for key, want in (('sent_at', sent), ('available_at', sent + 0.7), ('observed_at', newest)):
+            self.assertAlmostEqual(epoch(line[key]), want, delta=0.0011, msg=key)
+        for key, want in (('generated_at', sent + 0.7), ('available_at', sent + 0.7), ('first_received_at', sent + 0.7), ('observed_at', newest)):
+            self.assertAlmostEqual(epoch(observation[key]), want, delta=0.0011, msg='observation ' + key)
+        self.assertNotAlmostEqual(epoch(line['available_at']), sent, delta=0.5, msg='control: the reply\'s seconds moved it')
         self.assertEqual(observation['media_ids'], [still['jpeg_sha256'] for still in result['asks'][0]['stills']])
         self.assertEqual(observation['frame_ids'], [str(still['rgb_seq']) for still in result['asks'][0]['stills']])
         self.assertEqual(observation['capture_epoch'], 'virtual-' + 'ab' * 16)
@@ -614,11 +756,16 @@ class Walk(unittest.TestCase):
         routed(self.take, [('rq-00001', range(5, 21))])
         self.assertEqual(self.ask()[0]['refused'], 'two stills of one request are the same bytes, which is one look')
         shutil.rmtree(self.take)
-        synthetic_take(self.take, session='oak-' + 'ab' * 16)
-        routed(self.take, [('rq-00001', range(5, 21))])
-        self.assertEqual(self.ask()[0]['refused'], "the take's session does not start virtual-, and only a render's reply text may be kept")
-        shutil.rmtree(self.take)
+        for session in ('oak-' + 'ab' * 16, 'virtual' + 'ab' * 16, 'virtualX' + 'ab' * 16):
+            synthetic_take(self.take, session=session)
+            routed(self.take, [('rq-00001', range(5, 21))])
+            self.assertEqual(self.ask()[0]['refused'], "the take's session does not start virtual-, and only a render's reply text may be kept", session)
+            shutil.rmtree(self.take)
         synthetic_take(self.take)
+        routed(self.take, [('rq-00001', range(5, 21))], off=0.0015)   # 1.5 ms off its row: no row within 1 ms
+        self.assertEqual(self.ask()[0]['refused'], 'a bundle frame joins 0 frames.csv rows within 1 ms, not one')
+        routed(self.take, [('rq-00001', range(5, 21))], off=0.0009)
+        self.assertIsNone(self.ask()[0]['refused'], 'control: 0.9 ms off joins')
         routed(self.take, [('rq-00001', range(5, 21)), ('rq-00001', range(10, 26))])
         self.assertEqual(self.ask()[0]['refused'], 'request id rq-00001 repeats')
         routed(self.take, [('rq-00001', range(5, 21)), ('rq-00002', range(5, 21))])
@@ -642,12 +789,39 @@ class Walk(unittest.TestCase):
         self.assertEqual(len(result['missing']), 1, 'only the request with stills is owed')
         self.assertIsNotNone(rows[2]['body_sha256'])
 
-    def test_a_reply_that_is_not_the_six_fields_is_refused(self):
+    def test_a_reply_that_is_not_the_six_fields_is_hop_12s_and_feeds_no_line(self):
         synthetic_take(self.take)
         routed(self.take, [('rq-00001', range(5, 21))])
         name = self.ask()[0]['asks'][0]['body_sha256']
-        (self.store / (name + '.json')).write_text(json.dumps({'raw': '{}', 'root': 'x'}), encoding='utf-8')
-        self.assertRegex(self.ask()[0]['refused'], r'^the reply on file for body [0-9a-f]{12} is not the six fields')
+        for bad in ({'raw': '{}', 'root': 'x'}, None):
+            if bad is None:   # six fields, with the null root a vLLM that omits it would give
+                self.reply(name)
+                reply = json.loads((self.store / (name + '.json')).read_text(encoding='utf-8'))
+                bad = dict(reply, root=None)
+            (self.store / (name + '.json')).write_text(json.dumps(bad), encoding='utf-8')
+            result, work = self.ask()
+            self.assertEqual((result['refused'], result['malformed'], result['missing'], result['lines']), (None, [name], [], 0), 'the bodies were built')
+            self.assertEqual(result['asks'][0]['status'], 'malformed')
+            self.assertFalse((work / 'facts.jsonl').exists(), 'need gets no input')
+        self.reply(name)
+        self.assertEqual(self.ask()[0]['malformed'], [], 'control: a well-formed reply is read')
+
+    def test_the_encoder_refuses_too_many_bytes_a_wrong_size_and_a_repeated_still(self):
+        import numpy as np
+        from PIL import Image
+        synthetic_take(self.take)
+        files = ['frames/000006-505.npz', 'frames/000013-512.npz', 'frames/000021-520.npz']
+        scene = lambda size=(640, 360), cap=256 * 1024: SimpleNamespace(IMAGE_SIZE=size, MAX_IMAGE_BYTES=cap)
+        images = chain.still_bytes(np, Image, scene(), self.take, files)
+        self.assertEqual(len(set(images)), 3)
+        biggest = max(map(len, images))
+        with self.assertRaisesRegex(chain.Refused, r'^a still is \d+ bytes as a JPEG, over %d$' % (biggest - 1)):
+            chain.still_bytes(np, Image, scene(cap=biggest - 1), self.take, files)
+        self.assertEqual(chain.still_bytes(np, Image, scene(cap=biggest), self.take, files), images, 'control: at the cap it passes')
+        with self.assertRaisesRegex(chain.Refused, r'^a still is 640x360, not 320x180$'):
+            chain.still_bytes(np, Image, scene(size=(320, 180)), self.take, files)
+        with self.assertRaisesRegex(chain.Refused, r'^two stills of one request are the same bytes'):
+            chain.still_bytes(np, Image, scene(), self.take, [files[0], files[0], files[1]])
 
 
 def linked_copy(source, target):
@@ -675,6 +849,14 @@ class OnTheSet(unittest.TestCase):
         cls.home = scratch('den-sim-onset-')
         display = json.loads((SET / 'display.json').read_text(encoding='utf-8'))['scenes']
         cls.reading, cls.phone = (next(d['take'] for d in display if d['label'] == label) for label in ('Reading on the couch', 'Holding a phone'))
+        # Planted before --owed runs: a stale owed body it filed once, a note beside it, and a reply for another body.
+        owed, store = cls.home / 'prepared' / 'owed', cls.home / 'prepared' / 'replies'
+        owed.mkdir(parents=True)
+        store.mkdir()
+        cls.stale, cls.kept = owed / ('0' * 64 + '.body'), store / ('1' * 64 + '.json')
+        cls.stale.write_bytes(b'stale')
+        (owed / 'notes.txt').write_text('kept', encoding='utf-8')
+        cls.kept.write_text('{}', encoding='utf-8')
         cls.filled = fill(cls.home, SET, {cls.reading: 'reading', cls.phone: 'phone'})
         cls.info = json.loads((SET / 'set.json').read_text(encoding='utf-8'))
 
@@ -682,11 +864,11 @@ class OnTheSet(unittest.TestCase):
     def tearDownClass(cls):
         shutil.rmtree(cls.home, ignore_errors=True)
 
-    def click(self, set_dir, take, store=None):
+    def click(self, set_dir, take, store=None, last_ask=None):
         """One click of chain.py on this take, in this process: (rows by hop, end line, work folder)."""
         work = Path(tempfile.mkdtemp(dir=self.home, prefix='click-'))
         request, _ = prepare.chain_request(set_dir, self.info, take, self.home / 'prepared', work, self.home / 'tools')
-        request.update(owed=None, last_ask=str(self.home / 'prepared' / 'last-ask.json'), replies=str(store or self.home / 'prepared' / 'replies'))
+        request.update(owed=None, last_ask=str(last_ask or self.home / 'prepared' / 'last-ask.json'), replies=str(store or self.home / 'prepared' / 'replies'))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             try:
@@ -699,7 +881,9 @@ class OnTheSet(unittest.TestCase):
         return {row['n']: row for row in lines if 'word' in row}, lines[-1], work / take
 
     def decided(self, set_dir, take, store=None):
-        """What the older brain is told on a click: the adapter's label and person, and the files that fed it, byte for byte."""
+        """What the older brain is told on a click, which is all it decides from: the adapter's label and person, and the
+        files that fed it, byte for byte. The brain's own output is compared in test-den-sim-honesty.mjs, through the
+        harness, with its random decision_id masked: that id differs between any two clicks, truth folder or not."""
         _, end, work = self.click(set_dir, take, store)
         files = {name: (work / name).read_bytes() for name in ('requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'den-core-log.jsonl') if (work / name).exists()}
         return dict(files, adapter=json.dumps(end.get('adapter'), sort_keys=True), stop=json.dumps(end.get('stop'), sort_keys=True))
@@ -708,6 +892,60 @@ class OnTheSet(unittest.TestCase):
         owed = self.filled['owed']
         self.assertEqual(sorted(take for take, names in owed.items() if names), sorted([self.reading, self.phone]), 'standing, nobody and blank are asked nothing')
         self.assertEqual((self.filled['answered'], self.filled['still_needed'], self.filled['root']), (self.filled['asked'], 0, FAKE_ROOT))
+
+    def test_owed_removes_a_stale_body_and_keeps_a_reply_and_a_note(self):
+        folder = self.home / 'prepared' / 'owed'
+        self.assertFalse(self.stale.exists(), 'a body --owed filed once and no longer owed is removed')
+        self.assertTrue(self.kept.is_file() and (folder / 'notes.txt').is_file(), 'a reply never is, nor anything but a body')
+        listed = json.loads((folder / 'owed.json').read_text(encoding='utf-8'))
+        self.assertEqual((listed['set'], sorted(listed['bodies'])), (self.info['set'], sorted(n for names in self.filled['owed'].values() for n in names)))
+        self.assertEqual(sorted(path.stem for path in folder.glob('*.body')), sorted(listed['bodies']), 'exactly the owed bodies, each by its hash')
+
+    def test_the_bodies_a_click_builds_are_the_ones_filed_beside_this_set(self):
+        """The owed folder beside the set holds what a click on it will look up: each body filed there is one a click builds,
+        and each body a click builds is filed there or already has its reply. Any change to the stills, the join, the encoder,
+        Pillow or the prompt fails this until prepare.py --owed runs again."""
+        filed = SET.parent / 'owed' / 'owed.json'
+        listed = json.loads(filed.read_text(encoding='utf-8')) if filed.is_file() else {}
+        if listed.get('set') != self.info['set']:
+            self.skipTest('no owed list for this set beside it')
+        built = {name for names in self.filled['owed'].values() for name in names}
+        self.assertLessEqual(set(listed['bodies']), built, 'every body filed as owed is one a click builds')
+        self.assertEqual({name for name in built if name not in listed['bodies'] and not (SET.parent / 'replies' / (name + '.json')).is_file()}, set(),
+                         'and every body a click builds is owed or answered')
+        self.assertNotEqual(built, {name[::-1] for name in built}, 'control: other hashes differ')
+
+    def test_12_a_root_that_is_not_the_fake_reads_adapter_with_its_stand_ins(self):
+        store = self.home / 'other-root'
+        shutil.copytree(self.home / 'prepared' / 'replies', store)
+        for path in store.glob('*.json'):
+            reply = json.loads(path.read_text(encoding='utf-8'))
+            if reply:
+                path.write_text(json.dumps(dict(reply, root='test-root-not-a-model')), encoding='utf-8')
+        rows, end, _ = self.click(SET, self.reading, store=store)
+        self.assertEqual((rows[12]['word'], rows[12]['reply'], rows[12]['root'], end['reply'], end['adapter']['label']), ('ADAPTER', 'real', 'test-root-not-a-model', 'real', 'reading'))
+        self.assertEqual(rows[12]['stand_ins'], chain.named(12, 0, 1))
+        self.assertRegex(rows[12]['summary'], r"^Qwen's real words, from test-root-not-a-model, recorded once on \d{4}-\d\d-\d\d and looked up by each body's sha256: rq-00001 reading")
+        self.assertRegex(rows[12]['ran'], r'^recorded \d{4}-\d\d-\d\d, looked up now$')
+        self.assertEqual(self.click(SET, self.reading)[0][12]['word'], 'SCRIPTED', 'control: the fake root reads SCRIPTED')
+        shutil.rmtree(store)
+
+    def test_11_cites_the_tools_the_paste_ran(self):
+        rows, _, _ = self.click(SET, self.reading)
+        last = json.loads((self.home / 'prepared' / 'last-ask.json').read_text(encoding='utf-8'))
+        cited = {tool['path']: tool for tool in rows[11]['tools'] if tool['path'] in chain.PASTE_TOOLS}
+        self.assertEqual(sorted(cited), sorted(chain.PASTE_TOOLS))
+        for path, tool in cited.items():
+            self.assertEqual((tool['pin'], tool['actual'], tool['expected']), ('the commit the paste ran at (%s)' % last['tools']['head'][:8], last['tools']['blobs'][path], last['tools']['blobs'][path]), path)
+        # Control: a record whose blob is not the one at its commit shows at hop 11, as an uncommitted edit at the paste would.
+        tampered = self.home / 'tampered-last-ask.json'
+        tampered.write_text(json.dumps(dict(last, filed={name: dict(entry, blobs=dict(entry['blobs'], **{chain.PASTE_TOOLS[0]: '0' * 40}))
+                                                         for name, entry in last['filed'].items()})), encoding='utf-8')
+        tool = next(tool for tool in self.click(SET, self.reading, last_ask=tampered)[0][11]['tools'] if tool['path'] == chain.PASTE_TOOLS[0])
+        self.assertNotEqual(tool['actual'], tool['expected'])
+        # Before any reply is used, hop 11 lists them at HEAD, as the ones a paste would run.
+        rows, _, _ = self.click(SET, self.reading, store=self.home / 'empty-store')
+        self.assertEqual({tool['pin'] for tool in rows[11]['tools'] if tool['path'] in chain.PASTE_TOOLS}, {'HEAD'})
 
     def test_10_and_8_a_fake_root_reads_scripted_and_the_same_input_gives_the_same_bytes(self):
         rows, end, work = self.click(SET, self.reading)

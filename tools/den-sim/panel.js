@@ -314,8 +314,10 @@
       if (!status.click) return; // The receipt lands with the stop.
       sim.running = false;
       setFeedEnabled(true);
+      const unseen = /^Qwen has not seen these exact frames/.test(feed.pipeline.failed || '');
       message.textContent = feed.phase === 'stopped' ? `The click stopped: ${feed.pipeline.failed}. All four spots stay off.`
-        : `The pipeline broke, so the brain did not decide and all four spots stay off. ${feed.pipeline.failed}`;
+        : unseen ? `${feed.pipeline.failed}, so need gets no input, the brain does not decide, and all four spots stay off. The paste below asks Qwen once.`
+          : `The pipeline broke, so the brain did not decide and all four spots stay off. ${feed.pipeline.failed}`;
       return;
     }
     if (feed.summary && !sim.personShown) {

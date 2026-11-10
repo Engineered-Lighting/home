@@ -330,9 +330,9 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     const byScene = Object.fromEntries(table.slice(1).map(([scene, ...cells]) => [scene, cells]));
     assert.deepEqual(Object.keys(byScene), display.map(scene => scene.label));
     assert.match(byScene['Reading on the couch'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: reading x5 \| lit, \S+ \| –$/);
-    assert.match(byScene['Holding a phone'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: phone_use x5 \| off \| Not reading · no spotlight$/);
+    assert.match(byScene['Holding a phone'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: phone_use x5 \| off \| hop 17: Not reading · no spotlight$/);
     for (const label of ['Standing by the couch with a book', 'Nobody there', 'Blank frame']) {
-      assert.deepEqual(byScene[label], ['none', 'not asked', 'off', 'the detector saw nobody, nothing was asked'], label);
+      assert.deepEqual(byScene[label], ['none', 'not asked', 'off', 'hop 6: the detector saw nobody, nothing was asked'], label);
     }
     assert.equal(await page.textContent('[data-den-sim-every-note]'), 'No meter on this run. The top line stays as the last single click set it. Every reply on this table came from one model root, fake-vllm.');
     assert.equal(await page.textContent('[data-den-sim-top-line-text]'), before, 'the top line is the last single click\'s');

@@ -291,7 +291,7 @@ function everyRow(take, result) {
   every.rows.push({ take, click: view.click, box: boxes.length ? boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ') : view.boxes ? 'none' : 'rows did not hold',
     qwen: !twelve.reached ? 'not asked' : twelve.word === 'MISSING' ? `MISSING: ${twelve.summary.split(':')[0]}` : `${twelve.word === 'SCRIPTED' ? 'fake vLLM, scripted: ' : 'asked: '}${words}`,
     root: view.qwen?.root || null, beam: lit ? `lit, ${result.timeline.summary.fixture_id.match(/mount-\d+/)?.[0] || result.timeline.summary.fixture_id}` : 'off',
-    why: result.receipt.stopped?.why || (lit ? '' : result.timeline?.summary.refusal || '') });
+    why: result.receipt.stopped ? `hop ${result.receipt.stopped.hop}: ${result.receipt.stopped.why.replace(/^Qwen has not seen these exact frames: /, '')}` : lit ? '' : result.timeline?.summary.refusal || '' });
   every.roots = [...new Set(every.rows.map(row => row.root).filter(Boolean))];
   every.verdict = every.roots.length > 1 ? `replies from two models (${every.roots.join(', ')}): a table uses one` : null;
 }

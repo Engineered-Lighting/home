@@ -67,12 +67,12 @@ const prepareNotes = [
   ...(option('prepared') ? [] : refusedSince(OUT, SET).map(set => `the newest set ${set.id} was refused at hop ${set.refusal.hop} (${set.refusal.reason}), so set ${setInfo.set} is shown`)),
 ];
 // The display file holds each take's label for its button. Only this panel reads it: a click is
-// told a take's folder id, never a scene.
-if (!fs.existsSync(path.join(SET, 'display.json'))) {
-  console.error(`Prepared set ${setInfo.set} has no display.json, so it has no buttons${setInfo.refusal ? `: prepare stopped at hop ${setInfo.refusal.hop}: ${setInfo.refusal.reason}` : ''}. Prepare a new set.`);
-  process.exit(1);
-}
-const scenes = readFile(path.join(SET, 'display.json')).scenes.map(({ take, label }) => ({ take, label }));
+// told a take's folder id, never a scene. Without it the buttons show the takes' folder ids, and
+// every click runs exactly as it would with it.
+const displayFile = path.join(SET, 'display.json');
+const scenes = fs.existsSync(displayFile) ? readFile(displayFile).scenes.map(({ take, label }) => ({ take, label }))
+  : setInfo.takes.filter(item => item.kind === 'scene').map(({ take }) => ({ take, label: `take ${take}` }));
+if (!fs.existsSync(displayFile)) prepareNotes.push(`set ${setInfo.set} has no display file, so its buttons show folder ids`);
 if (!scenes.length) {
   console.error(`Prepared set ${setInfo.set} holds no scene take to press${setInfo.refusal ? `: prepare stopped at hop ${setInfo.refusal.hop}: ${setInfo.refusal.reason}` : ''}. Prepare a new set.`);
   process.exit(1);
@@ -80,6 +80,19 @@ if (!scenes.length) {
 const prepared = Object.fromEntries(scenes.map(({ take }) => [take, readFile(path.join(SET, take, 'prepare-receipt.json'))]));
 // The page's "chosen from N tries": a line is a Qwen try only when root names the served model and body_sha256 is a request's 64 hex.
 const tries = (() => { try { return fs.readFileSync(path.join(path.dirname(SET), 'tries.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(row => typeof row.root === 'string' && /^[0-9a-f]{64}$/.test(row.body_sha256 || '')); } catch { return null; } })();
+// Qwen's side of the data root: the replies a click looks up by body hash, the bodies prepare.py --owed filed
+// as still owed, and what the owner's last paste said. Hashes only: none of these names a scene.
+const PREPARED = path.join(OUT, 'prepared'), REPLIES = path.join(PREPARED, 'replies'), LAST_ASK = path.join(PREPARED, 'last-ask.json');
+const PASTE = `python -B ${path.join(HERE, 'ask_la.py')}`;
+function qwenStatus() {
+  let owed = null, last = null;
+  try { owed = readFile(path.join(PREPARED, 'owed', 'owed.json')).bodies.filter(name => !fs.existsSync(path.join(REPLIES, `${name}.json`))).length; } catch { /* nothing filed yet */ }
+  try {
+    const doc = readFile(LAST_ASK);
+    last = { finished_unix: doc.finished_unix, stopped_at: doc.stopped_at, reason: doc.reason, step: doc.step, needed: doc.needed, answered: doc.answered, still_needed: doc.still_needed, root: doc.root };
+  } catch { /* no paste yet */ }
+  return { owed, last_ask: last, paste: PASTE };
+}
 
 function packRoot() {
   if (room === 'real') return path.resolve(refs.content_packs);
@@ -266,19 +279,38 @@ const feed = createFeed({ emptyRow: brain.empty_row, couchLabel: couch.label });
 const commands = {}, pressed = new Set(), clickLines = [], startedAt = new Date().toISOString();
 const writeRunJson = () => fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: startedAt, origin: ORIGIN, clicks: clickLines }, null, 2) + '\n');
 let activeRun = null, lastClick = null;
+// "Run every scene": the same clicks, one table row each, leaving the top line as the last single click set it.
+const every = { rows: [], roots: [], verdict: null };
+function everyRow(take, result) {
+  const view = receiptView(result.receipt), twelve = view.rows[11], lit = result.ok && result.timeline?.summary.lit;
+  const boxes = view.boxes || [];
+  // Qwen's words, counted over the requests it answered: "reading x4, unclear x1".
+  const said = {};
+  for (const ask of view.qwen?.asks || []) if (ask.said) said[ask.said.split(',')[0]] = (said[ask.said.split(',')[0]] || 0) + 1;
+  const words = Object.entries(said).map(([word, n]) => `${word} x${n}`).join(', ');
+  every.rows.push({ take, click: view.click, box: boxes.length ? boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ') : view.boxes ? 'none' : 'rows did not hold',
+    qwen: !twelve.reached ? 'not asked' : twelve.word === 'MISSING' ? `MISSING: ${twelve.summary.split(':')[0]}` : `${twelve.word === 'SCRIPTED' ? 'fake vLLM, scripted: ' : 'asked: '}${words}`,
+    root: view.qwen?.root || null, beam: lit ? `lit, ${result.timeline.summary.fixture_id.match(/mount-\d+/)?.[0] || result.timeline.summary.fixture_id}` : 'off',
+    why: result.receipt.stopped?.why || (lit ? '' : result.timeline?.summary.refusal || '') });
+  every.roots = [...new Set(every.rows.map(row => row.root).filter(Boolean))];
+  every.verdict = every.roots.length > 1 ? `replies from two models (${every.roots.join(', ')}): a table uses one` : null;
+}
 function startClick(body) {
   const take = body?.take;
   if (!scenes.some(scene => scene.take === take) || !Array.isArray(body.fixtures)) return { ok: false, reason: 'take_unknown' };
   if (activeRun) return { ok: false, reason: 'a_run_is_going' };
-  const pressedAgain = pressed.has(take);
-  pressed.add(take);
+  const all = body.every === true;
+  if (all && body.first === true) Object.assign(every, { rows: [], roots: [], verdict: null });
+  const pressedAgain = !all && pressed.has(take);
+  if (!all) { pressed.add(take); lastClick = null; }
   feed.begin(take);
-  lastClick = null;
-  const current = activeRun = brain.runClick({ take, prepared: prepared[take], setDir: SET, roomModel, startRecord: { ...start, home: homeRow() }, pressedAgain },
-    row => feed.hop({ n: row.n, word: row.word, summary: row.summary, ms: row.ms }));
+  const current = activeRun = brain.runClick({ take, prepared: prepared[take], setDir: SET, roomModel, startRecord: { ...start, home: homeRow() }, pressedAgain,
+    replies: REPLIES, lastAsk: LAST_ASK }, row => feed.hop({ n: row.n, word: row.word, summary: row.summary, ms: row.ms }));
   current.promise.then(result => {
     if (activeRun !== current) return; // Reloaded while it ran: the page has moved on.
     activeRun = null;
+    if (all) everyRow(take, result);
+    if (all) { if (result.ok) feed.play(result.timeline, body.fixtures); else feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
     const picture = path.join(result.work, 'picture.png');
     lastClick = { click: result.receipt.click, view: receiptView(result.receipt), top: result.top, receipt: result.receipt, said: result.said || null,
       picture: fs.existsSync(picture) ? picture : null };
@@ -391,13 +423,15 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/' || pathname === '/index.html') {
       cancelClick();
       feed.reset(); pressed.clear(); lastClick = null; // A page load starts from an empty room, so every load can swing again.
+      Object.assign(every, { rows: [], roots: [], verdict: null });
       return send(res, 200, homePage(), { 'Content-Type': TYPES['.html'] });
     }
     if (pathname === '/__sim/panel.js') return send(res, 200, fs.readFileSync(path.join(HERE, 'panel.js')), { 'Content-Type': TYPES['.js'] });
     if (pathname === '/__sim/status') {
       // The person's point, the target and the camera marker's point reach the page here, because Home's markers need them. The panel prints none.
       const click = lastClick && { ...lastClick.view, top_line: lastClick.top, picture: !!lastClick.picture, said: lastClick.said };
-      return send(res, 200, { ...context, scenes, camera_m: cameraM, feed: feed.readback(), click, counters, refused: [...refused.values()], run });
+      return send(res, 200, { ...context, scenes, camera_m: cameraM, feed: feed.readback(), click, counters, refused: [...refused.values()], run,
+        qwen: qwenStatus(), every: { ...every, running: !!activeRun } });
     }
     if (pathname === '/__sim/receipt') return lastClick ? send(res, 200, lastClick.receipt) : refuse(res, req.method, pathname, 404);
     if (pathname === '/__sim/picture') {
@@ -442,7 +476,8 @@ server.on('error', error => {
 server.listen(PORT, HOST, () => {
   const scan = room === 'real' ? `real scan pack ${binding.content_revision}` : 'AUTHORED ROOM';
   console.log([`Den simulation: ${ORIGIN}/`, `Room: ${scan} | Sockets: ${registration.label.replace(' · ', ', ')} | Couch: ${couch.label}`,
-    `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash, holds the detector rows prepare recorded to their checks, and runs the pinned tools on them, with an INVENTED CAMERA. No model runs on a click.`,
+    `Prepared set ${setInfo.set}, recorded ${setInfo.recorded}: ${scenes.length} takes. Each click re-checks its take by hash, holds the detector rows prepare recorded to their checks, and runs the pinned tools on them, with an INVENTED CAMERA. No model runs on a click: Qwen's words are recorded replies, looked up by each request's exact bytes.`,
+    ...(qwenStatus().owed ? [`Qwen still owes ${qwenStatus().owed} replies. In a new PowerShell window, paste: ${PASTE}`] : []),
     `Camera registration: ${placed.summary}`,
     ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
     ...prepareNotes.map(note => 'Note: ' + note), ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,

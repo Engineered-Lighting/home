@@ -223,7 +223,10 @@ export function receiptView(receipt) {
   // A row sits under what it did on this click. A row that didn't run (not built yet, not reached, or
   // with no row) sits apart, never under "Ran on this click".
   const group = row => row.reached === false || /^(not |no row)/.test(row.ran) ? 'not run' : row.ran.startsWith('recorded') ? 'recorded' : row.ran.includes('page start') ? 'page' : 'click';
-  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, torso: receipt.torso?.line || null,
+  // Qwen on this click, from hop 12's row: its word, the model's served root, and what it said per request.
+  const twelve = receipt.rows.find(row => row.n === 12);
+  const qwen = twelve?.reached !== false && twelve?.asks ? { word: twelve.word, root: twelve.root || null, reply: twelve.reply || null, said: twelve.said || null, asks: twelve.asks } : null;
+  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, torso: receipt.torso?.line || null, qwen,
     boxes: Array.isArray(receipt.picture?.boxes) ? receipt.picture.boxes : null, picture_note: pictureNote(receipt.picture),
     rows: receipt.rows.map(row => ({ n: row.n, name: row.name, word: row.word, reached: row.reached !== false, ran: row.ran, group: group(row),
       summary: row.summary || row.note || '', stand_ins: row.stand_ins || [], tool: row.tool?.path || null })) };

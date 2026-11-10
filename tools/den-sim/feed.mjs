@@ -12,7 +12,7 @@ const STEP_MS = 100, RATE_DEG_S = 30, STEP_DEG = RATE_DEG_S * STEP_MS / 1000;
 // the hold is re-timed faster than that, as if the reader keeps reading.
 const HEARTBEAT_MS = 1000;
 const LEVEL_START = .25, MAX_TRAVEL_M = 8;
-const SCRIPTED = 'SIMULATION-scripted';
+const SCRIPTED = 'SIMULATION-scripted', LA_DIRECT = 'den_sim_la_direct';
 const SOURCE_CLOCKS = ['interval_start', 'observed_at', 'available_at', 'valid_until'];
 const DEG = Math.PI / 180;
 
@@ -59,7 +59,11 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   let revision = 0, eventId = 0, docsSent = 0, current = null, held = null, timer = null, stepper = null;
   let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null };
 
-  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, recorded detector rows, typed answers · brain: ${why}`.slice(0, 240);
+  // What the words came from on this click: 'real' when the click used a real model's recorded reply,
+  // 'fake' for a fake vLLM's, and null before any reply was used (the empty room).
+  const reply = () => timeline?.reply || null;
+  const words = () => ({ real: "Qwen's recorded words", fake: "a fake vLLM's scripted words" })[reply()] || 'no reply used';
+  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, recorded detector rows, ${words()} · brain: ${why}`.slice(0, 240);
   // The brain's state, unchanged but for its clocks and honest labels. Re-timing from
   // the row each time means repeating a row never stretches its evidence.
   function present(row, step = null) {
@@ -69,8 +73,9 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
     doc.generated_at = now; doc.state_revision = ++revision;
     doc.why = labelled(step ? `${doc.why} · beam swinging, motion scripted` : doc.why);
     doc.decisions = doc.decisions.map(item => ({ ...item, at: item.at + shift, why: `SIMULATION · ${item.why}`.slice(0, 240) }));
-    doc.occupancy.source = SCRIPTED; doc.activity.source = SCRIPTED;
-    doc.inputs = { ...doc.inputs, scripted: true, inference_ran: false };
+    // Occupancy stays typed until step 6. The activity is the model's only when a real reply was used.
+    doc.occupancy.source = SCRIPTED; doc.activity.source = reply() === 'real' ? LA_DIRECT : SCRIPTED;
+    doc.inputs = { ...doc.inputs, scripted: reply() !== 'real', inference_ran: reply() === 'real' };
     if (step) {
       const lit = doc.fixtures.find(item => item.spot.on);
       lit.spot = { ...lit.spot, level: step.level, target_m: step.target_m, fade_s: 0 };

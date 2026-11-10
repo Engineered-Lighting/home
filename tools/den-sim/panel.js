@@ -57,12 +57,19 @@
     #den-sim-panel h4 { margin: 8px 0 3px; font: 700 11px system-ui, sans-serif; color: #c8c8c8; text-transform: uppercase; letter-spacing: .04em; }
     #den-sim-panel .pill { display: inline-block; min-width: 58px; text-align: center; font: 700 9px/15px system-ui, sans-serif; border-radius: 3px; color: #fff; margin-right: 5px; }
     #den-sim-panel .note { color: #a8a8a8; display: block; }
+    #den-sim-panel [data-den-sim-qwen], #den-sim-panel [data-den-sim-owed], #den-sim-panel [data-den-sim-last-ask] { margin: 5px 0; padding: 5px 6px; border-left: 3px solid #2a5fa8; background: rgba(42,95,168,.18); }
+    #den-sim-panel [data-den-sim-owed] { border-left-color: #b00020; background: rgba(176,0,32,.18); }
+    #den-sim-panel code { display: block; margin: 4px 0; padding: 4px; background: #000; border: 1px solid #333; border-radius: 4px; font: 10.5px/1.35 ui-monospace, Consolas, monospace; overflow-wrap: anywhere; user-select: all; }
+    #den-sim-panel table { width: 100%; border-collapse: collapse; margin: 4px 0; font-size: 10.5px; table-layout: fixed; }
+    #den-sim-panel th:nth-child(1) { width: 27%; } #den-sim-panel th:nth-child(2) { width: 15%; } #den-sim-panel th:nth-child(3) { width: 25%; } #den-sim-panel th:nth-child(4) { width: 14%; }
+    #den-sim-panel th, #den-sim-panel td { border: 1px solid #333; padding: 2px 4px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
   ` }));
 
   const strip = el('div', { id: 'den-sim-strip', role: 'status', 'data-den-sim-strip': '1',
-    textContent: 'SIMULATION · rendered takes, a real detector\'s recorded rows, Qwen\'s words typed · INVENTED CAMERA: it does not exist · nothing is sent to any fixture' });
+    textContent: 'SIMULATION · rendered takes, a real detector\'s recorded rows, Qwen\'s words recorded once and looked up by exact bytes · INVENTED CAMERA: it does not exist · nothing is sent to any fixture' });
   const sceneButtons = el('div', { 'data-den-sim-scenes': '1' });
-  const setFeedEnabled = on => sceneButtons.querySelectorAll('button').forEach(button => { button.disabled = !on; });
+  const everyButton = el('button', { type: 'button', 'data-den-sim-every-run': '1', textContent: 'Run every scene', disabled: true, style: 'width:100%;margin-bottom:4px', onclick: () => runEvery() });
+  const setFeedEnabled = on => [...sceneButtons.querySelectorAll('button'), everyButton].forEach(button => { button.disabled = !on; });
   const resetButton = el('button', { type: 'button', 'data-den-sim-reset': '1', textContent: 'Reset (reload)', onclick: () => location.reload() });
   const hideButton = el('button', { type: 'button', 'data-den-sim-hide': '1', textContent: 'Hide details',
     onclick: () => { const shut = panel.dataset.collapsed !== '1'; panel.dataset.collapsed = shut ? '1' : '0'; hideButton.textContent = shut ? 'Show details' : 'Hide details'; } });
@@ -112,9 +119,17 @@
   const hops = el('details', { open: innerHeight >= 800 }, el('summary', { textContent: 'Each hop, from this click\'s receipt' }), hopRows);
   const commandBox = el('div', { 'data-den-sim-command': '1', hidden: true });
   const choice = el('div', { className: 'note', 'data-den-sim-choice': '1' });
-  const body = el('div', { 'data-den-sim-body': '1' }, topLine, pictureBox, pictureNote, torsoLine, brainBox, readback, commandBox, candidates, hops, proof);
-  const panel = el('aside', { id: 'den-sim-panel', 'aria-label': 'Den simulation' }, sceneButtons, el('div', { className: 'row' }, resetButton, hideButton),
-    message, choice, startupBox, inputNotes, body);
+  // Qwen: what it said on the last click, what it still owes with the owner's one paste, and what the last paste said.
+  const qwenBox = el('div', { 'data-den-sim-qwen': '1', hidden: true });
+  const pasteCode = el('code', { 'data-den-sim-paste': '1' });
+  const copyButton = el('button', { type: 'button', 'data-den-sim-copy': '1', textContent: 'Copy', onclick: () => copyPaste() });
+  const owedText = el('div', { 'data-den-sim-owed-text': '1' });
+  const owedBox = el('div', { 'data-den-sim-owed': '1', hidden: true }, owedText, pasteCode, copyButton);
+  const lastAskBox = el('div', { 'data-den-sim-last-ask': '1', hidden: true });
+  const everyBox = el('div', { 'data-den-sim-every': '1', hidden: true });
+  const body = el('div', { 'data-den-sim-body': '1' }, topLine, pictureBox, pictureNote, torsoLine, qwenBox, brainBox, readback, commandBox, candidates, hops, proof);
+  const panel = el('aside', { id: 'den-sim-panel', 'aria-label': 'Den simulation' }, sceneButtons, everyButton, el('div', { className: 'row' }, resetButton, hideButton),
+    message, choice, owedBox, lastAskBox, everyBox, startupBox, inputNotes, body);
   document.body.append(strip, panel);
 
   const sim = { status: null, selected: null, running: false, seen: new Map(), swinging: false, swingStart: 0, frames: [], longTasks: 0, longestTaskMs: 0, external: new Set() };
@@ -226,6 +241,15 @@
         el('ul', {}, ...top.reasons.map(reason => el('li', { 'data-den-sim-reason': String(reason.condition ?? ''), textContent: reason.condition ? `(${reason.condition}) ${reason.text}` : reason.text })))));
     }
     if (click.picture) { picture.src = `/__sim/picture?click=${click.click}`; drawBoxes(click.boxes, click.picture_note); } else pictureBox.hidden = pictureNote.hidden = true;
+    // Qwen on this click: rebuilt from what hop 12 recorded, never from the button pressed.
+    qwenBox.hidden = !click.qwen;
+    if (click.qwen) {
+      const asked = click.rows.find(row => row.n === 12)?.ran || '';
+      const head = click.qwen.word === 'MISSING' ? `Qwen: ${click.rows.find(row => row.n === 12).summary}`
+        : `Qwen${click.qwen.word === 'SCRIPTED' ? ' (SCRIPTED: a fake vLLM, not Qwen)' : ''}: model root ${click.qwen.root}, ${asked}.`;
+      qwenBox.replaceChildren(el('strong', { textContent: head }), el('ul', {}, ...click.qwen.asks.map(ask => el('li', { 'data-den-sim-ask': ask.request_id,
+        textContent: ask.not_asked ? `${ask.request_id}: not asked, ${ask.not_asked}` : `${ask.request_id}: frames ${ask.stills.join(', ')} (${ask.seconds.join(', ')} s before the newest)${ask.association_safe ? '' : ', a bundle not marked safe to tie to one person'}: ${ask.said}` }))));
+    }
     hopRows.replaceChildren(...GROUPS.flatMap(([group, heading]) => {
       const rows = click.rows.filter(row => row.group === group);
       return rows.length ? [el('h4', { textContent: heading }), el('ul', {}, ...rows.map(row => el('li', { 'data-den-sim-hop': String(row.n), 'data-den-sim-name': row.name,
@@ -313,10 +337,13 @@
         if (status.click) showCommand(status.click.click);
         const swing = feed.swing, decided = feed.summary, modeled = 'Lighting is on: Home\'s modeled view, not measured.';
         // Said on every lit result, never chosen by the button: nothing tests for being on the couch yet.
-        const scripted = 'The older brain\'s own 1.5 m rule decides whether the reader is on the couch, so a figure standing within 1.5 m of the seat lights a spot too, until step 5 builds the test for being on the couch. Qwen\'s answers are still typed from the take\'s truth.';
+        const qwen = status.click?.qwen, asked = (qwen?.asks || []).filter(ask => ask.said);
+        const counted = [...new Set(asked.map(ask => ask.said))].map(said => `${said} on ${asked.filter(ask => ask.said === said).length} of ${asked.length}`).join('; ');
+        const words = qwen?.word === 'SCRIPTED' ? `The words were a fake vLLM's, scripted for a test: ${counted}.` : qwen ? `Qwen's words, recorded once from ${qwen.root}: ${counted}.` : '';
+        const scripted = `The older brain's own 1.5 m rule decides whether the reader is on the couch, so a figure standing within 1.5 m of the seat lights a spot too, until step 5 builds the test for being on the couch. ${words}`;
         message.textContent = feed.phase === 'holding'
           ? `The beam is on the reader's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. ${scripted} Nothing was sent. ${modeled}`
-          : `The brain refused: ${decided.refusal}. All four spots stay off. Nothing was sent. ${modeled}`;
+          : `The brain refused: ${decided.refusal}. ${words} All four spots stay off. Nothing was sent. ${modeled}`;
       }, 400);
     }
   }
@@ -330,16 +357,79 @@
     const stopped = (status.set.notes || []).map(note => ` Note: ${note}.`).join('');
     choice.textContent = `Prepared set ${status.set.id}, recorded ${status.set.recorded}: ${status.set.figure}, book ${plain(status.set.way)}${tries}. ${status.placement.summary}.${stopped}`;
   }
+  // What Qwen still owes, with the owner's paste line, whenever a reply is still needed; and the last paste's record.
+  function showQwen(status) {
+    const qwen = status.qwen, twelve = status.click?.rows?.[11], missed = twelve?.word === 'MISSING' && /has not seen these exact frames/.test(twelve.summary);
+    owedBox.hidden = !(qwen.owed > 0 || missed);
+    pasteCode.textContent = qwen.paste;
+    owedText.textContent = qwen.owed > 0 ? `Qwen still owes ${qwen.owed} ${qwen.owed === 1 ? 'reply' : 'replies'}. Paste this line into a new PowerShell window (run.mjs holds this one), then press a scene again:`
+      : qwen.owed === 0 ? 'Qwen has no reply for this click\'s exact frames, and none is filed as owed: an agent runs prepare.py --owed, then you paste this line in a new PowerShell window:'
+        : 'Qwen has no reply for this click\'s exact frames, and no owed list is filed yet: an agent runs prepare.py --owed, then you paste this line in a new PowerShell window:';
+    const last = qwen.last_ask;
+    lastAskBox.hidden = !last;
+    if (last) {
+      const when = new Date(last.finished_unix * 1000).toLocaleString();
+      lastAskBox.textContent = `Your last paste, ${when}: ${last.stopped_at ? `stopped at ${last.stopped_at}: ${last.reason}. ` : ''}${last.needed === null ? '' : `${last.answered} of ${last.needed} replies came back, `}`
+        + `${last.still_needed === null ? 'nothing is filed as owed' : `${last.still_needed} still needed`}${last.root ? `; model root ${last.root}` : ''}.`;
+    }
+  }
+  async function copyPaste() {
+    try { await navigator.clipboard.writeText(pasteCode.textContent); copyButton.textContent = 'Copied'; return; } catch (_) { /* no clipboard API: select it */ }
+    const range = document.createRange(), selection = getSelection();
+    range.selectNodeContents(pasteCode); selection.removeAllRanges(); selection.addRange(range);
+    copyButton.textContent = document.execCommand('copy') ? 'Copied' : 'Selected: press Ctrl+C';
+  }
+  // "Run every scene": one row per scene, from what each click recorded; the top line stays as the last single click set it.
+  function showEvery(status) {
+    const table = status.every;
+    const key = JSON.stringify(table);
+    if (key === sim.everyShown) return;
+    sim.everyShown = key;
+    everyBox.hidden = !table.rows.length && !sim.every;
+    if (everyBox.hidden) return;
+    const label = take => status.scenes.find(scene => scene.take === take)?.label || take;
+    const cells = (tag, values) => el('tr', {}, ...values.map(value => el(tag, { textContent: value })));
+    everyBox.replaceChildren(el('strong', { textContent: `Run every scene: ${table.rows.length} of ${status.scenes.length}` }),
+      el('table', { 'data-den-sim-every-table': '1' }, cells('th', ['Scene', 'Box', 'Qwen', 'Beam', 'Why it stopped']),
+        ...table.rows.map(row => cells('td', [label(row.take), row.box, row.qwen, row.beam, row.why || '–']))),
+      el('span', { className: 'note', 'data-den-sim-every-note': '1', textContent: `No meter on this run. The top line stays as the last single click set it. ${table.verdict ? `MISSING: ${table.verdict}.`
+        : table.roots.length ? `Every reply on this table came from one model root, ${table.roots[0]}.` : 'No reply was used on this table.'}` }));
+  }
+  const settled = phase => ['holding', 'refused', 'stopped', 'pipeline_failed'].includes(phase);
+  async function runEvery() {
+    const scenes = sim.status?.scenes || [];
+    if (!overlay() || !scenes.length) return;
+    setFeedEnabled(false);
+    sim.every = true; sim.everyShown = null;
+    try {
+      for (const [i, scene] of scenes.entries()) {
+        message.textContent = `Run every scene: ${scene.label}, ${i + 1} of ${scenes.length}. No meter on this run.`;
+        const fixtures = fixtureDescriptors().map(d => ({ fixture_id: d.fixture_id, display_origin_m: d.display_origin_m, horizontal_world_reference: d.horizontal_world_reference, pan_deg: d.state.pan_deg, tilt_deg: d.state.tilt_deg }));
+        const result = await (await fetch('/__sim/feed', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ take: scene.take, fixtures, every: true, first: i === 0 }) })).json();
+        if (!result.ok) throw Error(result.reason || 'feed_refused');
+        await until(() => sim.status?.every.rows.length === i + 1 && !sim.status.every.running && settled(sim.status.feed.phase), 180000);
+        if (sim.status.feed.phase === 'holding') await new Promise(done => setTimeout(done, 1500));   // let the beam be seen
+      }
+      message.textContent = `Run every scene: done, ${scenes.length} scenes. No meter on this run; the top line is the last single click's.`;
+    } catch (error) {
+      message.textContent = `Run every scene stopped: ${error.message}`;
+    } finally {
+      sim.every = false;
+      setFeedEnabled(true);
+    }
+  }
   let markerShown = false;
   async function refresh() {
     let status;
     try { status = await (await fetch('/__sim/status', { cache: 'no-store' })).json(); } catch (_) { return; }
     sim.status = status;
     const room = status.room === 'real' ? 'YOUR SCAN' : 'AUTHORED ROOM';
-    strip.textContent = `SIMULATION · rendered takes, a real detector's recorded rows, Qwen's words typed · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA: it does not exist · Home's code from this PC's harness, not your deployed Home`;
+    strip.textContent = `SIMULATION · rendered takes, a real detector's recorded rows, Qwen's words recorded once and looked up by exact bytes · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA: it does not exist · Home's code from this PC's harness, not your deployed Home`;
     showScenes(status);
     showBrain(status);
     showClick(status.click);
+    showQwen(status);
+    showEvery(status);
     followRun(status);
     // The invented camera, as a marker in Home's own overlay. Its place is never printed.
     if (!markerShown && status.camera_m && overlay()?.setCalibMarkers) { overlay().setCalibMarkers([status.camera_m]); markerShown = true; }

@@ -3,9 +3,10 @@
 // together, because the mark names revision 3. Without both, a zone is sealed around a DECLARED point
 // and the file says so.
 //
-// On each click chain.py runs the pinned tools on a prepared take, and the brain decides from what
-// they produced, on a labelled geometry copy whose camera_m is null: facing comes from the shoulder
-// labels, and a refusal shows as no beam. Then the dry run, then the click's run-receipt.json.
+// On each click chain.py runs the pinned tools on a prepared take and looks Qwen's recorded replies up
+// by each request's exact bytes, and the brain decides from what they produced, on a labelled geometry
+// copy whose camera_m is null: facing comes from the shoulder labels, and a refusal shows as no beam.
+// Then the dry run, then the click's run-receipt.json.
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
@@ -157,6 +158,8 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
     const timeline = runPython('brain_run.py', { geometry: geometryFile, person: done.adapter.person, label: done.adapter.label });
     timeline.summary = summarize(timeline, seat);
     timeline.adapter = done.adapter;
+    // Whether the words the brain acted on are a real model's recorded reply or a fake vLLM's: the feed's honesty flags read it.
+    timeline.reply = done.reply;
     fs.writeFileSync(path.join(work, 'brain-timeline.json'), JSON.stringify(timeline, null, 2) + '\n');
     const files = { geometry: { path: 'brain-geometry-chain.json', sha256: sha256(geometryFile) }, timeline: { path: 'brain-timeline.json', sha256: sha256(path.join(work, 'brain-timeline.json')) } };
     const brain = brainRows({ work, summary: timeline.summary, files, chainDone: done });
@@ -167,7 +170,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
     const receipt = buildReceipt({ click: clicks, takeId: take, setId: prepared.set, setDir, prepared, refs, start: startRecord, chain, brain, command: commandInfo, pressedAgain });
     return { ok: true, timeline, command, command_status: commandStatus(command), receipt, said: brain.said };
   }
-  function runClick({ take, prepared, setDir, roomModel, startRecord, pressedAgain }, onRow) {
+  function runClick({ take, prepared, setDir, roomModel, startRecord, pressedAgain, replies, lastAsk }, onRow) {
     const work = path.join(runDirectory, `click-${++clicks}`);
     if (prepared.refusal) {
       // Prepare stopped on this take: the click shows where and why, and stops there. Nothing runs.
@@ -222,7 +225,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
       take_json_sha256: wrote(3).find(file => file.path.endsWith('/take.json'))?.sha256 || null,
       check_file: check ? path.posix.basename(check.path) : null, check_sha256: check?.sha256 || null,
       detector: prepared.hops['6'] || null, recorded: prepared.recorded, seat_top_m: seat[2],
-      set: setDir, room_model: roomModel, refs: refs.tools, tools_root: path.join(outputRoot, 'tools'), work }));
+      set: setDir, room_model: roomModel, refs: refs.tools, tools_root: path.join(outputRoot, 'tools'), work, replies, last_ask: lastAsk }));
     return { promise, work, cancel: () => child.kill() };
   }
   return { empty_row: start.empty_row, startup: start.startup, runClick, seat_m: seat,

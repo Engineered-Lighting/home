@@ -15,6 +15,14 @@
     "den-light": "8bcb37b3",
     "den-verify": "82a8ef38"
   },
+  "lifted": {
+    "note": "What ask_la.py lifts for the owner's paste, by git archive at these commits into <data root>\\tools\\, each file held to its blob before anything runs: the sofa look's LA helpers (la.py for the host and the ssh and scp argument lists, ask.py for the requests, the GPU gate and the reply check, copied to LA unchanged; its timezone helper is never called, because the time label is fixed) and qwen_scene.py, the same blob the click archives at den-core-live.",
+    "files": {
+      "tools/sofa-look/ask.py": {"commit": "0a9371a2a5e8e08a6d56392705aa21fd054e43af", "blob": "3f1ea21117703f92d397f1fb07d183819a43da05"},
+      "tools/sofa-look/la.py": {"commit": "0a9371a2a5e8e08a6d56392705aa21fd054e43af", "blob": "3a1356b879d16e3af06297df14d792f50e12272b"},
+      "stack/services/perception-lab/qwen_scene.py": {"commit": "037216304d1fb3becd7b74db1bff6b8f6703f487", "blob": "d11dd1011cc7828772df83263e4c8039a16f0df1"}
+    }
+  },
   "codec": {
     "note": "On no git ref, so it is read by path and pinned by these sha256 digests: a click whose codec files differ reads not yet. It is older than the release origin/main pins in room_production_canonical_provider.py.",
     "tools": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\tools",

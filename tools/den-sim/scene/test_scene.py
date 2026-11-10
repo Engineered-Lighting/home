@@ -732,6 +732,9 @@ class Placement(unittest.TestCase):
         self.assertTrue(np.allclose(behind["facing_unit"], [0, 1], atol=1e-12))
         left = prepare.placement(self.MARK, [2.0, 1.0], 90.0, 0.44)      # a quarter turn to the reader's left
         self.assertTrue(np.allclose(left["facing_unit"], [1, 0], atol=1e-12))
+        # The rule's words say the turn, so the page never names the stated facing for a turned reader (control: no turn, no words).
+        self.assertEqual(left["facing_rule"], "perpendicular to the longest edge, toward the floor's centre, then turned 90 degrees by facing.json (left positive)")
+        self.assertNotIn("facing.json", t["facing_rule"])
 
     def test_a_seat_on_the_floor_centre_is_named_a_tie_break(self):
         """The stand-in seat: a square around the floor's centre, so no edge is longest and no side is nearer."""

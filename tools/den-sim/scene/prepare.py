@@ -765,6 +765,8 @@ def placement(mark, centre, turn_deg, seat_height_m):
         rule = "a tie-break, not the stated rule: the seat's middle is the floor's centre, so the first longest edge decides"
     else:
         rule = "perpendicular to the longest edge, toward the floor's centre"
+    if turn_deg:
+        rule += ", then turned %g degrees by facing.json (left positive)" % turn_deg
     angle = math.atan2(normal[0], -normal[1]) + math.radians(turn_deg)      # the picture's reader faces -y
     return {"rotation_z_rad": angle, "facing_unit": [math.sin(angle), -math.cos(angle)],
             "translation_m": [middle[0], middle[1], seat[2] - seat_height_m], "facing_rule": rule}

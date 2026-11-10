@@ -48,11 +48,12 @@ scene. A click on **Reading on the couch** does this in about 6 seconds:
    `check-N.json` for its clock, so a second one beside it (another run of `check.py` writes one)
    stops the click at hop 4.
 2. The detector rows prepare recorded beside the take are held to hop 6's checks: their digest and
-   `detector-run.json`'s are the ones prepare recorded, they name the pinned weights, they cover
-   every usable frame, every row names YOLO26s or RTMPose-m, no frame took over 1.0 s, and prepare
-   ran the model again on three frames and got the same person boxes within 1 px. Anything less
-   reads MISSING at hop 6 and stops the click, never "nobody". Rows with no person stop it with
-   "the detector saw nobody, nothing was asked".
+   `detector-run.json`'s are the ones prepare recorded, they were recorded for this take and its
+   check, they name the pinned weights, they cover every usable frame, every row names YOLO26s or
+   RTMPose-m, no frame took over 1.0 s, and prepare ran the model again on three frames and got
+   the same people: boxes and joints within 1 px, scores within 0.001. Anything less reads MISSING
+   at hop 6 and stops the click, never "nobody". Rows with no person stop it with "the detector saw
+   nobody, nothing was asked".
 3. The pinned tools run on those rows: observations, tracks and the router. Qwen's answers are
    typed from the take's truth, which hop 12 finds by the take's folder id.
 4. The older lighting brain judges what they produced, with no camera position, so the reader's
@@ -63,7 +64,9 @@ scene. A click on **Reading on the couch** does this in about 6 seconds:
 
 The panel shows the frame read back out of the take's own picture plane, with the model's person
 box, its score and the supported joints from that frame's recorded row drawn on it, and a marker in
-the room shows where the invented camera sits. Under the picture, one line says how far the median
+the room shows where the invented camera sits. The note under it repeats the score. When the rows
+fail hop 6's checks, no box is drawn and the note says the rows did not pass, never that the frame
+holds no person. Under the picture, one line says how far the median
 height of the supported shoulders and hips over the take's last 2 s sits from the "on the couch"
 limit step 5 will test, the seat's top plus 0.45 m: for example "torso 0.09 m under the limit". It
 is said against the limit only, never as a height. The same line goes to the console and to the
@@ -91,7 +94,8 @@ pins, and the files it read and wrote with their digests. The recorded hops take
 
 `top_line.mjs` reads "yes" only when every hop has a row, every file a hop read is vouched for by
 the receipt that wrote it, every row reads its finished word with only named stand-ins, every
-tool matches its pin, the aim check is within tolerance and no row is MISSING. At this step it
+tool matches its pin (and, where `hops.json` names pins for a hop, as hop 6's, is held to the one
+named for its path), the aim check is within tolerance and no row is MISSING. At this step it
 reads "not yet". A click the pipeline stops (nobody, a refusal) reads "This click stopped at"
 only once the rows up to there hold. A click that breaks reads MISSING at the hop that broke, with
 why; the rows before it stay as they ran, and only the rows after it read "not reached". A second
@@ -181,7 +185,8 @@ Remove-Item -Recurse -Force "$env:USERPROFILE\den-sim\runs"
 
 A set is prepared once, by an agent, in about 3 minutes. It reads nothing in your private folder.
 Hop 6 runs `tools\den-detect\detect.py` in the detector's venv on each scene take, then again on
-three frames of each to check the model reproduces its rows. A missing venv or weights, a digest or
+three frames of each to check the model reproduces its rows: each person's box and joints within
+1 px, its scores within 0.001. A missing venv or weights, a digest or
 a mismatch stops prepare at hop 6: nothing fake stands in. The venv is
 `%USERPROFILE%\ml\den-detector`, or the Python `DEN_DETECT_PYTHON` names. Ultralytics' settings and
 caches, and the detector's TEMP, go to a work folder under the data root that prepare deletes.

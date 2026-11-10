@@ -18,8 +18,9 @@ private folder, so an agent can run it. The data root is DEN_SIM_HOME, or else %
    log in the set, never to the console.
 4. Hop 6 on each scene take, after its check: tools\\den-detect\\detect.py in the detector's venv
    (%USERPROFILE%\\ml\\den-detector\\Scripts\\python.exe, or DEN_DETECT_PYTHON) records YOLO26s and RTMPose-m
-   rows beside the take. At the end it runs again on three frames of each take, and the person boxes must
-   come back within 1 px. A missing venv or weights, a digest or a mismatch is a refusal at hop 6, never a fake.
+   rows beside the take. At the end it runs again on three frames of each take, and each person must come
+   back with its box and joints within 1 px and its scores within 0.001. A missing venv or weights, a digest
+   or a mismatch is a refusal at hop 6, never a fake.
 5. prepare-receipt.json beside each take, keyed by the take's digest (sha256 of frames.csv), with hop 6's part
    taken from detector-run.json; set.json, display.json and truth\\<word>\\ in the set; one line appended to
    prepared\\tries.jsonl.
@@ -335,11 +336,13 @@ def detect_take(folder, tree, state, commit, log):
 
 
 def reproduce(folder, hop, tree, state, log, date):
-    """The model again on three frames of the take: its person boxes must match the recorded rows within 1 px."""
+    """The model again on three frames of the take: each person's box and joints must match the recorded rows
+    within 1 px, and its scores within 0.001."""
     _, rows = den_detect.usable(folder)
     picked = sorted({int(rows[0]["n"]), int(rows[len(rows) // 2]["n"]), int(rows[-1]["n"])})
     result = json.loads(run_detector(folder, tree, state, log, "--only", ",".join(map(str, picked)), "--against", folder / "detections.jsonl")[-1])
-    hop["checked"] = {"on": date, "frames": picked, "max_px": result["max_px"], "tolerance_px": den_detect.TOLERANCE_PX, "ok": result["ok"]}
+    hop["checked"] = {"on": date, "frames": picked, "max_px": result["max_px"], "tolerance_px": den_detect.TOLERANCE_PX,
+                      "tolerance_score": den_detect.TOLERANCE_SCORE, "ok": result["ok"]}
     return hop["checked"]
 
 

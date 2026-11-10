@@ -137,8 +137,8 @@ It refuses to start without a console, and then writes nothing. It lifts the sof
 and `ask.py` and the Lab's `qwen_scene.py` with `git archive` at the commits `refs.json` pins under
 `lifted`, each held to its blob. With nothing owed, and no folder an earlier paste left behind, it
 says so and doesn't contact the inference host at all. Otherwise, two visits over ssh, as the model
-test's paste did: a check visit (the served name `qwen3-vl-30b`, the GPU under 77 C with 8 GiB free;
-no image is sent), and only if that passes, an ask visit in a fresh private `/dev/shm` folder,
+test's paste did: a check visit (the served name `qwen3-vl-30b` with the root of its weights named,
+the GPU under 77 C with 8 GiB free; no image is sent), and only if that passes, an ask visit in a fresh private `/dev/shm` folder,
 removed afterwards: one request per owed body, 4 s apart, a 20 s timeout, one re-send on no answer,
 a stop after two misses, and never more requests than the bodies plus 2. Every ssh and scp has a
 local timeout, so a stalled link stops the paste at its step. The replies come back to
@@ -314,9 +314,10 @@ node --test tools\den-sim\test-den-sim-honesty.mjs
 a fake vLLM on `127.0.0.1` that serves the root `fake-vllm`, through a local transport in place of
 ssh and scp, into a scratch data root. An audit hook in each test process refuses to start any
 process whose executable or command line names `ssh` or `scp`: directly, or through `shell=True`,
-`cmd /c`, `powershell -Command`, `bash -c` or `python -c`. A child Python running a script file of
-its own isn't watched by it; no test runs one that could start ssh, and `ask_la.py`'s own ssh class
-runs inside a test's process, under the hook.
+`cmd /c`, `powershell -Command`, `bash -c` or `python -c`. It doesn't catch a command line that
+only builds the name at run time (from an environment variable, or inside `python -c`), or a child
+Python running a script file of its own; no test runs either, and `ask_la.py`'s own ssh class runs
+inside a test's process, under the hook.
 
 `test_detect.py` runs the model in the detector's venv and skips those parts without it. With
 `$env:DEN_SIM_PREPARE_TRACE = "1"`, `test_scene.py` also prepares a whole set in a scratch data root

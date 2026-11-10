@@ -9,7 +9,8 @@ refs.json's pins, each held to its blob: the sofa look's la.py (the LA host, its
 ask.py, and qwen_scene.py. The model test's look_la.py, proved on LA, in two visits:
 
 1. Check visit: a fresh /dev/shm/den-sim-ask with umask 077, copy only the tools (ask_one.py, ask.py,
-   qwen_scene.py), run the preflight (served name and root, GPU under 77 C with 8 GiB free), remove the folder.
+   qwen_scene.py), run the preflight (the served name, with a root named, GPU under 77 C with 8 GiB free), remove
+   the folder.
    No image leaves this PC on this visit.
 2. Only if that passed: a fresh folder again, copy the tools and the bodies still needed, run ask_one.py under a
    timeout (at most the bodies plus 2 requests, 4 s apart), copy replies back through a .part folder, file each
@@ -50,10 +51,11 @@ REPLY_FIELDS = {"asked_unix", "host", "root", "http_status", "raw", "elapsed_s"}
 VLLM_DOC = r"docs\VLLM-QWEN36-SWAP.md"
 PREFLIGHT = {10: "vLLM on LA is not answering", 11: "LA's vLLM does not serve qwen3-vl-30b",
              12: "LA's GPU is at 77 C or more", 13: "LA's GPU has under 8 GiB free", 14: "LA's GPU could not be read",
+             15: "LA's vLLM does not say which weights it serves",
              124: "the preflight timed out", 255: "this PC could not reach LA over ssh"}
 ASKED = {0: None, 2: "the LA folder was not private", 20: "two misses in a row", 21: "vLLM refused a request",
          22: "the request cap", 23: "a body's hash changed on the way", 124: "the ask timed out", 255: "the ssh link dropped",
-         **{code: PREFLIGHT[code] for code in range(10, 15)}}   # the ask runs the preflight again before any request
+         **{code: PREFLIGHT[code] for code in range(10, 16)}}   # the ask runs the preflight again before any request
 AGAIN = "Paste the same line again later."
 
 
@@ -133,8 +135,11 @@ def blob(data):
 def paste_tools():
     """The commit this paste runs at and the blobs of the two files it runs, for last-ask.json: hop 11's row holds
     them to their blobs at that commit, so an uncommitted edit shows there as it does for any tool."""
-    done = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, encoding="ascii", errors="replace")
-    head = done.stdout.strip() if done.returncode == 0 else None
+    try:
+        done = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, encoding="ascii", errors="replace")
+        head = done.stdout.strip() if done.returncode == 0 else None
+    except OSError:   # no git on PATH: the record says so, and lift() then stops the paste at its start, by type name
+        head = None
     return {"head": head, "blobs": {path: blob((ROOT / path).read_bytes()) for path in PASTE_TOOLS}}
 
 

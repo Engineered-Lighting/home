@@ -6,8 +6,8 @@ after: the sofa look's ask.py (its helpers, lifted unchanged at refs.json's pin)
 click builds bodies with). Standard library only. The model test's look_one.py, proved on LA, with a cap that
 follows the bodies:
 
-  python3 -B ask_one.py --check   preflight only: the served name is qwen3-vl-30b (root recorded), the GPU under
-                                  77 C with 8 GiB free. No chat request.
+  python3 -B ask_one.py --check   preflight only: the served name is qwen3-vl-30b with its root named (and
+                                  recorded), the GPU under 77 C with 8 GiB free. No chat request.
   python3 -B ask_one.py           the preflight again, then each body in ./bodies: re-check its hash, POST to
                                   127.0.0.1:8000 (20 s timeout, 4 s apart), one re-send on no answer, stop after two
                                   misses, never more requests than the bodies plus 2. An answered reply is kept as it
@@ -48,7 +48,7 @@ import qwen_scene as scene  # noqa: E402
 
 MARGIN = 2
 REPLY_FIELDS = ("asked_unix", "host", "root", "http_status", "raw", "elapsed_s")
-EXIT = {"ok": 0, "not_private": 2, "vllm_down": 10, "not_served": 11, "gpu_hot": 12, "gpu_memory": 13, "gpu_unreadable": 14,
+EXIT = {"ok": 0, "not_private": 2, "vllm_down": 10, "not_served": 11, "gpu_hot": 12, "gpu_memory": 13, "gpu_unreadable": 14, "no_root": 15,
         "two_misses": 20, "server_refused": 21, "request_cap": 22, "body_refused": 23}
 
 
@@ -64,6 +64,8 @@ def preflight(served, gpu):
         return "vllm_down", type(exc).__name__, None, None, None
     if name != scene.SERVED_MODEL:
         return "not_served", None, root, None, None
+    if not isinstance(root, str) or not root:   # a reply is filed only with the weights it came from: ask nothing
+        return "no_root", None, root, None, None
     try:
         temp, free = gpu()
     except Exception as exc:

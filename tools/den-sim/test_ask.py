@@ -6,11 +6,12 @@ Stdlib unittest. Each check has a control that must make it fail.
     python -B -X utf8 tools\\den-sim\\test_ask.py --fill HOME --set SET --facts reading=TAKE,phone=TAKE [--stage owed|paste|both]
 
 Run it with DEN_SIM_HOME, LOCALAPPDATA, TEMP and TMP in scratch, and DEN_SIM_SET at a prepared set for the parts
-that need one; every folder a test writes is a new one under TEMP. No test process can start ssh or scp: the audit
-hook below, installed before anything else, refuses a process whose executable or command line names either, which
+that need one; every folder a test writes is a new one under TEMP. No test starts ssh or scp, and the audit hook
+below, installed before anything else, refuses a process whose executable or command line names either, which
 covers a direct start, shell=True, cmd /c, powershell -Command, bash -c and python -c, and its control shows a
-stand-in named ssh starting without the hook. A child Python running a script file of its own is not watched by it;
-no test runs one that could start ssh, and ask_la.py's own SSH class runs in a test's process, under the hook.
+stand-in named ssh starting without the hook. It does not catch a command line that only builds the name at run
+time (an environment variable, or string building inside python -c), nor a child Python running a script file of
+its own; no test runs either, and ask_la.py's own SSH class runs in a test's process, under the hook.
 ask_la.py's visits run through LocalTransport: a scratch folder stands in for /dev/shm, and ask_one.py runs as a
 local process against a fake vLLM on 127.0.0.1 (this file with --fake-vllm), which serves root fake-vllm and writes
 only under its own temporary folder. --fill is the Node tests' way to the same fake paste: prepare.py --owed into
@@ -383,6 +384,20 @@ class Lifted(unittest.TestCase):
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
+    def test_no_git_on_path_gives_no_head_not_a_traceback(self):
+        import ask_la
+        self.assertRegex(ask_la.paste_tools()['head'] or '', r'^[0-9a-f]{40}$', 'control: with git, the head is recorded')
+        real = ask_la.subprocess.run
+        def no_git(argv, **kw):
+            if argv[:1] == ['git']:
+                raise FileNotFoundError(2, 'no git')
+            return real(argv, **kw)
+        ask_la.subprocess.run = no_git
+        try:
+            self.assertIsNone(ask_la.paste_tools()['head'])
+        finally:
+            ask_la.subprocess.run = real
+
 
 class Paste(unittest.TestCase):
     """ask_la.py and ask_one.py, through the local transport against the fake vLLM."""
@@ -502,15 +517,17 @@ class Paste(unittest.TestCase):
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
-    def test_a_null_root_is_not_filed_and_its_body_stays_owed(self):
-        names = owed_home(self.home, [b'{"r": 1}', b'{"r": 2}'])
+    def test_a_null_root_stops_at_the_preflight_and_sends_no_image(self):
+        owed_home(self.home, [b'{"r": 1}', b'{"r": 2}'])
         self.fake.set('root.json', None)
         try:
-            code, out, last, _ = paste(self.home, self.fake)
+            code, out, last, transport = paste(self.home, self.fake)
         finally:
             (self.fake.state / 'root.json').unlink()
-        self.assertEqual(sorted(self.fake.asked()), sorted(names), 'Qwen was asked')
-        self.assertFalse(any((self.home / 'prepared' / 'replies').glob('*.json')), 'and nothing it said was filed')
+        self.assertEqual((code, last['stopped_at'], last['reason']), (3, 'preflight', "LA's vLLM does not say which weights it serves"))
+        self.assertFalse([call for call in transport.calls if call[0] == 'put' and any(n.endswith('.body') for n in call[1])], 'no body left this PC')
+        self.assertEqual(self.fake.asked(), [], 'Qwen was not asked')
+        self.assertFalse(any((self.home / 'prepared' / 'replies').glob('*.json')))
         self.assertEqual((last['answered'], last['still_needed'], last['filed']), (0, 2, {}))
         code, out, last, _ = paste(self.home, self.fake)
         self.assertEqual((last['answered'], last['still_needed']), (2, 0), 'control: with a root, the same paste files them')

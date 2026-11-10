@@ -20,6 +20,7 @@ digests, its tools against their pins, and its stand-ins, and the torso height a
 ({"torso": ...}); then {"hop": "done", ...} for the brain, {"hop": "owed", ...} for --owed, or
 {"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
 """
+import base64
 import csv
 import hashlib
 import io
@@ -358,6 +359,11 @@ def read_reply(path):
     return reply
 
 
+def body_images(body):
+    """The JPEGs a body carries, in order: the very bytes Qwen is sent, for the panel to show."""
+    parts = json.loads(body)['messages'][1]['content']
+    return [base64.b64decode(part['image_url']['url'].split(',', 1)[1]) for part in parts if part['type'] == 'image_url']
+
 
 def step_ask(request):
     """Hops 11 and 12 in one process: every body, then each one's reply by its sha256 in the store, or, for
@@ -381,6 +387,10 @@ def step_ask(request):
                 continue
             if any(other['body_sha256'] == row['body_sha256'] for other in asks[:-1]):
                 raise Refused('two requests have the same body, %s' % row['body_sha256'][:12])
+            if not request.get('owed'):   # the stills this body sends, by their sha256, for the panel: a display, read by no hop
+                (work / 'stills').mkdir(exist_ok=True)
+                for image in body_images(body):
+                    (work / 'stills' / (hashlib.sha256(image).hexdigest() + '.jpg')).write_bytes(image)
             path = replies / (row['body_sha256'] + '.json')
             if not path.is_file():
                 missing.append(row['body_sha256'])
@@ -836,9 +846,11 @@ def words(rows):
 
 
 def asks_view(rows):
-    """The panel's view of asks.jsonl: per request its stills by frame, how far each is before the newest, and Qwen's words."""
+    """The panel's view of asks.jsonl: per request its stills by frame and by their JPEG's sha256 (the click wrote each
+    under stills/), how far each is before the newest, and Qwen's words, with all of its fields."""
     return [dict(request_id=row['request_id'], association_safe=row['association_safe'], body=row['body_sha256'] and row['body_sha256'][:12],
-                 stills=[still['rgb_seq'] for still in row['stills'] or []], not_asked=row['not_asked'], said=said_by(row),
+                 stills=[still['rgb_seq'] for still in row['stills'] or []], jpegs=[still['jpeg_sha256'] for still in row['stills'] or []],
+                 not_asked=row['not_asked'], said=said_by(row), facts=row['facts'],
                  seconds=[round(row['stills'][-1]['observed_at'] - still['observed_at'], 1) for still in row['stills'] or []]) for row in rows]
 
 

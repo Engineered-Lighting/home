@@ -203,8 +203,12 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.match(await page.textContent('[data-den-sim-message]'), /The words were a fake vLLM's, scripted for a test: reading, holding book, people one on 5 of 5\./);
     // The honesty flags follow the reply used: a fake vLLM's words are no inference.
     const state = await (await fetch(ORIGIN + BRAIN_STATE)).json();
-    assert.deepEqual([state.inputs.inference_ran, state.inputs.scripted, state.activity.source], [false, true, 'SIMULATION-scripted']);
+    assert.deepEqual([state.inputs.inference_ran, state.inputs.scripted, state.inputs.activity_scripted, state.activity.source], [false, true, true, 'SIMULATION-scripted']);
     assert.match(state.why, /a fake vLLM's scripted words/);
+    // The Qwen card: each reply is a plain file, said so, and its words come with every field.
+    assert.match(await page.textContent('[data-den-sim-plain-file]'), /plain file with no signature, so a hand-typed one would pass/);
+    assert.equal(await page.locator('[data-den-sim-ask="rq-00002"] [data-den-sim-fields] dt').count(), 10, 'all ten fields');
+    assert.match(await page.textContent('[data-den-sim-ask="rq-00002"] [data-den-sim-fields]'), /activity hypothesisreading/);
     t.diagnostic(`${aims.length} distinct aims, ${aims[0]} to ${aims.at(-1)}, ${held.feed.summary.fixture_id}`);
   });
 
@@ -239,7 +243,8 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     const status = await statusOf(), bytes = Buffer.from(await (await fetch(ORIGIN + '/__sim/picture')).arrayBuffer());
     const written = fs.readFileSync(path.join(status.run, `click-${status.click.click}`, 'picture.png'));
     assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), crypto.createHash('sha256').update(written).digest('hex'), 'the click\'s own picture');
-    assert.equal(await page.locator('#den-sim-panel img').count(), 1, 'one picture');
+    assert.equal(await page.locator('[data-den-sim-picture]').count(), 1, 'one picture');
+    assert.equal(await page.locator('#den-sim-panel img:not([data-den-sim-picture]):not([data-den-sim-still])').count(), 0, 'and besides it only the stills Qwen was sent');
     assert.equal(await page.locator('#den-sim-panel canvas, #den-sim-panel video').count(), 0);
     // The box drawn is the one in the recorded row of the very frame the picture shows.
     const receipt = await (await fetch(ORIGIN + '/__sim/receipt')).json(), { rgb_seq: seq, boxes } = receipt.picture;

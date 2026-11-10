@@ -88,8 +88,14 @@ limit step 5 will test, the seat's top plus 0.45 m: for example "torso 0.09 m un
 is said against the limit only, never as a height. The same line goes to the console and to the
 run's `run.json`.
 
-Under it, the Qwen card lists each request: the frames of its stills, how far each is before the
-newest, and Qwen's words, with the model's served root and the day it was asked. **Reading on the
+Under it, the Qwen card lists each request: its stills, shown as the very JPEGs its body carries
+(the click writes them under its run folder's `stills\`, by their sha256), their frames, how far
+each is before the newest, and Qwen's words with every field, the model's served root and the day
+it was asked. It says each reply is a plain file with no signature, so a hand-typed one would
+pass. The red strip says whose words are on file: none yet, a fake vLLM's (a test's), or Qwen's,
+recorded once by your paste. Home's brain document says `inference_ran` and the activity source
+`den_sim_la_direct` only on a click that used Qwen's recorded words; its inputs stay marked
+scripted while the occupancy is still typed (until step 6). **Reading on the
 couch** lights only if Qwen says reading there; **Holding a phone** stays off unless it does, and
 then the beam stays off because of what Qwen said. Until you paste the line below, both stop at
 hop 12. **Nobody there** and **Blank

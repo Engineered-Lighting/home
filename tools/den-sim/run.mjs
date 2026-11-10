@@ -438,6 +438,13 @@ const server = http.createServer(async (req, res) => {
       // The last click's frame, read back out of its take's own NV12 plane.
       return lastClick?.picture ? send(res, 200, fs.readFileSync(lastClick.picture), { 'Content-Type': 'image/png' }) : refuse(res, req.method, pathname, 404);
     }
+    if (pathname === '/__sim/still') {
+      // One still the last click's bodies send, by its JPEG's sha256: only one its receipt names, from its own stills folder.
+      const sha = url.searchParams.get('sha') || '';
+      const named = /^[0-9a-f]{64}$/.test(sha) && (lastClick?.view.qwen?.asks || []).some(ask => (ask.jpegs || []).includes(sha));
+      const file = named && path.join(lastClick.stills, `${sha}.jpg`);
+      return file && fs.existsSync(file) ? send(res, 200, fs.readFileSync(file), { 'Content-Type': 'image/jpeg' }) : refuse(res, req.method, pathname, 404);
+    }
     if (pathname === '/__sim/command') {
       // A display, fetched once per click. Nothing on this page or harness can send it.
       const click = Number(url.searchParams.get('click'));

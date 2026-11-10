@@ -710,9 +710,15 @@ class Walk(unittest.TestCase):
         # Pinned: the stills chosen, the join, the encoder's settings, this Pillow and the prompt all go into these bytes,
         # and any change to one means another paste. A deliberate change re-pins it, and runs prepare.py --owed again.
         self.assertEqual(name, GOLDEN_BODY, 'the invented take\'s body is the one pinned (Pillow %s)' % __import__('PIL').__version__)
+        self.assertNotIn('stills', [path.name for path in work.iterdir()], '--owed writes no stills')
         self.reply(name)
         again, work = self.ask()
         self.assertEqual((again['missing'], again['lines'], again['asks'][0]['body_sha256']), ([], 1, name), 'control: the reply on file is found by the same hash')
+        # A click writes the very JPEGs the body carries, by their sha256, for the panel.
+        written = sorted(path.stem for path in (work / 'stills').glob('*.jpg'))
+        self.assertEqual(written, sorted(still['jpeg_sha256'] for still in again['asks'][0]['stills']))
+        self.assertTrue(all(hashlib.sha256(path.read_bytes()).hexdigest() == path.stem for path in (work / 'stills').glob('*.jpg')))
+        self.assertEqual([hashlib.sha256(image).hexdigest() for image in chain.body_images(body)], [still['jpeg_sha256'] for still in again['asks'][0]['stills']])
 
     def test_a_reply_becomes_a_real_fact_line_and_an_invalid_one_stays_invalid(self):
         synthetic_take(self.take)

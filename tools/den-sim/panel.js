@@ -241,14 +241,23 @@
         el('ul', {}, ...top.reasons.map(reason => el('li', { 'data-den-sim-reason': String(reason.condition ?? ''), textContent: reason.condition ? `(${reason.condition}) ${reason.text}` : reason.text })))));
     }
     if (click.picture) { picture.src = `/__sim/picture?click=${click.click}`; drawBoxes(click.boxes, click.picture_note); } else pictureBox.hidden = pictureNote.hidden = true;
-    // Qwen on this click: rebuilt from what hop 12 recorded, never from the button pressed.
+    // Qwen on this click: rebuilt from what hop 12 recorded, never from the button pressed. Each request's stills are
+    // the very JPEGs its body carries, and its words come with every field.
     qwenBox.hidden = !click.qwen;
     if (click.qwen) {
       const asked = click.rows.find(row => row.n === 12)?.ran || '';
       const head = click.qwen.word === 'MISSING' ? `Qwen: ${click.rows.find(row => row.n === 12).summary}`
         : `Qwen${click.qwen.word === 'SCRIPTED' ? ' (SCRIPTED: a fake vLLM, not Qwen)' : ''}: model root ${click.qwen.root}, ${asked}.`;
-      qwenBox.replaceChildren(el('strong', { textContent: head }), el('ul', {}, ...click.qwen.asks.map(ask => el('li', { 'data-den-sim-ask': ask.request_id,
-        textContent: ask.not_asked ? `${ask.request_id}: not asked, ${ask.not_asked}` : `${ask.request_id}: frames ${ask.stills.join(', ')} (${ask.seconds.join(', ')} s before the newest)${ask.association_safe ? '' : ', a bundle not marked safe to tie to one person'}: ${ask.said}` }))));
+      const plainFile = click.qwen.word === 'MISSING' ? [] : [el('span', { className: 'note', 'data-den-sim-plain-file': '1',
+        textContent: 'Each reply is a plain file with no signature, so a hand-typed one would pass: fine for one owner, and said so here.' })];
+      const fields = facts => facts ? el('details', {}, el('summary', { textContent: 'Every field' }),
+        el('dl', { 'data-den-sim-fields': '1' }, ...Object.entries(facts).flatMap(([key, value]) => [el('dt', { textContent: plain(key) }),
+          el('dd', { textContent: Array.isArray(value) ? value.map(plain).join(', ') : plain(value) })]))) : '';
+      const stills = ask => el('div', { className: 'row' }, ...(ask.jpegs || []).map((sha, i) => el('img', { 'data-den-sim-still': sha,
+        alt: `frame ${ask.stills[i]}, ${ask.seconds[i]} s before the newest`, src: `/__sim/still?sha=${sha}`, style: 'width:31%;min-width:0;border:1px solid #333;border-radius:3px' })));
+      qwenBox.replaceChildren(el('strong', { textContent: head }), ...plainFile, el('ul', {}, ...click.qwen.asks.map(ask => el('li', { 'data-den-sim-ask': ask.request_id },
+        el('span', { 'data-den-sim-ask-text': '1', textContent: ask.not_asked ? `${ask.request_id}: not asked, ${ask.not_asked}` : `${ask.request_id}: frames ${ask.stills.join(', ')} (${ask.seconds.join(', ')} s before the newest)${ask.association_safe ? '' : ', a bundle not marked safe to tie to one person'}: ${ask.said}` }),
+        ...(ask.not_asked ? [] : [stills(ask), fields(ask.facts)])))));
     }
     hopRows.replaceChildren(...GROUPS.flatMap(([group, heading]) => {
       const rows = click.rows.filter(row => row.group === group);

@@ -234,6 +234,15 @@ class Support(unittest.TestCase):
         self.assertEqual(safe['field_as_of']['working_region'], captures[safe['sources']['position'][0]['ref']])
         self.assertEqual([s['ref'] for s in safe['sources']['working_region']], [safe['sources']['position'][0]['ref'], 'sofa-seat'])
 
+    def test_the_head_is_the_median_of_the_supported_face_joints(self):
+        fixture = scene(safe=(True,) * 5)
+        newest = max(fixture['bundles'][-1]['keypoint_series'], key=lambda entry: entry['ts'])
+        newest['joints_room'][len(person.FACE) - 1]['xyz'][2] = 3.0   # the newest frame's last face point, far off
+        newest['joints_room'].insert(0, dict(j=0, xyz=[2.0, 2.4, 9.0], status='uncertain'))   # and an unsupported one
+        head = run(fixture)[0][-1]['attention']['head_xyz']
+        self.assertEqual(head, [2.0, 2.4, POSES['seated']['face']])
+        self.assertNotEqual(head[2], 3.0, 'control: the last face point would not be the median')
+
     def test_a_held_field_keeps_the_support_it_had(self):
         fixture = scene(safe=(True, True, False, True, True))
         records, _ = run(fixture)

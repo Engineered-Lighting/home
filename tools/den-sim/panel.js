@@ -304,14 +304,16 @@
 
   function followRun(status) {
     const feed = status.feed;
-    if (!sim.running) return;
+    // Only this click's status: a poll sent before the press can land after it, still holding the last click's phase
+    // and words. The harness numbers each click's run, and the feed's answer says which run this press is.
+    if (!sim.running || sim.awaiting == null || feed.run !== sim.awaiting) return;
     if (feed.phase === 'pipeline') {
       const last = feed.pipeline.rows.at(-1);
       message.textContent = `Running the pinned tools on a prepared take: ${last ? `hop ${last.n} done` : 'checking its frames by hash'}. No model runs on a click.`;
       return;
     }
     if (feed.phase === 'pipeline_failed' || feed.phase === 'stopped') {
-      if (!status.click) return; // The receipt lands with the stop.
+      if (status.click?.run !== sim.awaiting) return; // The receipt lands with the stop.
       sim.running = false;
       setFeedEnabled(true);
       const unseen = /^Qwen has not seen these exact frames/.test(feed.pipeline.failed || '');
@@ -329,7 +331,7 @@
       sim.swinging = true; sim.swingStart = performance.now();
       selectInHome(feed.swing.fixture_id);
       message.textContent = `The brain chose ${feed.swing.fixture_id}. Swinging at about 30°/s: this motion is scripted, because Home's follower has none.`;
-    } else if (feed.phase === 'holding' || feed.phase === 'refused') {
+    } else if ((feed.phase === 'holding' || feed.phase === 'refused') && status.click?.run === sim.awaiting) {
       sim.running = false;
       // Keep sampling for one more frame window so the final readback is counted.
       setTimeout(() => {
@@ -487,6 +489,7 @@
     setFeedEnabled(false);
     commandBox.hidden = true;
     sim.seen.clear(); sim.frames.length = 0; sim.longTasks = 0; sim.longestTaskMs = 0; sim.swinging = false; sim.personShown = false; sim.running = true;
+    sim.awaiting = null;   // until the feed says which run this press is, no status counts as this click's
     message.textContent = 'Checking the take\'s frames by hash and its recorded detector rows, then running the pinned tools on them. No model runs on a click.';
     try {
       const response = await fetch('/__sim/feed', { method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -494,6 +497,7 @@
           horizontal_world_reference: d.horizontal_world_reference, pan_deg: d.state.pan_deg, tilt_deg: d.state.tilt_deg })) }) });
       const result = await response.json();
       if (!result.ok) throw Error(result.reason || 'feed_refused');
+      sim.awaiting = result.run;
     } catch (error) {
       sim.running = false;
       setFeedEnabled(true);

@@ -303,7 +303,7 @@ function startClick(body) {
   if (all && body.first === true) Object.assign(every, { rows: [], roots: [], verdict: null });
   const pressedAgain = !all && pressed.has(take);
   if (!all) { pressed.add(take); lastClick = null; }
-  feed.begin(take);
+  const runId = feed.begin(take);
   const current = activeRun = brain.runClick({ take, prepared: prepared[take], setDir: SET, roomModel, startRecord: { ...start, home: homeRow() }, pressedAgain,
     replies: REPLIES, lastAsk: LAST_ASK }, row => feed.hop({ n: row.n, word: row.word, summary: row.summary, ms: row.ms }));
   current.promise.then(result => {
@@ -312,8 +312,8 @@ function startClick(body) {
     if (all) everyRow(take, result);
     if (all) { if (result.ok) feed.play(result.timeline, body.fixtures); else feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
     const picture = path.join(result.work, 'picture.png');
-    lastClick = { click: result.receipt.click, view: receiptView(result.receipt), top: result.top, receipt: result.receipt, said: result.said || null,
-      picture: fs.existsSync(picture) ? picture : null };
+    lastClick = { click: result.receipt.click, run: runId, view: receiptView(result.receipt), top: result.top, receipt: result.receipt, said: result.said || null,
+      picture: fs.existsSync(picture) ? picture : null, stills: path.join(result.work, 'stills') };
     // The torso line, relative to the limit only: in the console, run.json and the panel.
     if (result.receipt.torso) {
       console.log(`Click ${result.receipt.click}: ${result.receipt.torso.line}`);
@@ -325,7 +325,7 @@ function startClick(body) {
     context.brain.command = result.command_status;
     feed.play(result.timeline, body.fixtures);
   });
-  return { ok: true };
+  return { ok: true, run: runId };
 }
 function cancelClick() {
   activeRun?.cancel();
@@ -429,7 +429,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/__sim/panel.js') return send(res, 200, fs.readFileSync(path.join(HERE, 'panel.js')), { 'Content-Type': TYPES['.js'] });
     if (pathname === '/__sim/status') {
       // The person's point, the target and the camera marker's point reach the page here, because Home's markers need them. The panel prints none.
-      const click = lastClick && { ...lastClick.view, top_line: lastClick.top, picture: !!lastClick.picture, said: lastClick.said };
+      const click = lastClick && { ...lastClick.view, run: lastClick.run, top_line: lastClick.top, picture: !!lastClick.picture, said: lastClick.said };
       return send(res, 200, { ...context, scenes, camera_m: cameraM, feed: feed.readback(), click, counters, refused: [...refused.values()], run,
         qwen: qwenStatus(), every: { ...every, running: !!activeRun } });
     }

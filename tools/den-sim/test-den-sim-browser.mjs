@@ -298,6 +298,27 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(await page.getAttribute('[data-den-sim-hop="21"]', 'data-reached'), '0', 'hops past the refusal are not reached');
   });
 
+  await t.test('a second scene pressed without Reset speaks for itself, though a status from the last click lands after the press', async () => {
+    // Every status poll is held back 600 ms, so the polls sent just before the press land after it, still holding
+    // phone's refusal and its words. The panel must wait for this click's own run.
+    await page.evaluate(() => {
+      const real = window.fetch.bind(window);
+      window.fetch = async (input, init) => {
+        const response = await real(input, init);
+        if (String(input).startsWith('/__sim/status')) await new Promise(done => setTimeout(done, 600));
+        return response;
+      };
+    });
+    await press(page, 'Reading on the couch');
+    await phase('holding');
+    await page.waitForFunction(() => /^The beam is on the reader's hands/.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 30000 });
+    const text = await page.textContent('[data-den-sim-message]');
+    assert.match(text, /The words were a fake vLLM's, scripted for a test: reading, holding book, people one on 5 of 5\./);
+    assert.doesNotMatch(text, /phone_use|The brain refused/, 'none of the last click\'s words');
+    await page.waitForFunction(() => /Fixture angles/.test(document.querySelector('[data-den-sim-command]').textContent), null, { timeout: 15000 });
+    assert.doesNotMatch(await page.textContent('[data-den-sim-command]'), /the brain refused/, 'the command is this click\'s');
+  });
+
   for (const label of ['Nobody there', 'Blank frame']) {
     await t.test(`${label.toLowerCase()}: the click stops at the detector, says so, draws no box and lights nothing`, async () => {
       await openHome(page);
@@ -352,7 +373,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
   await t.test('after every run: nothing left the page, and the only write was the feed', async () => {
     assert.deepEqual(seen.external, [], 'zero external requests');
     assert.deepEqual([...new Set(seen.writes)], [FEED_POST], 'zero non-GET except the feed');
-    assert.equal(seen.writes.length, 5 + display.length, 'one feed post per click: five single clicks, and one per scene in Run every scene');
+    assert.equal(seen.writes.length, 6 + display.length, 'one feed post per click: six single clicks, and one per scene in Run every scene');
     assert.deepEqual(seen.sockets, [], 'no WebSocket opened');
     const blocked = await page.evaluate(() => (window.__denSimCsp || []).map(row => row.uri));
     assert.deepEqual(blocked.filter(uri => !EXPECTED_CSP_BLOCKS.has(uri)), [], 'nothing unexpected was stopped by the page policy');

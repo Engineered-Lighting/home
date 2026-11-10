@@ -56,7 +56,8 @@ const litFixture = row => row.state.fixtures.find(item => item.spot.on) || null;
 
 export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   const clients = new Set();
-  let revision = 0, eventId = 0, docsSent = 0, current = null, held = null, timer = null, stepper = null;
+  // run: one number per click, so a page can tell this click's status from one fetched before it was pressed.
+  let revision = 0, eventId = 0, docsSent = 0, current = null, held = null, timer = null, stepper = null, runs = 0;
   let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null };
 
   // What the words came from on this click: 'real' when the click used a real model's recorded reply,
@@ -134,14 +135,14 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   reset();
   const heartbeat = setInterval(() => { if (phase !== 'swinging') show(held); }, HEARTBEAT_MS);
   return {
-    begin: name => clear('pipeline', name), hop: row => { pipeline.rows.push(row); }, play, fail, reset, current: () => current,
+    begin: name => { clear('pipeline', name); return ++runs; }, hop: row => { pipeline.rows.push(row); }, play, fail, reset, current: () => current,
     attach(res) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       res.write('retry: 3000\n\n');
       res.write(`id: ${++eventId}\nevent: state\ndata: ${JSON.stringify(current)}\n\n`);
       clients.add(res); res.on('close', () => clients.delete(res));
     },
-    readback: () => ({ phase, take, docs_sent: docsSent, state_revision: revision, swing, step_ms: STEP_MS, rate_deg_s: RATE_DEG_S, streams: clients.size,
+    readback: () => ({ phase, take, run: runs, docs_sent: docsSent, state_revision: revision, swing, step_ms: STEP_MS, rate_deg_s: RATE_DEG_S, streams: clients.size,
       live: held && { why: held.state.why, refusal: held.refusal, mode: held.state.mode }, summary: timeline?.summary || null, pipeline }),
     dispose() { stop(); clearInterval(heartbeat); for (const res of clients) res.end(); clients.clear(); },
   };

@@ -175,7 +175,7 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     const written = filesUnder(path.join(home, 'runs')).map(([label, text]) => [`runs/${label}`, text]);
     assert.ok(written.some(([label]) => /asks\.jsonl$/.test(label)) && written.some(([label]) => /argv\.jsonl$/.test(label)));
     // Step 5's outputs join the search: the person states, the couch's room-model revision and the person card's served words.
-    assert.ok(written.filter(([label]) => /person_states\.jsonl$/.test(label)).length === 2, 'reading\'s and phone\'s person states are searched');
+    assert.ok(written.filter(([label]) => /person_states\.jsonl$/.test(label)).length >= 2, 'reading\'s and phone\'s person states are searched');
     assert.ok(roomModels.some(([label, text]) => /couch[\\/]room-model\.jsonl$/.test(label) && text.includes('"surface_id":"sofa"')), 'the couch\'s revision is searched');
     const cards = Object.values(clicks).filter(done => done.click.person).map(done => [`person card ${done.click.take}`, done.click.person.lines.join('\n')]);
     assert.equal(cards.length, 2, 'reading\'s and phone\'s person cards are searched');

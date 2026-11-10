@@ -190,33 +190,56 @@ export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, sta
 
 // The person card (hop 15), in words from what this click's row recorded, never from the button: per track how far it
 // is from the seat point, on the couch or not and which half failed, the spot by name and the engagement. No coordinate.
-const metres = v => `${v.toFixed(2)} m`;
+// A distance hop 15 left null (a held reply, no torso joint) reads in words: a card never throws on what person.py writes.
+const metres = v => Number.isFinite(v) ? `${v.toFixed(2)} m` : 'an unmeasured distance';
+// Each half that failed, in words, built only for the halves card.failed names.
+const HALVES = {
+  position: card => `the position half failed: ${metres(card.footprint_m)} outside the couch's footprint, past its 0.15 m reach`,
+  height: card => `the height half failed: torso ${metres(card.torso_margin_m)} over the limit, from the ${card.torso_from}`,
+  torso: () => 'the height half failed: no supported shoulder or hip in the bundle\'s last 2 s',
+};
 export function personCard(receipt) {
   const row = receipt.rows.find(item => item.n === 15), couch = receipt.rows.find(item => item.n === 14);
   if (!row || row.reached === false) return null;
-  if (row.word === 'MISSING' || !Array.isArray(row.person)) return { tracks: [], lines: [`Person state: MISSING: ${row.note || row.summary}.`] };
+  if (row.word === 'MISSING' || !Array.isArray(row.person)) {
+    const why = row.note || row.summary || 'hop 15 wrote no person state';
+    return { tracks: [], missing: why, lines: [`Person state: MISSING: ${why}.`] };
+  }
   const placed = couch?.couch === 'sofa_mark' ? 'On the picture\'s couch, which this simulation placed on your mark.'
     : 'On the picture\'s couch, which this simulation placed on a DECLARED stand-in seat, not your sofa mark.';
+  const facing = Number.isFinite(couch?.facing_deg) ? [`The reader faces your way, from facing.json: turned ${Number(couch.facing_deg.toFixed(1))} degrees from the stated facing, left positive.`] : [];
   const lines = row.person.flatMap(card => {
-    const half = { position: `the position half failed: ${metres(card.footprint_m)} outside the couch's footprint, past its 0.15 m reach`,
-      height: `the height half failed: torso ${metres(card.torso_margin_m)} over the limit, from the ${card.torso_from}`,
-      torso: 'the height half failed: no supported shoulder or hip in the bundle\'s last 2 s' };
-    const couchWords = card.on_couch === true ? 'On the couch: yes.' : card.on_couch === false ? `On the couch: no: ${card.failed.map(name => half[name]).join('; ')}.`
+    const couchWords = card.on_couch === true ? 'On the couch: yes.'
+      : card.on_couch === false ? `On the couch: no: ${(card.failed || []).map(name => (HALVES[name] || (() => `the ${name} half failed`))(card)).join('; ')}.`
       : `On the couch: not tested yet: ${card.held ? 'its bundle was not safe to tie to one person, so the reply was held' : 'no position'}.`;
     const spot = card.region === 'sofa-book' ? 'The spot: sofa-book, the book spot 0.30 m above the seat point. Its marker in the room comes at step 7.'
       : card.region === 'handheld' ? 'The spot: handheld, which isn\'t in the model, so no target.' : 'The spot: none yet.';
-    return [`Track ${card.track_id}: ${card.seat_distance_m === null ? 'no position' : `${metres(card.seat_distance_m)} from the seat point, across the floor`}.`, couchWords, spot,
-      `Engagement: ${card.engagement}, support ${card.support}, from need v0 on this track's replies.`];
+    const need = card.need_replies === 0 ? `Engagement: ${card.engagement}, support ${card.support}: every reply was held, so need v0 had none of this track's replies.`
+      : `Engagement: ${card.engagement}, support ${card.support}, from need v0 on this track's replies.`;
+    return [`Track ${card.track_id}: ${Number.isFinite(card.seat_distance_m) ? `${metres(card.seat_distance_m)} from the seat point, across the floor` : 'no position'}.`, couchWords, spot, need];
   });
-  return { tracks: row.person.map(card => ({ track_id: card.track_id, on_couch: card.on_couch })), lines: [...lines, placed,
+  return { tracks: row.person.map(card => ({ track_id: card.track_id, on_couch: card.on_couch, held: !!card.held })), track_lines: lines.length, lines: [...lines, placed, ...facing,
     'The older brain still decides the beam until step 6, under its own 1.5 m rule, so a figure standing within 1.5 m of the seat would still light.'] };
+}
+// Run every scene's Person column, from the card: one word per track, MISSING with why, and "none" only with no track.
+export function personColumn(card) {
+  if (!card) return 'none';
+  if (card.missing) return `MISSING: ${card.missing}`;
+  if (!card.tracks.length) return 'none';
+  return card.tracks.map(track => track.on_couch === true ? 'on the couch' : track.on_couch === false ? 'not on the couch'
+    : `not tested (${track.held ? 'held' : 'no position'})`).join(', ');
 }
 
 // Each row as the click left it. A hop past where the click stopped keeps its expected word, greyed,
 // "not reached on this click". The hop where it broke reads MISSING with why, and rows before it stay as
 // they ran. A hop with no row, though nothing stopped before it, reads MISSING: never "not reached".
+// A hop built at page start (hops.json's when "page") keeps the word it was built with, greyed: this click didn't reach it,
+// but it is not the table's word to claim.
 export function finalRow(row, n, stop) {
   const hop = TABLE.hops[n - 1], empty = { tools: [], read: [], wrote: [], stand_ins: [] };
+  if (stop && n > stop.hop && hop.when === 'page' && row) {
+    return { ...row, n, name: hop.name, reached: false, ran: `${row.ran}; not reached on this click`, note: 'not reached on this click' };
+  }
   if (stop && n > stop.hop) return { n, name: hop.name, word: hop.word, reached: false, ran: 'not reached on this click', note: 'not reached on this click', ...empty };
   if (stop && n === stop.hop && !stop.answer) {
     return { ...empty, n, name: hop.name, ran: 'ran now', ...row, word: 'MISSING', reached: true, note: stop.why,

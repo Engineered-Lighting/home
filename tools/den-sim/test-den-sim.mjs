@@ -30,7 +30,7 @@ import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs'
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import { chainRequest } from './brain.mjs';
 import { nextVersion, writeCouch } from './couch_to_room.mjs';
-import { buildReceipt, finalRow, pictureNote, sha256 } from './receipt.mjs';
+import { buildReceipt, finalRow, personColumn, pictureNote, receiptView, sha256 } from './receipt.mjs';
 import { topLine } from './top_line.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
@@ -212,6 +212,86 @@ test('a receipt files a break under the hop that broke, and never leaves a hop b
   assert.equal(top.verdict, 'not yet');
   assert.equal(top.count.missing, 1); assert.equal(top.count.not_reached, 19);
   assert.ok(top.reasons.some(reason => reason.condition === 6 && reason.hop === 7), JSON.stringify(top.reasons));
+});
+
+test('a hop built at page start keeps the word it was built with, greyed, on a click that stopped before it', () => {
+  const stop = { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true };
+  const couch = { n: 14, name: TABLE.hops[13].name, word: 'SCRIPTED', reached: true, ran: 'built at page start', summary: 'A DECLARED point', tools: [], read: [], wrote: [], stand_ins: ['a DECLARED point with a stand-in zone, not your sofa mark'] };
+  const kept = finalRow(couch, 14, stop);
+  assert.deepEqual([kept.word, kept.reached, kept.ran, kept.summary], ['SCRIPTED', false, 'built at page start; not reached on this click', 'A DECLARED point']);
+  const fifteen = finalRow({ ...couch, n: 15, word: 'ADAPTER', ran: 'ran now' }, 15, stop);   // control: a click hop past the stop takes the table's word
+  assert.deepEqual([fifteen.word, fifteen.reached, fifteen.summary], [TABLE.hops[14].word, false, undefined]);
+  // Through the top line, the kept row counts as not reached and the click still reads "stopped at".
+  const row = n => ({ n, name: TABLE.hops[n - 1].name, word: TABLE.hops[n - 1].word, reached: true, ran: 'ran now', summary: 'ran', tools: [], read: [], wrote: [],
+    stand_ins: TABLE.hops[n - 1].word === 'ADAPTER' ? [TABLE.hops[n - 1].stand_ins[0]] : [] });
+  const top = topLine(TABLE, { rows: TABLE.hops.map(hop => finalRow(hop.n <= 6 ? row(hop.n) : hop.n === 14 ? couch : null, hop.n, stop)), stopped: stop, aim_check: null });
+  assert.deepEqual([top.verdict, top.count.not_reached], ['stopped', 20], JSON.stringify(top.reasons));
+});
+
+// person.py's own cards (test_person.py's typed scenes, invented numbers) for hop 15's failure outcomes.
+function personCards() {
+  const script = ['import json, sys', 'sys.path.insert(0, sys.argv[1])', 'import test_person as tp', 'scenes = dict(held=tp.scene(safe=(False,) * 5), torso=tp.scene(), seated=tp.scene())',
+    'for entry in [e for b in scenes["torso"]["bundles"] for e in b["keypoint_series"]]:', '    for joint in entry["joints_room"]:',
+    '        joint["status"] = "uncertain" if joint["j"] in tp.person.SHOULDERS + tp.person.HIPS else joint["status"]',
+    'print(json.dumps({name: tp.run(scene)[1] for name, scene in scenes.items()}))'].join('\n');
+  return JSON.parse(execFileSync('python', ['-B', '-X', 'utf8', '-c', script, HERE], { encoding: 'utf8', windowsHide: true, timeout: 120000 }));
+}
+const cardReceipt = (cards, couch = {}) => ({ click: 1, take: 'aaaaaaaaaaaa', stopped: null, picture: null,
+  rows: TABLE.hops.map(hop => ({ n: hop.n, name: hop.name, word: hop.word, reached: true, ran: 'ran now', summary: 'typed', stand_ins: [],
+    ...(hop.n === 14 ? { couch: 'declared', word: 'SCRIPTED', ...couch } : {}), ...(hop.n === 15 ? { person: cards } : {}) })) });
+
+test('the person card says why on every outcome person.py writes, and the Person column says which', () => {
+  const cards = personCards();
+  assert.deepEqual([cards.held[0].on_couch, cards.held[0].footprint_m, cards.held[0].torso_margin_m], [null, null, null], 'a held track: nothing tested');
+  assert.deepEqual([cards.torso[0].on_couch, cards.torso[0].failed, cards.torso[0].torso_margin_m], [false, ['torso'], null], 'no supported torso joint');
+  const held = receiptView(cardReceipt(cards.held)).person, torso = receiptView(cardReceipt(cards.torso)).person, seated = receiptView(cardReceipt(cards.seated)).person;
+  assert.equal(held.lines[1], 'On the couch: not tested yet: its bundle was not safe to tie to one person, so the reply was held.');
+  assert.equal(held.lines[3], 'Engagement: none, support held_ambiguous: every reply was held, so need v0 had none of this track\'s replies.');
+  assert.equal(torso.lines[1], 'On the couch: no: the height half failed: no supported shoulder or hip in the bundle\'s last 2 s.');
+  assert.equal(seated.lines[1], 'On the couch: yes.', 'control: a seated track');
+  assert.ok([held, torso].every(card => card.lines.every(line => !/null|undefined|NaN/.test(line))), JSON.stringify([held, torso]));
+  // Run every scene's column: a held track is not "none", nor is a MISSING hop 15.
+  assert.deepEqual([held, torso, seated].map(personColumn), ['not tested (held)', 'not on the couch', 'on the couch']);
+  const missing = cardReceipt(null);
+  Object.assign(missing.rows[14], { word: 'MISSING', note: 'the room model\'s current revision holds no seat surface' });
+  assert.equal(personColumn(receiptView(missing).person), 'MISSING: the room model\'s current revision holds no seat surface');
+  assert.deepEqual([personColumn(null), personColumn({ tracks: [], lines: [] })], ['none', 'none'], 'control: no track reads none');
+});
+
+test('the person card says the facing is yours when the re-fit read facing.json', () => {
+  const seated = personCards().seated;
+  const turned = receiptView(cardReceipt(seated, { couch: 'sofa_mark', word: 'ADAPTER', facing_deg: 90 })).person.lines;
+  assert.ok(turned.includes('The reader faces your way, from facing.json: turned 90 degrees from the stated facing, left positive.'), turned.join('\n'));
+  const stated = receiptView(cardReceipt(seated, { couch: 'sofa_mark', word: 'ADAPTER', facing_deg: null })).person.lines;   // control: no facing.json
+  assert.ok(!stated.some(line => line.includes('facing.json')));
+  assert.equal(stated.length, turned.length - 1);
+});
+
+test('couch_to_room.mjs places the couch from the seat bytes the re-fit read, replaces an old couch, and versions by den-register\'s rule', { skip: fs.existsSync(path.resolve(REFS.content_packs)) ? false : 'needs the content packs' }, () => {
+  const home = scratch('den-sim-couch-'), privateFolder = path.join(home, 'private');
+  try {
+    invent(privateFolder, [[1.0, 2.0, 0.45], [3.0, 2.0, 0.45], [3.0, 3.0, 0.45], [1.0, 3.0, 0.45]]);
+    const seatFile = path.join(privateFolder, 'a-couch.json'), registration = JSON.parse(fs.readFileSync(path.join(privateFolder, 'registration-revision-3.json'), 'utf8')).registration;
+    const old = { surface_id: 'sofa', kind: 'seat', geometry: { form: 'polygon-3d/1', vertices_m: [], seat_point_m: [0, 0, 0] }, focal: false };
+    const from = path.join(home, 'fit.jsonl');
+    fs.writeFileSync(from, `${JSON.stringify({ room_id: 'den', version: 'den-v9', frame: {}, cameras: [], surfaces: [old, { surface_id: 'wall', kind: 'wall' }],
+      landmarks: [{ landmark_id: 'sofa-seat', kind: 'seat', surface_id: 'sofa' }] })}\n`);
+    const to = path.join(home, 'couch', 'room-model.jsonl');
+    assert.throws(() => writeCouch({ seatFile, seatSha256: '0'.repeat(64), registration, from, to, source: 'sofa_mark' }), /^Error: seat_changed_since_refit$/);
+    assert.equal(fs.existsSync(to), false, 'nothing written from bytes the re-fit did not read');
+    const wrote = writeCouch({ seatFile, seatSha256: sha256(seatFile), registration, from, to, source: 'sofa_mark' });   // control: the bytes it read
+    const revision = JSON.parse(fs.readFileSync(to, 'utf8').trim().split('\n').at(-1));
+    assert.deepEqual([revision.surfaces.map(s => s.surface_id), revision.landmarks.map(m => m.landmark_id)], [['wall', 'sofa'], ['sofa-seat']], 'one couch, the old one replaced');
+    assert.notDeepEqual(revision.surfaces[1].geometry.seat_point_m, old.geometry.seat_point_m);
+    // den-register's own records.next_room_version, at its pin, never this module's copy of it.
+    const rule = ['import json, sys', 'sys.path.insert(0, sys.argv[1])', 'import prepare', 'prepare.archive(prepare.Path(sys.argv[2]), prepare.pins())', 'import records',
+      'print(json.dumps([records.next_room_version(v, "den") for v in sys.argv[3:]]))'].join('\n');
+    const theirs = JSON.parse(execFileSync('python', ['-B', '-X', 'utf8', '-c', rule, path.join(HERE, 'scene'), path.join(home, 'register-tree'), 'den-v9', 'den'],
+      { encoding: 'utf8', windowsHide: true, timeout: 120000 }).trim().split('\n').at(-1));
+    assert.deepEqual([wrote.version, revision.version], [theirs[0], theirs[0]]);
+    assert.notEqual(theirs[0], 'den-v9', 'control: the rule moves the version');
+    assert.equal(nextVersion('den', 'den'), theirs[1]);
+  } finally { fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); }
 });
 
 // A copy of a prepared set made of hard links: free, and safe because a changed file is replaced, never written through.
@@ -890,10 +970,12 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
   await run.stop();
   assert.match(text, /on your sofa mark, unchanged since an earlier start/);
   assert.equal(fitFolders().length, 1);
+  assert.doesNotMatch(text, /facing\.json/, 'control: no facing.json, no turn named');
   fs.writeFileSync(path.join(privateFolder, 'facing.json'), '{"degrees": 90}');
   ({ run, text } = await start());
   await run.stop();
-  assert.match(text, /on your sofa mark, at this start/);
+  assert.match(text, /on your sofa mark, at this start; the reader faces [^\n]*, then turned 90 degrees by facing\.json \(left positive\)/);
+  assert.match(text, /^Couch in the click's room model: revision \S+, from your sofa mark; the reader turned 90 degrees from the stated facing by facing\.json$/m);
   assert.equal(fitFolders().length, 2);
   await pictureIndependence(t, { home, privateFolder, fits, corners, readingTake, markNumbers });
   // Controls for test 12: an edited byte is refused by the seal, and a mark with no export is not used.

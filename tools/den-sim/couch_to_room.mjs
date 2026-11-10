@@ -45,10 +45,12 @@ export function couchOf(seat, source) {
   };
 }
 
-// seatFile: your mark, or the stand-in seat; registration: the export it names (or the authored one the stand-in is
-// sealed to); from: the fit's room-model.jsonl; to: the new file the click reads. Throws Home's reason code on a seal.
-export function writeCouch({ seatFile, registration, from, to, source }) {
+// seatFile: your mark, or the stand-in seat; seatSha256: its digest as the re-fit read it, so the couch is placed from
+// those very bytes; registration: the export it names (or the authored one the stand-in is sealed to); from: the fit's
+// room-model.jsonl; to: the new file the click reads. Throws Home's reason code on a seal.
+export function writeCouch({ seatFile, seatSha256, registration, from, to, source }) {
   const read = readJson(seatFile);
+  if (seatSha256 !== undefined && sha256(read.bytes) !== seatSha256) throw Error('seat_changed_since_refit');   // a code: run.mjs prints only codes
   const seat = Sofa.validateSofaTarget(read.doc, { binding: registration.binding, equipment_ref: { revision: registration.revision, digest: registration.digest } },
     { sealDesk: sealRegisteredDeskTarget, digest: Core.digest });
   const fitBytes = fs.readFileSync(from), text = fitBytes.toString('utf8').replace(/\r\n/g, '\n');

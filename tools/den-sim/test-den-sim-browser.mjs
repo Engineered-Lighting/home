@@ -237,7 +237,8 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5, 6, 11]], ['Built when this page started', [14]], ['Ran on this click', [7, 8, 9, 10, 12, 13, 15, 17, 18, 19, 20, 21, 22, 23]],
       ['Not built yet, or not reached on this click', [16, 24, 25, 26]]]);
     // Hops 13 to 15 say what changed at step 5: need per track, the couch in the RoomModel, the person state, and who still decides.
-    assert.match(await page.textContent('[data-den-sim-hop="13"]'), /that pass feeds the older brain until step 6\. One need per track in person\.py \(hop 15\).*: trk-\d+ starting then engaged\./);
+    // The two need v0 passes part on the first reply, whose bundle isn't safe to tie to one person: the row says so.
+    assert.match(await page.textContent('[data-den-sim-hop="13"]'), /that pass feeds the older brain until step 6\. One need per track in person\.py \(hop 15\), on the replies its bundle was safe to take: trk-\d+ took 4 of 5 replies, 1 held as not safe to tie to one person: starting then engaged, so it engaged at reply 3, where the runner pass engaged at reply 2\./);
     assert.match(await page.textContent('[data-den-sim-hop="14"]'), /A DECLARED point \(the middle of the floor\) with a stand-in seat sealed around it, not your sofa mark, written by couch_to_room\.mjs into the pipeline's own RoomModel as revision \S+: surface sofa, landmark sofa-seat, and the spot sofa-book 0\.30 m above the seat point/);
     const fifteen = await page.textContent('[data-den-sim-hop="15"]');
     assert.match(fifteen, /person\.py wrote \d+ person states in canon's names.*Nothing reads it until step 6: the older brain still decides the beam, under its own 1\.5 m rule\./);
@@ -369,6 +370,9 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
       assert.equal(await hopStatus(page, 6), 'ADAPTER', 'the detector ran and saw nobody');
       assert.match(await page.textContent('[data-den-sim-hop="6"]'), /YOLO26s found no person on any of the \d+ usable frames/);
       assert.equal(await page.getAttribute('[data-den-sim-hop="7"]', 'data-reached'), '0');
+      // The couch was built at page start on the DECLARED stand-in: greyed, it keeps SCRIPTED, never the table's ADAPTER (hop 15, a click hop, does take it).
+      assert.deepEqual([await hopStatus(page, 14), await page.getAttribute('[data-den-sim-hop="14"]', 'data-reached'), await hopStatus(page, 15)], ['SCRIPTED', '0', 'ADAPTER']);
+      assert.match(await page.textContent('[data-den-sim-hop="14"]'), /built at page start; not reached on this click/);
       await page.waitForFunction(() => document.querySelector('[data-den-sim-picture-note]')?.textContent.includes('holds no person'), null, { timeout: 10000 });
       assert.equal(await page.locator('[data-den-sim-boxes]').count(), 0, 'no box');
       assert.equal(await page.isVisible('[data-den-sim-person]'), false, 'no person card');

@@ -34,7 +34,7 @@ import { prepareBrain, privateReason, standInSofa } from './brain.mjs';
 import { SPOT_ABOVE_SEAT_M, writeCouch } from './couch_to_room.mjs';
 import { dataRoot, newestPreparedSet, refusedSince } from './data-root.mjs';
 import { BRAIN_BASE, createFeed } from './feed.mjs';
-import { TABLE, headTools, receiptView, sha256 } from './receipt.mjs';
+import { TABLE, headTools, personColumn, receiptView, sha256 } from './receipt.mjs';
 
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..'), SRC = path.join(ROOT, 'app/src');
@@ -233,9 +233,10 @@ function placement() {
   const read = Object.keys(kinds).filter(key => files[key]).map(key => ({ path: labels[key], sha256: want[key],
     recorded: { kind: kinds[key], by: found ? `refit-receipt.json of fit ${found.folder}` : 'no re-fit', sha256: found ? found.receipt.inputs[key] : null } }));
   const where = mine ? 'your sofa mark' : `a public stand-in seat at the DECLARED point (${couch.where})`;
-  if (!found) return { registered: false, summary: `the re-fit on ${where} was refused: ${refused || 'no fit registered'}`, read, wrote: [], tools: {}, stand_in: TABLE.hops[4].stand_ins[4], files };
+  if (!found) return { registered: false, summary: `the re-fit on ${where} was refused: ${refused || 'no fit registered'}`, read, wrote: [], tools: {}, stand_in: TABLE.hops[4].stand_ins[4], files, seat_sha256: want.mark };
   const roomModel = path.join(FITS, found.folder, 'room-model.jsonl');
-  return { registered: true, folder: found.folder, reused, files, read, tools: found.receipt.tools,
+  // seat_sha256: the seat's bytes as the re-fit hashed them (and, for the stand-in, as this start wrote them), which hop 14 must read.
+  return { registered: true, folder: found.folder, reused, files, read, tools: found.receipt.tools, seat_sha256: want.mark,
     summary: `re-fit ${found.receipt.transform_id} on ${where}${reused ? ', unchanged since an earlier start' : ', at this start'}${found.receipt.facing_rule ? `; the reader faces ${found.receipt.facing_rule}` : ''}`,
     wrote: [{ path: `fits/${found.folder}/room-model.jsonl`, sha256: found.receipt.room_model_sha256 }],
     stand_in: mine ? TABLE.hops[4].stand_ins[4] : `re-fit at page start: the pose placed on a public stand-in seat at the DECLARED point, not your sofa mark`,
@@ -249,7 +250,7 @@ const couchIn = (() => {
   if (!placed.registered) return { error: 'the re-fit was refused, so no private room model holds the couch' };
   const label = `fits/${placed.folder}/couch/room-model.jsonl`, file = path.join(FITS, placed.folder, 'couch', 'room-model.jsonl');
   try {
-    return { label, file, ...writeCouch({ seatFile: placed.files.mark, registration: registration.doc, from: placed.room_model.path, to: file, source: couch.source }) };
+    return { label, file, ...writeCouch({ seatFile: placed.files.mark, seatSha256: placed.seat_sha256, registration: registration.doc, from: placed.room_model.path, to: file, source: couch.source }) };
   } catch (error) { return { error: `couch_to_room.mjs refused the ${couch.source === 'sofa_mark' ? 'mark' : 'stand-in seat'}: ${privateReason(error)}` }; }
 })();
 const roomModel = couchIn.sha256 ? { path: couchIn.file, sha256: couchIn.sha256, by: 'couch_to_room.mjs at page start', label: couchIn.label }
@@ -287,9 +288,12 @@ function couchRow() {
   const mine = couch.source === 'sofa_mark', fit = placed.registered && { path: `fits/${placed.folder}/room-model.jsonl`, sha256: couchIn.from_sha256 || null,
     recorded: { kind: 'room model', by: `refit-receipt.json of fit ${placed.folder}`, sha256: placed.room_model.sha256 } };
   // Your mark and export as the re-fit read them; the stand-in seat run.mjs sealed is no recorded input, so the row says so.
+  // Its digest as couch_to_room.mjs read it, against the one placement() took when it wrote the seat: never one hash twice.
   const seat = mine ? placed.read.filter(file => ['your mark', 'your export'].includes(file.recorded.kind))
-    : [{ path: 'stand-in-seat.json', sha256: couchIn.seat_sha256 || null, recorded: { kind: 'a stand-in seat', by: 'run.mjs at page start', sha256: couchIn.seat_sha256 || null } }];
-  const row = { n: 14, word: mine ? 'ADAPTER' : 'SCRIPTED', couch: couch.source, ran: 'built at page start', tool: { path: 'tools/den-sim/couch_to_room.mjs', pin: 'HEAD' },
+    : [{ path: 'stand-in-seat.json', sha256: couchIn.seat_sha256 || null, recorded: { kind: 'a stand-in seat', by: 'placement() at page start, as it wrote the seat', sha256: placed.seat_sha256 || null } }];
+  // facing.json, when the re-fit read one: the turn it holds, in degrees, for the person card. Only with your mark.
+  const facing = mine && placed.files.facing && Number.isFinite(placed.transform?.turn_deg) ? placed.transform.turn_deg : null;
+  const row = { n: 14, word: mine ? 'ADAPTER' : 'SCRIPTED', couch: couch.source, facing_deg: facing, ran: 'built at page start', tool: { path: 'tools/den-sim/couch_to_room.mjs', pin: 'HEAD' },
     tools: headTools(couchTools), read: [...seat, ...(fit ? [fit] : [])], wrote: couchIn.sha256 ? [{ path: couchIn.label, sha256: couchIn.sha256 }] : [],
     stand_ins: mine ? TABLE.hops[13].stand_ins.slice() : ['a DECLARED point with a stand-in zone, not your sofa mark'] };
   const where = mine ? 'Your sofa mark, checked by its seal against your registration export,' : `A DECLARED point (${couch.where}) with a stand-in seat sealed around it, not your sofa mark,`;
@@ -326,9 +330,8 @@ function everyRow(take, result) {
   const said = {};
   for (const ask of view.qwen?.asks || []) if (ask.said) said[ask.said.split(',')[0]] = (said[ask.said.split(',')[0]] || 0) + 1;
   const words = Object.entries(said).map(([word, n]) => `${word} x${n}`).join(', ');
-  const tracks = view.person?.tracks || [];
   every.rows.push({ take, click: view.click, box: boxes.length ? boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ') : view.boxes ? 'none' : 'rows did not hold',
-    person: tracks.length ? tracks.map(row => row.on_couch === true ? 'on the couch' : row.on_couch === false ? 'not on the couch' : 'none').join(', ') : 'none',
+    person: personColumn(view.person),
     qwen: !twelve.reached ? 'not asked' : twelve.word === 'MISSING' ? `MISSING: ${twelve.summary.split(':')[0]}` : `${twelve.word === 'SCRIPTED' ? 'fake vLLM, scripted: ' : 'asked: '}${words}`,
     root: view.qwen?.root || null, beam: lit ? `lit, ${result.timeline.summary.fixture_id.match(/mount-\d+/)?.[0] || result.timeline.summary.fixture_id}` : 'off',
     why: result.receipt.stopped ? `hop ${result.receipt.stopped.hop}: ${result.receipt.stopped.why.replace(/^Qwen has not seen these exact frames: /, '')}` : lit ? '' : result.timeline?.summary.refusal || '' });
@@ -346,6 +349,14 @@ function startClick(body) {
   const runId = feed.begin(take);
   const current = activeRun = brain.runClick({ take, prepared: prepared[take], setDir: SET, roomModel, startRecord: { ...start, home: homeRow() }, pressedAgain,
     replies: REPLIES, lastAsk: LAST_ASK }, row => feed.hop({ n: row.n, word: row.word, summary: row.summary, ms: row.ms }));
+  // A click that can't be shown fails with why, on the page and in the console: it never ends the harness.
+  const failed = error => {
+    if (activeRun === current) activeRun = null;
+    const why = `this page could not show the click: ${error?.message || error}`;
+    console.error(`Click on ${take}: ${why}`);
+    if (all && !every.rows.some(row => row.take === take)) every.rows.push({ take, click: null, box: '–', qwen: '–', person: '–', root: null, beam: 'off', why });
+    feed.fail(why, 'pipeline_failed');
+  };
   current.promise.then(result => {
     if (activeRun !== current) return; // Reloaded while it ran: the page has moved on.
     activeRun = null;
@@ -356,7 +367,7 @@ function startClick(body) {
       picture: fs.existsSync(picture) ? picture : null, stills: path.join(result.work, 'stills') };
     // The person card's words, distances only: in the console, run.json and the panel.
     if (lastClick.view.person) {
-      const { lines, tracks } = lastClick.view.person, words = (tracks.length ? lines.slice(0, -2) : lines).join(' ');
+      const { lines, track_lines: own } = lastClick.view.person, words = lines.slice(0, own ?? lines.length).join(' ');
       console.log(`Click ${result.receipt.click}: person: ${words}`);
       clickLines.push({ click: result.receipt.click, take, person: words });
       writeRunJson();
@@ -365,7 +376,7 @@ function startClick(body) {
     commands[result.receipt.click] = result.command;
     context.brain.command = result.command_status;
     feed.play(result.timeline, body.fixtures);
-  });
+  }).catch(failed);
   return { ok: true, run: runId };
 }
 function cancelClick() {
@@ -528,7 +539,8 @@ server.listen(PORT, HOST, () => {
     ...(qwen.owed ? [`Qwen still owes ${qwen.owed} replies. In a new PowerShell window, paste: ${PASTE}`] : []),
     ...(qwen.owed_set && qwen.owed_set !== setInfo.set ? [`The owed list on file is for set ${qwen.owed_set}, not this one: an agent runs prepare.py --owed for set ${setInfo.set}.`] : []),
     `Camera registration: ${placed.summary}`,
-    `Couch in the click's room model: ${couchIn.error || `revision ${couchIn.version}, from ${couch.source === 'sofa_mark' ? 'your sofa mark' : 'the DECLARED stand-in seat'}`}`,
+    `Couch in the click's room model: ${couchIn.error || `revision ${couchIn.version}, from ${couch.source === 'sofa_mark' ? 'your sofa mark' : 'the DECLARED stand-in seat'}`}${
+      start.couch.facing_deg === null ? '' : `; the reader turned ${Number(start.couch.facing_deg.toFixed(1))} degrees from the stated facing by facing.json`}`,
     ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
     ...prepareNotes.map(note => 'Note: ' + note), ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
     `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));

@@ -269,7 +269,7 @@
       return rows.length ? [el('h4', { textContent: heading }), el('ul', {}, ...rows.map(row => el('li', { 'data-den-sim-hop': String(row.n), 'data-den-sim-name': row.name,
         'data-den-sim-status': row.word, 'data-reached': row.reached ? '1' : '0' },
         el('span', { className: 'pill', style: `background:${PILL[row.word]}`, textContent: row.word }), `${row.n} ${row.name}`,
-        el('span', { className: 'note', textContent: [row.reached ? row.ran : 'not reached on this click', row.summary, ...row.stand_ins.map(text => `Stand-in: ${text}.`)].filter(Boolean).join(' · ') }))))] : [];
+        el('span', { className: 'note', textContent: [row.ran || 'not reached on this click', row.summary, ...row.stand_ins.map(text => `Stand-in: ${text}.`)].filter(Boolean).join(' · ') }))))] : [];
     }));
   }
 

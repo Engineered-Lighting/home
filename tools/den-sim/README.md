@@ -7,7 +7,7 @@ couch; then read the exact fixture command it would take, which is shown and nev
 that paste, no Qwen reply is on file: a click with a person stops at the reply, the beam stays off,
 and the page shows the line to paste.
 
-**Status: a simulation, step 4 of the connected plan.** The picture is a rendered, artificial
+**Status: a simulation, step 5 of the connected plan.** The picture is a rendered, artificial
 person in an authored room, seen by a camera that does not exist. A real detector, YOLO26s and
 RTMPose-m on this PC's CPU, looked at every usable frame when the set was prepared, and its rows
 are recorded beside each take: pixels decide whether anyone is there. Qwen on the inference host
@@ -72,8 +72,25 @@ to the click's receipt, measured, then the brain's 3 s wait and the swing):
 5. need v0 in den-core's runner reads those fact lines, and the older lighting brain judges what
    they produced, with no camera position, so the reader's facing comes from the shoulder labels
    of the newest bundle entry that has both. It waits for 3 seconds of reading.
-6. One fixture swings to the reader's hand point at about 30 degrees a second, and the exact
+6. Beside it, `person.py` (hop 15) writes `person_states.jsonl` in the field names of the
+   architecture's `person_state` record: one unchanged need v0 per track, fed only the replies whose
+   bundle was safe to tie to that track, and rules on the track's own joints, each using only what
+   was known when the reply arrived. It tests whether the person is on the couch: their position
+   within 0.15 m of the couch's footprint, and the median height of their supported shoulders and
+   hips over 2 s at most the seat's top plus 0.45 m, or with no hip, shoulders at most 1.20 m above
+   the floor. Seated, the spot is `sofa-book`; otherwise `handheld`, which has no target. Nothing
+   reads these states until step 6: **the older brain still decides the beam**, under its own 1.5 m
+   rule, exactly as before.
+7. One fixture swings to the reader's hand point at about 30 degrees a second, and the exact
    command appears, marked `NOT SENT`.
+
+At page start, after the re-fit, `couch_to_room.mjs` (hop 14) checks the couch's seal and binding with
+Home's own validator and appends one revision to a copy of the fit's private `room-model.jsonl`, by
+den-register's own rule: a seat surface `sofa`, its landmark `sofa-seat`, and the spot `sofa-book`
+0.30 m above the seat point. The fit's own file is left as its receipt names it. That copy is the room
+model every click reads, held to the digest written at page start. With your sofa mark (below) the
+couch is your mark, and hop 14 reads ADAPTER. Without it, the couch is the public stand-in seat sealed
+around the DECLARED point, and hop 14 stays SCRIPTED.
 
 The click is told the take's folder id and Home's report of the fixtures, never the scene. The
 button labels live in the set's `display.json`, which only the panel reads (without it, the
@@ -84,11 +101,13 @@ The panel shows the frame read back out of the take's own picture plane, with th
 box, its score and the supported joints from that frame's recorded row drawn on it, and a marker in
 the room shows where the invented camera sits. The note under it repeats the score. When the rows
 fail hop 6's checks, no box is drawn and the note says the rows did not pass, never that the frame
-holds no person. Under the picture, one line says how far the median
-height of the supported shoulders and hips over the take's last 2 s sits from the "on the couch"
-limit step 5 will test, the seat's top plus 0.45 m: for example "torso 0.09 m under the limit". It
-is said against the limit only, never as a height. The same line goes to the console and to the
-run's `run.json`.
+holds no person. Under the picture, the person card says what hop 15 found, per track: how far the
+person is from the seat point across the floor, "on the couch: yes" or "no" with which half of the
+test failed, the spot by name (the `sofa-book` spot's marker in the room comes at step 7) and the
+track's engagement. It says the couch is the picture's couch, placed on your mark or on a DECLARED
+stand-in seat, and that the older brain still decides the beam until step 6, so a figure standing
+within 1.5 m of the seat would still light. It holds distances and words only, never a coordinate.
+The same words go to the console and to the run's `run.json`.
 
 Under it, the Qwen card lists each request: its stills, shown as the very JPEGs its body carries
 (the click writes them under its run folder's `stills\`, by their sha256), their frames, how far
@@ -115,8 +134,8 @@ step its top line still reads "not yet", because rows are MISSING (see below). *
 the page and clears the aim.
 
 **Run every scene** presses all five in turn with no reload, swings the beam where each lights,
-and fills a plain table: scene, box, Qwen (asked or not, and its words), beam, and why it
-stopped. It checks that every reply on the table came from one model, says "no meter on this
+and fills a plain table: scene, box, Qwen (asked or not, and its words), person (on the couch, not on
+the couch, or none), beam, and why it stopped. It checks that every reply on the table came from one model, says "no meter on this
 run", and leaves the top line as your last single click set it.
 
 ## Qwen's words: the one paste
@@ -191,9 +210,10 @@ the digest `last-ask.json` recorded when the paste filed it.
 | 10 Occupancy | Scripted | The track list decides whether the older brain runs at all; that brain's own occupancy stays typed until step 6 |
 | 11 Bundle to Qwen | Adapter | Each request's exact bytes, rebuilt on each click: whole frames, no box, the time label fixed, the placement text the real camera's. Asked once, by your paste, straight to vLLM |
 | 12 Qwen reply | Adapter | Qwen's real words, recorded once and looked up by the body's hash, through the Lab's real builders, clocks moved and source id rewritten. Missing until your paste; a fake vLLM's reads Scripted |
-| 13 Need | Adapter | need v0 in den-core's runner, on those replies, standing in for need v1 |
-| 14 Couch | Scripted, or Adapter with your mark | A declared point, or your sofa mark |
-| 15, 16 Person state, light model | Missing | Not built yet |
+| 13 Need | Adapter | need v0, standing in for need v1: in den-core's runner, which feeds the older brain until step 6, and one per track in `person.py` |
+| 14 Couch | Scripted, or Adapter with your mark | `couch_to_room.mjs` writes the DECLARED stand-in seat, or your sofa mark, into the pipeline's own RoomModel at page start, with the spot 0.30 m above the seat point |
+| 15 Person state | Adapter | `person.py`: need v0 per track and rules on real joints, unscored. Rung 6 isn't built, and nothing reads it until step 6 |
+| 16 Light model | Missing | Not built yet |
 | 17 Spot decision and aim | Adapter | The older lighting brain, with jev and deep_stack health asserted |
 | 18, 19 Feed into Home, motion | Adapter, scripted | This harness replays the brain's timeline re-timed to now, with 10 Hz steps for the swing |
 | 20 Home client, follower, overlay | Real | Unchanged `app/src`, served from this harness |
@@ -249,9 +269,9 @@ agent prepared there would be invisible to your own PowerShell.
 | `prepared\replies` | Qwen's replies, `<body_sha256>.json`, filed by your paste. Never removed by any tool here |
 | `prepared\last-ask.json` | What your last paste did, and each reply's digest |
 | `prepared\tries.jsonl` | Every try at choosing the picture, append-only, and one line per paste. The page counts the Qwen tries in it |
-| `private` | Your optional files, the brain geometry built from them, and `fits\`, your re-fits |
-| `fits` | Re-fits on the authored room's stand-in seat |
-| `runs\<stamp>\click-<n>` | Each click's rows, observations, tracks, bundles, den-core log, brain timeline, dry run, picture and `run-receipt.json`, about 1.2 MB. Nothing cleans these up |
+| `private` | Your optional files, the brain geometry built from them, and `fits\`, your re-fits, each with `couch\room-model.jsonl`, the copy hop 14 wrote the couch into |
+| `fits` | Re-fits on the authored room's stand-in seat, with their `couch\room-model.jsonl` |
+| `runs\<stamp>\click-<n>` | Each click's rows, observations, tracks, bundles, den-core log, person states, brain timeline, dry run, picture and `run-receipt.json`, about 1.2 MB. Nothing cleans these up |
 | `tools\<name>-<sha>` | `git archive` of each pinned ref in `refs.json`, about 1 MB. `observe-<sha>` also holds the Lab files the detector imports, so it can be `detect.py`'s `--tools-root`; `core-<sha>` the Lab's `qwen_live.py` and the 7 files it imports. `tools\lifted\` holds what `ask_la.py` lifts |
 
 To clear the runs:
@@ -304,6 +324,7 @@ $env:DEN_SIM_SET = "$env:USERPROFILE\den-sim\prepared\<set>"
 python -B -X utf8 tools\den-sim\scene\test_scene.py
 python -B -X utf8 tools\den-sim\test_chain.py
 python -B -X utf8 tools\den-sim\test_ask.py
+python -B -X utf8 tools\den-sim\test_person.py
 python -B -X utf8 tools\den-detect\test_detect.py
 node --test tools\den-sim\scene\test-scene-figure.mjs
 node --test tools\den-sim\test-den-sim.mjs
@@ -350,6 +371,8 @@ node --test tools\den-sim\test-den-sim-browser.mjs
 | `top_line.mjs` | The top line: a pure function of the table and a receipt |
 | `brain.mjs` | Builds the geometry and runs one click from end to end |
 | `chain.py` | The frame hash, hop 6's checks on the recorded rows, the pinned tools in their own guarded processes, each request's exact body and its reply's lookup, and the adapter |
+| `couch_to_room.mjs` | Hop 14: your mark, or the stand-in seat, into the click's RoomModel, with the spot |
+| `person.py` | Hop 15: person states in the architecture's field names, need v0 per track, rules on real joints |
 | `ask_la.py`, `ask_one.py` | Your one paste on this PC, and what it runs on the inference host |
 | `brain_run.py` | The real activity loop, publisher and older brain under a fake clock, and the startup line |
 | `feed.mjs` | Replays the brain's timeline into Home and inserts the motion |
@@ -358,4 +381,4 @@ node --test tools\den-sim\test-den-sim-browser.mjs
 | `refs.json` | The pinned refs, and the codec's path and digests |
 | `scene\` | The recorded side: the scenes, renderer, virtual camera, frame hash and `prepare.py` |
 | `..\den-detect\` | `detect.py`, hop 6's detector over the Lab's workers, and the venv's `requirements.lock` |
-| `test-den-sim.mjs`, `test-den-sim-honesty.mjs`, `test-den-sim-browser.mjs`, `test_chain.py`, `test_ask.py`, `scene\test_scene.py`, `scene\test-scene-figure.mjs`, `..\den-detect\test_detect.py` | The tests |
+| `test-den-sim.mjs`, `test-den-sim-honesty.mjs`, `test-den-sim-browser.mjs`, `test_chain.py`, `test_ask.py`, `test_person.py`, `scene\test_scene.py`, `scene\test-scene-figure.mjs`, `..\den-detect\test_detect.py` | The tests |

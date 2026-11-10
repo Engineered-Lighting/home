@@ -5,17 +5,19 @@ hash, holds the detector rows prepare recorded beside it to hop 6's conditions, 
 it on those rows, each from `git archive` of its pinned ref and each in its own process, because they share
 module names (synth, records, method, check). Every process refuses all sockets.
 
-It is never told the scene. It gets a take folder and the set it sits in. Until Qwen is asked (step 4) the
-answers are typed from the take's truth, found by the take's folder id, and hop 12's row says so. The one
-piece that exists nowhere else is person_to_aim, part of hop 17's row.
+It is never told the scene. It gets a take folder, the set it sits in, and the reply store. Hops 11 and 12
+rebuild each router request's exact body from the take's own pixels and look Qwen's recorded reply up by
+the body's sha256 (step_ask); nothing here opens the truth folder or the display file. The one piece that
+exists nowhere else is person_to_aim, part of hop 17's row.
 
 Reads {"take", "take_digest", "take_json_sha256", "check_file", "check_sha256", "detector", "set",
-"room_model": {"path", "sha256", "by"}, "seat_top_m", "refs", "tools_root", "work"} as JSON on stdin: the
-digests are the ones the take's prepare-receipt.json recorded for frames.csv, take.json and its check, and
-detector is its hop 6 part. Prints hop 3's and hop 4's re-checks by hash ({"n": 3, "recheck": ...}), the
-picture with the person boxes of its frame's row ({"picture": ...}), one JSON line per hop, each with its
-word, the files it read and wrote with their digests, its tools against their pins, and its stand-ins, and
-the torso height against the limit ({"torso": ...}); then {"hop": "done", ...} for the brain, or
+"room_model": {"path", "sha256", "by"}, "seat_top_m", "refs", "tools_root", "work", "replies", "last_ask"}
+as JSON on stdin, and "owed" for prepare.py --owed: the digests are the ones the take's prepare-receipt.json
+recorded for frames.csv, take.json and its check, and detector is its hop 6 part. Prints hop 3's and hop 4's
+re-checks by hash ({"n": 3, "recheck": ...}), the picture with the person boxes of its frame's row
+({"picture": ...}), one JSON line per hop, each with its word, the files it read and wrote with their
+digests, its tools against their pins, and its stand-ins, and the torso height against the limit
+({"torso": ...}); then {"hop": "done", ...} for the brain, {"hop": "owed", ...} for --owed, or
 {"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
 """
 import csv
@@ -54,15 +56,22 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT / 'tools' / 'den-detect'))
 import detect  # noqa: E402  its constants and the lock's parser; the models load only in the venv, at prepare
 # observe's tree is also detect.py's --tools-root: den-observe, den-take and the Lab's workers at one pin.
+LAB = 'stack/services/perception-lab/'
+# qwen_live.spread's import closure, measured: 8 perception-lab modules and no third-party package (plan, hop 11).
+QWEN_LIVE = ['qwen_live.py', 'qwen_scene.py', 'qwen_transport.py', 'occupancy_gate.py', 'analysis.py', 'analysis_result.py', 'experiment_history.py', 'reasoning.py']
 TREES = {'observe': ('rung-2-observe', ['tools/den-observe', 'tools/den-take', *detect.WORKERS]),
          'track': ('claude/rung-3-track-local-514d6b', ['tools/den-track']),
          'bundle': ('rung-5-bundle', ['tools/den-bundle']),
-         'core': ('den-core-live', ['tools/den-core', 'ha-config/custom_components/den_lighting',
-                                    'stack/services/perception-lab/la_fact_log.py', 'stack/services/perception-lab/qwen_scene.py'])}
+         'core': ('den-core-live', ['tools/den-core', 'ha-config/custom_components/den_lighting', LAB + 'la_fact_log.py', *(LAB + name for name in QWEN_LIVE)])}
 CAMERA_ID, FRAME_PX = 'den-virtual', [640, 360]
 ROUTE_FROM_S, ROUTE_TO_S = 2.0, 19.5  # inside the check's 20 s usable part: requests at 2, 6, 10, 14 and 18 s
-TEMPLATE_FOR_HELD = {'book': 'reading', 'phone': 'phone_held'}
-COCO17 = ('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
+# Hops 11 and 12 (plan lines 477-521). The time label is fixed so bodies stay stable; the JPEG settings are the model test's.
+TIME_LABEL, JOIN_S = 'evening 20:00', 0.001
+JPEG = dict(format='JPEG', quality=85, subsampling=2, optimize=False, progressive=False)
+SITE_ID, ENGINE_EPOCH, SOURCE_ID, TEXT_SCOPE = 'den-sim', 'den-sim-direct', 'den_sim_la_direct', 'reply_kept_render_only'
+FAKE_ROOT, NOT_SEEN = 'fake-vllm', 'Qwen has not seen these exact frames'
+REPLY_FIELDS = {'asked_unix', 'host', 'root', 'http_status', 'raw', 'elapsed_s'}
+COCO17 =('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
           'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle')
 READING_STATES = ('engaged', 'ending')
 TORSO = ('left_shoulder', 'right_shoulder', 'left_hip', 'right_hip')
@@ -195,19 +204,6 @@ class Click:
         """A recorded file this click read: its digest now (None when it is gone) beside the one recorded."""
         return dict(path=label, sha256=sha256_file(path) if Path(path).is_file() else None, recorded=dict(kind=kind, by=by, sha256=sha256))
 
-    def truth(self):
-        """The take's truth folder, found by the take's id, never by a scene's name: (folder or None, the
-        other records opened to find it, as reads). Finding it opens every scene's truth/*/take.json, so each
-        of those is a read too. Labels are the take's own or "another take", so a folder's name (a scene's
-        random word) is never written down."""
-        found, others = None, []
-        for record in sorted((self.set / 'truth').glob('*/take.json')):
-            if found is None and json.loads(record.read_text(encoding='utf-8')).get('take') == self.take.name:
-                found = record.parent
-            else:
-                others.append(sha256_file(record))
-        return found, [dict(path='truth/(another take, %d of %d)/take.json' % (i, len(others)), sha256=digest) for i, digest in enumerate(others, 1)]
-
 
 def usable_rows(take, check):
     """frames.csv rows inside the check's usable part, so the slate's flashes never reach a detector."""
@@ -228,17 +224,176 @@ def nv12_to_rgb(np, nv12, width=640, height=360):
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
+def rgb_plane(np, frame):
+    """One frame file's picture plane, decoded as the Lab decodes it."""
+    with zipfile.ZipFile(io.BytesIO(Path(frame).read_bytes())) as archive:
+        return nv12_to_rgb(np, np.load(io.BytesIO(archive.read('rgb_nv12.npy')), allow_pickle=False))
+
+
 def step_picture(request):
     """The picture the panel shows: one usable frame read back out of the take's own NV12 plane."""
     import numpy as np
     from PIL import Image
-    data = Path(request['frame']).read_bytes()
-    with zipfile.ZipFile(io.BytesIO(data)) as archive:
-        nv12 = np.load(io.BytesIO(archive.read('rgb_nv12.npy')), allow_pickle=False)
     out = io.BytesIO()
-    Image.fromarray(nv12_to_rgb(np, nv12)).save(out, format='PNG', optimize=False)
+    Image.fromarray(rgb_plane(np, request['frame'])).save(out, format='PNG', optimize=False)
     Path(request['out']).write_bytes(out.getvalue())
     return dict(width=FRAME_PX[0], height=FRAME_PX[1])
+
+
+class Refused(Exception):
+    """Hop 11 refuses this take's requests: the click stops there, MISSING with why."""
+
+
+def session_of(take):
+    """The take's camera session, as take.py held every frame to it."""
+    session = ((json.loads((Path(take) / 'take.json').read_text(encoding='utf-8')).get('health_before') or {}).get('body') or {}).get('session')
+    if not isinstance(session, str) or not session.startswith('virtual-'):
+        # This path keeps reply text, which is only fair for renders (plan, hop 11 step 1).
+        raise Refused("the take's session does not start virtual-, and only a render's reply text may be kept")
+    return session
+
+
+def join(frames, offset_s, rows):
+    """Hop 11 step 3: each bundle frame's ts, less run.json's clock offset, to the one frames.csv row within 1 ms."""
+    out = []
+    for frame in frames:
+        t = frame['ts'] - offset_s
+        near = [row for row in rows if abs(float(row['t_host_s']) - t) <= JOIN_S]
+        if len(near) != 1:
+            raise Refused('a bundle frame joins %d frames.csv rows within 1 ms, not one' % len(near))
+        out.append((frame, near[0]))
+    return out
+
+
+def still_bytes(np, Image, scene, take, files):
+    """Hop 11 step 4: decode each still and encode it with Pillow at fixed settings. Refuses a wrong size, too
+    many bytes, or the same bytes twice, since one still repeated is one look."""
+    images = []
+    for file in files:
+        rgb = rgb_plane(np, Path(take) / file)
+        if rgb.shape != (scene.IMAGE_SIZE[1], scene.IMAGE_SIZE[0], 3):
+            raise Refused('a still is %dx%d, not %dx%d' % (rgb.shape[1], rgb.shape[0], *scene.IMAGE_SIZE))
+        out = io.BytesIO()
+        Image.fromarray(rgb).save(out, **JPEG)
+        if len(out.getvalue()) > scene.MAX_IMAGE_BYTES:
+            raise Refused('a still is %d bytes as a JPEG, over %d' % (len(out.getvalue()), scene.MAX_IMAGE_BYTES))
+        images.append(out.getvalue())
+    if len(set(images)) != len(images):
+        raise Refused('two stills of one request are the same bytes, which is one look')
+    return images
+
+
+def bodies(request, np, Image, live, scene):
+    """Hops 11 and 12's one path to a body, for a click and for prepare.py --owed: each router request in
+    requests.jsonl, its bundle, the stills qwen_live.spread chooses from the bundle's frames (the frame's file
+    name stands in for media_id, since no JPEG exists yet: it only breaks ties), their bytes, and the real
+    request_body. Yields (ask row, body bytes or None, stills)."""
+    take = Path(request['take'])
+    session = session_of(take)
+    offset = json.loads(Path(request['run_json']).read_text(encoding='utf-8'))['clock']['offset_s']
+    rows = list(csv.DictReader(io.StringIO((take / 'frames.csv').read_text(encoding='utf-8'))))
+    by_id = {bundle['bundle_id']: bundle for bundle in read_jsonl(request['bundles'])}
+    context, seen = scene.model_context(TIME_LABEL), set()
+    for routed in read_jsonl(request['requests']):
+        if routed['request_id'] in seen:
+            raise Refused('request id %s repeats' % routed['request_id'])
+        seen.add(routed['request_id'])
+        row = dict(request_id=routed['request_id'], bundle_id=routed['bundle_id'], track_id=routed['track_id'], sent_ts=routed['sent_ts'],
+                   association_safe=routed['association_safe'], body_sha256=None, stills=None, not_asked=None, root=None,
+                   status=None, facts=None, invalid_reason=None, elapsed_s=None)
+        bundle = by_id.get(routed['bundle_id'])
+        if bundle is None:   # the router writes these when the window held no box
+            yield dict(row, not_asked='the router wrote no bundle for this request'), None, None
+            continue
+        pool = [dict(media_id=line['file'], frame_id=line['rgb_seq'], capture_epoch=session, observed_at=frame['ts'],
+                     valid_until=frame['ts'] + scene.MAX_AGE_SECONDS) for frame, line in join(bundle['frames'], offset, rows)]
+        try:
+            chosen = live.spread(pool, routed['sent_ts'])
+        except live.FramesUnavailable as why:   # need gets no input from it, nothing is owed, and the walk goes on
+            yield dict(row, not_asked='qwen_live.spread: %s' % why), None, None
+            continue
+        images = still_bytes(np, Image, scene, take, [still['media_id'] for still in chosen])
+        body = scene.canonical(scene.request_body(context, images, [still['observed_at'] for still in chosen])).encode()
+        stills = [dict(rgb_seq=int(still['frame_id']), file=still['media_id'], observed_at=still['observed_at'], jpeg_sha256=hashlib.sha256(image).hexdigest(),
+                       bytes=len(image)) for still, image in zip(chosen, images)]
+        yield dict(row, body_sha256=hashlib.sha256(body).hexdigest(), stills=stills), body, stills
+
+
+def reply_line(scene, la_fact_log, row, stills, reply, session, take_digest):
+    """Hop 12's field table (plan line 499): the real reply_from_proof, build_observation, first_receipt and
+    la_fact_log.line, never den-core's synthetic line builder, with the clocks moved onto the chain's and the source id and
+    text scope rewritten. Returns (line, receipt)."""
+    try:
+        response = json.loads(reply['raw'])
+    except (TypeError, ValueError):
+        response = None
+    content, finish = scene.reply_from_proof({'response': response})
+    available = row['sent_ts'] + reply['elapsed_s']   # the real ask time stays in the reply file only
+    frames = [dict(media_id=still['jpeg_sha256'], frame_id=str(still['rgb_seq']), capture_epoch=session, observed_at=still['observed_at']) for still in stills]
+    draft = scene.build_observation(site_id=SITE_ID, camera_id=CAMERA_ID, session_id=take_digest[:32], request_id=row['body_sha256'], frames=frames,
+                                    generated_at=available, prompt_version=scene.PROMPT_VERSION, context=scene.model_context(TIME_LABEL),
+                                    body_sha256=row['body_sha256'], engine_epoch=ENGINE_EPOCH, artifact_sha256=None, content=content,
+                                    finish_reason=finish, prior_supplied=False)
+    receipt = dict(scene.first_receipt(draft, available), text_scope=TEXT_SCOPE)
+    text, _ = la_fact_log.line(request_id=row['body_sha256'], session_id=take_digest[:32], observed_at=stills[-1]['observed_at'], sent_at=row['sent_ts'],
+                               available_at=available, engine_epoch=ENGINE_EPOCH, prompt_version=scene.PROMPT_VERSION, outcome='completed', observation=receipt)
+    value = dict(json.loads(text), source_id=SOURCE_ID)   # the builder hard-codes the live source
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=True, allow_nan=False), receipt
+
+
+def read_reply(path):
+    reply = json.loads(Path(path).read_text(encoding='utf-8'))
+    if not isinstance(reply, dict) or set(reply) != REPLY_FIELDS or not isinstance(reply['root'], str) or type(reply['elapsed_s']) not in (int, float) or reply['elapsed_s'] < 0:
+        raise Refused('the reply on file for body %s is not the six fields ask_la.py files' % Path(path).stem[:12])
+    return reply
+
+
+def step_ask(request):
+    """Hops 11 and 12 in one process: every body, then each one's reply by its sha256 in the store, or, for
+    prepare.py --owed, each body still owed filed under owed/. Writes asks.jsonl (the join, one row per
+    request) and, when every asked request has a reply, facts.jsonl."""
+    lab = Path(request['core_tree']) / LAB
+    sys.path.insert(0, str(lab))
+    import numpy as np
+    import PIL
+    from PIL import Image
+    import la_fact_log
+    import qwen_live
+    import qwen_scene as scene
+    work, replies = Path(request['work']), Path(request['replies'])
+    asks, lines, missing, filed, roots, days = [], [], [], [], set(), set()
+    try:
+        session = session_of(request['take'])
+        for row, body, stills in bodies(request, np, Image, qwen_live, scene):
+            asks.append(row)
+            if body is None:
+                continue
+            if any(other['body_sha256'] == row['body_sha256'] for other in asks[:-1]):
+                raise Refused('two requests have the same body, %s' % row['body_sha256'][:12])
+            path = replies / (row['body_sha256'] + '.json')
+            if not path.is_file():
+                missing.append(row['body_sha256'])
+                if request.get('owed'):
+                    owed = Path(request['owed']) / (row['body_sha256'] + '.body')
+                    if not owed.is_file() or sha256_file(owed) != row['body_sha256']:
+                        owed.with_suffix('.part').write_bytes(body)
+                        os.replace(owed.with_suffix('.part'), owed)
+                    filed.append(row['body_sha256'])
+                continue
+            reply = read_reply(path)
+            line, receipt = reply_line(scene, la_fact_log, row, stills, reply, session, request['take_digest'])
+            row.update(root=reply['root'], status=receipt['status'], facts=receipt['facts'], invalid_reason=receipt['invalid_reason'], elapsed_s=reply['elapsed_s'])
+            roots.add(reply['root'])
+            days.add(time.strftime('%Y-%m-%d', time.localtime(reply['asked_unix'])) if type(reply['asked_unix']) in (int, float) else 'an unknown day')
+            lines.append(line)
+    except Refused as why:
+        return dict(refused=str(why), asks=asks)
+    (work / 'asks.jsonl').write_text(''.join(json.dumps(row, sort_keys=True, allow_nan=False) + '\n' for row in asks), encoding='utf-8', newline='\n')
+    if lines and not missing:
+        (work / 'facts.jsonl').write_text('\n'.join(lines) + '\n', encoding='utf-8', newline='\n')
+    return dict(refused=None, asks=asks, missing=missing, filed=filed, roots=sorted(roots), days=sorted(days), lines=len(lines), pillow=PIL.__version__,
+                read=[dict(path='replies/%s.json' % row['body_sha256'], sha256=sha256_file(replies / (row['body_sha256'] + '.json')))
+                      for row in asks if row['root'] is not None])
 
 
 def rows_hold(take, rows, hop, pins, take_digest, check_sha256):
@@ -344,29 +499,25 @@ def torso(observations, seat_top_m):
 
 
 def step_core(request):
-    """Hops 12 and 13: answers typed through the real fact_line, then need v0 in den-core's real runner.
-    Not run.py: its --facts path stamps synthetic false, and these inputs are synthetic."""
+    """Hop 13: need v0 in den-core's real runner, on hop 12's fact lines. Not run.py: its --facts path stamps
+    synthetic false, and these pixels are synthetic even when the words are real. The lines go to the runner
+    directly, as #424 does, because sources.py would refuse the rewritten source id."""
     sys.path.insert(0, str(Path(request['core_tree']) / 'tools' / 'den-core'))
     import runner
     import sources
-    import synthetic
 
-    template = synthetic.TEMPLATES[request['template']]
-    items, lines = [], []
-    for index, observed in enumerate(request['observed_at']):
-        line = synthetic.fact_line(index, observed, observed + request['reply_after_s'], facts=template)
-        lines.append(line)
+    items = []
+    for line in Path(request['facts']).read_text(encoding='utf-8').splitlines():
         value = json.loads(line)
         items.append((sources.fact_time(value['available_at']), 'facts', value))
     header, log = runner.run(runner.tagged(items, 'synthetic'), runner.load_policies(['need']), synthetic=True, sources=['synthetic'])
-    Path(request['facts']).write_text('\n'.join(lines) + '\n', encoding='utf-8')
     Path(request['log']).write_text('\n'.join(json.dumps(row) for row in [header, *log]) + '\n', encoding='utf-8')
     # The runner's ticks go on after the last reply, until need calls the support expired. This take is up to the last reply.
     last_input = max(t for t, _, _ in items)
     states = [row for row in log if row['kind'] == 'person_state' and row['t'] <= last_input]
     latest = states[-1]['data'] if states else {}
     engagement = latest.get('focused_engagement') or {}
-    return dict(states=[row['data']['focused_engagement']['state'] for row in states], facts=len(lines), events=len(log),
+    return dict(states=[row['data']['focused_engagement']['state'] for row in states], facts=len(items), events=len(log),
                 person=dict(state=engagement.get('state'), kind=engagement.get('kind'),
                             support=((latest.get('field_support') or {}).get('focused_engagement') or {}).get('support_status')))
 
@@ -543,36 +694,99 @@ def chain(request):
     emit(10, 'SCRIPTED', 'The track list decides whether the older brain runs at all: %d track(s), so it does. That brain\'s own occupancy is still '
          'typed in brain_run.py until step 6.' % track_run['counts']['tracks'],
          tools=head_tools('tools/den-sim/brain_run.py'), stand_ins=["the older brain's occupancy typed in brain_run.py; the track list only decides that it runs"])
-    emit(11, 'MISSING', 'Not built: the bundles go nowhere, and no model is asked.', ran='not built', note='no request is built from the bundles')
-
-    # Hops 12 and 13: typed answers, then need v0, in one process: a failure there is hop 12's.
-    at(12)
+    # Hops 11 and 12: each request's exact body, rebuilt from the take's own pixels, and its recorded reply by
+    # the body's sha256. A failure in that process is hop 11's.
+    at(11)
     started = time.monotonic()
-    truth, scanned = click.truth()
-    if truth is None:
-        raise Stop(12, 'no truth folder holds this take, so no answer can be typed')
-    # No receipt records the truth's digests, so nothing vouches for this read, nor for the other scenes'
-    # records opened to find it, and the row says so.
-    truth_read = dict(path='truth/(this take)/take.json', sha256=sha256_file(truth / 'take.json'))
-    template = TEMPLATE_FOR_HELD.get((json.loads((truth / 'take.json').read_text(encoding='utf-8'))['person'] or {}).get('held'), 'rest')
-    core = click.own_step('core', dict(core_tree=str(trees['core']), template=template, reply_after_s=1.25, facts=str(work / 'facts.jsonl'),
-                                       log=str(work / 'den-core-log.jsonl'), observed_at=[bundle['interval'][1] for bundle in bundles]))
-    core_tools = tools['core']
-    emit(12, 'SCRIPTED', '%d answers typed through the real fact_line, one per bundle. No model ran.' % core['facts'],
-         tools=[t for t in core_tools if t['path'].endswith(('synthetic.py', 'la_fact_log.py', 'qwen_scene.py'))] + head_tools(*own),
-         read=[click.read(work / 'bundles.jsonl', 9), truth_read, *scanned], wrote=[click.file(work / 'facts.jsonl')],
-         stand_ins=["answers typed from the truth folder's held object (a book reads, a phone is held), through the real fact_line: no model is asked"])
+    asked = click.own_step('ask', dict(core_tree=str(trees['core']), take=str(take), take_digest=request['take_digest'], run_json=str(observe / 'run.json'),
+                                       requests=str(work / 'requests.jsonl'), bundles=str(work / 'bundles.jsonl'), replies=request['replies'],
+                                       work=str(work), owed=request.get('owed')))
+    qwen_tools = [tool for tool in tools['core'] if tool['path'].startswith(LAB)]
+    eleven = dict(tools=head_tools(*own, 'tools/den-sim/ask_la.py', 'tools/den-sim/ask_one.py') + qwen_tools, wrote=[], stand_ins=named(11, 0, 1, 2),
+                  read=[take_read, record_read, click.read(observe / 'run.json', 7), click.read(work / 'requests.jsonl', 9), click.read(work / 'bundles.jsonl', 9)])
+    if asked['refused']:
+        emit(11, 'MISSING', 'No body was built: %s.' % asked['refused'], started, note=asked['refused'], **eleven)
+        raise Stop(11, asked['refused'])
+    rows = asked['asks']
+    built = [row for row in rows if row['body_sha256']]
+    thin = sorted({row['not_asked'] for row in rows if row['not_asked']})
+    if request.get('owed'):
+        print(json.dumps(dict(hop='owed', requests=len(rows), built=len(built), owed=asked['filed'], not_asked=thin)), flush=True)
+        return
+    last, days = read_last_ask(request.get('last_ask')), asked['days']
+    eleven['ran'] = 'recorded %s, bodies rebuilt now' % ', '.join(days) if days and not asked['missing'] else 'bodies rebuilt now; Qwen not asked about all of them yet'
+    counts = ' or '.join(map(str, sorted({len(row['stills']) for row in built}))) or 'no'
+    emit(11, 'ADAPTER', '%d of %d requests built into exact bodies: whole frames, %s stills each chosen by qwen_live.spread, JPEG by Pillow %s at '
+         'fixed settings, time label %s.%s' % (len(built), len(rows), counts, asked['pillow'], TIME_LABEL, ' Not asked: %s.' % '; '.join(thin) if thin else ''), started, **eleven)
+    if not built:
+        raise Stop(11, 'no request had two stills to ask with: %s' % '; '.join(thin), answer=True)
+
+    at(12)
+    replies = [dict(read, recorded=dict(kind='replies', by='last-ask.json', sha256=((last or {}).get('filed', {}).get(read['path'][8:-5]) or {}).get('sha256')))
+               for read in asked['read']]
+    twelve = dict(tools=head_tools(*own) + [tool for tool in qwen_tools if tool['path'].endswith(('qwen_scene.py', 'la_fact_log.py'))],
+                  read=[click.read(work / 'requests.jsonl', 9), *replies], wrote=[click.file(work / 'asks.jsonl')], asks=asks_view(rows))
+    if asked['missing']:
+        why = '%s: %d of %d bodies have no reply on file' % (NOT_SEEN, len(asked['missing']), len(built))
+        emit(12, 'MISSING', why + '. Need gets no input, so the beam stays off.', note=why, owed=asked['missing'], **twelve, stand_ins=[])
+        raise Stop(12, why)
+    if len(asked['roots']) > 1:
+        emit(12, 'MISSING', 'Replies from two models (%s): a click uses one.' % ', '.join(asked['roots']), note='replies from two models', **twelve, stand_ins=[])
+        raise Stop(12, 'replies from two models')
+    root, said = asked['roots'][0], words(built)
+    twelve['said'] = said
+    twelve['wrote'].append(click.file(work / 'facts.jsonl'))
+    if root == FAKE_ROOT:
+        emit(12, 'SCRIPTED', 'Scripted words from a fake vLLM (root %s), not Qwen: %s.' % (root, said), root=root, reply='fake', **twelve,
+             stand_ins=['replies from a fake vLLM on 127.0.0.1, a test\'s scripted words, not Qwen\'s'])
+    else:
+        emit(12, 'ADAPTER', 'Qwen\'s real words, from %s, recorded once on %s and looked up by each body\'s sha256: %s. Its clocks are moved onto '
+             'the chain\'s and its source id rewritten, and a re-ask could differ.' % (root, ', '.join(days) or 'an unknown day', said), root=root, reply='real',
+             ran='recorded %s, looked up now' % ', '.join(days) if days else 'looked up now', **twelve, stand_ins=named(12, 0, 1))
+
+    # Hop 13: need v0 on those lines, in den-core's real runner.
+    at(13)
+    started = time.monotonic()
+    core = click.own_step('core', dict(core_tree=str(trees['core']), facts=str(work / 'facts.jsonl'), log=str(work / 'den-core-log.jsonl')))
     emit(13, 'ADAPTER', 'need v0 on those lines: %s. Track room, no position.' % (' then '.join(core['states']) or 'no change'), started,
-         tools=[t for t in core_tools if t['path'].startswith('tools/den-core/')], read=[click.read(work / 'facts.jsonl', 12)],
+         tools=[t for t in tools['core'] if t['path'].startswith('tools/den-core/')], read=[click.read(work / 'facts.jsonl', 12)],
          wrote=[click.file(work / 'den-core-log.jsonl')], stand_ins=named(13, 0), person=core['person'])
 
     at(17)
     adapter, problem = person_to_aim(bundles, core['person'])
     if problem:
         raise Stop(17, problem)
-    print(json.dumps(dict(hop='done', ok=True, adapter=adapter, camera_m=camera_position(room['path']),
+    print(json.dumps(dict(hop='done', ok=True, adapter=adapter, camera_m=camera_position(room['path']), reply='fake' if root == FAKE_ROOT else 'real', root=root,
                           adapter_reads=[click.read(work / 'bundles.jsonl', 9), click.read(work / 'den-core-log.jsonl', 13)],
                           adapter_tools=head_tools(*own), work=str(work)), allow_nan=False), flush=True)
+
+
+def read_last_ask(path):
+    """last-ask.json, which ask_la.py writes: what each paste filed, by body hash, with each reply's digest."""
+    try:
+        last = json.loads(Path(path).read_text(encoding='utf-8'))
+        return last if isinstance(last.get('filed'), dict) else None
+    except (OSError, TypeError, ValueError, AttributeError):
+        return None
+
+
+def said_by(row):
+    facts = row['facts'] or {}
+    if row['status'] == 'valid':
+        return '%s, holding %s, people %s' % (facts['activity_hypothesis'], facts['held_object'], facts['people_visible'])
+    return 'invalid (%s)' % row['invalid_reason'] if row['status'] else 'no reply on file' if row['body_sha256'] else None
+
+
+def words(rows):
+    """What Qwen said, request by request, from the facts: its activity and held object, or why a reply is invalid."""
+    return '; '.join('%s %s' % (row['request_id'], said_by(row)) for row in rows)
+
+
+def asks_view(rows):
+    """The panel's view of asks.jsonl: per request its stills by frame, how far each is before the newest, and Qwen's words."""
+    return [dict(request_id=row['request_id'], association_safe=row['association_safe'], body=row['body_sha256'] and row['body_sha256'][:12],
+                 stills=[still['rgb_seq'] for still in row['stills'] or []], not_asked=row['not_asked'], said=said_by(row),
+                 seconds=[round(row['stills'][-1]['observed_at'] - still['observed_at'], 1) for still in row['stills'] or []]) for row in rows]
 
 
 def main():
@@ -583,7 +797,7 @@ def main():
         runpy.run_path(script, run_name='__main__')
         return
     if len(sys.argv) == 3 and sys.argv[1] == '--step':
-        print(json.dumps(dict(core=step_core, picture=step_picture)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
+        print(json.dumps(dict(ask=step_ask, core=step_core, picture=step_picture)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
         return
     request = json.load(sys.stdin)
     try:

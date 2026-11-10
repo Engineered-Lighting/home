@@ -2,6 +2,7 @@
 """Hops 1 to 6, recorded once: the rendered scenes through the real recorder, check, fit and detector.
 
     python -B -X utf8 tools\\den-sim\\scene\\prepare.py
+    python -B -X utf8 tools\\den-sim\\scene\\prepare.py --owed [--set SET]
     python -B -X utf8 tools\\den-sim\\scene\\prepare.py --refit --set SET --mark MARK --export EXPORT --floor FLOOR [--facing FACING]
 
 Without --refit it makes one new set under <data root>\\prepared\\<random id>\\ and never reads the
@@ -24,6 +25,12 @@ private folder, so an agent can run it. The data root is DEN_SIM_HOME, or else %
 5. prepare-receipt.json beside each take, keyed by the take's digest (sha256 of frames.csv), with hop 6's part
    taken from detector-run.json; set.json, display.json and truth\\<word>\\ in the set; one line appended to
    prepared\\tries.jsonl.
+
+--owed files the request bodies Qwen still owes a reply for one set (the newest finished one, or --set), so one
+paste of ask_la.py covers every asked scene. For each scene take it runs chain.py itself, hops 3 to 9 and the
+same walk that builds a click's bodies, and files each body with no reply in <data root>\\prepared\\replies\\ as
+<data root>\\prepared\\owed\\<body_sha256>.body, with owed.json listing their hashes and nothing else. Owed bodies
+no longer owed are removed; a reply never is. Its work and archives go to a folder under prepared\\ it deletes.
 
 --refit is for the owner's run.mjs (and later fresh_run.py), on the owner's files, when the mark's,
 export's or facing's digest changed. It copies a set's clicks and calibration into a new folder under
@@ -612,7 +619,8 @@ def receipt(folder, kind, hops, refusal, set_dir, seed, date, started, harness):
 
 
 def write_truth(truth_dir, word, render_name, scene, folder, poses):
-    """The truth folder: what the scene really holds, for the report and tests, and (until step 4) hop 12's typed answers."""
+    """The truth folder: what the scene really holds and its true joints, for the report and tests only. Nothing a
+    click runs opens it."""
     target = truth_dir / word
     target.mkdir(parents=True, exist_ok=True)
     if render_name != word and (truth_dir / render_name / "poses.json").exists():
@@ -631,6 +639,79 @@ def append_try(root, set_dir, seed, shots, digests):
             "invalid_reason": None, "outcome": "prepared", "written_unix": round(time.time(), 3)}
     with open(root / "tries.jsonl", "a", encoding="utf-8", newline="\n") as target:
         target.write(json.dumps(line, sort_keys=True) + "\n")
+
+
+# ---- the bodies Qwen still owes ------------------------------------------------------------------------
+
+def newest_set(prepared):
+    """The newest set prepare finished without a refusal, as data-root.mjs picks it."""
+    sets = []
+    for info in prepared.glob("*/set.json"):
+        doc = json.loads(info.read_text(encoding="utf-8"))
+        if doc.get("schema") == SCHEMA_SET and doc.get("refusal") is None:
+            sets.append((doc["ended_unix"], info.parent))
+    return max(sets)[1] if sets else None
+
+
+def chain_request(set_dir, info, take, root, work, tools_root):
+    """What brain.mjs gives chain.py for a click on this take, on the set's own fit: the bodies don't depend on
+    where the room model places the camera, because the router's times and the bundles' frames don't."""
+    receipt = json.loads((set_dir / take / "prepare-receipt.json").read_text(encoding="utf-8"))
+    wrote = lambda n: receipt["hops"][str(n)]["wrote"]
+    check = next(f for f in wrote(4) if f["path"].rsplit("/", 1)[-1].startswith("check-"))
+    return {"take": str(set_dir / take), "take_digest": receipt["take_digest"], "take_json_sha256": next(f["sha256"] for f in wrote(3) if f["path"].endswith("/take.json")),
+            "check_file": check["path"].rsplit("/", 1)[-1], "check_sha256": check["sha256"], "detector": receipt["hops"].get("6"), "recorded": receipt["recorded"],
+            "seat_top_m": None, "set": str(set_dir), "room_model": {"path": str(set_dir / info["fit"]["folder"] / "room-model.jsonl"),
+                                                                   "sha256": info["fit"]["room_model_sha256"], "by": "set.json"},
+            "refs": json.loads((ROOT / "tools/den-sim/refs.json").read_text(encoding="utf-8"))["tools"], "tools_root": str(tools_root),
+            "work": str(work / take), "replies": str(root / "replies"), "last_ask": None, "owed": str(root / "owed")}, receipt
+
+
+def owed(args):
+    guard(loopback=False)
+    root = data_root() / "prepared"
+    set_dir = Path(args.set).resolve() if args.set else newest_set(root)
+    if not set_dir or not (set_dir / "set.json").is_file():
+        print("--owed refused: no prepared set", file=sys.stderr)
+        return 2
+    info = json.loads((set_dir / "set.json").read_text(encoding="utf-8"))
+    (root / "owed").mkdir(parents=True, exist_ok=True)
+    work = root / (".work-owed-" + random_id())
+    work.mkdir()
+    union, broke = [], []
+    print(f"Owed for set {info['set']}:")
+    try:
+        for row in sorted((t for t in info["takes"] if t["kind"] == "scene"), key=lambda t: t["take"]):
+            request, receipt = chain_request(set_dir, info, row["take"], root, work, work / "tools")
+            if receipt.get("refusal"):
+                print(f"  take {row['take']}: prepare stopped on it, so nothing is asked")
+                continue
+            done = subprocess.run([sys.executable, "-B", str(ROOT / "tools/den-sim/chain.py")], input=json.dumps(request), capture_output=True, encoding="utf-8", timeout=600)
+            ends = [json.loads(line) for line in done.stdout.splitlines() if line.startswith('{"hop": ')]
+            end = ends[-1] if ends else {"hop": "stopped", "stop": {"hop": None, "why": f"chain.py exit {done.returncode}", "answer": False}}
+            if end["hop"] == "owed":
+                union += end["owed"]
+                print(f"  take {row['take']}: {end['requests']} requests, {end['built']} bodies, {len(end['owed'])} owed"
+                      + (f"; not asked: {'; '.join(end['not_asked'])}" if end["not_asked"] else ""))
+                for digest in end["owed"]:
+                    print(f"    {digest}")
+            elif end["stop"]["answer"]:
+                print(f"  take {row['take']}: stopped at hop {end['stop']['hop']}, {end['stop']['why']}: nothing to ask")
+            else:
+                broke.append(row["take"])
+                print(f"  take {row['take']}: BROKE at hop {end['stop']['hop']}: {end['stop']['why']}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    if broke:   # the owed list stays as it was: a partial one would remove bodies a take still owes
+        print(f"--owed refused: {len(broke)} take(s) broke, so the owed list is unchanged", file=sys.stderr)
+        return 1
+    keep = set(union)
+    for path in (root / "owed").iterdir():   # only bodies --owed filed: a reply lives in replies\, never here
+        if path.suffix in (".body", ".part") and path.stem not in keep:
+            path.unlink()
+    write_json(root / "owed" / "owed.json", {"schema": "den-sim-owed-1", "set": info["set"], "bodies": sorted(keep), "written_unix": round(time.time(), 3)})
+    print(f"{len(keep)} bodies owed, in {root / 'owed'}")
+    return 0
 
 
 # ---- the owner's re-fit -------------------------------------------------------------------------------
@@ -766,7 +847,8 @@ def main(argv=None):
     parser.add_argument("--out", help=r"the prepared folder (default <data root>\prepared)")
     parser.add_argument("--seed", type=int, help="moves the small motion and the noise (default: shots.json's)")
     parser.add_argument("--refit", action="store_true", help="re-fit one set on the owner's files; only run.mjs and fresh_run.py start this")
-    parser.add_argument("--set", help="--refit: the prepared set")
+    parser.add_argument("--owed", action="store_true", help=r"file the bodies Qwen still owes for a set under <data root>\prepared\owed")
+    parser.add_argument("--set", help="--refit and --owed: the prepared set (--owed's default: the newest finished one)")
     parser.add_argument("--mark", help="--refit: the owner's sofa mark")
     parser.add_argument("--export", help="--refit: the owner's registration export the mark names")
     parser.add_argument("--floor", help="--refit: the pack's floor.json, for the floor's centre")
@@ -777,6 +859,8 @@ def main(argv=None):
         if not (args.set and args.mark and args.export and args.floor):
             parser.error("--refit needs --set, --mark, --export and --floor")
         return refit(args)
+    if args.owed:
+        return owed(args)
     return prepare(args)
 
 

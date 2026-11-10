@@ -40,7 +40,8 @@ To use a prepared set somewhere else, add `--prepared <the set's folder>`.
 
 Each button is one prepared take: reading on the couch, holding a phone, standing by the couch
 with a book, nobody there, and a blank frame. The click is told the take's folder id, never the
-scene. A click on **Reading on the couch** does this in about 6 seconds:
+scene. A click on **Reading on the couch** does this in about 15 to 20 seconds on this PC (12 to 15 s
+to the click's receipt, measured, then the brain's 3 s wait and the swing):
 
 1. Every frame of the take is hashed against its `frames.csv` and the receipt prepare wrote, and
    its `take.json` is held to prepare's digest too. A frame or `take.json` that changed stops the

@@ -16,12 +16,16 @@ known by the reply's available_at (plan, hop 15 steps 1 to 8):
 5. On the couch: the position within REACH_M of the seat's footprint, and the median height of supported shoulders
    and hips over WINDOW_S at most the seat's top plus ABOVE_SEAT_M; with no supported hip, shoulders alone at most
    SHOULDERS_ONLY_M above the floor (the Lab's zone_word and posture_word numbers).
+   Both halves compare in whole millimetres, so a float's last bits can't flip a test that sits on a limit.
 6. Region: seated gives sofa-book; else handheld, which isn't in the model, so no target. No wrists are needed.
 7. Head: the median of supported face joints.
-8. field_support, sources (the bundle and sofa-seat) and flags. A record is emitted when something changed.
+8. field_support, sources (the bundle and sofa-seat) and flags. A support time is the capture time of the newest
+   evidence the field rests on, never the reply's arrival, and a held field keeps the one it had. A record is
+   emitted when a field's value or support status changed, as need v0's own _changes keys it.
 
 Left null on purpose: head_dir, head_cov, every confidence, visual_demand.level, embedding, episodes, motion,
-affected. It reads no clock, file or environment of its own beyond what it is handed.
+affected. posture is canon's "unknown": nothing here has evidence for it. It reads no clock, file or environment
+of its own beyond what it is handed.
 """
 import importlib.util
 import json
@@ -37,6 +41,7 @@ SHOULDERS, HIPS, FACE = (5, 6), (11, 12), (0, 1, 2, 3, 4)   # COCO-17
 COCO17 = ('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
           'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle')
 PLACES, CARD_PLACES = 6, 2   # records in micrometres, as den-register rounds metres; the card in centimetres
+COMPARE_PLACES = 3           # step 5's two halves compare in millimetres
 INTERPRETER = {'path': 'rules', 'version': 'den-sim-person-1'}
 NULL_REGION = {'center': None, 'extent_m': None, 'normal': None, 'confidence': None}
 
@@ -95,7 +100,8 @@ def joints(bundle, which, t):
 
 
 def seated(xy, bundle, couch, t):
-    """Step 5: on the couch or not, and which half failed: 'position', 'height', or 'torso' when no joint can say."""
+    """Step 5: on the couch or not, and which half failed: 'position', 'height', or 'torso' when no joint can say.
+    captured: the newest capture time of the joints it used."""
     polygon = [vertex[:2] for vertex in couch['vertices_m']]
     away = edge_distance(xy[0], xy[1], polygon)
     hips, shoulders = joints(bundle, HIPS, t), joints(bundle, SHOULDERS, t)
@@ -105,8 +111,10 @@ def seated(xy, bundle, couch, t):
         torso, limit, basis = statistics.median(p[2] for _, p in shoulders), SHOULDERS_ONLY_M, 'shoulders alone'
     else:
         torso, limit, basis = None, None, None
-    failed = (['position'] if away > REACH_M else []) + (['torso'] if torso is None else ['height'] if torso > limit else [])
-    return dict(on=not failed, failed=failed, footprint_m=round(away, CARD_PLACES), torso_margin_m=None if torso is None else round(torso - limit, CARD_PLACES), torso_from=basis)
+    over = None if torso is None else round(torso - limit, COMPARE_PLACES)
+    failed = (['position'] if round(away, COMPARE_PLACES) > REACH_M else []) + (['torso'] if torso is None else ['height'] if over > 0 else [])
+    return dict(on=not failed, failed=failed, footprint_m=round(away, CARD_PLACES), torso_margin_m=None if torso is None else round(torso - limit, CARD_PLACES),
+                torso_from=basis, captured=max((ts for ts, _ in hips + shoulders), default=None))
 
 
 def median_point(points):
@@ -134,6 +142,13 @@ def support(capture, value_set, status, hold=None):
     return {'last_support_capture_ts': capture, 'value_set_ts': value_set, 'support_status': status, 'hold_reason': hold, 'deadband': None, 'cov_ts': None}
 
 
+def changes(record):
+    """What emits a record when it changes: each field's value and support status, never a time (need v0's _changes)."""
+    return json.dumps([record['position'] and record['position']['xyz'], record['working_region'], record['focused_engagement']['state'],
+                       record['attention']['head_xyz'], record['heading'], record['posture'], record['flags'],
+                       {name: value['support_status'] for name, value in record['field_support'].items()}], sort_keys=True)
+
+
 def replies(asks, facts):
     """(ask row, fact line) per reply used: hop 12's fact line names the body's sha256 as its request id."""
     by_request = {line['request_id']: line for line in facts}
@@ -146,36 +161,46 @@ class Person:
     def __init__(self, track_id, need_module):
         self.track_id, self.need = track_id, need_module.make_policy()
         self.engagement, self.engagement_support, self.engagement_sources, self.need_flags = None, None, [], []
-        self.region, self.head, self.couch_test, self.held_since = None, None, None, None
+        self.region, self.head, self.couch_test = None, None, None
+        # (last_support_capture_ts, value_set_ts) of the working region and the head: capture times of the evidence used
+        self.region_times, self.head_times = (None, None), (None, None)
         self.need_states, self.last_key = [], None
+        self.replies, self.taken, self.engaged_reply = 0, 0, None   # this track's replies, those need was handed, and when it engaged
 
     def update(self, t, row, fact, bundle, known, couch):
         safe = bool(row.get('association_safe')) and bool(known) and (known[-1][1].get('association') or {}).get('status') == 'confident'
+        self.replies += 1
         if safe:   # step 3: this track's own need
+            self.taken += 1
             for out in self.need.handle({'t': t, 'kind': 'facts', 'data': fact}):
                 self.need_states.append(out['data']['focused_engagement']['state'])
             record = self.need._record(t)
             self.engagement = {key: record['focused_engagement'][key] for key in ('state', 'kind', 'since_s', 'onset_ts', 'confidence')}
             self.engagement_support = dict(support(None, None, None), **record['field_support']['focused_engagement'])
             self.engagement_sources, self.need_flags = record['sources']['focused_engagement'], record['flags']
+            if self.engaged_reply is None and self.engagement['state'] == 'engaged':
+                self.engaged_reply = self.replies
         positions = [entry for entry in bundle.get('positions') or [] if entry['ts'] <= t]
         newest = max(positions, key=lambda entry: entry['ts']) if positions else None
         position = newest and {'xyz': [newest['x'], newest['y'], 0.0], 'cov': newest.get('cov'), 'cov_ts': newest['ts'], 'predicted': False}
         line = known[-1] if known else None
         heading = line and line[1].get('heading')
-        if safe and position:   # steps 5 to 7
+        if safe and position:   # steps 5 to 7, each supported at the capture time of the newest evidence it used
             self.couch_test = seated(position['xyz'], bundle, couch, t)
             face = joints(bundle, FACE, t)
-            self.region = dict(NULL_REGION, surface_id=SPOT if self.couch_test['on'] else HANDHELD)
-            self.head = median_point([p for _, p in face]) if face else None
-            self.held_since = t
-        held = support(self.held_since, self.held_since, 'held_ambiguous', 'association')
+            region, head = dict(NULL_REGION, surface_id=SPOT if self.couch_test['on'] else HANDHELD), median_point([p for _, p in face]) if face else None
+            captured = max(ts for ts in (newest['ts'], self.couch_test['captured']) if ts is not None)
+            self.region_times = (captured, captured if region != self.region else self.region_times[1])
+            face_at = max((ts for ts, _ in face), default=None)
+            self.head_times = (face_at, face_at if head != self.head else self.head_times[1]) if head else (None, None)
+            self.region, self.head = region, head
+        held = lambda times: support(*times, 'held_ambiguous', 'association')   # a held field keeps the support it had
         engagement_support = self.engagement_support if safe else dict(self.engagement_support or support(None, None, None), support_status='held_ambiguous', hold_reason='association')
         field_support = {
             'position': dict(support(newest['ts'], newest['ts'], 'observed'), cov_ts=newest['ts']) if newest else support(None, None, 'held_unavailable', 'occluded'),
             'heading': support(line[1].get('heading_as_of'), line[1].get('heading_as_of'), 'observed') if heading else support(None, None, 'held_unavailable', 'source_silent'),
-            'working_region': support(t, t, 'observed') if safe and position else held,
-            'attention': (support(t, t, 'observed') if self.head else support(None, None, 'held_unavailable', 'occluded')) if safe and position else held,
+            'working_region': support(*self.region_times, 'observed') if safe and position else held(self.region_times),
+            'attention': (support(*self.head_times, 'observed') if self.head else support(None, None, 'held_unavailable', 'occluded')) if safe and position else held(self.head_times),
             'focused_engagement': engagement_support,
         }
         record = {
@@ -185,7 +210,7 @@ class Person:
             'focused_engagement': self.engagement or {'state': 'none', 'kind': 'reading', 'since_s': None, 'onset_ts': None, 'confidence': None},
             'visual_demand': {'level': None, 'basis': None, 'confidence': None},
             'attention': {'head_xyz': self.head, 'head_cov': None, 'head_dir': None, 'sd_deg': None, 'target': None, 'confidence': None},
-            'heading': heading or None, 'motion': None, 'affected': None, 'embedding': None, 'episodes': None,
+            'heading': heading or None, 'posture': 'unknown', 'motion': None, 'affected': None, 'embedding': None, 'episodes': None,
             'flags': sorted(set(([] if safe else ['association_uncertain']) + list(self.need_flags))),
             'sources': {'position': [{'origin': 'rules', 'ref': bundle['bundle_id']}] if newest else [],
                         'heading': [{'origin': 'rules', 'ref': line[1]['last_obs_ids'][-1]}] if heading else [],
@@ -196,8 +221,7 @@ class Person:
             'field_as_of': {name: value['last_support_capture_ts'] for name, value in field_support.items()},
             'interpreter': INTERPRETER,
         }
-        key = json.dumps({k: v for k, v in record.items() if k not in ('state_id', 'emitted_ts')}, sort_keys=True)
-        changed, self.last_key = key != self.last_key, key
+        changed, self.last_key = changes(record) != self.last_key, changes(record)
         return record, changed, safe
 
 
@@ -228,7 +252,8 @@ def card(person, record, safe, couch):
     return dict(track_id=person.track_id, seat_distance_m=round(math.hypot(position['xyz'][0] - seat[0], position['xyz'][1] - seat[1]), CARD_PLACES) if position else None,
                 on_couch=test.get('on'), failed=test.get('failed'), footprint_m=test.get('footprint_m'), torso_margin_m=test.get('torso_margin_m'),
                 torso_from=test.get('torso_from'), region=(record['working_region'] or {}).get('surface_id'), engagement=record['focused_engagement']['state'],
-                support=record['field_support']['focused_engagement']['support_status'], held=not safe, need_states=person.need_states)
+                support=record['field_support']['focused_engagement']['support_status'], held=not safe, need_states=person.need_states,
+                replies=person.replies, need_replies=person.taken, engaged_reply=person.engaged_reply)
 
 
 def dumps(record):

@@ -8,6 +8,7 @@ are read by `git show` too, and those parts skip when the commit is absent. Each
 import copy
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -69,12 +71,16 @@ def scene(pose='seated', xy=(2.0, 2.4), hips=True, safe=(False, True, True, True
     return out
 
 
+def loaded_need():
+    """need.py at the pin, read by git show and loaded by file path, unchanged. Its folder goes once it is loaded."""
+    with tempfile.TemporaryDirectory(prefix='den-sim-need-') as folder:
+        path = Path(folder) / 'need.py'
+        path.write_bytes(git('show', '%s:tools/den-core/need.py' % PIN).stdout)
+        return person.load_need(path)
+
+
 class Need:
-    """need.py at the pin, read by git show and loaded by file path, unchanged."""
-    folder = tempfile.mkdtemp(prefix='den-sim-need-')
-    path = Path(folder) / 'need.py'
-    path.write_bytes(git('show', '%s:tools/den-core/need.py' % PIN).stdout)
-    module = person.load_need(path)
+    module = loaded_need()
 
 
 def run(fixture, room=ROOM, need=None):
@@ -103,10 +109,12 @@ class Test11(unittest.TestCase):
                           first['field_support']['focused_engagement']['hold_reason'], first['focused_engagement']['state']),
                          (['association_uncertain'], None, 'held_ambiguous', 'association', 'none'))
         self.assertEqual(len(card['need_states']), 2, 'need saw four replies, not five: starting then engaged')
+        self.assertEqual((card['replies'], card['need_replies'], card['engaged_reply']), (5, 4, 3), 'the first held, so it engaged at the third')
         held, _ = run(scene(confident=False, safe=(True,) * 5))
         self.assertTrue(all(r['flags'] == ['association_uncertain'] and r['working_region'] is None for r in held), 'a Track not confident holds too')
-        records, _ = run(scene(safe=(True,) * 5))   # control: every bundle safe, nothing held
+        records, [card] = run(scene(safe=(True,) * 5))   # control: every bundle safe, nothing held
         self.assertEqual((records[0]['flags'], records[0]['working_region']['surface_id']), ([], 'sofa-book'))
+        self.assertEqual((card['replies'], card['need_replies'], card['engaged_reply']), (5, 5, 2))
 
     def test_phone_gives_no_engagement(self):
         records, [card] = run(scene(activity='phone_use'))
@@ -156,17 +164,120 @@ class Test11(unittest.TestCase):
         self.assertTrue(run(scene())[0], 'control: with the couch, states')
 
 
+def seat_bundle(frames, t=100.0):
+    """A typed bundle for person.seated: frames is [(seconds before t, {joint: (height, status)})], at the seat's own xy."""
+    return {'keypoint_series': [{'ts': t - before, 'joints_room': [dict(j=j, xyz=[2.0, 2.5, z], status=status) for j, (z, status) in joints.items()]}
+                                for before, joints in frames]}
+
+
+def torso(shoulders, hips=None, status='supported', hip_status='supported'):
+    return {**{j: (shoulders, status) for j in person.SHOULDERS}, **({j: (hips, hip_status) for j in person.HIPS} if hips is not None else {})}
+
+
+class Seated(unittest.TestCase):
+    """Step 5's two halves at their limits, and which joints count, on the couch ROOM holds (seat top 0.45 m)."""
+    COUCH = ROOM[0]['surfaces'][0]['geometry']
+    SITTING = seat_bundle([(0.5 * k, torso(0.85, 0.55)) for k in range(3)])
+
+    def on(self, xy, bundle=None, couch=None):
+        return person.seated(xy, bundle or self.SITTING, couch or self.COUCH, 100.0)
+
+    def test_the_footprint_reach_at_its_limit_and_on_a_slanted_edge(self):
+        self.assertEqual([self.on([3.0 + d, 2.5])['on'] for d in (0.149, 0.15, 0.151)], [True, True, False], 'east of an edge, by 0.149, 0.15 and 0.151 m')
+        self.assertEqual([self.on([2.0, 2.0 - d])['on'] for d in (0.149, 0.151)], [True, False])
+        diamond = dict(self.COUCH, vertices_m=[[1.0, 0.0, 0.45], [0.0, 1.0, 0.45], [-1.0, 0.0, 0.45], [0.0, -1.0, 0.45]], seat_point_m=[0.0, 0.0, 0.45])
+        out = lambda d: [0.5 + d / 2 ** 0.5] * 2   # d metres out along a 45 degree edge's normal
+        self.assertEqual([self.on(out(d), couch=diamond)['failed'] for d in (0.15, 0.151)], [[], ['position']], 'exactly 0.15 m off a slanted edge is in reach')
+        self.assertGreater(person.edge_distance(*out(0.15), [v[:2] for v in diamond['vertices_m']]), person.REACH_M, 'control: the raw float lies past 0.15')
+
+    def test_the_torso_median_at_its_limit(self):
+        at = lambda median: seat_bundle([(0.5 * k, torso(median + 0.1, median - 0.1)) for k in range(3)])   # an even count: the median is the middle
+        self.assertEqual([self.on([2.0, 2.5], at(0.45 + m))['failed'] for m in (0.449, 0.45, 0.451)], [[], [], ['height']])
+
+    def test_only_supported_joints_count(self):
+        uncertain = seat_bundle([(0.5 * k, torso(1.1, 1.5, hip_status='uncertain')) for k in range(3)])
+        self.assertEqual((self.on([2.0, 2.5], uncertain)['on'], self.on([2.0, 2.5], uncertain)['torso_from']), (True, 'shoulders alone'))
+        supported = seat_bundle([(0.5 * k, torso(1.1, 1.5)) for k in range(3)])   # control: the same hips supported count, and fail
+        self.assertEqual(self.on([2.0, 2.5], supported)['failed'], ['height'])
+
+    def test_the_median_holds_against_an_outlier(self):
+        frames = [(0.5 * k, torso(0.85, 0.55)) for k in range(3)] + [(0.2, {person.HIPS[0]: (5.0, 'supported')})]
+        heights = [0.85] * 6 + [0.55] * 6 + [5.0]
+        self.assertEqual(self.on([2.0, 2.5], seat_bundle(frames))['failed'], [])
+        self.assertGreater(sum(heights) / len(heights), 0.45 + person.ABOVE_SEAT_M, 'control: their mean is over the limit')
+
+    def test_only_the_last_two_seconds_before_t_count(self):
+        high = torso(2.0, 2.0)
+        old = seat_bundle([(0.5 * k, torso(0.85, 0.55)) for k in range(3)] + [(2.5 + 0.1 * k, high) for k in range(5)])
+        self.assertEqual(self.on([2.0, 2.5], old)['failed'], [], 'frames over 2 s before the newest are left out')
+        inside = seat_bundle([(0.5 * k, torso(0.85, 0.55)) for k in range(3)] + [(1.5 + 0.1 * k, high) for k in range(5)])
+        self.assertEqual(self.on([2.0, 2.5], inside)['failed'], ['height'], 'control: the same frames inside 2 s count')
+        late = seat_bundle([(0.5 * k, torso(0.85, 0.55)) for k in range(3)] + [(-0.5 - 0.1 * k, high) for k in range(5)])
+        self.assertEqual(self.on([2.0, 2.5], late)['failed'], [], 'frames after t are left out')
+
+
+class Support(unittest.TestCase):
+    """Canon: a support time is the capture time of the newest accepted evidence, so nothing is presented fresher than it."""
+
+    def test_no_field_is_fresher_than_the_evidence_it_used(self):
+        fixture = scene()
+        captures = {b['bundle_id']: max(e['ts'] for e in b['keypoint_series'] + b['positions']) for b in fixture['bundles']}
+        records, _ = run(fixture)
+        for record in records:
+            newest = captures[record['sources']['position'][0]['ref']]
+            for name, ts in record['field_as_of'].items():
+                self.assertTrue(ts is None or ts <= newest, '%s at %r, after the newest capture it rests on' % (name, ts))
+            self.assertLess(newest, record['emitted_ts'], 'control: each reply arrives after its captures')
+        safe = records[1]
+        self.assertEqual({name: value['support_status'] for name, value in safe['field_support'].items()},
+                         dict(position='observed', heading='observed', working_region='observed', attention='observed', focused_engagement='observed'))
+        self.assertEqual(safe['field_as_of']['working_region'], captures[safe['sources']['position'][0]['ref']])
+        self.assertEqual([s['ref'] for s in safe['sources']['working_region']], [safe['sources']['position'][0]['ref'], 'sofa-seat'])
+
+    def test_a_held_field_keeps_the_support_it_had(self):
+        fixture = scene(safe=(True, True, False, True, True))
+        records, _ = run(fixture)
+        before, held = [next(r for r in records if r['emitted_ts'] == t) for t in sorted({r['emitted_ts'] for r in records})[1:3]]
+        self.assertEqual({name: held['field_support'][name]['support_status'] for name in ('working_region', 'attention', 'focused_engagement')}, {'working_region': 'held_ambiguous', 'attention': 'held_ambiguous', 'focused_engagement': 'held_ambiguous'})
+        for name in ('working_region', 'attention'):
+            self.assertEqual(held['field_support'][name]['last_support_capture_ts'], before['field_support'][name]['last_support_capture_ts'], name)
+        self.assertNotEqual(held['field_as_of']['position'], before['field_as_of']['position'], 'control: the position, which is not held, moves on')
+
+
+class Emit(unittest.TestCase):
+    def test_a_record_is_emitted_only_when_a_value_or_a_status_changed(self):
+        records, _ = run(scene(safe=(True,) * 5))   # starting, engaged, then the same thing three times
+        self.assertEqual([r['focused_engagement']['state'] for r in records], ['starting', 'engaged'])
+        moving = scene(safe=(True,) * 5)   # control: a person who moves a centimetre each reply
+        for i, bundle in enumerate(moving['bundles']):
+            for entry in bundle['positions']:
+                entry['x'] += 0.01 * i
+        self.assertEqual(len(run(moving)[0]), 5)
+
+
 class Test8(unittest.TestCase):
     def test_the_same_input_twice_gives_byte_identical_person_states(self):
-        folder = Path(tempfile.mkdtemp(prefix='den-sim-person-'))
-        for name in ('once', 'twice'):
-            person.write(folder / name, run(scene())[0])
-        once, twice = (folder / 'once').read_bytes(), (folder / 'twice').read_bytes()
-        self.assertEqual(once, twice)
-        records = run(scene())[0]
-        records[-1]['read_at'] = time.time()   # control: a clock read planted in a record
-        person.write(folder / 'planted', records)
-        self.assertNotEqual((folder / 'planted').read_bytes(), once)
+        with tempfile.TemporaryDirectory(prefix='den-sim-person-') as folder:
+            folder = Path(folder)
+            for name in ('once', 'twice'):
+                person.write(folder / name, run(scene())[0])
+            once, twice = (folder / 'once').read_bytes(), (folder / 'twice').read_bytes()
+            self.assertEqual(once, twice)
+            # Control: a clock read planted in person.py's own record path, in each field's support, breaks it.
+            with mock.patch.object(person, 'support', lambda *args, real=person.support: dict(real(*args), read_ns=time.perf_counter_ns())):
+                for name in ('planted-once', 'planted-twice'):
+                    person.write(folder / name, run(scene())[0])
+            self.assertNotEqual((folder / 'planted-once').read_bytes(), (folder / 'planted-twice').read_bytes())
+
+    def test_the_tests_leave_nothing_in_the_temp_folder(self):
+        with tempfile.TemporaryDirectory(prefix='den-sim-temp-') as temp:
+            env = dict(os.environ, TEMP=temp, TMP=temp, TMPDIR=temp)
+            done = subprocess.run([sys.executable, '-B', '-X', 'utf8', str(HERE / 'test_person.py'), 'Test8.test_the_same_input_twice_gives_byte_identical_person_states', 'Hop13'],
+                                  capture_output=True, text=True, env=env, cwd=str(HERE))
+            self.assertEqual(done.returncode, 0, done.stderr[-2000:])
+            self.assertEqual(os.listdir(temp), [])
+            subprocess.run([sys.executable, '-B', '-c', 'import tempfile; tempfile.mkdtemp()'], env=env, check=True)   # control: a folder left behind is seen
+            self.assertEqual(len(os.listdir(temp)), 1)
 
 
 class Canon(unittest.TestCase):
@@ -178,6 +289,9 @@ class Canon(unittest.TestCase):
         names = {part.strip() for field in record['fields'] for part in field['name'].split('/')}
         written = run(scene())[0][-1]
         self.assertEqual(sorted(set(written) - names), [])
+        self.assertEqual(sorted(names - set(written)), [], 'every canon field is written, null or unknown where nothing has evidence')
+        self.assertEqual(sorted(names - set(dict((k, v) for k, v in written.items() if k != 'posture'))), ['posture'], 'control: a missing field is found')
+        self.assertEqual(written['posture'], 'unknown')
         self.assertEqual(set(written['focused_engagement']) - set(record['example']['focused_engagement']), {'kind', 'onset_ts'}, 'the dialect canon allows')
         self.assertLessEqual(set(written['field_support']['position']), set(record['example']['field_support']['position']))
         self.assertEqual(sorted(set(dict(written, seat_landmark=None)) - names), ['seat_landmark'], 'control: a name canon lacks is found')
@@ -195,21 +309,31 @@ class Canon(unittest.TestCase):
 
 class Hop13(unittest.TestCase):
     def test_the_runner_pass_and_the_need_per_track_give_the_same_states_on_the_same_lines(self):
-        folder = Path(tempfile.mkdtemp(prefix='den-sim-core-'))
+        temp = tempfile.TemporaryDirectory(prefix='den-sim-core-')
+        self.addCleanup(temp.cleanup)
+        folder = Path(temp.name)
         with tarfile.open(fileobj=io.BytesIO(git('archive', '--format=tar', PIN, 'tools/den-core').stdout)) as archive:
             archive.extractall(folder, filter='data')
         fixture = scene(safe=(True,) * 5)
         fixture['facts'][1]['observation']['facts']['activity_hypothesis'] = 'phone_use'   # reading, phone, then reading: a dropped line shows
 
-        def runner_states(facts):
+        def runner(facts):
             (folder / 'facts.jsonl').write_text(''.join(json.dumps(line) + '\n' for line in facts), encoding='utf-8')
-            return chain.step_core(dict(core_tree=str(folder), facts=str(folder / 'facts.jsonl'), log=str(folder / 'log.jsonl')))['states']
+            return chain.step_core(dict(core_tree=str(folder), facts=str(folder / 'facts.jsonl'), log=str(folder / 'log.jsonl')))
+        runner_states = lambda facts: runner(facts)['states']
         _, [card] = run(fixture)
         self.assertEqual(card['need_states'], runner_states(fixture['facts']))
+        self.assertEqual((card['engaged_reply'], runner(fixture['facts'])['engaged_reply']), (4, 4), 'reading, phone, then reading: both engage at the fourth')
         unsafe = copy.deepcopy(fixture)   # control: the first bundle unsafe, so person.py hands need four of the five lines
         unsafe['asks'][0]['association_safe'] = unsafe['bundles'][0]['association_safe'] = False
         self.assertNotEqual(run(unsafe)[1][0]['need_states'], runner_states(fixture['facts']))
         self.assertEqual(run(unsafe)[1][0]['need_states'], runner_states(fixture['facts'][1:]), 'and on the four it took, the two agree again')
+        # Hop 13's row says where the two passes part: reading on all five, the first held, engages a reply later in person.py.
+        lag = scene()
+        self.assertEqual(chain.need_words(runner(lag['facts']), run(lag)[1]).split('(hop 15), ')[1], 'on the replies its bundle was safe to take: trk-1 took 4 of 5 '
+                         'replies, 1 held as not safe to tie to one person: starting then engaged, so it engaged at reply 3, where the runner pass engaged at reply 2.')
+        safe = scene(safe=(True,) * 5)   # control: nothing held, nothing parts
+        self.assertTrue(chain.need_words(runner(safe['facts']), run(safe)[1]).endswith('trk-1 took 5 of 5 replies: starting then engaged.'))
 
 
 if __name__ == '__main__':

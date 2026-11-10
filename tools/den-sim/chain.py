@@ -533,6 +533,22 @@ def person_words(card):
     return '%s %s, %s, spot %s, engagement %s' % (card['track_id'], distance, couch, card['region'] or 'none', card['engagement'])
 
 
+def need_words(core, cards):
+    """Hop 13's row: which need v0 pass feeds what, and where the two passes part. The runner pass takes every reply;
+    person.py's need per track takes only the replies its bundle was safe to tie to one person, so it can engage later."""
+    runner = 'need v0 on those lines in den-core\'s runner: %s; that pass feeds the older brain until step 6.' % (' then '.join(core['states']) or 'no change')
+    tracks = []
+    for card in cards:
+        held = card['replies'] - card['need_replies']
+        words = '%s took %d of %d replies%s: %s' % (card['track_id'], card['need_replies'], card['replies'],
+                                                   ', %d held as not safe to tie to one person' % held if held else '', ' then '.join(card['need_states']) or 'no change')
+        if len(cards) == 1 and card['replies'] == core['facts'] and card['engaged_reply'] != core['engaged_reply']:
+            words += ', so it engaged %s, where the runner pass engaged %s' % tuple(
+                'at reply %d' % n if n else 'at no reply' for n in (card['engaged_reply'], core['engaged_reply']))
+        tracks.append(words)
+    return '%s One need per track in person.py (hop 15), on the replies its bundle was safe to take: %s.' % (runner, '; '.join(tracks) or 'not run')
+
+
 def step_core(request):
     """Hop 13: need v0 in den-core's real runner, on hop 12's fact lines. Not run.py: its --facts path stamps
     synthetic false, and these pixels are synthetic even when the words are real. The lines go to the runner
@@ -552,7 +568,9 @@ def step_core(request):
     states = [row for row in log if row['kind'] == 'person_state' and row['t'] <= last_input]
     latest = states[-1]['data'] if states else {}
     engagement = latest.get('focused_engagement') or {}
+    engaged = next((row['t'] for row in states if row['data']['focused_engagement']['state'] == 'engaged'), None)
     return dict(states=[row['data']['focused_engagement']['state'] for row in states], facts=len(items), events=len(log),
+                engaged_reply=None if engaged is None else sum(1 for t, _, _ in items if t <= engaged),
                 person=dict(state=engagement.get('state'), kind=engagement.get('kind'),
                             support=((latest.get('field_support') or {}).get('focused_engagement') or {}).get('support_status')))
 
@@ -798,9 +816,7 @@ def chain(request):
         person = click.own_step('person', dict(core_tree=str(trees['core']), work=str(work), room_model=room['path']))
     except Stop as failed:
         person = dict(missing=failed.why)
-    per_track = '; '.join('%s %s' % (card['track_id'], ' then '.join(card['need_states']) or 'no change') for card in person.get('tracks') or []) or 'not run'
-    emit(13, 'ADAPTER', 'need v0 on those lines in den-core\'s runner: %s; that pass feeds the older brain until step 6. One need per track in '
-         'person.py (hop 15), on the replies its bundle was safe to take: %s.' % (' then '.join(core['states']) or 'no change', per_track), ms=core_ms,
+    emit(13, 'ADAPTER', need_words(core, person.get('tracks') or []), ms=core_ms,
          tools=core_tools + head_tools('tools/den-sim/person.py'), read=[click.read(work / 'facts.jsonl', 12)],
          wrote=[click.file(work / 'den-core-log.jsonl')], stand_ins=named(13, 0), person=core['person'])
     fifteen = dict(tools=head_tools(*own, 'tools/den-sim/person.py') + [t for t in core_tools if t['path'] == 'tools/den-core/need.py'],

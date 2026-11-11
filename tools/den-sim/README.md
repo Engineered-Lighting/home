@@ -2,12 +2,12 @@
 
 Press a scene and watch the pinned den pipeline tools run on a recorded, rendered take. Once your
 one paste has recorded Qwen's words on that take's exact frames, they decide whether the person is
-reading, the older lighting brain decides, and a virtual spotlight in the real Home swings to the
-couch; then read the exact fixture command it would take, which is shown and never sent. Until
+reading, rung 9's coordinator decides the beam, and a virtual spotlight in the real Home swings to the
+couch; then read the exact fixture command that Decision would take, which is shown and never sent. Until
 that paste, no Qwen reply is on file: a click with a person stops at the reply, the beam stays off,
 and the page shows the line to paste.
 
-**Status: a simulation, step 5 of the connected plan.** The picture is a rendered, artificial
+**Status: a simulation, step 6 of the connected plan.** The picture is a rendered, artificial
 person in an authored room, seen by a camera that does not exist. A real detector, YOLO26s and
 RTMPose-m on this PC's CPU, looked at every usable frame when the set was prepared, and its rows
 are recorded beside each take: pixels decide whether anyone is there. Qwen on the inference host
@@ -45,8 +45,8 @@ To use a prepared set somewhere else, add `--prepared <the set's folder>`.
 
 Each button is one prepared take: reading on the couch, holding a phone, standing by the couch
 with a book, nobody there, and a blank frame. The click is told the take's folder id, never the
-scene. A click on **Reading on the couch** does this in about 15 to 20 seconds on this PC (12 to 15 s
-to the click's receipt, measured, then the brain's 3 s wait and the swing):
+scene. A click on **Reading on the couch** does this in about 15 seconds on this PC (about 10 s
+to the click's receipt, then the swing; 13.5 s measured in a headless browser):
 
 1. Every frame of the take is hashed against its `frames.csv` and the receipt prepare wrote, and
    its `take.json` is held to prepare's digest too. A frame or `take.json` that changed stops the
@@ -60,7 +60,9 @@ to the click's receipt, measured, then the brain's 3 s wait and the swing):
    the same people: boxes and joints within 1 px, scores within 0.001. Anything less reads MISSING
    at hop 6 and stops the click, never "nobody". Rows with no person stop it with "the detector saw
    nobody, nothing was asked".
-3. The pinned tools run on those rows: observations, tracks and the router.
+3. The pinned tools run on those rows: observations, tracks and the router. Hop 10 writes one
+   occupancy event, on via `den-track`, at the first confirmed Track line, dated by the observations
+   it names: what the coordinator reads as someone in the room. No track confirmed, no event.
 4. For each router request, hop 11 takes its bundle, chooses 2 or 3 stills with the Lab's own
    `qwen_live.spread`, finds each still's frame by its time (within 1 ms in `frames.csv`), encodes
    it as a JPEG with Pillow at fixed settings, and builds the exact body the Lab's
@@ -69,25 +71,34 @@ to the click's receipt, measured, then the brain's 3 s wait and the swing):
    real Lab builders. A request whose bundle is missing or too thin for two stills is not asked,
    and the walk goes on. With no reply on file for a body, the click stops there: "Qwen has not
    seen these exact frames", need gets no input and the beam stays off.
-5. need v0 in den-core's runner reads those fact lines, and the older lighting brain judges what
-   they produced, with no camera position, so the reader's facing comes from the shoulder labels
-   of the newest bundle entry that has both. It waits for 3 seconds of reading.
-6. Beside it, `person.py` (hop 15) writes `person_states.jsonl` in the field names of the
-   architecture's `person_state` record: one unchanged need v0 per track, fed only the replies whose
-   bundle was safe to tie to that track, and rules on the track's own joints, each using only what
-   was known when the reply arrived. Besides the bundles, replies and room model, it reads hop 7's
-   observations, only to date each Track line, which carries no time of its own. It tests whether
-   the person is on the couch: their position within 0.15 m of the couch's footprint, and the median
-   height of their supported shoulders and hips over 2 s at most the seat's top plus 0.45 m, or with
-   no hip, shoulders at most 1.20 m above the floor, both compared in whole millimetres. Seated, the
-   spot is `sofa-book`; otherwise `handheld`, which has no target. Each field's support time is the
-   capture time of the newest evidence it rests on, and a state is written when a value or its
-   support status changes. Nothing reads these states until step 6: **the older brain still decides
-   the beam**, under its own 1.5 m rule, exactly as before. The two need v0 passes can part: the
-   runner's takes every reply, `person.py`'s only the safe ones, so on the real takes, whose first
-   bundle isn't safe, it engages one reply later. Hop 13's row says where.
-7. One fixture swings to the reader's hand point at about 30 degrees a second, and the exact
-   command appears, marked `NOT SENT`.
+5. `person.py` (hop 15) writes `person_states.jsonl` in the field names of the
+   architecture's `person_state` record: one unchanged need v0 per track (hop 13, the only need pass
+   on a click), fed only the replies whose bundle was safe to tie to that track, and rules on the
+   track's own joints, each using only what was known when the reply arrived. Besides the bundles,
+   replies and room model, it reads hop 7's observations, only to date each Track line, which carries
+   no time of its own. It tests whether the person is on the couch: their position within 0.15 m of
+   the couch's footprint, and the median height of their supported shoulders and hips over 2 s at most
+   the seat's top plus 0.45 m, or with no hip, shoulders at most 1.20 m above the floor, both compared
+   in whole millimetres. Seated, the spot is `sofa-book`; otherwise `handheld`, which has no target.
+   Each field's support time is the capture time of the newest evidence it rests on, and a state is
+   written when a value or its support status changes. On the real takes, whose first bundle isn't
+   safe, need engages on the third reply.
+6. **Rung 9's coordinator decides the beam** (hop 17), in a spot mode written for this simulation, at
+   den-core's pin: once, on the occupancy event and the person states, through den-core's real runner
+   with the plant off, on hop 16's light model. Its readers are the tracks `decide.reading` calls
+   reading; a reader at `sofa-book` gets a target of 300 in the model's unit (modeled lux on assumed
+   lumens), any other spot none. Each fixture is held to the lighting brain's own `aim.py`, imported
+   by den-core's `spot_rule.py` (too far, beam through the head, in front of the reader, pan or tilt
+   out of reach), and the solve takes the lowest cost over every allowed fixture and level, or off:
+   one beam per reader. It writes canon Decisions on `virtual-den-4`, `actuation: synthetic`, with the
+   aim as `target_m` and a dark move then a fade in; `check.py` replays the log byte for byte. Nobody
+   reading writes no Decision, and the click stops there; a reader every fixture refuses gets one
+   Decision with no steps, the beam stays off and the refusals show.
+7. Each Decision goes through `decision_doc.mjs` into Home's document (hop 18); the feed swings the
+   lit fixture from Home's read-back to the Decision's `target_m` at about 30 degrees a second (hop
+   19), and keeps re-timing the last Decision's document once a second. The fixture command is
+   compiled from the Decision's target and level and appears, marked `NOT SENT` (hops 21 to 23). At
+   landing the page reads Home's aim back and the harness holds it to the Decision (hop 24, below).
 
 At page start, after the re-fit, `couch_to_room.mjs` (hop 14) checks the couch's seal and binding with
 Home's own validator and appends one revision to a copy of the fit's private `room-model.jsonl`, by
@@ -109,15 +120,35 @@ and there is no occlusion, bounce or daylight, so its unit is `relative` (modele
 `fake: true`. It holds coordinates, so it is written privately beside the fit, as `light\light-model.json`; its digest
 goes into the startup record, `run.json` and the console, and hop 16's row lists the room model and geometry it read,
 each against the digest its writer took. Hop 16 reads ADAPTER, "built at page start"; on authored sockets its row also
-says the fixture origins are not yours. Nothing decides from it until the coordinator does.
+says the fixture origins are not yours. The coordinator decides from it, and hop 17's row holds it to its digest.
 
 The empty room Home is shown before and between clicks is `decision_doc.mjs`'s off document: four dark fixtures and
-the full field set of Home's contract fixture, its reading evidence unbound. `decision_doc.mjs` also maps one spot
-Decision, in the coordinator's canonical shape, to Home's document; it refuses anything but `virtual-den-4` and
+the full field set of Home's contract fixture, its reading evidence unbound; it stands in for any click that writes no
+Decision. `decision_doc.mjs` maps each spot Decision to Home's document; it refuses anything but `virtual-den-4` and
 `synthetic`, takes each fixture's level and colour from the Decision's read-back, its point from the request and its fade
 from the fade-in's two times, and writes `bound: true` only when the reader's person state joins through `asks.jsonl`
-to one request, bundle, track and reply. The click doesn't use it yet. Every document the feed sends goes through Home's
-own validator first: one it refuses stops the click with the validator's reason, and the off document stays.
+to one request, bundle, track and reply. Every document the feed sends goes through Home's own validator first: one it
+refuses stops the click with the validator's reason, and the off document stays.
+
+## The Decision card, the command and the aim check
+
+Under the person card, the Decision card says what the coordinator chose, from hop 17's row: for example "Chose F2
+(fixture-02): level 0.79, predicts 273 of 300 asked, modeled lux, assumed lumens", the fixtures it allowed that cost more,
+and each refusal in words ("F1 refused: in front of reader"). When every fixture refuses, the beam stays off, the reasons
+show, and the card says you can turn the reader (see `facing.json`, below). With no Decision, as on a phone click, the card
+says why from the person state: nobody is reading. The fixture command box below it shows the motor units, the packets and
+the Zigbee command compiled from the Decision's target and level, marked NOT SENT (`sent: false`, `send_path: null`), and
+the aim check's two numbers. A target the fictional profile can't reach is refused and shown.
+
+The aim check (hop 24) runs at landing: the page reads the lit fixture back from Home's real overlay and posts it to the
+harness's same-origin `/__sim/aim`, and the harness writes `aim_check.json` beside the click with two angles: the
+Decision's target against Home's target point, seen from the fixture, and the inverse kinematics against Home's pan and
+tilt (fixture pan = -Home's pan, fixture tilt = 90 - Home's tilt), each within 0.05 degrees. Commanded, no encoder, not a
+measurement. Out of tolerance, the row shows both numbers and the top line reads "not yet: Home did not follow the
+Decision".
+
+The last Decision stays lit after the take ends, re-timed. Once the last reply's validity has passed on the chain's clock,
+the page adds "Last reply N s old. The live system would drop this beam."
 
 The click is told the take's folder id and Home's report of the fixtures, never the scene. The
 button labels live in the set's `display.json`, which only the panel reads (without it, the
@@ -134,8 +165,8 @@ test failed, the spot by name (the `sofa-book` spot's marker in the room comes a
 track's engagement. A track whose replies were all held reads "not tested yet", and one with no
 supported shoulder or hip says that half failed. It says the couch is the picture's couch, placed on
 your mark or on a DECLARED stand-in seat, says the facing is yours when `facing.json` turned the
-reader, and that the older brain still decides the beam until step 6, so a figure standing
-within 1.5 m of the seat would still light. It holds distances and words only, never a coordinate.
+reader, and that the coordinator decides the beam from this state, with no target unless the spot is
+`sofa-book`. It holds distances and words only, never a coordinate.
 The same words go to the console and to the run's `run.json`.
 
 Under it, the Qwen card lists each request: its stills, shown as the very JPEGs its body carries
@@ -143,29 +174,29 @@ Under it, the Qwen card lists each request: its stills, shown as the very JPEGs 
 each is before the newest, and Qwen's words with every field, the model's served root and the day
 it was asked. It says each reply is a plain file with no signature, so a hand-typed one would
 pass. The red strip says whose words are on file: none yet, a fake vLLM's (a test's), or Qwen's,
-recorded once by your paste. Home's brain document says `inference_ran` and the activity source
-`den_sim_la_direct` only on a click that used Qwen's recorded words; its inputs stay marked
-scripted while the occupancy is still typed (until step 6). **Reading on the
-couch** lights only if Qwen says reading there; **Holding a phone** stays off unless it does, and
-then the beam stays off because of what Qwen said. Until you paste the line below, both stop at
-hop 12. **Nobody there** and **Blank
+recorded once by your paste. Home's document says `inference_ran` and the activity source
+`den_sim_la_direct` only on a click that used Qwen's recorded words, and its inputs are marked
+scripted otherwise; a click's occupancy source is `den_sim_den_track`. **Reading on the
+couch** lights only if Qwen says reading there and a fixture passes; **Holding a phone** stays off unless
+Qwen says reading, and then the coordinator writes no Decision because of what Qwen said. Until you paste
+the line below, both stop at hop 12. **Nobody there** and **Blank
 frame** stop at the detector: "the detector saw nobody, nothing was asked", with no box, no person
 marker on the floor and no beam. **Standing by the couch with a book** stops there too: on these
 renders YOLO26s does not find the standing figure, close to the camera with its legs out of frame.
 Run as the Lab's worker runs it, its best person score on each of the take's 82 usable frames is
 0.006 to 0.049 (median 0.015), far under its 0.25 cut; with Ultralytics' default rectangular
 letterbox instead, 0.01 to 0.10. That is what the model saw, and the page says so, so Qwen is
-never asked about it. If a standing figure ever lights a spot, it's the older brain's own 1.5 m
-rule calling it on the couch, and the panel says that on every lit result.
+never asked about it. A standing figure the detector did find would read "on the couch: no", get
+`handheld`, which has no target, and no beam.
 
 A second click on the same button swings 0 degrees, because the beam is already there. At this
-step its top line still reads "not yet", because rows are MISSING (see below). **Reset** reloads
-the page and clears the aim.
+step its top line still reads "not yet", because hops 25 and 26 are MISSING until step 7 (see below).
+**Reset** reloads the page and clears the aim.
 
 **Run every scene** presses all five in turn with no reload, swings the beam where each lights,
 and fills a plain table: scene, box, Qwen (asked or not, and its words), person (on the couch, not on
 the couch, not tested when every reply was held, MISSING with why, or none when no track reached hop
-15), beam, and why it stopped. It checks that every reply on the table came from one model, says "no meter on this
+15), beam (the Decision's fixture and level), and why it stopped, from the coordinator. It runs no aim check. It checks that every reply on the table came from one model, says "no meter on this
 run", and leaves the top line as your last single click set it.
 
 ## Qwen's words: the one paste
@@ -220,8 +251,10 @@ pins, and the files it read and wrote with their digests. The recorded hops take
 the receipt that wrote it, every row reads its finished word with only named stand-ins, every
 tool matches its pin (and, where `hops.json` names pins for a hop, as hop 6's, is held to the one
 named for its path), the aim check is within tolerance and no row is MISSING. At this step it
-reads "not yet". A click the pipeline stops (nobody, a refusal) reads "This click stopped at"
-only once the rows up to there hold. A click that breaks reads MISSING at the hop that broke, with
+reads "not yet": hops 25 and 26, the virtual meter and verify, are step 7's. An aim check out of
+tolerance reads "not yet: Home did not follow the Decision". A click the pipeline stops (nobody,
+nobody reading, every fixture refusing) reads "This click stopped at" only once the rows up to there
+hold, which with the DECLARED stand-in seat or authored sockets they don't. A click that breaks reads MISSING at the hop that broke, with
 why; the rows before it stay as they ran, and only the rows after it read "not reached". A second
 press reads "Pressed again" only when nothing but its aim check could fail.
 
@@ -237,19 +270,20 @@ the digest `last-ask.json` recorded when the paste filed it.
 | 6 Detector and box | Adapter | `tools/den-detect/detect.py` over the Lab's real YOLO26s and RTMPose-m workers, on this PC's CPU, `authorize` answered yes. Recorded once per take, `available_ts` counting compute only, checked against the model at prepare and held to its checks on each click |
 | 7, 8 Observations, tracks | Real, unscored | `replay.py --detections` and `den_track.py` on the recorded rows, on open slots' proposed values. Zero tracks stops before the router, and says what was seen |
 | 9 Bundles and router | Adapter | `den_bundle.py route` with its fake sender, whose outcome field isn't read, on a method copy that adds this camera's frame size |
-| 10 Occupancy | Scripted | The track list decides whether the older brain runs at all; that brain's own occupancy stays typed until step 6 |
+| 10 Occupancy | Adapter | One occupancy event from the track list (`den-track`), at the first confirmed track: the live source, Frigate on Hailo, has no virtual stream |
 | 11 Bundle to Qwen | Adapter | Each request's exact bytes, rebuilt on each click: whole frames, no box, the time label fixed, the placement text the real camera's. Asked once, by your paste, straight to vLLM |
 | 12 Qwen reply | Adapter | Qwen's real words, recorded once and looked up by the body's hash, through the Lab's real builders, clocks moved and source id rewritten. Missing until your paste; a fake vLLM's reads Scripted |
-| 13 Need | Adapter | need v0, standing in for need v1: in den-core's runner, which feeds the older brain until step 6, and one per track in `person.py` |
+| 13 Need | Adapter | need v0, standing in for need v1, once per track in `person.py`: no other need pass runs on a click |
 | 14 Couch | Scripted, or Adapter with your mark | `couch_to_room.mjs` writes the DECLARED stand-in seat, or your sofa mark, into the pipeline's own RoomModel at page start, with the spot 0.30 m above the seat point |
-| 15 Person state | Adapter | `person.py`: need v0 per track and rules on real joints, unscored. Rung 6 isn't built, and nothing reads it until step 6 |
+| 15 Person state | Adapter | `person.py`: need v0 per track and rules on real joints, unscored. Rung 6 isn't built. The coordinator reads it |
 | 16 Light model | Adapter | `light_model.mjs` at page start: Home's own beam formula on assumed numbers, `fake: true`, unit relative, one private file for every take |
-| 17 Spot decision and aim | Adapter | The older lighting brain, with jev and deep_stack health asserted |
-| 18, 19 Feed into Home, motion | Adapter, scripted | This harness replays the brain's timeline re-timed to now, with 10 Hz steps for the swing |
+| 17 Spot decision and aim | Adapter | Rung 9's coordinator in a spot mode written for this simulation, at den-core's pin: its own solve and target, the lighting brain's fixture rule imported; plumbing, which its own `score.py` refuses |
+| 18, 19 Feed into Home, motion | Adapter, scripted on purpose | One mapping from each Decision to Home's document, re-timed to now and the last one kept lit; 10 Hz steps at 30 deg/s for the swing |
 | 20 Home client, follower, overlay | Real | Unchanged `app/src`, served from this harness |
-| 21, 22 Inverse kinematics, packets | Adapter | `compile_target` on a fictional profile, and the codec with its public test key |
-| 23 Zigbee envelope, CAN frames | Scripted | Display only |
-| 24 to 26 Aim check, meter, verify | Missing | Not built yet |
+| 21, 22 Inverse kinematics, packets | Adapter | `compile_target` on a fictional profile, and the codec with its public test key, on the Decision's target and level |
+| 23 Zigbee envelope, CAN frames | Scripted on purpose | Display only, from the Decision: NOT SENT |
+| 24 Aim check | Adapter | At landing, Home's read-back against the Decision and the inverse kinematics, 0.05 degrees: commanded, no encoder |
+| 25, 26 Virtual meter, verify | Missing | Step 7 |
 
 ## Your own sockets and couch (optional)
 
@@ -302,7 +336,7 @@ agent prepared there would be invisible to your own PowerShell.
 | `prepared\tries.jsonl` | Every try at choosing the picture, append-only, and one line per paste. The page counts the Qwen tries in it |
 | `private` | Your optional files, the brain geometry built from them, and `fits\`, your re-fits, each with `couch\room-model.jsonl`, the copy hop 14 wrote the couch into, and `light\light-model.json`, hop 16's light model |
 | `fits` | Re-fits on the authored room's stand-in seat, with their `couch\room-model.jsonl` and `light\light-model.json` |
-| `runs\<stamp>\click-<n>` | Each click's rows, observations, tracks, bundles, den-core log, person states, brain timeline, dry run, picture and `run-receipt.json`, about 1.2 MB. Nothing cleans these up |
+| `runs\<stamp>\click-<n>` | Each click's rows, observations, tracks, bundles, occupancy, person states, the coordinator's `decide\` folder (`log.jsonl`, `decisions.jsonl`, `surfaces.json`), Home's documents, dry run, `aim_check.json`, picture and `run-receipt.json`, about 1.2 MB. They hold the room's coordinates, so they are private like `private`. Nothing cleans these up |
 | `tools\<name>-<sha>` | `git archive` of each pinned ref in `refs.json`, about 1 MB. `observe-<sha>` also holds the Lab files the detector imports, so it can be `detect.py`'s `--tools-root`; `core-<sha>` the Lab's `qwen_live.py` and the 7 files it imports. `tools\lifted\` holds what `ask_la.py` lifts |
 
 To clear the runs:
@@ -331,7 +365,7 @@ python -B -X utf8 tools\den-sim\scene\prepare.py
 
 - The harness binds `127.0.0.1` only and refuses any other `Host`.
 - Anything it does not serve returns 503 and is logged.
-- It refuses non-GET except a same-origin `/__sim/feed`, and destroys WebSocket upgrades.
+- It refuses non-GET except a same-origin `/__sim/feed` and `/__sim/aim`, and destroys WebSocket upgrades.
 - The page's security policy allows connections to its own origin only, plus `data:` and `blob:`,
   which Home's Photo view needs for local bytes.
 - Every Python process here refuses all sockets, through an audit hook. Only `prepare.py`'s
@@ -387,8 +421,10 @@ node --test tools\den-sim\test-den-sim-browser.mjs
   the couch, and Qwen's recorded words say what it saw in a render, once: a re-ask could differ.
   The reply files are plain files with no signature, so a hand-typed one would pass.
 - That the real den camera could see a reader on the couch. This camera doesn't exist.
-- That the command would work. The codec on disk is older than the release `origin/main` pins,
-  clock exchange is not generated, and no real radio has run this format.
+- That the command would work. The codec on disk is the release `origin/main` pins, with LF line
+  endings where those pins hash CRLF; clock exchange is not generated, and no real radio has run this format.
+- That the light is right. The coordinator decides on a light model marked `fake: true`, on assumed
+  lumens, and until step 7 nothing meters or verifies the light: only the aim check judges where it points.
 - That the numbers are tuned. Every tool runs unscored, on proposed values.
 
 ## Files
@@ -400,16 +436,16 @@ node --test tools\den-sim\test-den-sim-browser.mjs
 | `hops.json` | The 26 hops: finished words, tools, pins, recorded inputs and stand-ins |
 | `receipt.mjs` | Builds each click's `run-receipt.json` |
 | `top_line.mjs` | The top line: a pure function of the table and a receipt |
-| `brain.mjs` | Builds the geometry and runs one click from end to end |
-| `chain.py` | The frame hash, hop 6's checks on the recorded rows, the pinned tools in their own guarded processes, each request's exact body and its reply's lookup, and the adapter |
+| `brain.mjs` | Builds the fixture geometry, from brain-targets.mjs, at page start: nothing else |
+| `click.mjs` | Runs one click: the chain, its Decisions into Home's documents, the dry run, the receipt, and hop 24's two numbers |
+| `chain.py` | The frame hash, hop 6's checks on the recorded rows, the pinned tools in their own guarded processes, each request's exact body and its reply's lookup, the occupancy event, and the coordinator in spot mode; also the startup line, through den-core's `spot_rule.py` |
 | `couch_to_room.mjs` | Hop 14: your mark, or the stand-in seat, into the click's RoomModel, with the spot |
 | `light_model.mjs` | Hop 16: the light model, Home's own beam formula from each fixture to the spot, built at page start |
 | `decision_doc.mjs` | Hop 18's mapping: a spot Decision to Home's document, and the off document |
 | `person.py` | Hop 15: person states in the architecture's field names, need v0 per track, rules on real joints |
 | `ask_la.py`, `ask_one.py` | Your one paste on this PC, and what it runs on the inference host |
-| `brain_run.py` | The real activity loop, publisher and older brain under a fake clock, and the startup line |
-| `feed.mjs` | Replays the brain's timeline into Home and inserts the motion, each document held to Home's validator |
-| `dry_run.py` | The fixture command for the brain's target |
+| `feed.mjs` | Plays each Decision's document into Home, inserts the motion and keeps the last one lit, each document held to Home's validator |
+| `dry_run.py` | The fixture command for the Decision's target and level |
 | `panel.js` | The strip and panel on the page |
 | `refs.json` | The pinned refs, and the codec's path and digests |
 | `scene\` | The recorded side: the scenes, renderer, virtual camera, frame hash and `prepare.py` |

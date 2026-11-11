@@ -72,6 +72,7 @@ QWEN_LIVE = ("qwen_live.py", "qwen_scene.py", "qwen_transport.py", "occupancy_ga
              "experiment_history.py", "reasoning.py")
 TREES = {"observe": ("rung-2-observe", ("tools/den-observe", "tools/den-take", *detect.WORKERS)),
          "register": ("den-register", ("tools/den-register", "tools/den-take")),
+         "track": ("claude/rung-3-track-local-514d6b", ("tools/den-track",)),   # step 3's live loop
          "core": ("den-core-live", tuple(LAB + name for name in QWEN_LIVE))}
 REMOTE = "/dev/shm/den-live-check"
 VENV_PY = Path.home() / "ml" / "den-detector" / "Scripts" / "python.exe"

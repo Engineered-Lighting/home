@@ -7,33 +7,20 @@
 //   node tools\den-live\scan_pick.mjs --work <folder> --take <scaled take> --mode pick|show [--room real|authored]
 //
 // register_now.py starts it; it prints `ready <url>` once it listens. Exit 0: saved (pick) or Done (show).
-// It binds 127.0.0.1 only and refuses any other Host. GET only, except Save and Done, which need this page's own
-// Origin and its token. Nothing beyond this harness is reachable: anything else is a 503, and WebSocket upgrades are
-// destroyed. It prints no coordinate: the points go to the worksheet, which stays in the private folder.
+// The page is home_harness.mjs's: 127.0.0.1 only, its own Host only. Besides Home's own read-only routes it serves its
+// state and the camera's picture, and takes Save and Done, which need this page's own Origin and its token. It prints
+// no coordinate: the points go to the worksheet, which stays in the private folder.
 import crypto from 'node:crypto';
 import fs from 'node:fs';
-import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import Core from '../../app/src/home-equipment-registration.js';
-import { readActiveBinding, REGISTRATION_ROUTE } from '../../web-gateway/equipment-registration.mjs';
-import { createContentPackHandler } from '../../web-gateway/content-pack-route.mjs';
-import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs';
-import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
+import { HOST, createHarness, fail, loadHome, option, packRoot, readBody, refuse, send } from './home_harness.mjs';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..'), SRC = path.join(ROOT, 'app/src');
-const SITE = /\/sites\/([^/]+)\//.exec(REGISTRATION_ROUTE)[1];   // the den's site, as the gateway's own route names it
+const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
 const SCAN_PICK = 'scan-pick', SHA = /^[0-9a-f]{64}$/, LIMIT_M = 100;
-
-function option(name, fallback) {
-  const at = process.argv.indexOf('--' + name);
-  return at > 1 ? process.argv[at + 1] : fallback;
-}
-function fail(text) { console.log(`refused: ${text}`); process.exit(2); }
 const MODE = option('mode', 'pick'), ROOM = option('room', 'real');
 const WORK = path.resolve(option('work', '')), TAKE = path.resolve(option('take', ''));
-const HOST = '127.0.0.1', PORT = Number(option('port', '18186')), ORIGIN = `http://${HOST}:${PORT}`;
+const PORT = Number(option('port', '18186')), ORIGIN = `http://${HOST}:${PORT}`;
 if (!['pick', 'show'].includes(MODE)) fail('--mode is pick or show');
 if (!['real', 'authored'].includes(ROOM)) fail('--room is real or authored');
 const WORKSHEET = path.join(WORK, 'worksheet.json');
@@ -44,25 +31,8 @@ for (let dir = WORK; ; dir = path.dirname(dir)) {   // outside every git checkou
   if (path.dirname(dir) === dir) break;
 }
 const TOKEN = crypto.randomBytes(18).toString('hex');
-
-/* ---------- the packs: your scan, or the authored room for tests ---------- */
-function packRoot() {
-  if (ROOM === 'real') {
-    const refs = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools', 'den-sim', 'refs.json'), 'utf8'));
-    return path.resolve(option('packs', refs.content_packs));
-  }
-  // --tmp: where the authored room's packs go (tests give their own folder: a terminated process skips 'exit')
-  const packs = fs.mkdtempSync(path.join(path.resolve(option('tmp', os.tmpdir())), 'scan-pick-'));
-  process.on('exit', () => fs.rmSync(packs, { recursive: true, force: true }));
-  const item = installPack(packs, SITE);
-  fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1, packs: [{ manifest: item.manifest, active: true, baseUrl: item.base }] }));
-  return packs;
-}
-const PACKS = packRoot();
-let binding;
-try { binding = readActiveBinding(PACKS); } catch (error) { fail(`no active pack for the den in ${ROOM === 'real' ? 'your content packs' : 'the authored room'} (${error.code || error.message})`); }
-// The authored room's sockets, as the den simulation serves them. Your scan needs none: the picker reads the mesh.
-const registration = ROOM === 'authored' ? Core.sealDocument(Core.normalizeDocument(authoredDocument(binding, Core))) : null;
+const home = await loadHome(ROOT);
+const PACKS = packRoot(home, { room: ROOM, refsRoot: ROOT, packs: option('packs'), tmp: option('tmp'), prefix: 'scan-pick-' });
 
 /* ---------- the worksheet, the clicks and the fit, all in the registration folder ---------- */
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
@@ -74,6 +44,7 @@ function writeJson(file, value) {
 const clicksFile = () => path.join(WORK, `clicks-${path.basename(TAKE).replace(/[^A-Za-z0-9._-]/g, '_')}.json`);
 // A pick counts only on the scan revision it was made on: a pick from an older pack is no pick on this one.
 const pickedOn = revision => `content revision ${revision}`;
+let binding = null;
 const picked = point => point.measured_with === SCAN_PICK && Array.isArray(point.room_xyz_m)
   && String(point.note || '').endsWith(pickedOn(binding.content_revision));
 const metres = value => Math.round(value * 1e6) / 1e6;   // den-register's records.rounded: micrometres
@@ -129,113 +100,45 @@ function save(body) {
   return sheet.points.length;
 }
 
-/* ---------- static source: app/src as the den simulation serves it ---------- */
-function staticSources(root) {
-  const sources = new Map(), excluded = new Set(['node_modules', 'data', 'artifacts', 'private', 'recordings', 'logs', 'precompiled']);
-  (function walk(directory) {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (entry.name.startsWith('.') || excluded.has(entry.name)) continue;
-      const file = path.join(directory, entry.name), name = path.relative(root, file).split(path.sep).join('/');
-      if (name === 'assets/apartment' || name === 'img/raw') continue;
-      const stat = fs.lstatSync(file);
-      if (stat.isSymbolicLink()) continue;
-      if (stat.isDirectory()) { walk(file); continue; }
-      const trusted = /^(?:vendor|fonts|icons)\//.test(name) && /\.(?:wasm|woff2?|ttf|otf|png|jpe?g|webp|svg|ico|ktx2|json)$/.test(entry.name);
-      const rootAsset = directory === root && ['index.html', 'favicon.svg', 'favicon.ico', 'favicon-32.png', 'apple-touch-icon.png', 'site.webmanifest'].includes(entry.name);
-      if (/\.(?:js|mjs|jsx|css)$/.test(entry.name) || trusted || rootAsset) sources.set('/' + name, file);
-    }
-  })(root);
-  return sources;
-}
-const sources = staticSources(SRC);
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
-  '.jsx': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.webmanifest': 'application/manifest+json',
-  '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf', '.wasm': 'application/wasm' };
-const type = file => TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
-const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__scanPick={token:${JSON.stringify(TOKEN)}};`
-  + `try{localStorage.setItem('apartment3d.site',${JSON.stringify(SITE)});localStorage.setItem('home.perf.backgroundWarmup','off');localStorage.setItem('apartment3d.prewarm','off');}catch(_){}</script>`;
-function homePage() {
-  const html = fs.readFileSync(path.join(SRC, 'index.html'), 'utf8');
-  if (!html.includes('<head>') || !html.includes('</body>')) throw Error('index.html no longer has the expected shape');
-  return html.replace('<head>', '<head>' + PAGE_INIT).replace('</body>', '<script src="/__pick/panel.js"></script></body>');
-}
-
 /* ---------- the server ---------- */
-const SECURITY = { 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer',
-  'Content-Security-Policy': "default-src 'self' data: blob:; connect-src 'self' data: blob:; img-src 'self' data: blob:; media-src 'self' blob:; "
-    + "font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; worker-src 'self' blob:; "
-    + "frame-src 'none'; object-src 'none'; form-action 'none'; base-uri 'self';" };
-function send(res, status, body, headers = {}) {
-  const bytes = Buffer.isBuffer(body) ? body : Buffer.from(typeof body === 'string' ? body : JSON.stringify(body));
-  res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': bytes.length, ...headers });
-  res.end(bytes);
-}
-const refuse = (res, status) => send(res, status, { ok: false, error: 'scan_pick_not_served', detail: 'Loopback scan page: nothing beyond this harness is reachable.' });
-function readBody(req, limit = 16384) {
-  return new Promise((resolve, reject) => {
-    let size = 0; const chunks = [];
-    req.on('data', chunk => { size += chunk.length; if (size > limit) { reject(Error('body_too_large')); req.destroy(); } else chunks.push(chunk); });
-    req.on('end', () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8'))); } catch { reject(Error('json_invalid')); } });
-    req.on('error', reject);
-  });
-}
+let finished = false;
 function finish(code, message) {
   console.log(message);
   setTimeout(() => { server.closeAllConnections(); server.close(() => process.exit(code)); }, 300);
 }
-const handleLighting = createLightingLayerHandler({ contentPacksDir: PACKS, authenticate: () => true });
-const handlePack = createContentPackHandler({ contentPacksDir: PACKS, authenticate: () => true });
-const LAB_CAPABILITIES = { site_id: SITE, cameras: [], live_previews: {}, live_videos: {}, recording_allowed: false,
-  experiments: [], apartment_viewing: { provisioned: false } };
-let finished = false;
-
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url, ORIGIN), { pathname } = url;
-  for (const [name, value] of Object.entries(SECURITY)) res.setHeader(name, value);
-  try {
-    if (req.headers.host !== `${HOST}:${PORT}`) return refuse(res, 403);
-    if (req.method === 'POST' && (pathname === '/__pick/save' || pathname === '/__pick/done')) {
-      if (req.headers.origin !== ORIGIN || req.headers['x-scan-pick'] !== TOKEN || finished) return refuse(res, 403);
-      if (pathname === '/__pick/done') {
-        if (MODE !== 'show') return refuse(res, 409);
-        finished = true; send(res, 200, { ok: true });
-        return finish(0, 'the page says done');
-      }
-      if (MODE !== 'pick') return refuse(res, 409);
-      let count;
-      try { count = save(await readBody(req)); } catch (error) { return send(res, 422, { ok: false, error: error.message }); }
-      finished = true; send(res, 200, { ok: true, saved: count });
-      return finish(0, `saved ${count} scan picks to the worksheet`);
+const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__scanPick={token:${JSON.stringify(TOKEN)}};`
+  + `try{localStorage.setItem('apartment3d.site',${JSON.stringify(home.site)});localStorage.setItem('home.perf.backgroundWarmup','off');localStorage.setItem('apartment3d.prewarm','off');}catch(_){}</script>`;
+async function routes(req, res, url) {
+  const { pathname } = url;
+  if (req.method === 'POST' && (pathname === '/__pick/save' || pathname === '/__pick/done')) {
+    if (req.headers.origin !== ORIGIN || req.headers['x-scan-pick'] !== TOKEN || finished) { refuse(res, 403); return true; }
+    if (pathname === '/__pick/done') {
+      if (MODE !== 'show') { refuse(res, 409); return true; }
+      finished = true; send(res, 200, { ok: true });
+      finish(0, 'the page says done');
+      return true;
     }
-    if (req.method !== 'GET') return refuse(res, 405);
-    if (pathname === '/' && !url.search) { res.writeHead(302, { Location: '/?apartmentRedesign=1&worldZoom=off' }); return res.end(); }
-    if (pathname === '/' || pathname === '/index.html') return send(res, 200, homePage(), { 'Content-Type': TYPES['.html'] });
-    if (pathname === '/__pick/panel.js') return send(res, 200, fs.readFileSync(path.join(HERE, 'scan_pick_panel.js')), { 'Content-Type': TYPES['.js'] });
-    if (pathname === '/__pick/state') return send(res, 200, state());
-    if (pathname === '/__pick/left.png') {
-      const file = path.join(WORK, 'pick', 'left.png');
-      return fs.existsSync(file) ? send(res, 200, fs.readFileSync(file), { 'Content-Type': 'image/png' }) : refuse(res, 404);
-    }
-    if (pathname === '/auth/status') return send(res, 200, { authenticated: true, username: 'scan-pick' });
-    if (pathname === '/api/perception-lab/v1/capabilities') return send(res, 200, LAB_CAPABILITIES, { 'X-Home-Lab-Access': 'read-only' });
-    if (registration && (pathname === REGISTRATION_ROUTE || pathname === `${REGISTRATION_ROUTE}/revisions/${registration.revision}`)) {
-      return send(res, 200, { ok: true, registration, capabilities: { read: true, write: false } });
-    }
-    if (pathname.startsWith('/content-packs/')) {
-      if (!handleLighting(req, res)) handlePack(req, res);
-      return undefined;
-    }
-    const file = sources.get(pathname);
-    if (file) return send(res, 200, fs.readFileSync(file), { 'Content-Type': type(file) });
-    return refuse(res, 503);
-  } catch (error) {
-    if (!res.headersSent) send(res, 500, { ok: false, error: error.message }); else res.destroy();
-    return undefined;
+    if (MODE !== 'pick') { refuse(res, 409); return true; }
+    let count;
+    try { count = save(await readBody(req)); } catch (error) { send(res, 422, { ok: false, error: error.message }); return true; }
+    finished = true; send(res, 200, { ok: true, saved: count });
+    finish(0, `saved ${count} scan picks to the worksheet`);
+    return true;
   }
-});
-server.on('upgrade', (_req, socket) => { socket.on('error', () => {}); socket.destroy(); });
-server.on('clientError', (_error, socket) => socket.destroy());
+  if (req.method !== 'GET') return false;
+  if (pathname === '/__pick/state') { send(res, 200, state()); return true; }
+  if (pathname === '/__pick/left.png') {
+    const file = path.join(WORK, 'pick', 'left.png');
+    if (fs.existsSync(file)) send(res, 200, fs.readFileSync(file), { 'Content-Type': 'image/png' }); else refuse(res, 404);
+    return true;
+  }
+  return false;
+}
+const made = createHarness({ home, packs: PACKS, port: PORT, pageInit: PAGE_INIT, panel: path.join(HERE, 'scan_pick_panel.js'),
+  panelRoute: '/__pick/panel.js', authoredRoom: ROOM === 'authored', routes });
+if (made.error) fail(`no active pack for the den in ${ROOM === 'real' ? 'your content packs' : 'the authored room'} (${made.error})`);
+binding = made.binding;
+const { server } = made;
 server.on('error', error => fail(error.code === 'EADDRINUSE' ? `port ${PORT} is busy; is another scan page still open?` : error.message));
 server.listen(PORT, HOST, () => console.log(`ready ${ORIGIN}/`));
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { server.closeAllConnections(); server.close(() => process.exit(1)); });

@@ -669,6 +669,7 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
     receipt["fit"] = {"result": report["result"], "transform_id": report.get("transform_id"), "reasons": reasons}
     found = own_scale(report.get("pairs", []))
     receipt["own_scale"] = found
+    receipt["scan_revision"] = scan_revision(work)
     write_receipt(work, receipt)
     say("")
     say("Summary (words and numbers only; this block is what to tell an agent):")
@@ -708,6 +709,17 @@ def show_page(work, take_dir):
         "Each dot should sit on its feature. Press Done on the page when you've looked. If you closed the tab, press "
         "Ctrl+C here: the registration stands either way.")
     scan_page(work, take_dir, "show")
+
+
+def scan_revision(work):
+    """The scan revision the worksheet's picks were made on (the scan page writes it into each pick's note), or None
+    when they don't all say one. Step 3 holds the registration to the scan it draws on with it."""
+    try:
+        sheet = json.loads((work / "worksheet.json").read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return None
+    found = {str(p.get("note") or "").rpartition("content revision ")[2] for p in sheet.get("points") or []}
+    return found.pop() if len(found) == 1 and "" not in found else None
 
 
 def write_receipt(work, receipt):

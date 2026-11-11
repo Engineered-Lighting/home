@@ -635,6 +635,7 @@ class OnRenders(unittest.TestCase):
         receipt = json.loads((self.work() / 'register-now-1.json').read_text(encoding='utf-8'))
         self.assertEqual(receipt['fit']['result'], 'registered')
         self.assertTrue(receipt['floor_guard']['ok'])
+        self.assertTrue(receipt['scan_revision'].startswith('authored-'), 'the scan revision the picks were made on, for step 3')
         self.assertTrue(self.seen['take'].name.endswith('-x1'))
         take = json.loads((self.seen['take'] / 'take.json').read_text(encoding='utf-8'))
         self.assertEqual(take['derived']['depth_scale'], 1.0)

@@ -1,6 +1,6 @@
 # den-live
 
-Tools for the live den view: the den camera, live, to markers and a virtual reading spotlight in Home. Steps 1 and 2 are here so far: the sofa check, and registering the camera to your scan.
+Tools for the live den view: the den camera, live, to markers and a virtual reading spotlight in Home. Steps 1 to 3 are here so far: the sofa check, registering the camera to your scan, and your marker live on this PC.
 
 ## Step 1: the sofa check
 
@@ -118,3 +118,66 @@ python -B -X utf8 tools\den-live\test_register_now.py
   - a fresh paste starts the picks afresh;
   - a stopped click page, an unclicked feature and a den-register refusal each stop with their reason.
 - It needs Node and a prepared den-sim set. It takes about a minute.
+
+## Step 3: your marker, live, on this PC
+
+Once step 2 has registered the camera, paste:
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\run_local.py
+```
+
+Then open http://127.0.0.1:18190/ and walk around the den. Ctrl+C stops it. While it runs, this PC reads the camera continuously, and your paste is the go-ahead for that.
+
+It needs:
+- step 2's registration;
+- the camera token;
+- the detector's venv;
+- Node;
+- the `claude/den-live-home` worktree beside this one, which holds Home's new people layer.
+
+It says which one is missing if it can't start.
+
+**What you see:** Home on your scan, with a marker for each person in the den.
+- Each marker is a disc on the floor, with a ring showing how sure it is, an arrow showing which way the person faces (once the arms or hips show it), and a trail of the last 10 seconds.
+- A coasting marker, someone briefly unseen, is dimmed.
+- Someone who leaves is dimmed at once, while the tracker waits up to 6 s for them to reappear, and is gone within about 8 s.
+- A small panel says what the stream says: the camera, how many people, how far behind, frames a second, and drops. A banner shows when something is wrong: "camera offline", "stream stopped", "depth not corrected at the camera", "detector errors", "too dark", or that the page shows another scan revision than the camera is registered to.
+
+**What runs, all on this PC:**
+- `source.py` fetches the camera's newest frame about 5 times a second.
+- `detect_worker.py`, in the detector's venv with no network, runs YOLO26s and RTMPose-m on each frame.
+- `perceive.py` runs den-observe and den-track, unedited, on step 2's registration. It checks every frame says the camera corrected its depth.
+- `stream.py` serves the people stream on 127.0.0.1:8111.
+- `live_page.mjs` serves Home from the `claude/den-live-home` worktree on 127.0.0.1:18190. It passes the stream through on the same paths step 4's gateway route will use.
+
+**Its numbers:**
+- **The floor:** the tracker's floor box is your scan's walkable floor, padded 1 m on every side. den-track's own box is a tape rectangle in no scan frame. In the den simulation, your real sofa sat outside it, and one reader split into three tracks.
+- **Freshness:** a frame older than 1.5 s by the time the detector finishes is dropped and counted.
+- **The clock:** frame times come from when frames arrive on this PC, because the den Jetson's clock reads 1970. They're kept on this PC's monotonic clock, so a time-sync step can't stall the tracker. "Behind" leaves out the camera-to-PC transit, about 0.1 s here.
+- **Weak boxes:** a person box under 0.5 still reaches the tracker, but it never shows as a marker on its own. A track shows once a pose, or a box at 0.5 or more, has backed it (plan L3).
+- **The arrow:** a heading older than 3 s is left off.
+- **New epochs:** a camera restart gives new marker ids (`e2-trk-1`), never an old marker.
+- **The scan revision:** it must be the one step 2 picked on. If the active scan changed since, it stops and asks you to register again.
+- **Too dark:** the picture's mean brightness under 40 (of 255) for 3 s gives "too dark" until step 6's infrared.
+
+**Every 10 s it prints one line**, for example `camera ok | 4.0 frames a second | 1 people | 0.25 s behind | 0 dropped a minute | 160 frames`. Anything dropped is named at the end, such as `, 3 out of order`. That's words and counts, never a position. Tell an agent those lines if something looks wrong.
+
+**What's kept:** nothing. No frames, no tracks. Only the tracker's method copy and the detector's log go in `%USERPROFILE%\den-live\private\live\`.
+
+### Tests
+
+```powershell
+python -B -X utf8 tools\den-live\test_live.py
+```
+
+- Most tests replay the den simulation's rendered reading take through the perceiver, with the rows the simulation's own detector run recorded. They need no venv, and they cover:
+  - one reader is one marker, within 30 cm of where they sit;
+  - a floor box that misses the seat splits them, and one that holds it doesn't;
+  - frames without the camera's correction are refused;
+  - the clock's epochs;
+  - too dark;
+  - an invalidated registration.
+- The stream's tests check its events, heartbeat, Host check and client cap.
+- The end-to-end test runs `run_local.run` with the real detector process, the fake camera and the page on the authored room. It needs the venv, Node and the `den-live-home` worktree, and takes about 40 s.
+- Home's layer has its own tests on that branch: `node --test tools\test-apartment-people-layer.mjs`.

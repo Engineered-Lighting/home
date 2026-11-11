@@ -1,0 +1,142 @@
+"""Step 3's people stream (plan L6): the newest people events, as server-sent events, on 127.0.0.1 only. Standard library.
+
+    GET /api/den-live/v1/homes/<home>/stream   text/event-stream: `event: people` per processed frame, `: heartbeat`
+                                              every heartbeat_s, so a silent pipeline reads as offline in under 3 s
+    GET /api/den-live/v1/homes/<home>/state    {"people": the newest event, or null}
+
+It answers GET and HEAD only, for its own Host only (127.0.0.1:<port>), to at most max_clients streams at once. A slow
+client's backlog is capped: its oldest events go first, since only the newest position matters. The same paths are
+the gateway route step 4 adds in front of LA's service, so the page's code doesn't change between the steps.
+"""
+import json
+import socket
+import socketserver
+import threading
+from collections import deque
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+BASE = "/api/den-live/v1/homes/"
+BACKLOG = 8
+
+
+class _Client:
+    def __init__(self):
+        self.cond, self.events = threading.Condition(), deque(maxlen=BACKLOG)
+
+
+class PeopleStream:
+    def __init__(self, *, home="den", host="127.0.0.1", port=8111, max_clients=16, heartbeat_s=2.0):
+        self.home, self.host, self.max_clients, self.heartbeat_s = home, host, max_clients, heartbeat_s
+        self.latest, self.clients, self.lock, self.closing = None, set(), threading.Lock(), threading.Event()
+        self.served = self.refused = 0
+        stream = self
+
+        class Server(ThreadingHTTPServer):
+            daemon_threads = True
+            allow_reuse_address = False   # on Windows it would let a second server share a port already in use
+
+            def server_bind(self):
+                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):   # Windows: nobody else may bind this port while it's ours
+                    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                socketserver.TCPServer.server_bind(self)
+                self.server_name, self.server_port = host, self.server_address[1]
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, *_args):
+                pass
+
+            def answer(self, status, body, kind="application/json"):
+                data = body if isinstance(body, bytes) else json.dumps(body, separators=(",", ":")).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", kind)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(data)
+
+            def do_HEAD(self):
+                self.do_GET()
+
+            def do_GET(self):
+                if self.headers.get("Host") != "%s:%d" % (host, stream.port):
+                    stream.refused += 1
+                    return self.answer(403, {"ok": False, "error": "host"})
+                path = self.path.split("?", 1)[0]
+                if path == BASE + stream.home + "/state":
+                    stream.served += 1
+                    return self.answer(200, {"people": stream.latest})
+                if path == BASE + stream.home + "/stream":
+                    return self.sse()
+                stream.refused += 1
+                return self.answer(404, {"ok": False, "error": "not_served"})
+
+            def sse(self):
+                client = _Client()
+                with stream.lock:
+                    if len(stream.clients) >= stream.max_clients:
+                        stream.refused += 1
+                        return self.answer(503, {"ok": False, "error": "too_many_clients"})
+                    stream.clients.add(client)
+                    if stream.latest is not None:
+                        client.events.append(stream.latest)
+                stream.served += 1
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                if self.command == "HEAD":
+                    return stream._drop(client)
+                try:
+                    self.wfile.write(b"retry: 2000\n\n")
+                    self.wfile.flush()
+                    while not stream.closing.is_set():
+                        with client.cond:
+                            client.cond.wait_for(lambda: client.events or stream.closing.is_set(), stream.heartbeat_s)
+                            pending = list(client.events)
+                            client.events.clear()
+                        if not pending:
+                            self.wfile.write(b": heartbeat\n\n")
+                        for event in pending:
+                            self.wfile.write(b"id: %d\nevent: people\ndata: %s\n\n"
+                                             % (event.get("seq", 0), json.dumps(event, separators=(",", ":")).encode("utf-8")))
+                        self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                    pass
+                finally:
+                    stream._drop(client)
+
+        self.server = Server((host, port), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="den-live-stream")
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def _drop(self, client):
+        with self.lock:
+            self.clients.discard(client)
+
+    def publish(self, event):
+        with self.lock:
+            self.latest = event
+            clients = list(self.clients)
+        for client in clients:
+            with client.cond:
+                client.events.append(event)
+                client.cond.notify_all()
+
+    def close(self):
+        self.closing.set()
+        with self.lock:
+            clients = list(self.clients)
+        for client in clients:
+            with client.cond:
+                client.cond.notify_all()
+        self.server.shutdown()
+        self.server.server_close()

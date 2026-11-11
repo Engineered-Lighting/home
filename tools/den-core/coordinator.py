@@ -24,11 +24,18 @@ inputs.light_state names the newest LightState at or before a Decision's ts, fro
 for rung 10 and never an input to the solve: a run with the file writes the same Decisions as one without, apart from the
 light_state fields, which go on a line after it is fitted so they can't change what fits.
 
+Spot mode, for the den simulation, when config["channels"] names one spot per channel: Decisions on actuator_domain
+virtual-den-4, every spot off unless decide's rule is reading_look, then per reader at a spot the lowest cost over each
+fixture spot_rule.py allows, at the levels the solve tries, or off: one beam per reader, at config["spot_target"]. README's
+"Spot mode" says what it reads and writes. A Hue config never reaches it, and its Decisions and hash stay as they were.
+
 Standard library only. handle() reads no clock, randomness, file or network; make_policy reads the gate file and a
-light-model file, once.
+light-model file, once, and in spot mode loads spot_rule.py and the lighting brain's aim.py by file path.
 """
 import bisect
 import copy
+import importlib.util
+import sys
 from pathlib import Path
 
 import decide
@@ -55,6 +62,17 @@ LIGHT_STATE_ROOM = 120  # the inputs.light_state fields in their longest form, w
 LINE_ROOM = events.MAX_LINE_BYTES - 200 - LIGHT_STATE_ROOM
 NO_FRAME_GIVEN = "no LightState given"
 NO_FRAME_BEFORE = "no LightState at or before this decision"
+# Spot mode's code is pinned in config["code"] only when config["channels"] is set, so a Hue config and its hash never move.
+BRAIN = HERE.parents[1] / "stack" / "services" / "lighting-brain" / "lighting_brain"
+SPOT_PINS = {"spot_rule": HERE / "spot_rule.py", **{name: BRAIN / (name + ".py") for name in ("aim", "settings", "geometry")}}
+SPOT_DOMAIN = "virtual-den-4"
+SPOT_KINDS = ("occupancy", "person_state", "tick")  # its read-back is its own command, and it has no holds or games
+SPOT_MOVE_S = 180 / 30.0  # a fixed bound: no two aims are over 180 degrees apart, at the fictional profile's 30 degrees a second
+SPOT_NOTE = "modeled lux, assumed lumens"
+SPOT_CHECKS = {"revision_current": True, "fresh_check": False, "not_held": True}
+SIMULATED = "simulated: nothing is sent"
+KEPT = "kept: t + T_chk + T_react (pending, freshness)"
+_spot_rules = {}
 
 
 def load_gate(path=None):
@@ -248,6 +266,9 @@ class Coordinator:
         self.solved, self.pending, self.last_rule = None, None, None
         self.made = 0
         self._memo = {}  # each hold's bound and what a channel's setting does against it, for one event's plan
+        self.channels = list(config.get("channels") or ())
+        if self.channels:
+            self._spot_setup(light.model)
 
     # What each event changes -----------------------------------------------------------------------------------------
 
@@ -846,7 +867,173 @@ class Coordinator:
         out["predicted"]["surfaces_not_logged"] = len(whole) - len(listed)
         return out
 
+    # Spot mode ------------------------------------------------------------------------------------------------------------
+
+    def _spot_setup(self, model):
+        """The fixtures and aim points spot mode reads from the light model, whose hash the header logs."""
+        fixture_of = {c["entity_id"]: c.get("fixture_id") for c in model["channels"]}
+        fixtures, points = model.get("fixtures") or {}, model.get("aim_points") or {}
+
+        def placed(channel):
+            one = fixtures.get(fixture_of.get(channel))
+            return isinstance(one, dict) and _xyz(one.get("horizontal_world_reference")) and (
+                one.get("aim_origin_m") is None or _xyz(one["aim_origin_m"]))
+
+        if not (points and all(isinstance(p, dict) and _xyz(p.get("point_m")) and s in self.light.surfaces for s, p in points.items())
+                and all(map(placed, self.channels))):
+            raise ValueError("spot mode needs a light model with a channel and fixture {aim_origin_m, horizontal_world_reference, "
+                             "limits} for each of %s, and aim_points {surface_id: {point_m: [x, y, z]}} on its surfaces" % self.channels)
+        self.spot, self.points = _spot_rule(), {s: list(p["point_m"]) for s, p in points.items()}
+        self.fixtures = {c: fixtures[fixture_of[c]] for c in self.channels}
+        self.ranges = {c["entity_id"]: c.get("cct_range_k") for c in model["channels"]}
+        self.spot_state = {c: {"on": False, "level": 0.0, "cct_k": None, "aim": None} for c in self.channels}
+        self.spot_last = None
+
+    def _spot_cct(self, channel):
+        """(cct_k, clip_reason): the seed Look's temperature, inside the channel's cct_range_k."""
+        k = self.look["kelvin"]
+        low, high = self.ranges[channel] or (k, k)
+        return min(max(k, low), high), None if low <= k <= high else "outside %s's cct_range_k" % channel
+
+    def _spot_scene(self, channel, brightness):
+        return {"on": True, "brightness": brightness, "kelvin": self._spot_cct(channel)[0]}  # never an aim: that is the record's
+
+    def _spot_cost(self, plan, surface, extra):
+        """The seed Look's weights at one spot: squared shortfall, half the squared excess, and a small pull toward off."""
+        weights, target = self.slots["look_weights"], self.config["spot_target"]
+        lit = {c: b for c, (b, _, _) in plan["lit"].items()}
+        scene = {c: self._spot_scene(c, b) for c, b in {**lit, **extra}.items()}
+        gap = (target - (self.light.predict(scene, [surface])[surface] or 0.0)) / target
+        return (weights["shortfall"] if gap > 0 else weights["excess"]) * gap ** 2 + weights["change"] * sum(extra.values()) / 255.0
+
+    def _spot_plan(self, t):
+        """None, or {rule, lit {channel: [brightness, surface, track]}, targets, skipped, notes, candidates}. decide's rule names
+        the case only: anything but reading_look turns every spot off. Each reader at a spot gets the lowest cost over every
+        fixture spot_rule allows and every level the solve tries, or off: one beam per reader."""
+        readers = {track: p for track, p in sorted(self.people.items()) if decide.reading(p)}
+        base = decide.plan({**self.state, "person": next(iter(readers.values()), None)}, t, self.config)
+        if base is None:
+            return None
+        plan = {"rule": base["rule"], "lit": {}, "targets": {}, "skipped": [], "notes": [], "candidates": []}
+        if base["rule"] != "reading_look":
+            return plan
+        steps, target, unit = self.slots["solve_steps"], self.config["spot_target"], self.light.unit
+        levels = sorted({round(255 * (n + 1) / steps) for n in range(steps)} | {self.look["brightness"]})  # as _solve tries
+        for track, person in readers.items():
+            surface = (person.get("working_region") or {}).get("surface_id")
+            if surface not in self.points:
+                plan["notes"].append("%s reads at %s, which has no spot: no target" % (track, surface))
+                continue
+            plan["targets"][track] = {"surface_id": surface, "lx": target if unit == "lx" else None, "value": target, "unit": unit,
+                                      "note": SPOT_NOTE}
+            plan["notes"] += ["%s %s" % (track, note) for note in self.spot.reader_notes(person)]
+            options = [(None, 0, self._spot_cost(plan, surface, {}))]  # off is a choice
+            for channel in (c for c in self.channels if c not in plan["lit"]):
+                reason = self.spot.refusal(self.fixtures[channel], person, self.points[surface])
+                if reason:
+                    plan["skipped"].append({"channel": channel, "reason": reason, "hold_ref": None, "track_id": track})
+                else:
+                    options.append(min(((channel, b, self._spot_cost(plan, surface, {channel: b})) for b in levels), key=lambda o: o[2]))
+            best = min(options, key=lambda o: o[2])  # the first of equals, so off wins a tie
+            plan["candidates"] += [{"scene_id": "%s@%d" % (c, b) if c else "off", "track_id": track, "cost": round(cost, 6),
+                                    "scene": {c: {"on": True, "level": _level({"on": True, "brightness": b})}} if c else {},
+                                    "why": "chosen" if c == best[0] else "rejected: cost %.6f, above the chosen %.6f" % (cost, best[2])}
+                                   for c, b, cost in options]
+            if best[0]:
+                plan["lit"][best[0]] = [best[1], surface, track]
+        return plan
+
+    def _spot_steps(self, was, now, t, revisions):
+        """K17's steps for one spot, simulated: a dark move at its fixed bound and the fade in from its landing, a fade out, a
+        fade between levels, or none."""
+        fade, lit = self.slots["look_fade_s"], {"level": now["level"], "cct_k": now["cct_k"]}
+
+        def step(kind, at, span, readback=None):
+            return {"kind": kind, "revisions": revisions, "sent_at": at, "transition_s": span, "reason": None, "checks": dict(SPOT_CHECKS),
+                    "result": {"status": SIMULATED, "at": at + span, **({"readback": readback} if readback else {})}}
+
+        if not now["on"]:
+            return [step("fade_out", t, fade, lit)] if was["on"] else []
+        if was["aim"] == now["aim"]:
+            return [] if was["on"] and (was["level"], was["cct_k"]) == (now["level"], now["cct_k"]) else [
+                step("fade" if was["on"] else "fade_in", t, fade, lit)]
+        steps = [step("fade_out", t, fade, {"level": 0.0, "cct_k": None})] if was["on"] else []
+        steps.append(step("move", steps[-1]["result"]["at"] if steps else t, SPOT_MOVE_S))
+        return steps + [step("fade_in", steps[-1]["result"]["at"], fade, lit)]
+
+    def _spot_record(self, plan, t, trigger):
+        """A canon Decision on virtual-den-4. The model is asked about level and temperature only; the aim goes on the record,
+        as requested_scene's aim and target_m. The read-back is the command, since no fixture answers, so aim_status stays
+        unknown. inputs.actuator_state is every spot's own last command, an explicit off object before any."""
+        self.made += 1
+        inputs = {**self._inputs(), "actuator_state": copy.deepcopy(self.spot_state), "t_exec": {}}
+        requested, applied, result = {}, {}, {}
+        for channel in self.channels:
+            was, lit = self.spot_state[channel], plan["lit"].get(channel)
+            if lit:
+                cct, clip = self._spot_cct(channel)
+                now = {"on": True, "level": _level({"on": True, "brightness": lit[0]}), "cct_k": cct, "aim": lit[1]}
+                requested[channel] = {**now, "target_cct_k": self.look["kelvin"], "clip_reason": clip, "target_m": self.points[lit[1]]}
+                result[channel] = self._spot_scene(channel, lit[0])
+            else:
+                now = {"on": False, "level": 0.0, "cct_k": None, "aim": was["aim"]}  # a dark spot stays where it pointed
+                requested[channel] = {"on": False, "level": 0.0, "cct_k": None, "target_cct_k": None, "clip_reason": None, "aim": None}
+            steps = self._spot_steps(was, now, t, inputs["revisions"])
+            applied[channel] = {"status": "sent", "readback": dict(now), "readback_source": SIMULATED, "aim_source": "commanded",
+                                "aim_status": "unknown", "steps": steps}
+            inputs["t_exec"].update({channel: steps[-1]["result"]["at"]} if steps else {channel: None, channel + "_status": KEPT})
+            self.spot_state[channel] = now
+        total = self.light.predict(result)
+        whole = {s: None if v is None else round(v, 3) for s, v in total.items()}
+        recipients = {}
+        for channel, (_, surface, track) in plan["lit"].items():
+            part = self.light.contribution(channel, result[channel])[surface]
+            share = round(part / total[surface], 4) if total[surface] else None
+            recipients[channel] = {"served": [track] if share is not None and share >= self.slots["s_serve"] else [],
+                                   "exposed": sorted(self.people), "layers": ["task"], "light_model": self.light.version,
+                                   "targets": [{"target_id": surface, "kind": "task", "track_id": track, "share": share, "interval": None,
+                                                "lx": round(part, 3) if self.light.unit == "lx" else None, "value": round(part, 3),
+                                                "unit": self.light.unit}]}
+        record = {"decision_id": "decide-%d-%d" % (round(t * 1000), self.made), "ts": t, "trigger": trigger, "policy": POLICY,
+                  "actuator_domain": SPOT_DOMAIN, "inputs": inputs, "targets": plan["targets"], "requested_scene": requested,
+                  "applied_scene": applied, "candidates": plan["candidates"], "skipped": plan["skipped"], "hard_conflicts": [],
+                  "recipients": recipients, "status": "applied", "why": self._spot_why(plan, whole),
+                  "predicted": {"surfaces": {**whole, "unit": self.light.unit}, "eyes": [], "daylight": "excluded: rung 8 does not model it",
+                                "eyes_note": "spot mode writes no eye rows: no glare model or numeric limit exists for a spot"}}
+        inputs.update(self._frame_at(t))
+        return copy.deepcopy(record)
+
+    def _spot_why(self, plan, whole):
+        parts = ["%s lit for %s at level %s, predicting %s of %s asked at %s, %s" % (
+            channel, track, round(_level({"on": True, "brightness": b}), 2), whole[surface], plan["targets"][track]["value"], surface,
+            SPOT_NOTE) for channel, (b, surface, track) in plan["lit"].items()]
+        parts += ["no beam for %s" % track for track in plan["targets"] if track not in {v[2] for v in plan["lit"].values()}]
+        for track in dict.fromkeys(s["track_id"] for s in plan["skipped"]):
+            parts.append("refused for %s: %s" % (track, ", ".join("%s %s" % (s["channel"], self.spot.words(s["reason"]))
+                                                                  for s in plan["skipped"] if s["track_id"] == track)))
+        return "%s: %s." % (plan["rule"], "; ".join(parts + plan["notes"]) or "every spot off")
+
+    def _spot_handle(self, event):
+        """No Decision while nobody is reading and nothing is lit; a reader with no beam writes one, holding why and skipped;
+        after that, a Decision only when what it would say changes."""
+        if event["kind"] not in SPOT_KINDS:
+            return []
+        trigger = self._observe(event)
+        plan = self._spot_plan(event["t"])
+        if plan is None:
+            return []
+        if plan["rule"] != "reading_look" and not any(s["on"] for s in self.spot_state.values()):
+            self.spot_last = None
+            return []
+        key = events.dumps([plan["lit"], plan["targets"], plan["skipped"], plan["notes"]])
+        if key == self.spot_last:
+            return []
+        self.spot_last = key
+        return [{"kind": "decision", "data": self._spot_record(plan, event["t"], trigger)}]
+
     def handle(self, event):
+        if self.channels:  # spot mode, before anything keyed on the Hue ids
+            return self._spot_handle(event)
         t, out = event["t"], []
         if self.pending and t >= self.pending["send_at"]:  # the send comes before whatever this event changes
             out.append(self._finish(self.pending, self.pending["send_at"], False))
@@ -871,6 +1058,51 @@ class Coordinator:
         else:
             out.append(self._finish(plan, t, False))
         return out
+
+
+def _xyz(value):
+    return isinstance(value, list) and len(value) == 3 and all(map(events.is_number, value))
+
+
+def _spot_rule():
+    """spot_rule.py, loaded by file path under a private name once per file hash, as light_adapter loads predict.py, and with
+    no __pycache__ left beside it or the brain's files."""
+    sha = events.sha256_file(SPOT_PINS["spot_rule"])
+    if sha not in _spot_rules:
+        spec = importlib.util.spec_from_file_location("_den_core_spot_rule", SPOT_PINS["spot_rule"])
+        module = importlib.util.module_from_spec(spec)
+        saved, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.dont_write_bytecode = saved
+        _spot_rules[sha] = module
+    return _spot_rules[sha]
+
+
+def spot_config(effective):
+    """Spot mode's part of make_policy: channels and actuator_domain together or neither, the four files pinned, and the gate's
+    service floor copied into spot_target, so the log holds it and check.py replays it."""
+    channels = effective.get("channels")
+    if not channels:
+        if effective.get("actuator_domain") is not None:  # channels [] reads as unset, so a domain alone would run as Hue
+            raise ValueError("actuator_domain %s needs config channels, one per spot" % effective["actuator_domain"])
+        return
+    if not (isinstance(channels, list) and all(isinstance(c, str) and c for c in channels) and len(set(channels)) == len(channels)):
+        raise ValueError("channels must be a list of the light model's channel ids, each once")
+    if effective.get("actuator_domain") != SPOT_DOMAIN:
+        raise ValueError("spot mode writes actuator_domain %s, and the config says %r" % (SPOT_DOMAIN, effective.get("actuator_domain")))
+    for name, path in SPOT_PINS.items():
+        try:
+            sha = events.sha256_file(path)
+        except OSError:
+            raise events.BadFile("spot mode needs %s, beside tools/den-core" % path) from None
+        if effective["code"].setdefault(name, sha) != sha:
+            raise ValueError("code changed: %s" % name)
+    if "spot_target" not in effective:
+        effective["spot_target"] = load_gate()["fixed"]["service_floor_lx"]["value"]["fine"]
+    if not (events.is_number(effective["spot_target"]) and effective["spot_target"] > 0):
+        raise ValueError("spot_target must be a number above 0")
 
 
 def _over_limit(record):
@@ -900,6 +1132,7 @@ def make_policy(config=None):
     for name, module in PINS.items():
         if effective["code"][name] != events.sha256_file(module.__file__):
             raise ValueError("code changed: %s" % name)
+    spot_config(effective)
     if effective["preference"]["offsets"] != NEUTRAL:
         raise ValueError("Preference is a fixed stand-in: offsets must stay %s" % NEUTRAL)
     comp = effective["compensation"]

@@ -135,7 +135,8 @@ read that variable. On the merged tree they use the sibling.
 | `victoria_den_bulb_scenes.yaml` | a draft HA package for Victoria that records each bulb's level (below); nothing deploys it |
 | `run.py` | the CLI and its summary/diff |
 | `need.py`, `decide.py` | written on their own branches against the interface below; the runner loads them by name |
-| `coordinator.py` | rung 9's coordinator v0: decide's rules behind the light model, as policy `decide` (below) |
+| `coordinator.py` | rung 9's coordinator v0: decide's rules behind the light model, as policy `decide` (below); its spot mode for the den simulation |
+| `spot_rule.py` | spot mode's fixture rule: the lighting brain's own `aim.py` on a PersonState, loaded by file path; and the startup line |
 | `light_adapter.py` | the one adapter to rung 8's light model; every prediction goes through it, into den-light's `predict.py` |
 | `fake_light.py` | rung 8's prediction rule from its plan, for a model marked `fake: true` or a checkout with no `tools/den-light`; plumbing only |
 | `testdata/predict_stand_in.py` | `predict.py`'s call on the fake's rule, for the scoring tests on a branch without den-light; only a test reaches it |
@@ -779,9 +780,64 @@ The last track always stays and a mask never goes, so one line can still break i
 8, as above, or with a lone track whose id runs to a couple of hundred characters, in that worst shape, fewer on a finer
 grid. Contract ids are far shorter.
 
+### Spot mode, for the den simulation
+
+`config["channels"]`, the light model's channel ids for its spots (`["F1.spot", "F2.spot", "F3.spot", "F4.spot"]` in the den
+simulation), with `config["actuator_domain"]: "virtual-den-4"`, gives one spot per channel. The mode branches at the top of
+`handle`, before anything keyed on the Hue ids. Each key needs the other: a domain with no channels is refused, because
+`channels: []` reads as unset and would run as Hue. A Hue config has neither, `PINS` and `_defaults` don't move, and so every
+Hue Decision and its `config_sha256` stay byte-identical: `test_spot_mode.py` holds the four synthetic evenings' Decisions to
+digests taken before spot mode existed.
+
+- **Reads:** `occupancy` and `person_state` events and the runner's ticks, nothing else: the read-back is its own last
+  command, and it has no holds or games. Run it as `runner.run(runner.tagged(items, "synthetic"), [policy], synthetic=True,
+  tail_s=0, plant=False)`, then `events.write` and `run.coordinator_outputs` under `contextlib.redirect_stdout`, in a new
+  folder. Frames come as `config["light_states"]`, as `--light-states` gives them, and change only the `light_state` fields.
+- **The model:** a file in Stage-1 shape, plus two keys `light_adapter.py` ignores: `fixtures`, `{fixture_id:
+  {aim_origin_m, horizontal_world_reference, limits}}`, reached from each channel's `fixture_id`, and `aim_points`,
+  `{surface_id: {point_m: [x, y, z]}}`, each a surface of its map. The header logs its hash.
+- **Rule:** readers are the tracks `decide.reading` holds for. `decide.plan` names the rule only, and anything but
+  `reading_look` (`base`, `vacant_off`) turns every spot off. A reader's surface is its `working_region.surface_id`; one
+  with no aim point (on the den simulation's model, anything but `sofa-book`) gets no target, and `why` says so.
+- **Target:** `make_policy` copies the gate's `service_floor_lx.fine`, 300, into `config["spot_target"]`, a declared
+  value in the model's unit: `targets[track]` is `{surface_id, lx: null, value: 300, unit: "relative", note: "modeled lux,
+  assumed lumens"}` on a relative model.
+- **Fixtures:** `spot_rule.py` builds the brain's `Fixture` from the model and its `Reader` from `attention.head_xyz`,
+  `position.xyz`, `heading.deg` (clockwise from +y) and the spot's point, and calls the brain's own `evaluate_fixture` with
+  `Settings(timezone="UTC")`. Refusals go in `skipped[]` with their track: `pan_tilt_infeasible:<detail>`, `too_far` (8 m),
+  `beam_through_head` (0.15 m), `in_front_of_reader`, and `no_head`: no head, no beam. With no heading the reader faces
+  nowhere, so only the in-front test is skipped, and `why` says so.
+- **Solve:** the lowest cost over every allowed fixture at each brightness the Hue solve tries, and off: the look's weights
+  on the shortfall squared, half the excess squared, and a small pull toward off. One beam per reader, and off wins a tie.
+  Short of the target it lights at full, with the shortfall in `why`.
+- **When:** no Decision while nobody is reading and nothing is lit. A reader with no beam writes one, with no steps,
+  holding `why` and `skipped`. After that, one only when what it would say changes.
+- **The Decision:** `requested_scene[channel] {on, level, cct_k, target_cct_k, clip_reason, aim}`, `level` the brightness
+  over 254, unrounded; the lit spot's `aim` names its surface and `target_m` its point. The model is asked about level and
+  temperature only, never the aim. `applied_scene[channel] {status: sent, readback {on, level, cct_k, aim},
+  readback_source, aim_source: commanded, aim_status: unknown, steps}`: a dark `move` with a fixed bound of 6 s (no two aims
+  are over 180 degrees apart, at the fictional profile's 30 degrees a second), then `fade_in` out at its landing over
+  `look_fade_s`; `fade_out` when a spot goes dark; no steps when nothing changed. Each step has `sent_at`, `transition_s`
+  and `result.at`. `aim_status` is never `settled`: nothing has moved when the coordinator decides.
+  `inputs.actuator_state` is each spot's own last command, an explicit off object before any, in place of the Hue ids.
+  `predicted.surfaces` lists `room` and the spot, 0.0 when off, through `light.predict`, and `predicted.eyes` is empty.
+- **Pins:** `spot_rule`, `aim`, `settings` and `geometry` join `config["code"]` only in this mode, so `check.py` refuses a
+  log once the rule or one of its thresholds changes. The brain's package loads under a private name, never through
+  `sys.path`.
+- **Never evidence:** the log is synthetic, on a fake model, with no incumbent, and `score.py` refuses it. No line fitting
+  either: it is for a couch with a track or two.
+
+`spot_rule.startup_line(fixtures, seat_m, facing_unit, spot_m)` gives each fixture against a stated facing, in words, through
+the same rule: `["F1 clear", "F2 refused: in front of reader", ...]`, with the reader's shoulders 0.5 m and head 0.73 m
+over the seat.
+
 ### Keys the contracts do not name
 
 Behind the `record_extensions` slot, proposed `coordinator-ext/v1`. They appear only in the coordinator's Decisions:
+
+- `requested_scene[].target_m`: in spot mode, the lit spot's point `[x, y, z]` from the light model's `aim_points`, in the
+  model's frame. Beside it, spot mode's `requested_scene[]` and `applied_scene[].readback` carry `on`, and its `skipped[]`
+  and `candidates[]` carry `track_id`.
 
 - `candidates[]`: `scene_id` (v0's) and the candidate's `scene`.
 - `requested_scene` and `inputs.actuator_state` keep the hue-den-4 dialect `{on, brightness, kelvin}`, with `aim` when a spot

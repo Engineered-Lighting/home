@@ -31,7 +31,7 @@ import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import { privateReason, standInSofa, writeGeometry } from './brain.mjs';
-import { aimNumbers, aimRow, createClicks } from './click.mjs';
+import { aimNumbers, aimRow, createClicks, servedCommand } from './click.mjs';
 import { SPOT_ABOVE_SEAT_M, writeCouch } from './couch_to_room.mjs';
 import { dataRoot, newestPreparedSet, refusedSince } from './data-root.mjs';
 import { offDocument } from './decision_doc.mjs';
@@ -569,9 +569,9 @@ const server = http.createServer(async (req, res) => {
       return file && fs.existsSync(file) ? send(res, 200, fs.readFileSync(file), { 'Content-Type': 'image/jpeg' }) : refuse(res, req.method, pathname, 404);
     }
     if (pathname === '/__sim/command') {
-      // A display, fetched once per click. Nothing on this page or harness can send it.
+      // A display, fetched once per click, without the fixture's origin. Nothing on this page or harness can send it.
       const click = Number(url.searchParams.get('click'));
-      return Object.hasOwn(commands, click) ? send(res, 200, commands[click]) : refuse(res, req.method, pathname, 404);
+      return Object.hasOwn(commands, click) ? send(res, 200, servedCommand(commands[click])) : refuse(res, req.method, pathname, 404);
     }
     if (pathname === '/auth/status') return send(res, 200, { authenticated: true, username: 'den-sim' });
     if (pathname === '/api/perception-lab/v1/capabilities') return send(res, 200, LAB_CAPABILITIES, { 'X-Home-Lab-Access': 'read-only' });

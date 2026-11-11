@@ -44,6 +44,13 @@ function fixtureCommand(take, decision, refs) {
     return { sent: false, send_path: null, take, decision, failed: `The dry run failed: ${String(error.stderr || error.message).trim().split('\n').at(-1)}` };
   }
 }
+// The command as /__sim/command serves it to the page: the lit fixture's origin and reference stay in dry-run.json, beside
+// the click, since they are the private geometry's. The target, the fixture and the level the page shows stay in.
+export function servedCommand(command) {
+  if (!command?.decision) return command;
+  const { aim_origin_m: _origin, horizontal_world_reference: _reference, ...decision } = command.decision;
+  return { ...command, decision };
+}
 // What the panel needs from the command. Whole commands are large, and the panel polls its status.
 export function commandStatus(command) {
   return { pending: false, failed: command.failed || null, lit: !!command.decision, ik_ok: !!command.ik?.ok, ik_reason: command.ik?.reason || null,
@@ -61,7 +68,8 @@ function mapDecisions({ work, folder, channels, geometry, chainRows }) {
   const file = name => ({ path: name, sha256: sha256(path.join(work, name)) }), from = n => name => ({ ...file(name), from_hop: n });
   const decided = from(17)(`${folder}/decisions.jsonl`), table = { path: 'brain-geometry.json', sha256: sha256(geometry.path),
     recorded: { kind: 'fixture table', by: 'brain.mjs at page start, as it wrote the geometry', sha256: geometry.sha256 } };
-  const refused = mapped.find(item => !item.ok), last = mapped.filter(item => item.lit.length).at(-1);
+  // The click ends on its last Decision, as the feed does: chain.py stops at 17 when that one lit nothing.
+  const refused = mapped.find(item => !item.ok), last = mapped.at(-1)?.lit.length ? mapped.at(-1) : null;
   const fixtureOf = channel => channels.find(row => row.channel === channel)?.fixture_id;
   const bound = last && !last.unbound ? `reading evidence bound to ${last.state.reading_evidence.activity.request_id}, ${last.state.reading_evidence.activity.bundle_id}, `
     + `${last.state.reading_evidence.activity.track_id} and its reply` : last ? `reading evidence unbound: ${last.unbound}` : 'no lit Decision';
@@ -127,8 +135,9 @@ export function createClicks({ refs, outputRoot, runDirectory, geometry, channel
   function finish({ take, prepared, setDir, startRecord, chain, done, work, pressedAgain }) {
     const maps = mapDecisions({ work, folder: done.decide, channels, geometry });
     const reply = done.reply;
-    if (maps.refused) {
-      const stop = { hop: 18, why: `decision_doc.mjs refused the Decision: ${maps.refused.reason}`, answer: false };
+    if (maps.refused || !maps.last) {
+      // chain.py says done only when the last Decision lit: one that didn't is a break here, never the earlier beam.
+      const stop = { hop: 18, why: maps.refused ? `decision_doc.mjs refused the Decision: ${maps.refused.reason}` : 'the last Decision lit nothing, though chain.py went on past hop 17', answer: false };
       const receipt = buildReceipt({ click: clicks, takeId: take, setId: prepared.set, setDir, prepared, refs, start: startRecord, chain: { ...chain, stop },
         decision: { feedRow: maps.row, motionRow: null }, command: null, pressedAgain });
       return { ok: false, reason: stop.why, receipt };

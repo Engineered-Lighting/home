@@ -31,12 +31,12 @@ import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs'
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import * as Bake from '../../app/src/home-3d/lit-bvh-bake.mjs';
 import * as Lit from '../../app/src/home-3d/lit-model.mjs';
-import { aimNumbers, chainRequest } from './click.mjs';
+import { aimNumbers, chainRequest, servedCommand } from './click.mjs';
 import { nextVersion, writeCouch } from './couch_to_room.mjs';
 import { EVIDENCE_S, decisionDocument, offDocument } from './decision_doc.mjs';
 import { createFeed, planSwing } from './feed.mjs';
 import { LEVELS, channelTable, lightModel } from './light_model.mjs';
-import { buildReceipt, finalRow, personColumn, pictureNote, receiptView, sha256 } from './receipt.mjs';
+import { buildReceipt, decisionCard, finalRow, personColumn, pictureNote, receiptView, sha256 } from './receipt.mjs';
 import { topLine } from './top_line.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..');
@@ -488,14 +488,14 @@ test('test 14: the light model is Home\'s formula, equal to directCpu within 0.0
 // A spot Decision in canon's shape as hop 17 step 7 writes it, typed here on invented numbers: one reader, F2 lit at full on the spot.
 const T0 = 1800000000, STATE = `trk-1@${T0 + 10.5}`, BODY = 'b'.repeat(64);
 const CHANNEL_KEYS = ['F1.spot', 'F2.spot', 'F3.spot', 'F4.spot'];
-function typedDecision({ lit = 'F2.spot', target = [...BOOK], domain = 'virtual-den-4', actuation = 'synthetic', tracks = ['trk-1'] } = {}) {
+function typedDecision({ lit = 'F2.spot', target = [...BOOK], domain = 'virtual-den-4', actuation = 'synthetic', tracks = ['trk-1'], level = 1.0 } = {}) {
   const t = T0 + 11, move = 2.4, fade = 2.0, on = channel => channel === lit;
   return { decision_id: `decide-${t * 1000}-1`, ts: t, trigger: { kind: 'person_state' }, policy: 'decide', actuator_domain: domain, ...(actuation ? { actuation } : {}),
     targets: Object.fromEntries(tracks.map(track => [track, { surface_id: 'sofa-book', lx: null, value: 300, unit: 'relative', note: 'modeled lux, assumed lumens' }])),
-    requested_scene: Object.fromEntries(CHANNEL_KEYS.map(channel => [channel, { on: on(channel), level: on(channel) ? 1.0 : 0.0, cct_k: on(channel) ? 2700 : null,
+    requested_scene: Object.fromEntries(CHANNEL_KEYS.map(channel => [channel, { on: on(channel), level: on(channel) ? level : 0.0, cct_k: on(channel) ? 2700 : null,
       target_cct_k: on(channel) ? 2700 : null, clip_reason: null, aim: on(channel) ? 'sofa-book' : null, ...(on(channel) && target ? { target_m: target } : {}) }])),
     applied_scene: Object.fromEntries(CHANNEL_KEYS.map(channel => [channel, { status: on(channel) ? 'sent' : 'kept',
-      readback: { on: on(channel), level: on(channel) ? 1.0 : 0.0, cct_k: on(channel) ? 2700 : null }, aim_source: 'commanded', aim_status: 'unknown',
+      readback: { on: on(channel), level: on(channel) ? level : 0.0, cct_k: on(channel) ? 2700 : null }, aim_source: 'commanded', aim_status: 'unknown',
       steps: on(channel) ? [{ kind: 'move', sent_at: t, result: { at: t + move } }, { kind: 'fade_in', sent_at: t + move, result: { at: t + move + fade } }] : [] }])),
     skipped: CHANNEL_KEYS.filter(channel => channel !== lit).map(channel => ({ channel, reason: 'in_front_of_reader' })),
     predicted: { surfaces: { room: 0.0, 'sofa-book': lit ? 246.2 : 0.0, unit: 'relative' }, eyes: [] },
@@ -529,6 +529,9 @@ test('test 15, typed: decision_doc.mjs maps a spot Decision to a document Home a
   assert.deepEqual([lit.ok, lit.reason, lit.lit, lit.unbound], [true, null, ['F2.spot'], null]);
   assert.equal(Client.validateState(lit.state).ok, true, Client.validateState(lit.state).reason);
   assert.deepEqual(lit.state.fixtures[1].spot, { on: true, level: 1, cct_k: 2700, target_m: BOOK, fade_s: 2 });
+  // A solved level reaches Home as the read-back holds it, unrounded: verify reads the map as wrong on a rounded one.
+  const solved = decisionDocument({ decision: typedDecision({ level: 198 / 254 }), channels, asks: typedAsks(), personStates: [typedPerson()] });
+  assert.equal(solved.state.fixtures[1].spot.level, 198 / 254);
   assert.ok([0, 2, 3].every(i => !lit.state.fixtures[i].spot.on && lit.state.fixtures[i].spot.target_m === null));
   assert.deepEqual([lit.state.mode, lit.state.decision_id, lit.state.generated_at], ['reading', typedDecision().decision_id, T0 + 11]);
   assert.match(lit.state.why, /^SIMULATION · reading_look: lit F2\.spot; 3 refused$/);
@@ -565,6 +568,7 @@ test('test 15, typed: decision_doc.mjs maps a spot Decision to a document Home a
     'the PersonState cites another reply': [typedDecision(), typedAsks(), [typedPerson({ sources: { ...typedPerson().sources, focused_engagement: [{ origin: 'qwen', ref: 'a'.repeat(64) }] } })]],
     'no person states': [typedDecision(), typedAsks(), []],
     'two readers': [typedDecision({ tracks: ['trk-1', 'trk-2'] }), typedAsks(), [typedPerson()]],
+    'two asks rows join it': [typedDecision(), [...typedAsks(), typedAsks()[1]], [typedPerson()]],
   };
   for (const [name, [decision, asks, personStates]] of Object.entries(broken)) {
     const got = decisionDocument({ decision, channels, asks, personStates });
@@ -656,13 +660,60 @@ test('test 16, typed: the aim check\'s two numbers hold Home to the Decision wit
   // Home's own aim on a point, as aimAtTarget computes it: pan from the reference, tilt down from level.
   const home = point => { const back = readbackNear(fixture, point, 0); return { fixture_id: fixture.fixture_id, display_origin_m: fixture.aim_origin_m, pan_deg: back.pan_deg, tilt_deg: back.tilt_deg, target_point: point }; };
   const held = aimNumbers({ target: BOOK, command: ik, home: home(BOOK) });
-  assert.deepEqual([held.within_tolerance, held.decision_deg <= .05, held.ik_deg <= .05, held.why], [true, true, true, null], JSON.stringify(held));
+  assert.deepEqual([held.within_tolerance, held.decision_deg <= .05, held.ik_deg <= .05, held.why, held.tolerance_deg], [true, true, true, null, .05], JSON.stringify(held));
+  // Either number alone fails it: Home's pan or tilt 0.1 degrees off its own target point, or that point 1 cm off the
+  // Decision's with the angles on it. Each is under any beam the overlay would show moved.
+  for (const [name, change, [decisionOk, ikOk]] of [['pan', back => ({ pan_deg: back.pan_deg + .1 }), [true, false]], ['tilt', back => ({ tilt_deg: back.tilt_deg - .1 }), [true, false]],
+    ['point', () => ({ target_point: [BOOK[0] + .01, BOOK[1], BOOK[2]] }), [false, true]]]) {
+    const one = aimNumbers({ target: BOOK, command: ik, home: { ...home(BOOK), ...change(home(BOOK)) } });
+    assert.deepEqual([one.within_tolerance, one.decision_deg <= .05, one.ik_deg <= .05], [false, decisionOk, ikOk], `${name}: ${JSON.stringify(one)}`);
+  }
   for (const off of [0.3, 1]) {
     const missed = aimNumbers({ target: BOOK, command: ik, home: home([BOOK[0] + off, BOOK[1], BOOK[2]]) });
     assert.deepEqual([missed.within_tolerance, missed.why], [false, 'Home did not follow the Decision'], `${off} m off`);
     assert.ok(missed.decision_deg > 1 && missed.ik_deg > 1, JSON.stringify(missed));
   }
   assert.equal(aimNumbers({ target: BOOK, command: { ik: { ok: false } }, home: home(BOOK) }), null, 'no compiled aim, no check');
+});
+
+test('the Decision card reads the click\'s last Decision: a beam gone off, a missing head, a tie, and turning the reader only where it helps', () => {
+  const channels = channelTable({ fixtures: INVENTED }), id = n => Client.FIXTURE_IDS[n - 1].match(/mount-\d+|fixture-\d+/)[0];
+  const refusal = (channel, reason) => ({ channel, track_id: 'trk-1', reason, words: reason.split(':')[0].replaceAll('_', ' ') });
+  const view = (change = {}) => ({ decision_id: 'decide-1-1', lit: [], level: [], predicts: 0, asked: 300, note: 'modeled lux, assumed lumens', readers: ['trk-1'],
+    refusals: [], costlier: [], tied: [], off: null, why: 'reading_look: no beam for trk-1.', ...change });
+  const card = (views, stopped = null) => decisionCard({ rows: [{ n: 17, reached: true, decisions: views }], stopped }, channels);
+  const lit = view({ lit: ['F1.spot'], level: [1], predicts: 246.2, costlier: ['F4.spot'], why: 'reading_look: F1.spot lit for trk-1.' });
+  const chose = `Chose F1 (${id(1)}): level 1, predicts 246 of 300 asked, modeled lux, assumed lumens.`;
+  assert.deepEqual(card([lit]).lines, [chose, `F4 (${id(4)}): allowed, and cost more at its best level.`], 'one fixture: said in the singular');
+  assert.equal(card([{ ...lit, costlier: ['F2.spot', 'F4.spot'] }]).lines[1], `F2 (${id(2)}), F4 (${id(4)}): allowed, and each cost more at its best level.`);
+  assert.deepEqual(card([{ ...lit, costlier: [], tied: ['F2.spot'] }]).lines, [chose, `F2 (${id(2)}): allowed, and tied it at its best level, so the first in order was chosen.`]);
+  // A later Decision that turned every spot off: the card ends dark, with the earlier choice as history, and no level.
+  const dark = view({ readers: [], off: 'every spot off', why: 'base: every spot off.' });
+  const went = card([lit, dark], { hop: 17, why: 'the beam went off: nobody is reading (trk-1: engagement none, on the couch yes)', answer: true });
+  assert.deepEqual([went.lit, went.level, went.went_off], [null, null, true]);
+  assert.deepEqual(went.lines, ['The beam went off: nobody is reading (trk-1: engagement none, on the couch yes).',
+    `Before that it chose F1 (${id(1)}): level 1, predicts 246 of 300 asked, modeled lux, assumed lumens. The last of the 2 Decisions lit nothing.`, 'The beam stays off.']);
+  assert.equal(card([lit, dark, lit]).lit, 'F1.spot', 'control: lit again at the end, the card says so');
+  // No head: said once, with no refusal per fixture and no turn, which can't help.
+  const headless = view({ refusals: CHANNEL_KEYS.map(channel => refusal(channel, 'no_head')), off: 'the person state of trk-1 has no head' });
+  assert.deepEqual(card([headless]).lines, ['No beam: the person state of trk-1 has no head.', 'The beam stays off.']);
+  // Every fixture refused, one of them in front of the reader: each reason shows, and the turn is offered.
+  const refused = view({ refusals: [refusal('F1.spot', 'in_front_of_reader'), refusal('F2.spot', 'too_far'), refusal('F3.spot', 'pan_tilt_infeasible:tilt_limit'), refusal('F4.spot', 'beam_through_head')],
+    off: 'every fixture refused' });
+  assert.deepEqual(card([refused]).lines, ['No beam: every fixture refused.', `F1 (${id(1)}) refused: in front of reader.`, `F2 (${id(2)}) refused: too far.`,
+    `F3 (${id(3)}) refused: pan tilt infeasible.`, `F4 (${id(4)}) refused: beam through head.`, 'The beam stays off. You can turn the reader: say which way, and an agent writes facing.json.']);
+  assert.equal(card([{ ...refused, refusals: CHANNEL_KEYS.map(channel => refusal(channel, 'too_far')) }]).lines.at(-1), 'The beam stays off.', 'control: no fixture in front, no turn');
+  assert.ok([went, card([refused]), card([lit])].every(item => item.lines.every(line => !line.toLowerCase().includes(SITE.toLowerCase()))), 'short ids only');
+});
+
+test('the page gets the command without the lit fixture\'s origin and reference, which stay in dry-run.json', () => {
+  const command = { sent: false, send_path: null, ik: { ok: true }, decision: { channel: 'F1.spot', fixture_id: Client.FIXTURE_IDS[0], aim_origin_m: [1, 2, 3],
+    horizontal_world_reference: [0, 1, 0], target_m: BOOK, level: 1, cct_k: 2700, decision_id: 'decide-1-1' } };
+  const served = servedCommand(command);
+  assert.deepEqual(Object.keys(served.decision).sort(), ['cct_k', 'channel', 'decision_id', 'fixture_id', 'level', 'target_m']);
+  assert.deepEqual([served.sent, served.ik, command.decision.aim_origin_m], [false, { ok: true }, [1, 2, 3]], 'the rest as it was, and the click keeps its own');
+  assert.equal(servedCommand({ sent: false, decision: null }).decision, null);
+  assert.match(read('run.mjs'), /send\(res, 200, servedCommand\(commands\[click\]\)\)/, '/__sim/command serves it so');
 });
 
 /* ---------- test 2 and test 19: searches over code ---------- */
@@ -1260,7 +1311,10 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
     // Hop 17 on your export and mark: the coordinator decided, held to the light model hop 16 built, and the card says what.
     assert.deepEqual([now.click.rows[16].word, now.click.rows[16].reached], ['ADAPTER', true], now.click.rows[16].summary);
     assert.deepEqual(now.click.top_line.reasons.filter(reason => reason.hop === 17), [], 'hop 17 holds: its tools pinned, its reads vouched, the light model\'s digest the one hop 16 wrote');
-    assert.ok(now.click.decision?.lines.length > 0);
+    // Which fixture, from the reader's facing on the invented mark and the authored sockets: the startup line and the card agree.
+    // Read with the heading another way, F3 and F4 swap, and so does the beam.
+    assert.match(text, /^Fixtures for the stated facing, at the spot: F1 clear, F2 refused: in front of reader, F3 refused: in front of reader, F4 clear$/m);
+    assert.match(now.click.decision?.lines[0] || '', /^Chose F4 \(mount-04\): level 1, predicts \d+ of 300 asked, modeled lux, assumed lumens\.$/);
     t.diagnostic(`the Decision on the sealed invented export and mark: ${now.click.decision.lines.join(' ')}`);
     // Tests 19 and 9: no number of the mark or the camera in any panel text, the console or the harness's logs.
     const shown = panelText(now), logs = ['run.json', 'requests.jsonl', `click-${now.click.click}/argv.jsonl`].filter(name => fs.existsSync(path.join(now.run, name)))

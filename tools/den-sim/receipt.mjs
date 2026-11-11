@@ -237,23 +237,33 @@ export function personCard(receipt) {
   return { tracks: row.person.map(card => ({ track_id: card.track_id, on_couch: card.on_couch, held: !!card.held })), track_lines: lines.length, lines: [...lines, placed, ...facing,
     'The coordinator decides the beam from this state (hop 17): no target unless the spot is sofa-book.'] };
 }
-// The Decision card (hop 17), in words from what this click's row recorded, never from the button: the chosen fixture, each
-// refusal in words, and the level against the target; with no Decision, why, read from the person state. channels: F1 to F4
-// to Home's fixture ids, when the page has them.
+// The Decision card (hop 17), in words from what this click's row recorded, never from the button: the click's last Decision,
+// which the feed ends on: the chosen fixture, each refusal in words, and the level against the target; a beam that went off
+// says so, with the earlier choice as history; with no Decision, why, read from the person state. channels: F1 to F4 to
+// Home's fixture ids, when the page has them.
 const short = id => String(id).match(/mount-\d+|fixture-\d+/)?.[0] || id;
+const levelOf = view => `level ${Math.round(view.level[0] * 100) / 100}, predicts ${Math.round(view.predicts)} of ${view.asked} asked, ${view.note}`;
 export function decisionCard(receipt, channels = null) {
   const row = receipt.rows.find(item => item.n === 17);
   if (!row || row.reached === false || !Array.isArray(row.decisions)) return null;
   const fixture = channel => { const id = channels?.find(item => item.channel === channel)?.fixture_id; return `${channel.split('.')[0]}${id ? ` (${short(id)})` : ''}`; };
-  const views = row.decisions, last = views.filter(view => view.lit.length).at(-1) || views.at(-1);
+  const views = row.decisions, last = views.at(-1), earlier = views.filter(view => view.lit.length).at(-1);
   if (!last) return { lit: null, level: null, refusals: [], decisions: 0, lines: [`No Decision: ${receipt.stopped?.why || 'nobody is reading'}. Every spot stays off.`] };
-  const refusals = last.refusals.map(item => `${fixture(item.channel)} refused: ${item.words}`), lit = last.lit[0] || null;
-  const level = lit ? `level ${Math.round(last.level[0] * 100) / 100}, predicts ${Math.round(last.predicts)} of ${last.asked} asked, ${last.note}` : null;
-  const turn = last.readers.length && refusals.length ? ['The beam stays off. You can turn the reader: say which way, and an agent writes facing.json.'] : ['The beam stays off.'];
-  const costlier = (last.costlier || []).map(fixture);
-  const lines = lit ? [`Chose ${fixture(lit)}: ${level}.`, ...(costlier.length ? [`${costlier.join(', ')}: allowed, and each cost more at its best level.`] : []), ...refusals.map(text => `${text}.`)]
-    : [`No beam: ${last.readers.length && refusals.length ? 'every fixture refused' : last.why}.`, ...refusals.map(text => `${text}.`), ...turn];
-  return { lit, level, refusals, decisions: views.length, why: last.why, lines };
+  // A missing head is the card's why, said once, not a refusal per fixture.
+  const refusals = last.refusals.filter(item => item.reason !== 'no_head').map(item => `${fixture(item.channel)} refused: ${item.words}`), lit = last.lit[0] || null;
+  const allowed = (names, one, each) => names.length ? [`${names.map(fixture).join(', ')}: allowed, and ${names.length === 1 ? one : each}.`] : [];
+  if (lit) {
+    return { lit, level: levelOf(last), refusals, decisions: views.length, why: last.why, lines: [`Chose ${fixture(lit)}: ${levelOf(last)}.`,
+      ...allowed(last.costlier || [], 'cost more at its best level', 'each cost more at its best level'),
+      ...allowed(last.tied || [], 'tied it at its best level, so the first in order was chosen', 'each tied it at its best level, so the first in order was chosen'),
+      ...refusals.map(text => `${text}.`)] };
+  }
+  // Turning the reader can help only a fixture refused for being in front of the reader.
+  const turn = last.refusals.some(item => item.reason === 'in_front_of_reader') ? ' You can turn the reader: say which way, and an agent writes facing.json.' : '';
+  const went = receipt.stopped?.hop === 17 && /^the beam went off: /.test(receipt.stopped.why) ? receipt.stopped.why.replace(/^the beam went off: /, '') : null;
+  const head = earlier ? [`The beam went off: ${went || last.off || last.why}.`, `Before that it chose ${fixture(earlier.lit[0])}: ${levelOf(earlier)}. The last of the ${views.length} Decisions lit nothing.`]
+    : [`No beam: ${last.off || last.why}.`];
+  return { lit: null, level: null, went_off: !!earlier, refusals, decisions: views.length, why: last.why, lines: [...head, ...refusals.map(text => `${text}.`), `The beam stays off.${turn}`] };
 }
 // Run every scene's Person column, from the card: one word per track, MISSING with why, and "none" only with no track.
 export function personColumn(card) {

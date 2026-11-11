@@ -29,6 +29,12 @@ OCCUPANCY = "occupancy"
 # health false. Short on purpose: an unreachable broker is never "warming up".
 MQTT_CONNECT_GRACE_S = 10.0
 
+# Retry backoff stops doubling after this many failures. The delay is already
+# at `retry_max_s` long before this unless the cap is over 2**64 times the
+# initial delay. Without the bound, 2 ** n stops fitting in a float after about
+# 1,024 consecutive failures and the bridge crashes with OverflowError.
+MAX_RETRY_DOUBLINGS = 64
+
 Clock = Callable[[], float]
 Value = tuple[bool, "int | None"]  # (present, people_count)
 
@@ -123,7 +129,8 @@ class Outbox:
         elif result.retryable:
             self._failures += 1
             self.stats.failed_attempts += 1
-            delay = min(self._timing.retry_initial_s * 2 ** (self._failures - 1), self._timing.retry_max_s)
+            doublings = min(self._failures - 1, MAX_RETRY_DOUBLINGS)
+            delay = min(self._timing.retry_initial_s * 2 ** doublings, self._timing.retry_max_s)
             self._next_attempt_at = now + delay
             if self._failures == 1:
                 log.warning("brain unreachable (%s); buffering, retry in %.0f s", result.detail, delay)

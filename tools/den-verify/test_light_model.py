@@ -648,7 +648,7 @@ class NoSibling(Temp):
 class BrokenPredict(Temp):
     """den-light's predict.py broken or missing, in a copy of the two folders: verify.py says so in one sentence."""
 
-    def run_copy(self, predict_text):
+    def run_copy(self, predict_text, env=None):
         tools = self.tmp / "tools"
         shutil.copytree(HERE, tools / "den-verify", ignore=shutil.ignore_patterns("test_*", "__pycache__"))
         (tools / "den-light").mkdir()
@@ -657,7 +657,7 @@ class BrokenPredict(Temp):
         d, f, c = syn.v11_evening()
         argv, folder = self.case(syn.v11_model(), d, f, name="run")
         command = [sys.executable, str(tools / "den-verify" / "verify.py"), *map(str, argv), "--preview"]
-        return tools, folder, subprocess.run(command, capture_output=True, text=True, timeout=120)
+        return tools, folder, subprocess.run(command, capture_output=True, text=True, timeout=120, env=env)
 
     def test_a_predict_py_that_will_not_load_is_a_sentence(self):
         for text in ("def broken(:\n", "raise KeyError('x')\n", "def predict(scene, model):\n    return {}\n", None):
@@ -672,8 +672,11 @@ class BrokenPredict(Temp):
                 shutil.rmtree(folder)
 
     def test_it_leaves_no_pycache_beside_the_file(self):
-        tools, _, done = self.run_copy(REAL_PREDICT.read_text(encoding="utf-8"))
+        # with bytecode on, as it is on a PC with no PYTHONDONTWRITEBYTECODE: den-verify's own modules write theirs
+        env = {k: v for k, v in os.environ.items() if k != "PYTHONDONTWRITEBYTECODE"}
+        tools, _, done = self.run_copy(REAL_PREDICT.read_text(encoding="utf-8"), env=env)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertTrue((tools / "den-verify" / "__pycache__").exists())
         self.assertFalse((tools / "den-light" / "__pycache__").exists())
 
 

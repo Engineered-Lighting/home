@@ -13,6 +13,7 @@ from http.server import HTTPServer
 import io
 import ipaddress
 import math
+import os
 import re
 import socket
 import ssl
@@ -244,7 +245,14 @@ class PrivateTLSIngress(HTTPServer):
     Shutdown closes active sockets; slots remain charged until handler cleanup,
     including any in-progress admitted backend call. No automatic engine restart.
     """
-    allow_reuse_address = False
+    # A restart rebinds at once. The old instance's closed connections linger
+    # on this port in FIN-WAIT-2 or TIME-WAIT for up to about 60 s. Without
+    # SO_REUSEADDR, every start in that window failed with EADDRINUSE (the LA
+    # camera pilot, 2026-11-11). Linux needs it on both the old and the new
+    # listener, and it never lets a second listener share the port. Windows
+    # SO_REUSEADDR would, so it stays off there. SO_REUSEPORT stays off too.
+    allow_reuse_address = os.name == "posix"
+    allow_reuse_port = False
 
     def __init__(self, address: tuple[str, int], gateway: Gateway, *, certificate: str,
                  private_key: str, client_ca: str,

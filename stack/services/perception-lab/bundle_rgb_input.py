@@ -30,8 +30,11 @@ SUPPORT_SCHEMA, SUPPORT_STREAM = 'home-lab-bundled-rgb-input-original-1', 'bundl
 ANCHOR_STREAM = 'bundled_rgb_clock_anchor'
 ROLE_LIMITS = dict(anchor_a=256*1024, anchor_b=256*1024, npz=4*1024**2,
     calibration_original=24576, bundle=4*1024**2, rgb=1024**2, support=256*1024)
-CAMERA_SOURCE = Path(JETSON_HOME + '/victoria-camera-pilot/pilot-20260926/capture.py')
-CAMERA_SHA = 'd052fc217b2d412cb877cfb49608e7dcef4a52526932b8d036a51380accb6132'
+CAMERA_SOURCE = Path(JETSON_HOME + '/victoria-camera-pilot/pilot-20261111-depth/capture.py')
+CAMERA_SHA = '15430138f9dffdead4a7d2833cb57514a0162a037d0328931f1b134cee1374cc'
+# Earlier releases whose clock checks are byte-identical to CAMERA_SOURCE's (test_camera_depth_correction
+# proves it), so receiver-clock proofs they already signed stay valid. New proofs always name CAMERA_SHA.
+EARLIER_CAMERA_SHAS = ('d052fc217b2d412cb877cfb49608e7dcef4a52526932b8d036a51380accb6132',)
 AUTHORITY = dict(candidate_only=True, owner_local_only=True, operational_geometry=None,
     identity_authority=False, engagement_authority=False, protection_authority=False, beam_authority=False)
 SUPPORT_KEYS = {'schema', 'version', 'binding', 'capture_id', 'started_event_id', 'anchors',
@@ -131,7 +134,7 @@ def host_execution_interval(proof):
     lifetime charge is subtracted and no relation to sensor exposure is granted.
     """
     need(isinstance(proof, dict) and set(proof) == {'evidence', 'before', 'after', 'boot_id', 'validator_source_sha256'}
-        and proof['validator_source_sha256'] == CAMERA_SHA, 'bundled_receiver_proof_invalid')
+        and proof['validator_source_sha256'] in (CAMERA_SHA, *EARLIER_CAMERA_SHAS), 'bundled_receiver_proof_invalid')
     e = proof['evidence']; points = [proof['before'], proof['after']]
     need(isinstance(e, dict) and set(e) == {'version', 'semantics', 'host_boot_id', 'validation_id',
         'checked_monotonic_ns', 'checked_unix_ns', 'valid_until_monotonic_ns', 'uncertainty_seconds'}

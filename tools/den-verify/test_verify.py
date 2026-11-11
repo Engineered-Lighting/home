@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import light_model
 import method
 import synthetic as syn
 import verify as cli
@@ -477,6 +478,68 @@ class SpillAndUncertainty(unittest.TestCase):
         self.assertEqual(v["spill"][0]["status"], "unverifiable")
         decisions, _, _ = score(d, rel, syn.v11_model(), corrections=c)
         self.assertEqual(point(decisions[0], "counter-1")["status"], "unverifiable")
+
+
+class RealPredict(unittest.TestCase):
+    """Every prediction is rung 8 Stage 1's own predict() over a light-model.json in its shape."""
+
+    def setUp(self):
+        self.model = syn.hue_model({"desk-1": {B0: 400, B1: 50}, "sofa-1": {B2: 300}, "r00c02": {B0: 9}},
+                                   excluded=("r00c02",))
+        self.lm = LightModel(self.model)
+        self.state = {B0: {"level": 0.6, "cct_k": 3000}, B1: {"level": 0.3, "cct_k": 2400},
+                      B2: {"level": 1.0, "cct_k": 6000}}
+
+    def test_backend_is_den_lights_predict(self):
+        self.assertEqual(Path(light_model.predict.__file__).resolve().parent, HERE.parent / "den-light")
+        self.assertEqual(Path(syn.__file__).resolve().parent, HERE)  # rung 10's synthetic.py stays first
+        self.assertEqual(self.lm.backend, light_model.BACKEND)
+        self.assertIn("predict.py", light_model.BACKEND)
+
+    def test_values_are_predicts_by_entity_or_channel_and_parts_sum(self):
+        ours = self.lm.predict(self.state)
+        by_channel = {syn.hue_channel(b): s for b, s in self.state.items()}
+        theirs = light_model.predict.predict(by_channel, self.model)["surfaces"]
+        self.assertEqual(self.lm.predict(by_channel), ours)
+        parts = self.lm.contributions(self.state)
+        for sid, value in ours.items():
+            self.assertAlmostEqual(value, theirs[sid], places=9)
+            self.assertAlmostEqual(sum(p[sid] for p in parts.values()), value, places=9)
+
+    def test_excluded_point_is_no_surface_and_stays_unverifiable(self):
+        self.assertIsNone(light_model.predict.predict({}, self.model)["surfaces"]["r00c02"])
+        self.assertEqual(sorted(self.lm.surfaces), ["desk-1", "sofa-1"])
+        t = syn.T0
+        k = self.lm.predict({B0: {"level": 1, "cct_k": 2700}})["desk-1"]
+        ref = syn.light_state(t, {"desk-1": 0.1 * k, "r00c02": 1}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-ex", t + 0.5, {B0: 0.1}, {B0: {"level": 0.5, "steps": send(t + 0.6)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}})
+        dec["predicted"]["surfaces"] = {"desk-1": 0, "r00c02": 0, "unit": "relative"}
+        after = syn.light_state(t + 4, {"desk-1": 0.5 * k, "r00c02": 5}, anchored=False)
+        decisions, _, report = score([dec], [ref, after], self.model)
+        self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
+        self.assertEqual(point(decisions[0], "r00c02")["status"], "unverifiable")
+        self.assertEqual(report["model"]["backend"], light_model.BACKEND)
+
+    def test_a_state_predict_refuses_leaves_the_decision_unverified(self):
+        t = syn.T0
+        ref = syn.light_state(t, {"desk-1": 40}, anchored=False, ident="ls-ref")
+        dec = syn.hue_decision("d-nocct", t + 0.5, {B0: 0.1}, {B0: {"level": 0.5, "steps": send(t + 0.6)}}, "ls-ref",
+                               targets={"A": {"surface_id": "desk-1"}}, cct_k=None)
+        after = syn.light_state(t + 4, {"desk-1": 200}, anchored=False)
+        decisions, _, _ = score([dec], [ref, after], self.model)
+        self.assertIsNone(decisions[0]["verify"])
+        self.assertIn("needs cct_k", decisions[0]["verify_status"])
+        with self.assertRaisesRegex(KeyError, "no channel 'light.den_attic'"):
+            self.lm.predict({"light.den_attic": {"level": 0.5, "cct_k": 2700}})
+        self.assertEqual(self.lm.predict({"light.den_attic": {"level": 0, "cct_k": None}}),
+                         {"desk-1": 0.0, "sofa-1": 0.0})  # a channel that is off needs nothing
+
+    def test_one_captured_temperature_needs_no_cct_k_and_a_level_caps_at_full(self):
+        single = LightModel(syn.hue_model({"desk-1": {B0: 400}}, kelvins=(2700,)))
+        self.assertEqual(single.predict({B0: {"level": 1, "cct_k": None}})["desk-1"], 400.0)
+        full = self.lm.predict({B0: {"level": 1.0, "cct_k": 2700}})
+        self.assertEqual(self.lm.predict({B0: {"level": 255 / 254, "cct_k": 2700}}), full)
 
 
 class MethodAndCommandLine(unittest.TestCase):

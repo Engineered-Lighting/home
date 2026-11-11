@@ -134,8 +134,12 @@ refuses stops the click with the validator's reason, and the off document stays.
 
 Under the person card, the Decision card says what the coordinator chose, from hop 17's row: for example "Chose F2
 (fixture-02): level 0.79, predicts 273 of 300 asked, modeled lux, assumed lumens", the fixtures it allowed that cost more,
-and each refusal in words ("F1 refused: in front of reader"). When every fixture refuses, the beam stays off, the reasons
-show, and the card says you can turn the reader (see `facing.json`, below). With no Decision, as on a phone click, the card
+and each refusal in words ("F1 refused: in front of reader"). When every fixture refuses, the beam stays off and the
+reasons show; when one of them is in front of the reader, the card says you can turn the reader (see `facing.json`,
+below). A person state with no head reads "no beam: the person state of trk-1 has no head", and an off that cost less
+than each fixture allowed says so. The card reads the click's last Decision, as the feed ends on it: when a later
+Decision lit nothing after an earlier beam (a reading that ends), the click stops at hop 17 with "the beam went off" and
+why, and the card gives the earlier choice as history. With no Decision, as on a phone click, the card
 says why from the person state: nobody is reading. The fixture command box below it shows the motor units, the packets and
 the Zigbee command compiled from the Decision's target and level, marked NOT SENT (`sent: false`, `send_path: null`), and
 the aim check's two numbers. A target the fictional profile can't reach is refused and shown.
@@ -366,6 +370,8 @@ python -B -X utf8 tools\den-sim\scene\prepare.py
 - The harness binds `127.0.0.1` only and refuses any other `Host`.
 - Anything it does not serve returns 503 and is logged.
 - It refuses non-GET except a same-origin `/__sim/feed` and `/__sim/aim`, and destroys WebSocket upgrades.
+- `/__sim/command` serves the dry run without the lit fixture's origin and reference, which stay in the click's
+  `dry-run.json`; the panel's read-back names a fixture by its short id.
 - The page's security policy allows connections to its own origin only, plus `data:` and `blob:`,
   which Home's Photo view needs for local bytes.
 - Every Python process here refuses all sockets, through an audit hook. Only `prepare.py`'s

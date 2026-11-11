@@ -60,10 +60,13 @@ finally:connection.close()
 '''
 
 
-# Moved past the inspected 2026-10-20 01:35 UTC download-container OOM (the
-# Qwen3.6 model fetch, not a host fault); host release
-# release-speed-82aef18471685737-kb20261020 carries the same value.
-_KERNEL_BASELINE = '2026-10-20 01:36:00 UTC'
+# Moved past the owner-inspected 2026-11-11 21:37:41 UTC memcg OOM: this
+# service's own 256 MiB cgroup filled with orphaned root `journalctl` baseline
+# scans (each from the then three-week-old baseline, timed out under `sudo -n`).
+# Not a host fault; host release release-health-2ddb518730876293-kb20261111
+# carries the same value. (Previous: 2026-10-20 01:36:00 UTC, past the Qwen3.6
+# download-container OOM.)
+_KERNEL_BASELINE = '2026-11-11 21:37:42 UTC'
 _KERNEL_FAULTS = 'invoked oom-killer|Out of memory: Killed|kernel panic|soft lockup|hard LOCKUP|Hardware Error|I/O error|segfault|Machine check|thermal throttling'
 _KERNEL_CLEAN = {'until': None}
 _KERNEL_LOCK = threading.Lock()

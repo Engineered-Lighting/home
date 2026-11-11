@@ -227,7 +227,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(JSON.parse(fs.readFileSync(path.join(work, 'aim_check.json'), 'utf8')).within_tolerance, true, 'the harness wrote aim_check.json');
     // The Decision card, from hop 17's row: the fixture it chose and the level against the target.
     const card = await page.locator('[data-den-sim-decision-line]').allTextContents();
-    assert.match(card[0], /^Chose F\d \(fixture-0\d\): level [01](\.\d+)?, predicts \d+ of 300 asked, modeled lux, assumed lumens\.$/);
+    assert.match(card[0], /^Chose F\d \((fixture|mount)-0\d\): level [01](\.\d+)?, predicts \d+ of 300 asked, modeled lux, assumed lumens\.$/);
     await page.waitForFunction(() => /^The beam is on the spot: 0\.30 m from the DECLARED seat/.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });
     assert.match(await page.textContent('[data-den-sim-message]'), /The words were a fake vLLM's, scripted for a test: reading, holding book, people one on 5 of 5\./);
     assert.doesNotMatch(await page.innerText('#den-sim-panel'), OLDER_BRAIN, 'no sentence says the older brain decided');
@@ -259,7 +259,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.match(await page.textContent('[data-den-sim-hop="17"]'), /rung 9's coordinator in spot mode \(virtual-den-4, synthetic\) ran once on \d+ events in \d+ ms, check\.py: \d+ lines replayed byte-identically\. 1 Decision: reading_look: F\d\.spot lit for trk-\d+ at level/);
     for (const stand of ["rung 9's coordinator with a spot mode written for this simulation, the brain's fixture rule imported", "plumbing: its own score.py refuses it"])
       assert.ok((await page.textContent('[data-den-sim-hop="17"]')).includes(`Stand-in: ${stand}.`), `hop 17 names: ${stand}`);
-    assert.match(await page.textContent('[data-den-sim-hop="18"]'), /decision_doc\.mjs mapped 1 Decision to Home's activity-lighting-state-1, one mapping: F\d\.spot \(fixture-0\d\) lit at its target_m, reading evidence bound to rq-\d+/);
+    assert.match(await page.textContent('[data-den-sim-hop="18"]'), /decision_doc\.mjs mapped 1 Decision to Home's activity-lighting-state-1, one mapping: F\d\.spot \((fixture|mount)-0\d\) lit at its target_m, reading evidence bound to rq-\d+/);
     assert.match(await page.textContent('[data-den-sim-hop="21"]'), /on the Decision's target_m and level/);
     assert.match(await page.textContent('[data-den-sim-hop="23"]'), /from the Decision.*NOT SENT, sent false, send_path null/);
     assert.match(await page.textContent('[data-den-sim-hop="24"]'), /Home followed the Decision: the Decision's target against Home's target point, 0\.0\d\d degrees apart at the fixture; inverse kinematics against Home's read-back, 0\.0\d\d degrees apart/);
@@ -449,7 +449,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.deepEqual(table[0], ['Scene', 'Box', 'Qwen', 'Person', 'Beam', 'Why it stopped']);
     const byScene = Object.fromEntries(table.slice(1).map(([scene, ...cells]) => [scene, cells]));
     assert.deepEqual(Object.keys(byScene), display.map(scene => scene.label));
-    assert.match(byScene['Reading on the couch'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: reading x5 \| on the couch \| lit, F\d \(fixture-0\d\), level [01](\.\d+)?, predicts \d+ of 300 asked, modeled lux, assumed lumens \| –$/);
+    assert.match(byScene['Reading on the couch'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: reading x5 \| on the couch \| lit, F\d \((fixture|mount)-0\d\), level [01](\.\d+)?, predicts \d+ of 300 asked, modeled lux, assumed lumens \| –$/);
     assert.match(byScene['Holding a phone'].join(' | '), /^person 0\.\d\d \| fake vLLM, scripted: phone_use x5 \| on the couch \| off \| hop 17: nobody is reading \(trk-\d+: engagement none, on the couch yes\)$/);
     for (const label of ['Standing by the couch with a book', 'Nobody there', 'Blank frame']) {
       assert.deepEqual(byScene[label], ['none', 'not asked', 'none', 'off', 'hop 6: the detector saw nobody, nothing was asked'], label);

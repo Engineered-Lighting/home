@@ -168,7 +168,7 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
   const stepSix = r => { for (const n of [25, 26]) Object.assign(r.rows[n - 1], { word: 'MISSING', stand_ins: [], tools: [] }); };
   const six = edited(stepSix);
   assert.equal(six.line, 'Connected start to finish: not yet');
-  assert.deepEqual([...new Set(six.reasons.map(reason => `${reason.condition}:${reason.hop}`))], ['6:25', '6:26'], 'only step 7\'s two hops');
+  assert.deepEqual([...new Set(six.reasons.map(reason => `${reason.condition}:${reason.hop}`))].sort(), ['3:25', '3:26', '6:25', '6:26'], 'only step 7\'s two hops, MISSING where the table has ADAPTER');
   assert.equal(six.count_line, '3 real, 17 adapter (9 real tools with a named stand-in, 8 written for this simulation), 4 scripted, 2 missing');
   const missed = edited(r => { stepSix(r); r.aim_check = { within_tolerance: false, why: 'Home did not follow the Decision' }; });
   assert.equal(missed.line, 'Connected start to finish: not yet: Home did not follow the Decision');

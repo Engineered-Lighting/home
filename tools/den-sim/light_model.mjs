@@ -67,9 +67,12 @@ export function writeLightModel({ roomModel, geometry, to, sockets }) {
   if (seats.length !== 1) throw Error('room_model_holds_no_couch');
   const doc = JSON.parse(geometryBytes.toString('utf8')), channels = channelTable(doc);
   const read = { room_model: sha256(roomBytes), geometry: sha256(geometryBytes) };
+  // The fixture rows it used, by their own digest: the geometry file carries the time it was built, so its digest moves at
+  // every page start while the rows stay, and the model, which the coordinator's config hashes, must stay with them.
+  const rows = doc.fixtures.map(row => ({ aim_origin_m: row.aim_origin_m, horizontal_world_reference: row.horizontal_world_reference, limits: row.limits || null }));
   const model = lightModel({ bookPoint: seats[0].geometry.book_point_m, fixtures: doc.fixtures, sources: {
     spot: { from: `book_point_m of room model ${latest.version}`, room_model_sha256: read.room_model },
-    fixtures: { status: sockets === 'export' ? 'your registration export' : "the authored room's public sockets", from: 'the brain geometry', geometry_sha256: read.geometry } } });
+    fixtures: { status: sockets === 'export' ? 'your registration export' : "the authored room's public sockets", from: 'the brain geometry', fixtures_sha256: sha256(JSON.stringify(rows)) } } });
   const bytes = Buffer.from(JSON.stringify(model, null, 1) + '\n', 'utf8');
   fs.mkdirSync(path.dirname(to), { recursive: true });
   fs.writeFileSync(`${to}.part`, bytes);

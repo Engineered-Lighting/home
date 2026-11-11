@@ -164,26 +164,39 @@ function detectorTools(hop, refs) {
 
 const missing = (n, note, extra = {}) => ({ n, name: TABLE.hops[n - 1].name, word: 'MISSING', reached: true, ran: 'not built', note, summary: note, tools: [], read: [], wrote: [], stand_ins: [], ...extra });
 
-// The whole receipt. start: what run.mjs built at page start; chain: chain.py's rows and stop; brain,
-// command: the older brain's timeline and the dry run; files: this click's own outputs with digests.
-export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, start, chain, brain, command, pressedAgain = false }) {
+// Hop 24's tolerance, in degrees, on both of its numbers (plan, hop 24).
+export const AIM_TOLERANCE_DEG = .05;
+// Hop 24's row: none until Home lands the beam, then the two numbers against their tolerance. files: what it read and wrote.
+export function aimRow(check, files = null) {
+  const base = { n: 24, name: TABLE.hops[23].name, reached: true, tool: { path: 'tools/den-sim/panel.js', pin: 'HEAD' } };
+  if (!check) return { ...base, word: 'MISSING', ran: 'not run yet', note: 'the aim check runs when Home lands the beam', summary: 'Not run yet: the aim check runs when Home lands the beam.', tools: [], read: [], wrote: [], stand_ins: [] };
+  const numbers = `the Decision's target against Home's target point, ${check.decision_deg.toFixed(3)} degrees apart at the fixture; inverse kinematics against Home's read-back, `
+    + `${check.ik_deg.toFixed(3)} degrees apart (fixture pan = -Home's pan, fixture tilt = 90 - Home's tilt); tolerance ${AIM_TOLERANCE_DEG} degrees`;
+  return { ...base, word: 'ADAPTER', ran: 'ran now', tools: headTools(['tools/den-sim/panel.js', 'tools/den-sim/click.mjs', 'tools/den-sim/run.mjs']),
+    read: files.read, wrote: files.wrote, stand_ins: [TABLE.hops[23].stand_ins[0]], aim: check,
+    summary: `${check.within_tolerance ? 'Home followed the Decision' : 'Home did not follow the Decision'}: ${numbers}. Commanded, no encoder, not a measurement.`,
+    note: check.within_tolerance ? null : 'Home did not follow the Decision' };
+}
+
+// The whole receipt. start: what run.mjs built at page start; chain: chain.py's rows and stop; decision: hops 18 and 19's
+// rows, from the Decisions; command: the dry run's rows, 21 to 23.
+export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, start, chain, decision, command, pressedAgain = false }) {
   const rows = recordedRows({ prepared, refs, recheck: chain.recheck, checkRecheck: chain.checkRecheck, takeRead: chain.takeRead, placement: start.placement, setDir });
   const byN = new Map(chain.rows.map(row => [row.n, row]));
+  const ran = n => byN.get(n) ? { name: TABLE.hops[n - 1].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...byN.get(n) } : null;
   for (const n of [6, 7, 8, 9, 10, 11, 12, 13]) {
-    const row = byN.get(n);
-    if (row && n === 6) row.tools = [...(row.tools || []), ...detectorTools(prepared.hops['6'], refs)];
-    rows.push(row ? { name: TABLE.hops[n - 1].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...row } : null);
+    if (byN.get(n) && n === 6) byN.get(n).tools = [...(byN.get(n).tools || []), ...detectorTools(prepared.hops['6'], refs)];
+    rows.push(ran(n));
   }
   rows.push({ ...start.couch, n: 14, name: TABLE.hops[13].name, reached: true });
-  rows.push(byN.get(15) ? { name: TABLE.hops[14].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...byN.get(15) } : null);
+  rows.push(ran(15));
   // Hop 16, as run.mjs built it at page start: one light model for every take.
   rows.push(start.light ? { ...start.light, n: 16, name: TABLE.hops[15].name, reached: true } : missing(16, 'Not built: no light model exists before any picture yet.', { ran: 'not built at page start' }));
-  rows.push(brain?.row || null);
-  rows.push(brain?.feedRow || null, brain?.motionRow || null, start.home && { ...start.home, name: TABLE.hops[19].name, reached: true });
+  rows.push(ran(17));
+  rows.push(decision?.feedRow || null, decision?.motionRow || null, start.home && { ...start.home, name: TABLE.hops[19].name, reached: true });
   rows.push(...(command?.rows || [null, null, null]));
-  rows.push(missing(24, 'Not built: nothing compares where Home points with where the Decision said.'),
-    missing(25, 'Not built: no virtual meter reads Home\'s modeled light.'), missing(26, 'Not built: den-verify does not run.'));
-  const stop = chain.stop || brain?.stop || null;
+  rows.push(aimRow(null), missing(25, 'Not built: no virtual meter reads Home\'s modeled light (step 7).'), missing(26, 'Not built: den-verify does not run (step 7).'));
+  const stop = chain.stop || null;
   const out = rows.map((row, i) => finalRow(row, i + 1, stop));
   return { schema: SCHEMA, click, take: takeId, set: setId, recorded: prepared.recorded, written_unix: Date.now() / 1000,
     prepare_refusal: prepared.refusal, stopped: stop, pressed_again: pressedAgain, aim_check: null, picture: chain.picture || null, rows: out };
@@ -222,7 +235,25 @@ export function personCard(receipt) {
     return [`Track ${card.track_id}: ${Number.isFinite(card.seat_distance_m) ? `${metres(card.seat_distance_m)} from the seat point, across the floor` : 'no position'}.`, couchWords, spot, need];
   });
   return { tracks: row.person.map(card => ({ track_id: card.track_id, on_couch: card.on_couch, held: !!card.held })), track_lines: lines.length, lines: [...lines, placed, ...facing,
-    'The older brain still decides the beam until step 6, under its own 1.5 m rule, so a figure standing within 1.5 m of the seat would still light.'] };
+    'The coordinator decides the beam from this state (hop 17): no target unless the spot is sofa-book.'] };
+}
+// The Decision card (hop 17), in words from what this click's row recorded, never from the button: the chosen fixture, each
+// refusal in words, and the level against the target; with no Decision, why, read from the person state. channels: F1 to F4
+// to Home's fixture ids, when the page has them.
+const short = id => String(id).match(/mount-\d+|fixture-\d+/)?.[0] || id;
+export function decisionCard(receipt, channels = null) {
+  const row = receipt.rows.find(item => item.n === 17);
+  if (!row || row.reached === false || !Array.isArray(row.decisions)) return null;
+  const fixture = channel => { const id = channels?.find(item => item.channel === channel)?.fixture_id; return `${channel.split('.')[0]}${id ? ` (${short(id)})` : ''}`; };
+  const views = row.decisions, last = views.filter(view => view.lit.length).at(-1) || views.at(-1);
+  if (!last) return { lit: null, level: null, refusals: [], decisions: 0, lines: [`No Decision: ${receipt.stopped?.why || 'nobody is reading'}. Every spot stays off.`] };
+  const refusals = last.refusals.map(item => `${fixture(item.channel)} refused: ${item.words}`), lit = last.lit[0] || null;
+  const level = lit ? `level ${Math.round(last.level[0] * 100) / 100}, predicts ${Math.round(last.predicts)} of ${last.asked} asked, ${last.note}` : null;
+  const turn = last.readers.length && refusals.length ? ['The beam stays off. You can turn the reader: say which way, and an agent writes facing.json.'] : ['The beam stays off.'];
+  const costlier = (last.costlier || []).map(fixture);
+  const lines = lit ? [`Chose ${fixture(lit)}: ${level}.`, ...(costlier.length ? [`${costlier.join(', ')}: allowed, and each cost more at its best level.`] : []), ...refusals.map(text => `${text}.`)]
+    : [`No beam: ${last.readers.length && refusals.length ? 'every fixture refused' : last.why}.`, ...refusals.map(text => `${text}.`), ...turn];
+  return { lit, level, refusals, decisions: views.length, why: last.why, lines };
 }
 // Run every scene's Person column, from the card: one word per track, MISSING with why, and "none" only with no track.
 export function personColumn(card) {
@@ -269,14 +300,14 @@ export function pictureNote(picture) {
 }
 
 // The panel's view: the words and notes, without the digests the page has no use for.
-export function receiptView(receipt) {
+export function receiptView(receipt, channels = null) {
   // A row sits under what it did on this click. A row that didn't run (not built yet, not reached, or
   // with no row) sits apart, never under "Ran on this click".
   const group = row => row.reached === false || /^(not |no row)/.test(row.ran) ? 'not run' : row.ran.startsWith('recorded') ? 'recorded' : row.ran.includes('page start') ? 'page' : 'click';
   // Qwen on this click, from hop 12's row: its word, the model's served root, and what it said per request.
   const twelve = receipt.rows.find(row => row.n === 12);
   const qwen = twelve?.reached !== false && twelve?.asks ? { word: twelve.word, root: twelve.root || null, reply: twelve.reply || null, said: twelve.said || null, asks: twelve.asks } : null;
-  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, person: personCard(receipt), qwen,
+  return { click: receipt.click, take: receipt.take, stopped: receipt.stopped, person: personCard(receipt), qwen, decision: decisionCard(receipt, channels), aim_check: receipt.aim_check,
     boxes: Array.isArray(receipt.picture?.boxes) ? receipt.picture.boxes : null, picture_note: pictureNote(receipt.picture),
     rows: receipt.rows.map(row => ({ n: row.n, name: row.name, word: row.word, reached: row.reached !== false, ran: row.ran, group: group(row),
       summary: row.summary || row.note || '', stand_ins: row.stand_ins || [], tool: row.tool?.path || null })) };

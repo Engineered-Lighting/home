@@ -8,7 +8,7 @@
 //      row names only stand-ins the table names;
 //   4. each tool file hashes to its pin: the blob at its commit, at HEAD for this branch, or the
 //      codec's sha256;
-//   5. this click's aim check is within tolerance;
+//   5. this click's aim check is within tolerance; one out of it reads "not yet: Home did not follow the Decision";
 //   6. no row reads MISSING.
 // A click a model, the detector, the couch or the fixtures stopped reads "stopped at" when 1 to 4
 // and 6 hold up to there. A row "not reached" is one only past a stop, at a hop the table has. A
@@ -111,5 +111,7 @@ export function topLine(table, receipt) {
   }
   if (stop?.answer) reasons.push({ condition: null, hop: stop.hop, text: `it stopped at hop ${stop.hop} (${stop.why}), but the rows up to there don't hold` });
   if (!reasons.length) return done('yes', 'Connected start to finish: yes');
-  return done('not yet', 'Connected start to finish: not yet', reasons);
+  // Condition 5 names itself: an aim check that ran and found Home pointing elsewhere is the first thing to say.
+  const missed = !stop && receipt.aim_check && receipt.aim_check.within_tolerance !== true;
+  return done('not yet', `Connected start to finish: not yet${missed ? ': Home did not follow the Decision' : ''}`, reasons);
 }

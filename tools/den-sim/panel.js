@@ -1,10 +1,11 @@
 /* Den simulation panel, injected by tools/den-sim/run.mjs into the unchanged Home.
  * A red strip, one button per prepared take, the top line, the picture read back out of the
  * take with the detector's person box, score and joints from that frame's recorded row, the person
- * card (hop 15), and one hop list read from the click's run-receipt.json. It reads Home's real overlay,
- * presses Home's own view buttons, selects the fixture as a person would, and posts only to
- * /__sim/feed on this harness. There is no send control. It prints no coordinate: the aim target
- * and the hand point show only their distance from the seat, and the camera is a marker. */
+ * card (hop 15), the Decision card (hop 17), the fixture command marked NOT SENT with the aim check's two
+ * numbers (hop 24), and one hop list read from the click's run-receipt.json. It reads Home's real overlay,
+ * presses Home's own view buttons, selects the fixture as a person would, and posts only to /__sim/feed
+ * and, at landing, Home's read-back to /__sim/aim on this harness. There is no send control. It prints no
+ * coordinate: the aim target shows only its distance from the seat, and the camera is a marker. */
 (function () {
   'use strict';
   const STRIP_PX = 26;
@@ -110,12 +111,12 @@
     }
     pictureBox.append(svg);
   }
-  const brainBox = list([['says', 'Brain says'], ['refusal', 'Spot refused'], ['chose', 'Brain chose'], ['hand', 'Hand point'], ['agree', 'Home vs brain']]);
+  // The Decision card (hop 17): the chosen fixture, each refusal in words, and the level against the target, from the receipt.
+  const decisionBox = el('div', { 'data-den-sim-decision': '1', hidden: true, style: 'margin:4px 0;padding:4px 6px;border-left:3px solid #a86a00;background:rgba(168,106,0,.18)' });
+  const staleLine = el('div', { 'data-den-sim-stale': '1', hidden: true, style: 'margin:4px 0;color:#ffb4b4' });
   const readback = list([['fixture', 'Lit fixture'], ['aim', 'Pan / tilt'], ['spot', 'Spot'], ['target', 'Aim target'], ['camera', 'Camera marker']]);
-  const candidateRows = el('ul', { 'data-den-sim-candidates': '1' });
-  const candidates = el('details', {}, el('summary', { textContent: 'Fixture by fixture' }), candidateRows);
   const proof = el('details', {}, el('summary', { textContent: 'Proof from this page' }), list([['seen', 'Distinct readbacks'], ['trail', 'Recent pan/tilt'], ['docs', 'Docs sent'],
-    ['events', 'Events into brain'], ['frames', 'Frames in swing'], ['external', 'External requests'], ['csp', 'Blocked by CSP'], ['refused', 'Refused by harness']]));
+    ['frames', 'Frames in swing'], ['external', 'External requests'], ['csp', 'Blocked by CSP'], ['refused', 'Refused by harness']]));
   const hopRows = el('div', { 'data-den-sim-hops': '1' }, el('span', { className: 'note', textContent: 'No click yet: each row\'s word comes from what a click recorded.' }));
   // Open when there is room for it: the list is the point of the page, not a footnote.
   const hops = el('details', { open: innerHeight >= 800 }, el('summary', { textContent: 'Each hop, from this click\'s receipt' }), hopRows);
@@ -129,7 +130,7 @@
   const owedBox = el('div', { 'data-den-sim-owed': '1', hidden: true }, owedText, pasteCode, copyButton);
   const lastAskBox = el('div', { 'data-den-sim-last-ask': '1', hidden: true });
   const everyBox = el('div', { 'data-den-sim-every': '1', hidden: true });
-  const body = el('div', { 'data-den-sim-body': '1' }, topLine, pictureBox, pictureNote, personCard, qwenBox, brainBox, readback, commandBox, candidates, hops, proof);
+  const body = el('div', { 'data-den-sim-body': '1' }, topLine, pictureBox, pictureNote, personCard, qwenBox, decisionBox, staleLine, readback, commandBox, hops, proof);
   const panel = el('aside', { id: 'den-sim-panel', 'aria-label': 'Den simulation' }, sceneButtons, everyButton, el('div', { className: 'row' }, resetButton, hideButton),
     message, choice, owedBox, lastAskBox, everyBox, startupBox, inputNotes, body);
   document.body.append(strip, panel);
@@ -173,13 +174,22 @@
     if (sim.swinging && !sim.seen.has(key)) sim.seen.set(key, [lit.state.pan_deg, lit.state.tilt_deg]);
     values.aim.textContent = `${fmt(lit.state.pan_deg)}° / ${fmt(lit.state.tilt_deg)}°`;
     const decided = sim.status?.feed?.summary, point = lit.target?.point;
-    // A distance, never the point: from the brain's hand point, which the harness measured from the seat.
+    // A distance, never the point: from the Decision's target_m, which the harness measured from the seat.
     values.target.textContent = point && decided?.target_m
-      ? `${fmt(distance(point, decided.target_m), 3)} m from the brain's hand point, which is ${fmt(decided.hand_from_seat_m, 2)} m from the seat` : point ? 'set' : '–';
-    if (sim.status?.feed?.phase === 'holding' && decided?.fixture_id === lit.fixture_id) {
-      values.agree.textContent = `pan off by ${fmt(Math.abs(lit.state.pan_deg - decided.pan_deg), 2)}°, tilt off by ${fmt(Math.abs(lit.state.tilt_deg - decided.tilt_deg), 2)}°`;
-    }
+      ? `${fmt(distance(point, decided.target_m), 3)} m from the Decision's target, which is ${fmt(decided.target_from_seat_m, 2)} m from the seat` : point ? 'set' : '–';
   }
+  // Hop 24's read-back: the lit fixture as Home's real overlay holds it, now. The harness holds it to the Decision.
+  const homeReadback = fixtureId => {
+    const d = fixtureDescriptors().find(row => row.fixture_id === fixtureId);
+    return d && { fixture_id: d.fixture_id, display_origin_m: d.display_origin_m, pan_deg: d.state.pan_deg, tilt_deg: d.state.tilt_deg, target_point: d.target?.point || null };
+  };
+  async function postAim(click, fixtureId) {
+    const home = homeReadback(fixtureId);
+    if (!home) return { ok: false, reason: 'no_readback' };
+    try { return await (await fetch('/__sim/aim', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ click, home }) })).json(); }
+    catch (error) { return { ok: false, reason: error.message }; }
+  }
+  sim.aimCheck = () => postAim(sim.status?.click?.click, sim.status?.feed?.summary?.fixture_id);
   // A timer, not only rAF: a hidden pane stops rAF, and the readbacks still count.
   setInterval(sample, 50);
   let lastFrame = null;
@@ -200,44 +210,36 @@
   }
 
   const plain = text => String(text).replace(/_/g, ' ');
-  function showCandidates(rows, heading) {
-    const key = JSON.stringify([rows, heading]);
-    if (key === sim.candidatesShown) return; // This polls: leave a selection in the list alone.
-    sim.candidatesShown = key;
-    candidateRows.replaceChildren(...rows.map(row => el('li', { 'data-den-sim-candidate': row.fixture_id, textContent: `${row.fixture_id}: ${row.ok ? 'clear' : plain(row.reason)}` })));
-    if (heading) candidateRows.prepend(el('li', { className: 'note', textContent: heading }));
-  }
-  function showBrain(status) {
-    const feed = status.feed, decided = feed.summary;
+  function showInputs(status) {
     inputNotes.hidden = !status.private_notes.length;
     inputNotes.textContent = status.private_notes.join(' ');
     startupBox.hidden = !status.startup;
     startupBox.textContent = status.startup ? `Fixtures for the stated facing, at the spot: ${status.startup}.` : '';
-    // A broken or stopped click never reaches the brain: Home's off document's reason isn't the brain's word.
-    const unseen = /^Qwen has not seen these exact frames/.test(feed.pipeline?.failed || '');
-    values.says.textContent = feed.phase === 'pipeline_failed' ? (unseen ? 'not run: Qwen has not seen these frames' : 'not run: the pipeline broke')
-      : feed.phase === 'stopped' ? 'not run: the click stopped before it' : feed.live?.why || '–';
-    values.refusal.textContent = feed.live?.refusal || '–';
-    values.events.textContent = decided ? `${decided.events}, from the adapter, into the real activity loop` : '–';
     values.camera.textContent = status.camera_m ? 'shown in the room: a green dot where the invented camera sits' : '–';
-    const landed = feed.phase === 'swinging' || feed.phase === 'holding';
-    values.chose.textContent = landed ? `${decided.fixture_id}, pan ${fmt(decided.pan_deg)}°, tilt ${fmt(decided.tilt_deg)}°` : '–';
-    values.hand.textContent = landed ? `${fmt(decided.hand_from_seat_m, 2)} m from the seat` : '–';
-    if (!landed) values.agree.textContent = '–';
-    showCandidates(decided ? decided.candidates : [], decided?.candidates.length ? '' : 'The brain only compares fixtures once reading has held for 3 s.');
+    // The stale-reply line, from the feed: the last Decision stays lit after its reply's validity has passed.
+    const stale = sim.running ? null : status.feed.stale;
+    staleLine.hidden = !stale;
+    staleLine.textContent = stale ? stale.line : '';
   }
 
   /* ---------- the top line and the one hop list, from this click's receipt ---------- */
   function showClick(click) {
-    const key = click ? `${click.click}:${click.top_line.line}:${click.rows.length}` : 'none';
+    const key = click ? `${click.click}:${click.top_line.line}:${click.rows.length}:${JSON.stringify(click.aim_check)}` : 'none';
     if (key === sim.clickShown) return;
     sim.clickShown = key;
     topLine.hidden = pictureBox.hidden = pictureNote.hidden = !click;
     personCard.hidden = !click?.person;
+    decisionBox.hidden = !click?.decision;
     if (!click) return;
+    if (sim.command) showAim(click.aim_check);
     // The person card: hop 15's words, rebuilt from what this click's row recorded, never from the button.
     personCard.replaceChildren(...(click.person ? [el('strong', { textContent: 'Person state (hop 15)' }),
       ...click.person.lines.map(line => el('span', { 'data-den-sim-person-line': '1', textContent: line }))] : []));
+    // The Decision card: the coordinator's own words, rebuilt from hop 17's row, never from the button pressed.
+    decisionBox.hidden = !click.decision;
+    decisionBox.replaceChildren(...(click.decision ? [el('strong', { textContent: 'Decision (hop 17, rung 9\'s coordinator in spot mode)' }),
+      ...click.decision.lines.map(line => el('span', { style: 'display:block', 'data-den-sim-decision-line': '1', textContent: line })),
+      el('span', { className: 'note', textContent: 'One spot on the couch: pixels decide whether it lights, not where along the couch. Modeled lux on assumed lumens, from a light model marked fake.' })] : []));
     const top = click.top_line;
     topLine.dataset.verdict = top.verdict;
     topLine.replaceChildren(el('strong', { 'data-den-sim-top-line-text': '1', textContent: top.line }), el('span', { className: 'note', 'data-den-sim-count': '1', textContent: top.count_line }));
@@ -278,19 +280,27 @@
   const rows = pairs => el('dl', {}, ...pairs.flatMap(([label, text]) => [el('dt', { textContent: label }), el('dd', { textContent: text })]));
   const post = row => `POST ${row.route}\n${JSON.stringify(row.body)}`;
   const shortSha = text => text ? text.slice(0, 16) : 'unknown';
-  function renderCommand(command) {
+  // The aim check's two numbers (hop 24), from the receipt once Home has landed the beam.
+  const aimBox = el('div', { 'data-den-sim-aim': '1' });
+  function showAim(check) {
+    aimBox.replaceChildren(el('strong', { textContent: 'Aim check (hop 24): commanded, no encoder, not a measurement' }), el('span', { style: 'display:block', 'data-den-sim-aim-text': '1', textContent: check
+      ? `${check.within_tolerance ? 'Home followed the Decision' : 'Home did not follow the Decision'}: Decision against Home ${check.decision_deg.toFixed(3)}°, inverse kinematics against Home ${check.ik_deg.toFixed(3)}°, tolerance ${check.tolerance_deg}°.`
+      : 'Not run yet: it runs when Home lands the beam.' }));
+  }
+  function renderCommand(command, check) {
     const badge = el('div', { 'data-den-sim-not-sent': '1', textContent: 'NOT SENT · nothing here can send it' });
     if (command.failed) return commandBox.replaceChildren(badge, el('div', { textContent: command.failed }));
-    if (!command.brain) return commandBox.replaceChildren(badge, el('div', { textContent: 'No fixture command: the brain refused, so nothing was compiled.' }));
+    if (!command.decision) return commandBox.replaceChildren(badge, el('div', { textContent: 'No fixture command: the Decision lit nothing, so nothing was compiled.' }));
     const ik = command.ik;
-    if (!ik.ok) return commandBox.replaceChildren(badge, el('div', { textContent: `No fixture command: compile_target refused (${ik.reason}).` }));
-    const [pan, tilt] = ik.fixture_angles_deg, [homePan, homeTilt] = ik.home_angles_deg, spot = command.spot;
-    const listed = [['Profile', `${ik.profile_id}, FICTIONAL: zero, direction, ratio and limits are invented`],
-      ['Fixture angles', `pan ${fmt(pan)}°, tilt ${fmt(tilt)}° from straight down`],
-      ['Home\'s angles', `pan ${fmt(homePan)}°, tilt ${fmt(homeTilt)}° from level: ${ik.agrees_with_home ? 'the same aim' : 'THESE DISAGREE'}`],
+    if (!ik.ok) return commandBox.replaceChildren(badge, el('div', { 'data-den-sim-refused': '1', textContent: `No fixture command: compile_target refused the Decision's target (${ik.reason}).` }));
+    const [pan, tilt] = ik.fixture_angles_deg, spot = command.spot;
+    const listed = [['From', `the Decision ${command.decision.decision_id}: ${command.decision.channel}, its target_m and level`],
+      ['Profile', `${ik.profile_id}, FICTIONAL: zero, direction, ratio and limits are invented`],
+      ['Fixture angles', `pan ${fmt(pan)}°, tilt ${fmt(tilt)}° from straight down: inverse kinematics on the Decision's target`],
       ['Motor target', `${ik.target_centideg.join(', ')} centideg at ${ik.speed_deg_s.join(', ')} deg/s`],
-      ['Spot', `raw duty ${spot.raw_duty} of ${spot.full_duty}, a test value with no colour claim. The brain asked for ${fmt(spot.brain_level, 2)} at ${spot.brain_cct_k} K, and semantic CCT refuses: ${spot.semantic_refusal}.`]];
-    const parts = [badge];
+      ['Spot', `raw duty ${spot.raw_duty} of ${spot.full_duty}, a test value with no colour claim. The Decision asked for level ${fmt(spot.decision_level, 4)} at ${spot.decision_cct_k} K, and semantic CCT refuses: ${spot.semantic_refusal}.`]];
+    showAim(check);
+    const parts = [badge, aimBox];
     if (!command.wire) {
       parts.push(rows(listed), el('div', { textContent: `The codec was not found at ${command.codec.tools}, so no packets exist.` }));
     } else {
@@ -306,13 +316,13 @@
       + `Contract oracle: ${can.oracle_ok === true ? 'matches' : can.oracle_ok === false ? 'DOES NOT MATCH' : 'not available'}. Motor allowlist entries: ${can.allowlist_entries ?? 'unknown'}.`));
     if (command.wire) {
       parts.push(block('Where these bytes came from', 'sources', `Codec, by path: ${command.codec.tools}\nc12_runtime_plan.py ${shortSha(command.codec.c12_runtime_plan_sha256)}\nc12_runtime_wire.py ${shortSha(command.codec.c12_runtime_wire_sha256)}\n`
-        + `Older than the release origin/main pins. Device ${command.wire.device_id} and ieee ${command.wire.ieee} are placeholders.\n${command.wire.time_exchange}\nPlan (${command.plan.bytes} bytes, ${command.plan.status}):\n${command.plan.hex}`));
+        + `The release origin/main pins, its line endings LF where those pins hash CRLF. Device ${command.wire.device_id} and ieee ${command.wire.ieee} are placeholders.\n${command.wire.time_exchange}\nPlan (${command.plan.bytes} bytes, ${command.plan.status}):\n${command.plan.hex}`));
     }
     return commandBox.replaceChildren(...parts);
   }
-  async function showCommand(click) {
+  async function showCommand(click, check) {
     commandBox.hidden = false;
-    try { renderCommand(await (await fetch(`/__sim/command?click=${click}`, { cache: 'no-store' })).json()); }
+    try { renderCommand(sim.command = await (await fetch(`/__sim/command?click=${click}`, { cache: 'no-store' })).json(), check); }
     catch (error) { commandBox.replaceChildren(el('div', { textContent: `The command could not be read: ${error.message}` })); }
   }
 
@@ -332,36 +342,37 @@
       setFeedEnabled(true);
       const unseen = /^Qwen has not seen these exact frames/.test(feed.pipeline.failed || '');
       message.textContent = feed.phase === 'stopped' ? `The click stopped: ${feed.pipeline.failed}. All four spots stay off.`
-        : unseen ? `${feed.pipeline.failed}, so need gets no input, the brain does not decide, and all four spots stay off. The paste below asks Qwen once.`
-          : `The pipeline broke, so the brain did not decide and all four spots stay off. ${feed.pipeline.failed}`;
+        : unseen ? `${feed.pipeline.failed}, so need gets no input, the coordinator has nothing to decide on, and all four spots stay off. The paste below asks Qwen once.`
+          : `The pipeline broke, so no Decision reached Home and all four spots stay off. ${feed.pipeline.failed}`;
       return;
     }
     if (feed.summary && !sim.personShown) {
       sim.personShown = true;
-      if (feed.summary.person_m) overlay()?.setPerson?.({ pos: feed.summary.person_m, sigma_m: .25 }); // Floor disc at the adapter's person.
-      message.textContent = 'The pipeline is done. The older brain waits for 3 s of reading before it lights a spot.';
+      if (feed.summary.person_m) overlay()?.setPerson?.({ pos: feed.summary.person_m, sigma_m: .25 }); // Floor disc at the person state's position.
+      message.textContent = 'The pipeline and the coordinator are done: Home follows the Decision.';
     }
     if (feed.phase === 'swinging' && !sim.swinging) {
       sim.swinging = true; sim.swingStart = performance.now();
       selectInHome(feed.swing.fixture_id);
-      message.textContent = `The brain chose ${feed.swing.fixture_id}. Swinging at about 30°/s: this motion is scripted, because Home's follower has none.`;
+      message.textContent = `The Decision lit ${feed.summary.channel}. Swinging at about 30°/s: this motion is scripted, because Home's follower has none.`;
     } else if ((feed.phase === 'holding' || feed.phase === 'refused') && status.click?.run === sim.awaiting) {
       sim.running = false;
-      // Keep sampling for one more frame window so the final readback is counted.
-      setTimeout(() => {
+      // Keep sampling for one more frame window so the final readback is counted, then read Home's aim back for hop 24.
+      setTimeout(async () => {
         sim.swinging = false;
         setToolbar('Lighting', true);
         setFeedEnabled(true);
-        if (status.click) showCommand(status.click.click);
         const swing = feed.swing, decided = feed.summary, modeled = 'Lighting is on: Home\'s modeled view, not measured.';
-        // Said on every lit result, never chosen by the button: hop 15's test for being on the couch drives nothing until step 6.
+        const aimed = feed.phase === 'holding' && status.click ? await postAim(status.click.click, decided.fixture_id) : null;
+        if (status.click) showCommand(status.click.click, aimed?.ok ? aimed : null);
+        // Said from what this click recorded, never from the button pressed.
         const qwen = status.click?.qwen, asked = (qwen?.asks || []).filter(ask => ask.said);
         const counted = [...new Set(asked.map(ask => ask.said))].map(said => `${said} on ${asked.filter(ask => ask.said === said).length} of ${asked.length}`).join('; ');
         const words = qwen?.word === 'SCRIPTED' ? `The words were a fake vLLM's, scripted for a test: ${counted}.` : qwen ? `Qwen's words, recorded once from ${qwen.root}: ${counted}.` : '';
-        const scripted = `The older brain's own 1.5 m rule decides whether the reader is on the couch, so a figure standing within 1.5 m of the seat lights a spot too, until step 6: hop 15's own test, on the person card, drives nothing yet. ${words}`;
+        const chose = (status.click?.decision?.lines || [])[0] || '';
         message.textContent = feed.phase === 'holding'
-          ? `The beam is on the reader's hands: ${fmt(decided.hand_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. ${scripted} Nothing was sent. ${modeled}`
-          : `The brain refused: ${decided.refusal}. ${words} All four spots stay off. Nothing was sent. ${modeled}`;
+          ? `The beam is on the spot: ${fmt(decided.target_from_seat_m, 2)} m from the ${status.couch.label} seat, after ${fmt(swing.angle_deg)}° in ${fmt((swing.finished_at_ms - swing.started_at_ms) / 1000)} s. ${chose} ${words} Nothing was sent. ${modeled}`
+          : `The last Decision lit nothing. ${words} All four spots stay off. Nothing was sent. ${modeled}`;
       }, 400);
     }
   }
@@ -446,7 +457,7 @@
     // Whose words are on file, from the store: none before the paste, a test's on a fake vLLM's root, or Qwen's after.
     strip.textContent = `SIMULATION · rendered takes, a real detector's recorded rows, ${status.qwen.words} · nothing is sent to any fixture · ${room} · ${status.registration.label} · couch: ${status.couch.label} · INVENTED CAMERA: it does not exist · Home's code from this PC's harness, not your deployed Home`;
     showScenes(status);
-    showBrain(status);
+    showInputs(status);
     showClick(status.click);
     showQwen(status);
     showEvery(status);
@@ -496,7 +507,7 @@
     clearInterval(ready);
     const view = await openBestView();
     setFeedEnabled(true);
-    message.textContent = `Room loaded with ${fixtures.length} virtual fixtures. The older brain's empty-room state keeps them off.${view.mesh ? '' : ' Mesh is unavailable, so the beam is faint in this view.'}`;
+    message.textContent = `Room loaded with ${fixtures.length} virtual fixtures. The off document keeps them off until a Decision lights one.${view.mesh ? '' : ' Mesh is unavailable, so the beam is faint in this view.'}`;
   }, 250);
 
   async function runTake(take) {

@@ -254,6 +254,17 @@ class SpotTest(unittest.TestCase):
         self.assertAlmostEqual(f1[0]["cost"], 1.0 + 0.001 * 28 / 255, places=6)
         self.assertEqual(f1[0]["why"], "rejected: cost %.6f, above the chosen 1.000000" % f1[0]["cost"])
 
+    def test_of_two_equal_fixtures_the_first_is_chosen_and_the_tie_is_said(self):
+        # With no heading, F1 and F2 both pass; give them the same light at the spot. The first of equals wins, and the
+        # other is not called costlier.
+        self.use_model(full={**FULL, "F2.spot": FULL["F1.spot"]})
+        d = self.click(scene(heading=None))[2][0]
+        self.assertEqual([c for c in CHANNELS if d["requested_scene"][c]["on"]], ["F1.spot"])
+        rows = {c["scene_id"]: c for c in d["candidates"]}
+        self.assertEqual(rows["F1.spot@255"]["cost"], rows["F2.spot@255"]["cost"])
+        self.assertEqual(rows["F2.spot@255"]["why"], "rejected: cost %.6f, no lower than the chosen %.6f" % ((rows["F1.spot@255"]["cost"],) * 2))
+        self.assertTrue(rows["off"]["why"].startswith("rejected: cost 1.000000, above the chosen"))
+
     def test_reading_ending_turns_every_spot_off(self):
         decisions = self.click(scene(("starting", "engaged", "ending", "none")))[2]
         self.assertEqual([round(d["ts"] - T0, 1) for d in decisions], [11.2, 19.2])  # ending still reads, as decide's rule says

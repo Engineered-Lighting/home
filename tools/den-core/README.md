@@ -808,7 +808,8 @@ digests taken before spot mode existed.
   `beam_through_head` (0.15 m), `in_front_of_reader`, and `no_head`: no head, no beam. With no heading the reader faces
   nowhere, so only the in-front test is skipped, and `why` says so.
 - **Solve:** the lowest cost over every allowed fixture at each brightness the Hue solve tries, and off: the look's weights
-  on the shortfall squared, half the excess squared, and a small pull toward off. One beam per reader, and off wins a tie.
+  on the shortfall squared, half the excess squared, and a small pull toward off. One beam per reader, and off wins a tie,
+  as the first of equal fixtures does: each candidate's `why` says `above` the chosen cost, or `no lower than` it on a tie.
   Short of the target it lights at full, with the shortfall in `why`.
 - **When:** no Decision while nobody is reading and nothing is lit. A reader with no beam writes one, with no steps,
   holding `why` and `skipped`. After that, one only when what it would say changes.

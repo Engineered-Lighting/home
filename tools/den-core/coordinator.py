@@ -937,7 +937,8 @@ class Coordinator:
             best = min(options, key=lambda o: o[2])  # the first of equals, so off wins a tie
             plan["candidates"] += [{"scene_id": "%s@%d" % (c, b) if c else "off", "track_id": track, "cost": round(cost, 6),
                                     "scene": {c: {"on": True, "level": _level({"on": True, "brightness": b})}} if c else {},
-                                    "why": "chosen" if c == best[0] else "rejected: cost %.6f, above the chosen %.6f" % (cost, best[2])}
+                                    "why": "chosen" if c == best[0] else "rejected: cost %.6f, %s the chosen %.6f" % (
+                                        cost, "above" if round(cost, 6) > round(best[2], 6) else "no lower than", best[2])}
                                    for c, b, cost in options]
             if best[0]:
                 plan["lit"][best[0]] = [best[1], surface, track]

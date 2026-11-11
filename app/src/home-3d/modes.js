@@ -351,7 +351,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             pts.visible = v;
             pts.traverse?.((object) => {
                 for (const material of Array.isArray(object.material) ? object.material : object.material ? [object.material] : []) {
-                    material.depthWrite = depthWrite;
+                    // The etched look's additive points never write depth; its depth pass follows the rule.
+                    material.depthWrite = material.userData?.additive ? false : depthWrite;
                 }
             });
         }

@@ -786,6 +786,23 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         throw lastErr || new Error('no point asset reachable');
     }
 
+    /* The etched Cloud look (pointcloud.js): WebGL on desktop-class devices,
+     * unless this browser opted out. The classic cloud shows until the
+     * worker's features arrive, and stays if they never do. Phones keep the
+     * classic cloud until the look has been measured there. */
+    let etchedLook = null;
+    const etchedViewport = new THREE.Vector2();
+    function startEtchedLook(target) {
+        if (nodeRenderer || pointcloudM.etchedLookOptedOut()) return;
+        const tier = adaptiveM.selectClientPerformanceTarget({ navigatorRef, windowRef: window });
+        if (tier === 'mobile60' || tier === 'mobile30') return;
+        pointcloudM.attachEtchedLook(target, pointsMaterial, { signal: lifetimeController.signal })
+            .then((look) => { if (disposed) look.detach(); else etchedLook = look; })
+            .catch((error) => {
+                if (error?.name !== 'AbortError') console.warn('[home-3d] etched cloud unavailable; classic cloud kept', error);
+            });
+    }
+
     const pointsPromise = (async () => {
         const result = await loadPoints();
         if (disposed) {
@@ -797,6 +814,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         apartmentRoot.add(points);
         fitNow();
         emit('loaded', { total: result.total });
+        startEtchedLook(points);
         return points;
     })();
 
@@ -895,6 +913,16 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 });
             pointsMaterial.uniforms.uMaxPointPx.value = limits.maxPointPx;
             pointsMaterial.uniforms.uDepthFloor.value = limits.depthFloor;
+        }
+        if (etchedLook) {
+            etchedLook.update({
+                viewportPx: renderer.getDrawingBufferSize(etchedViewport).y,
+                gain: pointcloudM.etchedGain({
+                    orbitRadius: orbitR,
+                    overviewRadius: rig.detentRadius(0),
+                    closestRadius: rig.detentRadius(rig.detentCount() - 1),
+                }),
+            });
         }
         if (modes.setMeshNearCut) {
             // melt near geometry at room zoom, but NEVER while sitting at a

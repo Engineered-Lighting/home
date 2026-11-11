@@ -182,6 +182,8 @@ void main() {
  * opacity, cutaway) reach it unchanged; only the colour differs.
  */
 export function createLitPointsMaterial(base, { texture, width }) {
+    // The etched look swaps its own material onto the cloud; relighting always starts from the classic one.
+    base = base?.userData?.classicPoints || base;
     const vertex = base.vertexShader
         .replace('varying float vIntensity;', 'varying float vIntensity;\nuniform sampler2D uLitColor;\nuniform int uLitWidth;\nvarying vec3 vLitColor;')
         .replace('vIntensity = intensity;', 'vIntensity = intensity;\n    vLitColor = texelFetch(uLitColor, ivec2(gl_VertexID % uLitWidth, gl_VertexID / uLitWidth), 0).rgb;');
@@ -256,6 +258,233 @@ export function createPointsMaterial() {
         } catch (e) { /* */ }
     };
     return mat;
+}
+
+/*
+ * The etched look (WebGL only): the engineered.lighting site's etching, from
+ * the point cloud itself. Light comes from edges and a steep curve on the
+ * scan's own intensity, on true black, so plain walls fall away and furniture,
+ * frames and seams are drawn in light.
+ *
+ *   - point-features.mjs gives each point a normal, an edge strength and its
+ *     sample spacing (in a worker, once per load);
+ *   - each point is drawn about the size of the surface patch it stands for,
+ *     0.9..2.4 px, and overlapping points share their light, so a surface is
+ *     equally bright at every zoom;
+ *   - additive, so the cloud glows; a depth-only pass of the same points,
+ *     pushed 4 cm (+1% of depth) back along the view ray, lets near surfaces
+ *     hide what is behind them without hiding themselves (additive alone is
+ *     an x-ray through every wall).
+ *
+ * The classic material stays the cloud's base: the engine writes its uniforms
+ * every frame, the etched materials share those uniform objects, and the lit
+ * layer and the WebGPU port still start from it. Opt out per browser with
+ * localStorage 'apartment3d.pointLook' = 'classic'.
+ */
+export const ETCHED_POINT_MIN_PX = 0.9;
+export const ETCHED_POINT_MAX_PX = 2.4;
+export const ETCHED_DEPTH_BIAS_M = 0.04;
+export const ETCHED_GAIN_CLOSE = 2.4;
+export const ETCHED_GAIN_OVERVIEW = 3.1;
+export const POINT_LOOK_KEY = 'apartment3d.pointLook';
+
+export const etchedVertexShader = /* glsl */ `
+${cutawayVertexDeclarations}
+uniform float uTime;
+uniform float uPixelRatio;
+uniform float uFadeNear;
+uniform float uWallNear;
+uniform float uFadeFar;
+uniform float uViewportPx;
+uniform float uEtchGain;
+
+attribute float intensity;
+attribute float aEdge;
+attribute float aSpacing;
+
+varying float vEtch;
+
+void main() {
+    float r = fract(sin(dot(position.xy, vec2(12.9898, 78.233)) + position.z * 3.7) * 43758.5453);
+    vec3 pos = position;
+    pos.z += sin(uTime * 0.8 + r * 6.2831) * 0.0015;     // Z-up object space: a faint breath
+
+    vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+    vDollhouseLocal = (uDollhouseWorldToLocal * modelMatrix * vec4(pos, 1.0)).xyz;
+    float depth = -mvPosition.z;
+    float fade = 1.0 - smoothstep(uFadeNear, uFadeFar, depth);
+    if (uWallNear > 0.0) fade *= smoothstep(uWallNear * 0.35, uWallNear * 0.85, depth);
+
+    float facing = clamp(abs(dot(normalize(normalMatrix * normal), normalize(-mvPosition.xyz))), 0.1, 1.0);
+    float focalPx = projectionMatrix[1][1] * 0.5 * uViewportPx;
+    float spacePx = aSpacing * 0.255 * focalPx / max(depth, 0.2);   // aSpacing: mm / 255
+    float size = clamp(spacePx * (1.0 + 0.5 * aEdge), ${ETCHED_POINT_MIN_PX.toFixed(2)} * uPixelRatio, ${ETCHED_POINT_MAX_PX.toFixed(2)} * uPixelRatio);
+    float cover = clamp(spacePx * spacePx * facing / (size * size), 0.0, 1.0);
+
+    float light = 0.02 + 0.45 * pow(intensity, 2.2) + 1.6 * aEdge;
+    vEtch = light * (0.5 + r * r) * mix(0.55, 1.0, facing) * (0.2 + 0.8 * fade) * uEtchGain * cover;
+
+    gl_PointSize = size;
+    gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+export const etchedFragmentShader = /* glsl */ `
+${cutawayFragmentDeclarations}
+uniform vec3 uGlowColor;
+uniform float uOpacity;
+
+varying float vEtch;
+
+void main() {
+    float d = length(gl_PointCoord - vec2(0.5));
+    if (d > 0.5) discard;
+    float cutawayKeep = homeDollhouseKeep();
+    if (cutawayKeep <= 0.001) discard;
+    vec3 c = uGlowColor * vEtch * (1.0 - smoothstep(0.15, 0.5, d)) * uOpacity * cutawayKeep;
+    gl_FragColor = vec4(c, max(c.r, max(c.g, c.b)));   // premultiplied, added
+}
+`;
+
+export const etchedDepthVertexShader = /* glsl */ `
+${cutawayVertexDeclarations}
+uniform float uPixelRatio;
+uniform float uWallNear;
+uniform float uViewportPx;
+attribute float aSpacing;
+
+void main() {
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vDollhouseLocal = (uDollhouseWorldToLocal * modelMatrix * vec4(position, 1.0)).xyz;
+    float depth = -mvPosition.z;
+    // the near wall the room zoom melts away must not hide the room
+    if (uWallNear > 0.0 && depth < uWallNear * 0.6) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    float focalPx = projectionMatrix[1][1] * 0.5 * uViewportPx;
+    gl_PointSize = clamp(aSpacing * 0.255 * focalPx / max(depth, 0.2) * 1.6, uPixelRatio, ${(ETCHED_POINT_MAX_PX * 1.5).toFixed(2)} * uPixelRatio);
+    mvPosition.xyz *= (depth + ${ETCHED_DEPTH_BIAS_M.toFixed(3)} + 0.01 * depth) / depth;
+    gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+export const etchedDepthFragmentShader = /* glsl */ `
+${cutawayFragmentDeclarations}
+void main() {
+    if (length(gl_PointCoord - vec2(0.5)) > 0.5) discard;
+    if (homeDollhouseKeep() <= 0.001) discard;
+    gl_FragColor = vec4(0.0);
+}
+`;
+
+/** The etched gain for the current orbit: a touch brighter at the overview, where grain is finest. */
+export function etchedGain({ orbitRadius, overviewRadius, closestRadius } = {}) {
+    const radius = Math.max(1e-6, finiteOr(orbitRadius, overviewRadius));
+    const outer = Math.max(1e-6, finiteOr(overviewRadius, radius));
+    const inner = Math.max(1e-6, Math.min(outer, finiteOr(closestRadius, outer)));
+    const span = Math.log(outer / inner);
+    const t = span > 1e-9 ? Math.min(1, Math.max(0, Math.log(radius / inner) / span)) : 1;
+    return ETCHED_GAIN_CLOSE + (ETCHED_GAIN_OVERVIEW - ETCHED_GAIN_CLOSE) * t;
+}
+
+/** Whether this browser keeps the classic cloud (localStorage opt-out). */
+export function etchedLookOptedOut(storage = globalThis.localStorage) {
+    try { return storage?.getItem?.(POINT_LOOK_KEY) === 'classic'; } catch (e) { return false; }
+}
+
+/** The etched colour and depth materials, sharing the classic material's per-frame uniform objects. */
+export function createEtchedPointsMaterials(base) {
+    const shared = {};
+    for (const [name, uniform] of Object.entries(base.uniforms)) {
+        if (name.startsWith('uDollhouse') || ['uTime', 'uPixelRatio', 'uFadeNear', 'uFadeFar', 'uWallNear', 'uOpacity', 'uGlowColor'].includes(name)) shared[name] = uniform;
+    }
+    const own = { uViewportPx: { value: 1080 }, uEtchGain: { value: ETCHED_GAIN_CLOSE } };
+    const color = new THREE.ShaderMaterial({
+        name: 'apartment-points-etched',
+        uniforms: { ...shared, ...own },
+        vertexShader: etchedVertexShader,
+        fragmentShader: etchedFragmentShader,
+        transparent: true,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+        blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneFactor,
+        depthWrite: false,
+        depthTest: true,
+    });
+    // modes.js keeps an additive material's depth writes off; the depth pass carries occlusion
+    color.userData.additive = true;
+    color.userData.classicPoints = base;
+    const depth = new THREE.ShaderMaterial({
+        name: 'apartment-points-etched-depth',
+        uniforms: { ...shared, ...own },
+        vertexShader: etchedDepthVertexShader,
+        fragmentShader: etchedDepthFragmentShader,
+        colorWrite: false,
+        depthWrite: true,
+        depthTest: true,
+    });
+    depth.userData.classicPoints = base;
+    return { color, depth, uniforms: own };
+}
+
+function computeFeaturesInWorker(geometry, count, signal) {
+    return new Promise((resolve, reject) => {
+        const search = new URL(import.meta.url).search;
+        let worker;
+        try {
+            worker = new Worker(new URL(`./point-features-worker.mjs${search}`, import.meta.url), { type: 'module', name: 'home-point-features' });
+        } catch (error) { reject(error); return; }
+        const stop = () => { worker.terminate(); reject(new DOMException('scene_load_aborted', 'AbortError')); };
+        if (signal?.aborted) { stop(); return; }
+        signal?.addEventListener?.('abort', stop, { once: true });
+        worker.onmessage = (event) => {
+            signal?.removeEventListener?.('abort', stop);
+            worker.terminate();
+            if (event.data?.ok) resolve(event.data); else reject(new Error(event.data?.error || 'point features failed'));
+        };
+        worker.onerror = (event) => { signal?.removeEventListener?.('abort', stop); worker.terminate(); reject(new Error(event.message || 'point features worker failed')); };
+        // copies: the geometry keeps its own arrays
+        const positions = geometry.getAttribute('position').array.slice(0, count * 3);
+        const intensity = geometry.getAttribute('intensity').array.slice(0, count);
+        worker.postMessage({ positions, intensity, count }, [positions.buffer, intensity.buffer]);
+    });
+}
+
+/**
+ * Computes the features for a loaded cloud and swaps the etched look onto it.
+ * Resolves to { update({ viewportPx, gain }), detach(), ms, cells } or rejects (the classic look stays).
+ */
+export async function attachEtchedLook(points, base, { signal } = {}) {
+    const geometry = points.geometry;
+    const count = Math.min(geometry.getAttribute('position').count, geometry.drawRange.count);
+    const features = await computeFeaturesInWorker(geometry, count, signal);
+    if (signal?.aborted) throw new DOMException('scene_load_aborted', 'AbortError');
+    geometry.setAttribute('normal', new THREE.BufferAttribute(features.normal, 3, true));
+    geometry.setAttribute('aEdge', new THREE.BufferAttribute(features.edge, 1, true));
+    geometry.setAttribute('aSpacing', new THREE.BufferAttribute(features.spacing, 1, true));
+    const { color, depth, uniforms } = createEtchedPointsMaterials(base);
+    const occluder = new THREE.Points(geometry, depth);
+    occluder.name = 'apartment-points-etched-depth';
+    occluder.frustumCulled = false;
+    occluder.raycast = () => {};
+    // A lit layer may have its own material on the cloud; take over only from the classic one, and
+    // again whenever the classic one comes back (a lit layer restores whatever it found).
+    if (points.material === base) points.material = color;
+    points.add(occluder);
+    return {
+        ms: features.ms, cells: features.cells,
+        material: color,
+        update({ viewportPx, gain } = {}) {
+            if (Number.isFinite(viewportPx) && viewportPx > 0) uniforms.uViewportPx.value = viewportPx;
+            if (Number.isFinite(gain)) uniforms.uEtchGain.value = gain;
+            if (points.material === base) points.material = color;
+            occluder.visible = points.material === color;
+        },
+        detach() {
+            if (points.material === color) points.material = base;
+            points.remove(occluder);
+            color.dispose(); depth.dispose();
+        },
+    };
 }
 
 const RECORD = 13; // 3*f32 + u8

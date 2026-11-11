@@ -245,7 +245,7 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     await page.waitForFunction(() => document.querySelector('[data-den-sim-value="fixture"]').textContent !== '–', null, { timeout: 5000 });
     const shown = await page.textContent('[data-den-sim-value="fixture"]');
     assert.match(shown, /^(fixture|mount)-0\d$/);
-    assert.ok(held.feed.summary.fixture_id.endsWith(shown), `${shown} is the lit fixture's short id`);
+    assert.equal(shown, held.feed.summary.fixture_id.match(/mount-\d+|fixture-\d+/)?.[0], 'the lit fixture\'s short id');
     t.diagnostic(`${aims.length} distinct aims, ${aims[0]} to ${aims.at(-1)}, ${shown}`);
   });
 

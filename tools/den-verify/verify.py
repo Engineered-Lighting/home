@@ -90,6 +90,20 @@ def cmd_run(args):
     _say(f"decisions verified {report['decisions']['verified']} of {report['decisions']['total']}; "
          f"hit rate {hr['value']} ({hr['hits']} of {hr['hits'] + hr['misses']}), "
          f"gate {hr['gate']}: {hr['verdict']}{' (preview)' if args.preview else ''}")
+    left, noise = report["excluded_held_or_superseded"], report["below_meter_noise"]
+    if left:
+        _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs")
+    stale = report["decisions"]["read_frame_stale"]
+    if stale:
+        _say(f"{len(stale)} decision(s) read a frame from before a step landed: nothing taken from that frame was judged")
+    if noise["count"]:
+        _say(f"{noise['count']} counted point(s) have a change below the meter's noise "
+             f"({noise['hits']} hit(s), {noise['misses']} miss(es)); "
+             f"without them the hit rate would be {noise['value_without']}: {noise['verdict_without']}; a pass needs both")
+    wide = report["hits_beyond_level_tolerance"]
+    if wide["count"]:
+        _say(f"{wide['count']} hit(s) are beyond {values['tolerance']:.0%} of the level; if they had missed, "
+             f"the hit rate would be {wide['value_if_missed']}: {wide['verdict_if_missed']}")
     _say(f"wrote {', '.join(names)} in {out}")
     return 0
 

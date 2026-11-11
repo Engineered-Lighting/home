@@ -35,6 +35,16 @@ def _r(x, n):
     return None if x is None else round(x, n)
 
 
+def changed_light(now, was, tolerance):
+    """What one bulb puts under the allowance at a point: its brighter level, once it has really moved.
+
+    A move inside the ladder's tolerance of that level counts in proportion, so a read-back step, a colour
+    nudge or a pin's rounding widens a bound by about its own size, never by a whole bulb.
+    """
+    brighter, moved = max(now, was), abs(now - was)
+    return moved / tolerance if moved < tolerance * brighter else brighter
+
+
 def percentile(sorted_values, q):
     """Linear interpolation between closest ranks (q in 0..1)."""
     if not sorted_values:
@@ -84,6 +94,15 @@ class Hold:
     def active(self, t):
         return self.since <= t and (self.ended is None or self.ended > t)
 
+    def after_copy(self, revision, ts):
+        """Past a decision's copy of the hold set, which already says what became of any earlier hold."""
+        if self.revision is None or revision is None:
+            return self.since > ts
+        return self.revision > revision
+
+    def order(self):
+        return (self.revision is not None, self.revision or 0, self.since)
+
 
 class Dec:
     """A Decision with its times resolved and its settle facts."""
@@ -99,7 +118,7 @@ class Dec:
             or run.first_ts
         self.resolve = lambda v: run.clock.resolve(v, anchor)
         self.ts = self.resolve(rec.get("ts"))
-        self.problem = None
+        self.problem = self.stale_read = None
         try:
             self.steps = settle.decision_steps(rec, self.resolve, run.m)
         except settle.Unsettleable as e:
@@ -121,12 +140,14 @@ class Dec:
     def state_at(self, t, holds):
         """The actual resulting state at t, and the channels held or superseded."""
         state = self.before_state()
-        held = set()
+        held, read_back = set(), set()
         for ch, a in (self.rec.get("applied_scene") or {}).items():
             rb = a.get("readback") or {}
             prev = state.get(ch, {})
             state[ch] = {"level": float(rb.get("level") or 0),
                          "cct_k": rb.get("cct_k", prev.get("cct_k"))}
+            if rb.get("level") is not None:
+                read_back.add(ch)
             if a.get("status") in ("held", "superseded"):
                 held.add(ch)
         hold_set = self.inputs.get("hold_set") or {}
@@ -136,14 +157,17 @@ class Dec:
             p = h.get("pinned") or {}
             pins.append(Hold(h.get("entity_id"), h.get("channels"), p.get("level_pct"), p.get("cct_k"),
                              -math.inf, None, revision, self.id))
-        pins += [h for h in holds if h.active(t)]
+        pins += sorted((h for h in holds if h.active(t) and h.after_copy(revision, self.ts)), key=Hold.order)
         for h in pins:
             for ch in h.keys(state):
+                held.add(ch)
+                # this decision's read-back comes after its own copy: a game's vacancy turns a held bulb off and keeps the hold
+                if h.ref == self.id and ch in read_back:
+                    continue
                 if h.level is not None:
                     state[ch]["level"] = float(h.level) / 100.0
                 if h.cct_k is not None:
                     state[ch]["cct_k"] = h.cct_k
-                held.add(ch)
             if h.revision is not None and (revision is None or h.revision > revision):
                 revision = h.revision
         return state, held, revision
@@ -214,6 +238,9 @@ class Run:
         all_steps = [s for d in self.decs for s in d.steps]
         self.windows.add_steps(all_steps)
         settle.mark_mid_transition(all_steps)
+        for d in self.decs:
+            if d.ref is not None:
+                d.stale_read = settle.stale_read(d.id, d.ts, d.ref.ts, all_steps)
         self.occupancy = [(float(o["start"]), float(o["end"]), o.get("people") or []) for o in occupancy]
         self.gold = list(gold)
 
@@ -257,6 +284,7 @@ class Run:
         parts = model.contributions(state)
         before_state = d.before_state()
         before = model.predict(before_state)
+        parts_before = model.contributions(before_state)
         ref = d.ref
         out = {}
         unit_ok = frame.unit == model.basis_unit
@@ -265,7 +293,9 @@ class Run:
             measured, why = frame.usable(sid, m) if unit_ok else (None, "unit mismatch")
             row["basis"] = (frame.estimates.get(sid) or {}).get("basis")
             ref_val, rwhy = None, "no reference frame in the same unit"
-            if ref is not None and ref.unit == frame.unit:
+            if d.stale_read:
+                rwhy = f"reference frame: {d.stale_read}"
+            elif ref is not None and ref.unit == frame.unit:
                 ref_val, rwhy = ref.usable(sid, m)
                 rwhy = rwhy and f"reference frame: {rwhy}"
             if m["background"] == "zero":
@@ -275,19 +305,25 @@ class Run:
             predicted = None if background is None else background + after[sid]
             row.update(measured=measured, why=why, predicted=predicted, ref_value=ref_val,
                        predicted_change=after[sid] - before[sid])
-            if predicted is not None and predicted > 0:
-                row["held_share"] = sum(parts[c][sid] for c in held if c in parts) / predicted
-            else:
-                row["held_share"] = 0.0
+            # each channel at its brighter level: one held off gives no light now, and is still why a point moved
+            brightest = own = free = held_light = held_moved = 0.0
+            for c in parts:
+                now, was = parts[c][sid], parts_before[c][sid] if c in parts_before else 0.0
+                if c in held:
+                    held_light += max(now, was)
+                    held_moved += abs(now - was)
+                else:
+                    free += max(now, was)
+                    own += abs(now - was)
+                brightest += changed_light(now, was, m["tolerance"])
+            row["held_share"] = held_light / max(predicted, held_light) if held_light > 0 and predicted is not None else 0.0
+            row["held_lit"] = held_light > 0 and row["held_share"] >= m["held_share_min"]
             if measured is None:
                 row["status"] = "prior_only" if why == "prior_only" else "unverifiable"
             elif predicted is None:
                 row["status"], row["why"] = "unverifiable", rwhy
-            elif predicted <= 0:
-                row["status"], row["why"] = "unverifiable", "prediction not positive"
             else:
-                row["residual"] = (measured - predicted) / predicted
-                row["status"] = "within" if within(measured, predicted, m["tolerance"]) else "outside"
+                self.judge_level(row, measured, predicted, ref_val, brightest, own, frame.unit)
             # increments: measured change against the model's own change
             if measured is not None and ref_val is not None:
                 mc = measured - ref_val
@@ -300,15 +336,50 @@ class Run:
                 row["increment"] = {"point_id": sid, "measured_change": None,
                                     "predicted_change": row["predicted_change"],
                                     "status": "unverifiable", "uncertainty": None}
-            row["excluded_held"] = row["status"] == "outside" and row["held_share"] >= m["held_share_min"]
+            # Out both ways where this decision's bulbs could not show; the reading plays no part.
+            row["excluded_held"] = False
+            if row["held_lit"] and row["status"] in ("within", "outside"):
+                answers_for = own if held_moved > row["level_bound"] else free
+                row["excluded_held"] = m["held_rule"] == "exclude_both" or answers_for <= row["level_bound"]
             out[sid] = row
         return out, revision
+
+    def judge_level(self, row, measured, predicted, ref_val, brightest, own, unit):
+        """within or outside, to the ladder's tolerance or what the prediction itself inherits if that is wider.
+
+        Whether a point counts, and its bound, come from predictions alone: a reading can only choose
+        between hit and miss, never leave a point out.
+        """
+        m = self.m
+        # the read frame's D hides the model's error at the state it read, and the changed bulbs carry theirs;
+        # with D taken as zero only an off, with no level to take a share of, needs the same allowance
+        noise = self.u(max(predicted, 0.0), unit)
+        inherited = 0.0
+        if m["background"] != "zero" or predicted <= 0:
+            inherited = float(Fraction(str(m["change_allowance"])) * Fraction(brightest))
+        if m["background"] != "zero":
+            noise = math.hypot(noise, self.u(ref_val, unit))
+        wide = max(inherited, noise)
+        if predicted <= 0 and not (brightest and wide):
+            row["status"], row["why"] = "unverifiable", "prediction not positive"
+            return
+        level_tolerance = m["tolerance"] * max(predicted, 0.0)
+        row["error"] = measured - predicted
+        if predicted > 0:
+            row["residual"] = row["error"] / predicted
+        # the meter cannot tell this change from none, only from a bulb far off: it still counts, to the noise
+        row["below_noise"] = level_tolerance < noise and 0 < own <= noise
+        ladder = predicted > 0 and within(measured, predicted, m["tolerance"])
+        row["status"] = "within" if ladder or within(measured, predicted, 0, wide) else "outside"
+        row["level_bound"] = max(level_tolerance, wide)
+        row["widened"] = wide > level_tolerance
+        row["wide_hit"] = row["status"] == "within" and not ladder
 
     def explain(self, d, frame, row):
         """One cause for an outside point: held, shadow, daylight, drift or unexplained."""
         if row["excluded_held"]:
             return {"cause": "held", "basis": f"held or superseded share {row['held_share']:.2f}"}
-        res = row["residual"]
+        res = row["error"]
         occ, people = self.occupied(frame.ts)
         xy = self.model.xy(row["point_id"])
         if occ and res < 0 and xy:
@@ -323,7 +394,7 @@ class Run:
             if common and abs(change) >= self.m["daylight_change_min"] and _sign(change) == _sign(res):
                 return {"cause": "daylight", "basis": f"window daylight changed by {change:+.3f}"}
         inc = row["increment"]
-        if (inc["status"] == "outside" and not occ
+        if (inc["status"] == "outside" and not occ and row["held_share"] == 0
                 and _sign(inc["measured_change"] - inc["predicted_change"]) == _sign(res)):
             return {"cause": "drift", "basis": "the change itself landed off in the same direction"}
         return {"cause": "unexplained", "basis": "no daylight change, shadow or drift"}
@@ -364,8 +435,11 @@ class Run:
                                "camera_estimate": None, "residual": None})
                 continue
             kind = kinds.get(p) or self.model.kind(p)
-            points.append({"point_id": p, "kind": kind, "status": row["status"],
-                           "camera_estimate": row["measured"], "residual": _r(row.get("residual"), 4)})
+            judged = row["status"] in ("within", "outside")
+            points.append({"point_id": p, "kind": kind, "status": row["status"], "camera_estimate": row["measured"],
+                           "residual": _r(row.get("residual"), 4) if judged else None})
+            if row.get("widened"):
+                points[-1]["level_bound"] = _r(row["level_bound"], 3)
             inc = dict(row["increment"])
             for k in ("measured_change", "predicted_change", "uncertainty"):
                 inc[k] = _r(inc[k], 3)
@@ -430,6 +504,8 @@ class Run:
             return None, "no decision in force"
         if d.problem:
             return None, f"decision {d.id}: {d.problem}"
+        if d.stale_read and self.m["background"] != "zero":
+            return None, f"decision {d.id}: {d.stale_read}"
         try:
             rows, revision = self.evaluate(d, frame, frame.ts)
         except KeyError as e:
@@ -437,15 +513,19 @@ class Run:
         occ, _ = self.occupied(frame.ts)
         entries = []
         for sid, row in rows.items():
-            if row["measured"] is None or row.get("residual") is None:
+            if row["measured"] is None or row["predicted"] is None:
                 continue
             flags = []
-            if row["held_share"] >= self.m["held_share_min"]:
+            if row["held_lit"]:
                 flags.append("held")
             if occ:
                 flags.append("occupied")
             if row["basis"] == "fallback_patch":
                 flags.append("fallback_patch")
+            if row.get("wide_hit"):
+                flags.append("wide_tolerance")
+            if row.get("below_noise"):
+                flags.append("below_noise")
             if row["status"] == "outside":
                 flags.append("outside")
                 cause = self.explain(d, frame, row)["cause"]
@@ -453,7 +533,7 @@ class Run:
                     flags.append(cause)
             entries.append({"surface_id": sid, "predicted": _r(row["predicted"], 3),
                             "residual": _r(row["measured"] - row["predicted"], 3),
-                            "residual_pct": _r(100 * row["residual"], 2), "unit": frame.unit,
+                            "residual_pct": _r(100 * row["residual"], 2) if "residual" in row else None, "unit": frame.unit,
                             "against": {"decision_id": d.id, "hold_set_revision": revision},
                             "flags": flags})
         return entries, None
@@ -500,17 +580,24 @@ class Run:
 
     # -- the whole run --------------------------------------------------------
 
+    def rate_and_verdict(self, hits, n):
+        gate = Fraction(str(self.m["hit_rate_min"]))
+        return (_r(hits / n, 4) if n else None,
+                "insufficient" if not n else "pass" if Fraction(hits, n) >= gate else "fail")
+
     def hit_rate(self, counted_by_day):
         m = self.m
         hits = sum(h for h, _ in counted_by_day.values())
         n = sum(k for _, k in counted_by_day.values())
-        gate = Fraction(str(m["hit_rate_min"]))
-        out = {"hits": hits, "misses": n - hits, "value": _r(hits / n, 4) if n else None,
+        value, verdict = Run.rate_and_verdict(self, hits, n)
+        out = {"hits": hits, "misses": n - hits, "value": value,
                "gate": m["hit_rate_min"], "orientation": "higher is better",
                "delta": m["delta_hit_rate"], "delta_status": "promotion-margins: no delta set by the owner",
-               "verdict": ("insufficient" if not n else "pass" if Fraction(hits, n) >= gate else "fail")}
-        sessions = list(counted_by_day.values())
+               "verdict": verdict}
+        # A day with nothing counted is no evidence: it must not narrow the interval.
+        sessions = [day for day in counted_by_day.values() if day[1]]
         out["sessions"] = len(sessions)
+        out["days_with_nothing_counted"] = len(counted_by_day) - len(sessions)
         if len(sessions) >= 2:
             rng = random.Random(0)
             rates = []
@@ -526,7 +613,7 @@ class Run:
                                       "session-bootstrap rounds (owner choice 6)")
         else:
             out["interval"] = None
-            out["interval_status"] = "one session: no session-bootstrap interval"
+            out["interval_status"] = f"{'one session' if sessions else 'no session'}: no session-bootstrap interval"
         return out
 
     def run(self):
@@ -537,7 +624,10 @@ class Run:
         per_point = {}
         causes = {"daylight": 0, "shadow": 0, "drift": 0, "unexplained": 0}
         excluded_held = fallback_scored = eyes_total = 0
-        not_admitted, not_verified = [], []
+        below_noise = {"count": 0, "hits": 0}
+        wide_by_day = {}
+        excluded_by_status = {"within": 0, "outside": 0}
+        not_admitted, not_verified, read_frame_stale = [], [], []
         spill_counts, inc_counts = {}, {}
         for i, d in enumerate(self.decs):
             rec = copy.deepcopy(d.rec)
@@ -548,7 +638,7 @@ class Run:
                 decisions_out.append(rec)
                 continue
             try:
-                verify, rows, counted = self.verify(d, frame)
+                verify, _, counted = self.verify(d, frame)
             except KeyError as e:
                 why = str(e.args[0])
                 rec["verify"], rec["verify_status"] = None, why
@@ -558,6 +648,8 @@ class Run:
             rec["verify"] = verify
             rec.pop("verify_status", None)
             decisions_out.append(rec)
+            if d.stale_read:
+                read_frame_stale.append({"decision_id": d.id, "why": d.stale_read})
             admitted = not any(s.mid_transition for s in d.steps)
             if not admitted:
                 not_admitted.append({"decision_id": d.id, "pending": "fixture-capabilities",
@@ -572,21 +664,27 @@ class Run:
             for s in verify["increments"]:
                 inc_counts[s["status"]] = inc_counts.get(s["status"], 0) + 1
             if admitted:
-                hits = n = 0
+                hits = n = wide = 0
                 for r in counted:
                     if r["excluded_held"]:
                         excluded_held += 1
+                        excluded_by_status[r["status"]] += 1
                         continue
                     if r["basis"] == "fallback_patch":
                         fallback_scored += 1
                     n += 1
                     hits += r["status"] == "within"
+                    wide += r["wide_hit"]
+                    if r["below_noise"]:
+                        below_noise["count"] += 1
+                        below_noise["hits"] += r["status"] == "within"
                 for e in verify["explanation"] or []:
                     if e["cause"] in causes:
                         causes[e["cause"]] += 1
                 day = self.clock.day(frame.ts)
                 h0, n0 = counted_by_day.get(day, (0, 0))
                 counted_by_day[day] = (h0 + hits, n0 + n)
+                wide_by_day[day] = wide_by_day.get(day, 0) + wide
             rows_out.append({"decision_id": d.id, "light_state": frame.id, "ts": frame.ts,
                              "settled_at": d.settled, "occupied": occ, "admitted": admitted,
                              "within_tolerance": verify["within_tolerance"],
@@ -611,18 +709,33 @@ class Run:
                 frame_counts["residual_written"] += 1
             states_out.append(rec)
 
+        wide_hits = sum(wide_by_day.values())
+        all_hits = sum(h for h, _ in counted_by_day.values())
+        all_counted = sum(k for _, k in counted_by_day.values())
+        narrow = self.rate_and_verdict(all_hits - wide_hits, all_counted)
+        judged = self.rate_and_verdict(all_hits - below_noise["hits"], all_counted - below_noise["count"])
         misses = sum(causes.values())
         surfaces_total = sum(status_counts.values())
         unver = status_counts["unverifiable"] + status_counts["prior_only"]
+        rate = self.hit_rate(counted_by_day)
+        # hits the meter could not tell from a bulb that never moved lift nothing: the rest must pass too
+        if rate["verdict"] != "fail":
+            rate["verdict"] = judged[1]
         report = {
             "tool": "den-verify", "rung": 10, "scored": self.scored,
             "model": {"version": self.model.version, "basis_unit": self.model.basis_unit,
                       "backend": self.model.backend},
             "decisions": {"total": len(self.decs), "verified": len(rows_out),
-                          "not_verified": not_verified, "not_admitted": not_admitted},
+                          "not_verified": not_verified, "not_admitted": not_admitted,
+                          "read_frame_stale": read_frame_stale},
             "frames": frame_counts,
-            "hit_rate": self.hit_rate(counted_by_day),
+            "hit_rate": rate,
             "excluded_held_or_superseded": excluded_held,
+            "excluded_held_by_status": excluded_by_status,
+            "below_meter_noise": {**below_noise, "misses": below_noise["count"] - below_noise["hits"],
+                                  "value_without": judged[0], "verdict_without": judged[1]},
+            "hits_beyond_level_tolerance": {"count": wide_hits, "value_if_missed": narrow[0],
+                                            "verdict_if_missed": narrow[1]},
             "fallback_patch_points_scored": fallback_scored,
             "misses_explained": {
                 **causes, "misses": misses,

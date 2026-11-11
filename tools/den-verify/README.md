@@ -16,7 +16,7 @@ Stage 1's `predict()` over the session's `light-model.json`, so
 | `VERIFY-V1.md` | The design note and its one `verify-v1` block of numbers and open slots. |
 | `method.py` | Reads that block (CRLF or LF), lists open slots and the pending decisions. |
 | `records.py` | JSON Lines in and out, clock strings, LightState ids, schema field names. |
-| `settle.py` | The settle rule: den_lighting's 2 s fades (5 s on a restore), probes at 0 s. |
+| `settle.py` | The settle rule: den_lighting's 2 s fades (5 s on a restore), probes at 0 s; and when a read frame is stale. |
 | `light_model.py` | The one adapter to rung 8's model: every prediction goes through it, to rung 8 Stage 1's `predict()` in `tools/den-light/predict.py`. |
 | `score.py` | `Decision.verify`, `LightState.residual` and the report. |
 | `verify.py` | The command line. |
@@ -47,6 +47,15 @@ folder; it refuses while `VERIFY-V1.md` has an open slot. Optional inputs:
 `--occupancy` and `--gold` (formats in `VERIFY-V1.md`), and `--utc-offset-h -7`
 when the records' clock strings are not in this PC's time zone. Run folders
 stay on the PC: no records, frames or reports go into git.
+
+The console gives the verdict, then how many points were left out of the hit
+rate (lit by held or superseded bulbs where the decision's own bulbs could not
+show), how many decisions read a frame from before a step landed, so nothing taken
+from that frame was judged, how many counted points have a change below the meter's noise, with the
+hit rate without them, which must pass too, and how many hits are beyond 15% of the
+level, on dims and offs, with the hit rate if those had missed. `VERIFY-V1.md` gives
+each rule. Which points count never depends on what they
+read. A run with nothing left to count reads `insufficient`.
 
 Running on real records needs the owner's go-ahead, and the records come from
 rungs that have not run yet (rung 7's metering frames, rung 8's model, rung 9's

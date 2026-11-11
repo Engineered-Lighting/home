@@ -18,10 +18,11 @@ METHOD_FILE = "VERIFY-V1.md"
 BLOCK = "verify-v1"
 NUMBERS = ("tolerance", "hit_rate_min", "fade_s_den_lighting", "fade_s_den_lighting_restore_on",
            "fade_s_probe", "v_min", "tau_r_cm", "interval_level", "bootstrap_rounds",
-           "settle_margin_s", "held_share_min", "uncertainty_rel", "uncertainty_abs_lx",
+           "settle_margin_s", "change_allowance", "held_share_min", "uncertainty_rel", "uncertainty_abs_lx",
            "spill_allowance_lx", "daylight_change_min", "shadow_radius_m", "max_frame_gap_s",
            "delta_hit_rate")
 CHOICES = {"background": ("reference_frame", "zero"),
+           "held_rule": ("free_bulbs_count", "exclude_both"),
            "spill_band_top": ("target_lx",),
            "record_extensions": ("verify-ext/v1",)}
 KEYS = NUMBERS + tuple(CHOICES)

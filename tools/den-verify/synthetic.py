@@ -2,10 +2,14 @@
 
 Nothing here is real data. The illustrative evening (A at the counter, B in
 the armchair) comes straight from the Decision, LightState and Correction
-examples in docs/architecture/live-v1/schemas.json; the fake light model is
-built so that it reproduces the walkthrough's predictions: 510 lx at counter-1
-for the decision's applied scene and 368 lx once A's dim pins F1.spot at 50%
-(case V11). The Hue fixtures use den_lighting's four bulbs.
+examples in docs/architecture/live-v1/schemas.json; the synthetic light model
+is built so that it reproduces the walkthrough's predictions: 510 lx at
+counter-1 for the decision's applied scene and 368 lx once A's dim pins F1.spot
+at 50% (case V11). The Hue fixtures use den_lighting's four bulbs.
+
+Light models are in the shape rung 8 Stage 1 writes (`light_model()` in
+tools/den-light/model.py; tools/den-light/README.md), so rung 10's tests run
+rung 8's own predict() over them.
 """
 import copy
 import json
@@ -15,6 +19,8 @@ from records import SCHEMAS
 UTC_OFFSET_S = -7 * 3600  # the walkthrough's evening: A@1793066610.0 is 19:03:30 local
 T0 = 1793066609.0         # ls-190329, the frame the walkthrough decision read
 HUE = ("light.den_front_left", "light.front_right", "light.den_rear_left", "light.den_rear_right")
+HUE_PAIRS = (HUE[:2], HUE[2:])  # front and rear share a dimming curve, as rung 8 fits them
+MIRED = "linear in mired between the captured temperatures, clamped outside them"
 
 
 def example(record_id):
@@ -25,29 +31,64 @@ def example(record_id):
     raise KeyError(record_id)
 
 
+def hue_channel(entity_id):
+    """rung 8's channel key for a den bulb: `<entity without light.>.white`, as probe.py names it."""
+    return f"{entity_id.split('.', 1)[1]}.white"
+
+
+def sample_point(point_id, kind, xyz, excluded=None):
+    return {"point_id": point_id, "kind": kind, "xyz": xyz, "normal": None, "rect": None, "excluded": excluded}
+
+
+def channel(fixture_id, channel_id, entity_id, kind, basis, levels, g, cct_range_k=None, shared_with=None):
+    """One channel: `basis` maps kelvin -> {point_id: value at full}; `levels`/`g` its dimming table."""
+    return {"channel_key": f"{fixture_id}.{channel_id}", "fixture_id": fixture_id, "channel_id": channel_id,
+            "entity_id": entity_id, "kind": kind, "cct_range_k": cct_range_k,
+            "basis": basis, "levels": levels, "g": g, "shared_with": shared_with}
+
+
+def light_model_record(version, room_version, points, channels, unit, shared_curve=None):
+    """A light-model.json with the fields predict() and rung 10 read, named as model.light_model names them.
+
+    A point with `excluded` set has None in every basis, as the fit writes it. A
+    v1 model's points are camera blocks with kind and xyz None; these carry both,
+    so rung 10's geometry is exercised. The session's provenance (room_view,
+    anchor, sessions, method hashes) is left out: nothing here reads it.
+    """
+    basis, cct, dimming, listed = {}, {}, {}, []
+    for c in channels:
+        key = c["channel_key"]
+        listed.append({k: c[k] for k in ("channel_key", "fixture_id", "channel_id", "entity_id", "kind",
+                                         "cct_range_k")})
+        kelvins = list(c["basis"])
+        keys = [f"{key}@{k}K" for k in kelvins]
+        for k, bk in zip(kelvins, keys):
+            basis[bk] = {p["point_id"]: None if p["excluded"] else float(c["basis"][k].get(p["point_id"], 0.0))
+                         for p in points}
+        cct[key] = {"kelvin": kelvins, "basis_keys": keys, "entity_id": c["entity_id"], "interpolation": MIRED}
+        dimming[key] = {"levels": c["levels"], "g": c["g"], "shared_with": c["shared_with"],
+                        "command_unit": "Hue brightness 0 to 254", "monotone": "pool-adjacent-violators"}
+    return {"record": "light_model", "contract": "live-v1", "version": version, "room_version": room_version,
+            "meter_norm": {"version": "meter-norm/v1", "parameters_sha256": None},
+            "sample_points": points, "channels": listed, "basis": basis, "basis_unit": unit, "spot_model": None,
+            "dimming": dimming, "shared_curve": shared_curve or {}, "cct": cct, "bounce": "measured",
+            "glare": None, "error": {"median_pct": None, "p90_pct": None, "note": "synthetic model for tests"}}
+
+
 def v11_model():
-    """A light-model.json in rung 8's plan's shape for the walkthrough's channels."""
-    return {
-        "version": "lm-den-3", "room_version": "den-v4", "meter_norm": "meter-norm/v1",
-        "sample_points": [
-            {"point_id": "counter-1", "kind": "task", "xyz": [1.2, 0.8, 0.9], "normal": None, "rect": None},
-            {"point_id": "armchair-book", "kind": "task", "xyz": [3.5, 2.0, 0.6], "normal": None, "rect": None},
-        ],
-        "basis_unit": "lx",
-        "basis": {
-            "F1.spot": {"3500": {"counter-1": 686.0, "armchair-book": 8.4866}},
-            "F1.radial_4+5": {"2700": {"counter-1": 100.0, "armchair-book": 80.0}},
-            "F2.spot": {"2700": {"counter-1": 0.0, "armchair-book": 700.0}},
-        },
-        "dimming": {
-            # g(0.5) = 0.5 and g(0.7) = 485/686, so the spot gives 343 lx and 485 lx at counter-1
-            "F1.spot": [[0, 0], [127, 0.5], [177.8, 485.0 / 686.0], [254, 1]],
-            "F1.radial_4+5": [[0, 0], [88.9, 0.25], [254, 1]],
-            "F2.spot": [[0, 0], [114.3, 0.4], [254, 1]],
-        },
-        "bounce": "measured", "glare": None,
-        "error": {"median_pct": None, "p90_pct": None, "note": "fake model for tests"},
-    }
+    """A light-model.json for the walkthrough's channels: F1 and F2 as schemas.json's fixture names them."""
+    points = [sample_point("counter-1", "task", [1.2, 0.8, 0.9]),
+              sample_point("armchair-book", "task", [3.5, 2.0, 0.6])]
+    return light_model_record("lm-den-3", "den-v4", points, [
+        # g(0.5) = 0.5 and g(0.7) = 485/686, so the spot gives 343 lx and 485 lx at counter-1
+        channel("F1", "spot", None, "gimbal spot", {3500: {"counter-1": 686.0, "armchair-book": 8.4866}},
+                [0, 127, 177.8, 254], [0, 0.5, 485.0 / 686.0, 1]),
+        # one captured temperature: the walkthrough's radial fill has no cct_k
+        channel("F1", "radial_4+5", None, "radial", {2700: {"counter-1": 100.0, "armchair-book": 80.0}},
+                [0, 88.9, 254], [0, 0.25, 1]),
+        channel("F2", "spot", None, "gimbal spot", {2700: {"counter-1": 0.0, "armchair-book": 700.0}},
+                [0, 114.3, 254], [0, 0.4, 1]),
+    ], unit="lx")
 
 
 def light_state(ts, values, anchored=True, windows=None, basis=None, clipped=None, unit=None, ident=None):
@@ -87,25 +128,24 @@ def v11_evening():
 
 # -- Hue fixtures --------------------------------------------------------------
 
-def hue_model(points, unit="relative", kelvins=(2202, 6500)):
-    """Four bulbs, a shared linear dimming curve, basis[bulb][k][point] from `points`.
+def hue_model(points, unit="relative", kelvins=(2202, 6500), excluded=()):
+    """den_lighting's four bulbs, each a linear dimming curve shared with its pair, basis from `points`.
 
-    `points` maps point_id -> {bulb: value at full}; the cool end is 10% brighter
-    so mired interpolation is exercised.
+    `points` maps point_id -> {entity_id: value at full}; the cool end is 10%
+    brighter so mired interpolation is exercised. A point in `excluded` is one
+    the fit excluded ("mask").
     """
-    basis = {}
-    for b in HUE:
-        basis[b] = {}
-        for i, k in enumerate(kelvins):
-            basis[b][str(k)] = {p: float(v.get(b, 0.0)) * (1.0 + 0.1 * i) for p, v in points.items()}
-    return {
-        "version": "lm-hue-test", "room_version": "den-test", "meter_norm": "meter-norm/v1",
-        "sample_points": [{"point_id": p, "kind": "task", "xyz": [float(i), 0.0, 0.8], "normal": None,
-                           "rect": None} for i, p in enumerate(points)],
-        "basis_unit": unit, "basis": basis,
-        "dimming": {HUE[0]: [[0, 0], [254, 1]], **{b: {"same_as": HUE[0]} for b in HUE[1:]}},
-        "bounce": "measured", "glare": None, "error": {"note": "fake model for tests"},
-    }
+    partner = {a: b for a, b in HUE_PAIRS}
+    partner.update({b: a for a, b in HUE_PAIRS})
+    pts = [sample_point(p, "task", [float(i), 0.0, 0.8], "mask" if p in excluded else None)
+           for i, p in enumerate(points)]
+    channels = [channel(e.split(".", 1)[1], "white", e, "tunable_white",
+                        {k: {p: float(v.get(e, 0.0)) * (1.0 + 0.1 * i) for p, v in points.items()}
+                         for i, k in enumerate(kelvins)},
+                        [0, 254], [0, 1], cct_range_k=[2202, 6500], shared_with=hue_channel(partner[e]))
+                for e in HUE]
+    return light_model_record("lm-hue-test", "den-test", pts, channels, unit,
+                       shared_curve={"+".join(pair): True for pair in HUE_PAIRS})
 
 
 def hue_decision(did, ts, before, applied, ref, policy="den_lighting@1.0.4", targets=None,

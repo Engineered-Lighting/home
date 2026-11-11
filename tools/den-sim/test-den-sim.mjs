@@ -754,6 +754,18 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
   fs.writeFileSync(owedList, JSON.stringify({ schema: 'den-sim-owed-1', set: first.set.id, bodies }));
   assert.equal((await status()).qwen.owed, 3, 'control: the same list filed for this set is counted');
   fs.rmSync(owedList);
+  // Test 15: the harness starts on decision_doc.mjs's off document, and Home's state reads four dark fixtures.
+  const empty = await (await fetch(ORIGIN + Client.BASE + '/state')).json();
+  assert.equal(Client.validateState(empty).ok, true);
+  assert.deepEqual([empty.decision_id, empty.mode, empty.reading_evidence.bound, empty.fixtures.map(row => [row.fixture_id, row.spot.on])],
+    [null, 'off', false, Client.FIXTURE_IDS.map(id => [id, false])]);
+  assert.match(empty.why, / · no Decision: all four spots off$/);
+  // Hop 16, built at page start beside the fit: its file's digest in the startup record and the console, and no coordinate printed.
+  const fitDir = path.join(home, 'fits', fs.readdirSync(path.join(home, 'fits')).find(name => fs.existsSync(path.join(home, 'fits', name, 'light', 'light-model.json'))));
+  const lightFile = path.join(fitDir, 'light', 'light-model.json');
+  assert.deepEqual([first.light_model.sha256, first.light_model.fake, first.light_model.unit], [sha256(lightFile), true, 'relative']);
+  assert.ok(run.output().includes(`Light model (hop 16), built at page start: lm-den-sim-1, fake: true, unit relative, ${first.light_model.label}, sha256 ${sha256(lightFile)}`), run.output());
+  assert.equal(JSON.parse(fs.readFileSync(lightFile, 'utf8')).fake, true);
   assert.deepEqual(first.scenes, display.map(({ take, label }) => ({ take, label })), 'the buttons carry labels and take ids, never the words');
   for (const key of ['seat_m', 'point']) assert.ok(!JSON.stringify({ couch: first.couch, brain: first.brain }).includes(`"${key}"`), `${key} left the startup record`);
   // The stand-in seat is a square, which has no single longest edge, so its facing is a tie-break, and the page says so.
@@ -819,6 +831,13 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
   const want = ['2:5', '2:5', '3:5', '3:10', '3:12', '6:12', 'null:12'];
   assert.deepEqual(reading.view.top_line.reasons.map(reason => `${reason.condition}:${reason.hop}`).sort(), want.sort());
   assert.equal(reading.receipt.aim_check, null, 'no aim check is claimed');
+  // Hop 16 was built at page start: past the stop it keeps its word, greyed, and its reads are held to their writers' digests. On
+  // authored sockets the row says the fixture origins are not your export's.
+  const sixteen = rowOf(16);
+  assert.deepEqual([sixteen.word, sixteen.reached, sixteen.ran, sixteen.wrote], ['ADAPTER', false, 'built at page start; not reached on this click', [{ path: first.light_model.label, sha256: first.light_model.sha256 }]]);
+  assert.deepEqual(sixteen.read.map(file => [file.recorded.kind, file.sha256 === file.recorded.sha256]), [['room model', true], ['fixture table', true]]);
+  assert.deepEqual(sixteen.stand_ins, [TABLE.hops[15].stand_ins[0], "the fixture origins are the authored room's public sockets, not your registration export"]);
+  assert.match(sixteen.summary, /^light_model\.mjs built lm-den-sim-1 at page start, before any picture, the same file for every take: .* At full, modeled: F1 \d+, F2 \d+, F3 \d+, F4 \d+\. Fixture origins from the authored room's public sockets/);
   assert.ok(rowOf(1).read.every(file => ['shots.json', 'render'].includes(file.recorded.kind)), 'hop 1 reads only shots.json and the render\'s inputs');
   assert.deepEqual(rowOf(4).read.map(file => file.path), [`${take}/frames.csv`], 'hop 4 read the take');
   // Nobody and blank light nothing and stop at hop 6, where the real detector's rows hold no person, with no
@@ -1159,7 +1178,13 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
     assert.deepEqual([now.click.rows[11].word, now.click.rows[13].word, now.click.rows[13].reached], ['SCRIPTED', 'ADAPTER', true], 'the replies were found, and the couch is your mark');
     assert.equal(now.click.top_line.line, 'Connected start to finish: not yet');
     assert.ok(!now.click.top_line.reasons.some(reason => /stand-in seat|authored sockets/.test(reason.text)), 'hop 5 read your files, not the stand-ins');
-    assert.deepEqual(now.click.top_line.reasons.filter(reason => [14, 15].includes(reason.hop)), [], 'hops 14 and 15 hold: ADAPTER, named stand-ins, digests vouched');
+    assert.deepEqual(now.click.top_line.reasons.filter(reason => [14, 15, 16].includes(reason.hop)), [], 'hops 14, 15 and 16 hold: ADAPTER, named stand-ins, digests vouched');
+    // Hop 16 on your export: built at page start into the private folder beside the fit, and no number of it is printed.
+    const lightFile = path.join(fits, fitFolders()[0], 'light', 'light-model.json'), model = JSON.parse(fs.readFileSync(lightFile, 'utf8'));
+    assert.deepEqual([now.click.rows[15].word, now.click.rows[15].ran, now.light_model.sha256], ['ADAPTER', 'built at page start', sha256(lightFile)]);
+    assert.deepEqual(now.click.rows[15].stand_ins, [TABLE.hops[15].stand_ins[0]], 'your export: the table\'s stand-in only');
+    assert.match(now.click.rows[15].summary, /Fixture origins from your registration export\./);
+    const lightNumbers =[...model.aim_points['sofa-book'].point_m, ...Object.values(model.fixtures).flatMap(row => row.aim_origin_m)];
     // Test 12: the couch in the pipeline's own RoomModel, one revision appended by den-register's rule to a copy of the
     // fit's file, which still matches its receipt: the surface, its landmark, the spot 0.30 m up, named after the mark.
     const fit = fitFolders()[0], fitText = fs.readFileSync(path.join(fits, fit, 'room-model.jsonl'), 'utf8'), couchText = fs.readFileSync(path.join(fits, fit, 'couch', 'room-model.jsonl'), 'utf8');
@@ -1180,6 +1205,7 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
     assert.deepEqual(coordinatesIn(shown, markNumbers), [], 'no number of the mark in any panel text');
     assert.deepEqual(coordinatesIn(shown, camera), [], 'nor the camera');
     assert.deepEqual([coordinatesIn(logs, markNumbers), coordinatesIn(logs, camera)], [[], []], 'nor in a console line or a log');
+    assert.deepEqual([coordinatesIn(shown, lightNumbers), coordinatesIn(logs, lightNumbers)], [[], []], 'nor the light model\'s spot or fixture origins');
     assert.ok(coordinatesIn(`${text}\ncamera at ${now.camera_m.map(v => v.toFixed(3)).join(', ')}`, camera).length > 0, 'control: the camera as a fit prints it, from what the page gets for its marker, is found');
     assert.ok(coordinatesIn(`${shown}\nseat at ${mark.seat.point_m[0].toFixed(2)}`, markNumbers).length > 0, 'control: a planted number is found');
     const runJson = JSON.parse(fs.readFileSync(path.join(now.run, 'run.json'), 'utf8'));

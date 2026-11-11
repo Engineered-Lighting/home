@@ -33,7 +33,9 @@ import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-
 import { prepareBrain, privateReason, standInSofa } from './brain.mjs';
 import { SPOT_ABOVE_SEAT_M, writeCouch } from './couch_to_room.mjs';
 import { dataRoot, newestPreparedSet, refusedSince } from './data-root.mjs';
+import { offDocument } from './decision_doc.mjs';
 import { BRAIN_BASE, createFeed } from './feed.mjs';
+import { channelTable, writeLightModel } from './light_model.mjs';
 import { TABLE, headTools, personColumn, receiptView, sha256 } from './receipt.mjs';
 
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
@@ -281,6 +283,17 @@ function startBrain() {
 }
 const brain = startBrain();
 const startup = brain.startup ? `${brain.startup.join(', ')}${brain.startup.some(words => words.endsWith('clear')) ? '' : '. None passes: say which way to turn the reader, and an agent writes facing.json'}` : null;
+// F1 to F4 to Home's fixture ids, from the geometry brain.mjs wrote: read here, never written down.
+const channels = channelTable(readFile(brain.geometry_file.path));
+// Hop 16, after the couch and before any picture: the light model, one file for every take, private beside the fit.
+// Digests and labels only leave this block: the file holds coordinates.
+const lightIn = (() => {
+  if (!couchIn.sha256) return { error: `no room model holds the spot: ${couchIn.error}` };
+  const label = `fits/${placed.folder}/light/light-model.json`;
+  try {
+    return { label, ...writeLightModel({ roomModel: roomModel.path, geometry: brain.geometry_file.path, to: path.join(FITS, placed.folder, 'light', 'light-model.json'), sockets: registration.source }) };
+  } catch (error) { return { error: `light_model.mjs refused: ${privateReason(error)}` }; }
+})();
 
 /* ---------- what this page built when it started: hops 5's re-fit, 14 and 20 ---------- */
 const couchTools = ['tools/den-sim/couch_to_room.mjs', 'tools/den-sim/run.mjs', 'tools/den-sim/brain.mjs', 'app/src/home-lighting-sofa-target.js'];
@@ -301,21 +314,41 @@ function couchRow() {
   return { ...row, summary: `${where} written by couch_to_room.mjs into the pipeline's own RoomModel as revision ${couchIn.version}: surface sofa, landmark sofa-seat, `
     + `and the spot sofa-book ${SPOT_ABOVE_SEAT_M.toFixed(2)} m above the seat point by a stated rule. The fit's own file is unchanged.` };
 }
+// Hop 16's row, built at page start: the room model and the geometry as light_model.mjs read them, each against the digest
+// its writer took, and the file it wrote. On authored sockets the fixture origins are no registration of yours: the row says so.
+const lightTools = ['tools/den-sim/light_model.mjs', 'tools/den-sim/run.mjs', 'tools/den-sim/brain.mjs', 'app/src/home-3d/lit-model.mjs'];
+const AUTHORED_ORIGINS = "the fixture origins are the authored room's public sockets, not your registration export";
+function lightRow() {
+  const exported = registration.source === 'export';
+  const row = { n: 16, word: 'ADAPTER', ran: 'built at page start', tool: { path: 'tools/den-sim/light_model.mjs', pin: 'HEAD' }, tools: headTools(lightTools), read: [], wrote: [],
+    stand_ins: [TABLE.hops[15].stand_ins[0], ...(exported ? [] : [AUTHORED_ORIGINS])] };
+  if (lightIn.error) return { ...row, word: 'MISSING', ran: 'not built at page start', stand_ins: [], note: lightIn.error, summary: `No light model: ${lightIn.error}.` };
+  const values = Object.entries(lightIn.at_full).map(([key, value]) => `${key} ${value}`).join(', ');
+  return { ...row, model: { version: lightIn.version, sha256: lightIn.sha256, fake: true, unit: 'relative' },
+    read: [{ path: roomModel.label, sha256: lightIn.read.room_model, recorded: { kind: 'room model', by: roomModel.by, sha256: roomModel.sha256 } },
+      { path: 'brain-geometry.json', sha256: lightIn.read.geometry, recorded: { kind: 'fixture table', by: 'brain.mjs at page start, as it wrote the geometry', sha256: brain.geometry_file.sha256 } }],
+    wrote: [{ path: lightIn.label, sha256: lightIn.sha256 }],
+    summary: `light_model.mjs built ${lightIn.version} at page start, before any picture, the same file for every take: Home's own beam formula from each fixture to the sofa-book spot, `
+      + `450 lm assumed and a 20 degree beam, unit relative (modeled lux on assumed lumens), marked fake: true, sha256 ${lightIn.sha256.slice(0, 12)}. At full, modeled: ${values}. `
+      + `Fixture origins from ${exported ? 'your registration export' : "the authored room's public sockets, not your registration export"}. No occlusion, bounce or daylight.` };
+}
 function homeRow() {
   const now = sourceIsPinned();
   return { n: 20, word: 'REAL', ran: 'ran now', tool: { path: 'app/src', pin: 'refs.json base' }, read: [], wrote: [], stand_ins: [],
     tools: [{ path: 'app/src', pin: 'refs.json base', expected: refs.base.sha, actual: now ? refs.base.sha : 'app/src differs from it' }],
     summary: `${now ? 'Unchanged' : 'EDITED'} Home source at ${refs.base.sha.slice(0, 8)}, served from this PC's harness, which answers sign-in, Lab and registration. The light on the room is Home's modeled view.` };
 }
-const start = { placement: placed, couch: couchRow() };
+const start = { placement: placed, couch: couchRow(), light: lightRow() };
 const context = { room, registration: { source: registration.source, label: registration.label, revision: registration.doc.revision },
   couch: { source: couch.source, label: couch.label }, base: refs.base.sha.slice(0, 8), source_is_pinned: pinned,
   pack_revision: binding.content_revision, private_notes: privateNotes, tools: refs.tools,
   set: { id: setInfo.set, recorded: setInfo.recorded, figure: setInfo.figure, way: setInfo.way, takes: scenes.length, refusal: setInfo.refusal || null, notes: prepareNotes },
   placement: { registered: placed.registered, summary: placed.summary }, startup,
   tries: tries && { count: tries.length, reading: tries.filter(row => row.facts?.activity_hypothesis === 'reading').length },
-  brain: { command: brain.command_status } };
-const feed = createFeed({ emptyRow: brain.empty_row, couchLabel: couch.label });
+  brain: { command: brain.command_status },
+  light_model: lightIn.error ? { error: lightIn.error } : { label: lightIn.label, sha256: lightIn.sha256, version: lightIn.version, fake: true, unit: 'relative' } };
+// The empty room is decision_doc.mjs's off document: four dark fixtures, until a click has something to show.
+const feed = createFeed({ emptyRow: { state: offDocument(channels), refusal: null }, couchLabel: couch.label });
 
 /* ---------- one click: the pipeline on a prepared take, then the brain, the receipt and the replay into Home ---------- */
 const commands = {}, pressed = new Set(), clickLines = [], startedAt = new Date().toISOString();
@@ -542,6 +575,7 @@ server.listen(PORT, HOST, () => {
     `Couch in the click's room model: ${couchIn.error || `revision ${couchIn.version}, from ${couch.source === 'sofa_mark' ? 'your sofa mark' : 'the DECLARED stand-in seat'}`}${
       start.couch.facing_deg === null ? '' : `; the reader turned ${Number(start.couch.facing_deg.toFixed(1))} degrees from the stated facing by facing.json`}`,
     ...(startup ? [`Fixtures for the stated facing, at the spot: ${startup}`] : []),
+    `Light model (hop 16), built at page start: ${lightIn.error || `${lightIn.version}, fake: true, unit relative, ${lightIn.label}, sha256 ${lightIn.sha256}`}`,
     ...prepareNotes.map(note => 'Note: ' + note), ...privateNotes.map(note => 'Note: ' + note), `app/src ${pinned ? 'matches' : 'DIFFERS FROM'} ${context.base}`,
     `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));
   writeRunJson();

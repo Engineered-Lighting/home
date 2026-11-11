@@ -38,9 +38,10 @@ const FEED_POST = 'POST /__sim/feed';
 const SET = process.env.DEN_SIM_SET ? path.resolve(process.env.DEN_SIM_SET) : null;
 const SKIP = SET && fs.existsSync(path.join(SET, 'display.json')) ? false : 'needs DEN_SIM_SET=<a prepared set>';
 // The plan's step 5 words ("Labels that change"), hop by hop, with no sofa mark saved, on a fake vLLM's
-// replies: hop 12 reads SCRIPTED, because a fake root is no model; 14 SCRIPTED on the DECLARED stand-in; 15 ADAPTER.
+// replies: hop 12 reads SCRIPTED, because a fake root is no model; 14 SCRIPTED on the DECLARED stand-in; 15 ADAPTER;
+// and step 6's first change: 16, the light model, ADAPTER, built at page start.
 const STEP5 = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
-  11: 'ADAPTER', 12: 'SCRIPTED', 13: 'ADAPTER', 14: 'SCRIPTED', 15: 'ADAPTER', 16: 'MISSING', 17: 'ADAPTER', 18: 'ADAPTER', 19: 'SCRIPTED', 20: 'REAL',
+  11: 'ADAPTER', 12: 'SCRIPTED', 13: 'ADAPTER', 14: 'SCRIPTED', 15: 'ADAPTER', 16: 'ADAPTER', 17: 'ADAPTER', 18: 'ADAPTER', 19: 'SCRIPTED', 20: 'REAL',
   21: 'ADAPTER', 22: 'ADAPTER', 23: 'SCRIPTED', 24: 'MISSING', 25: 'MISSING', 26: 'MISSING' };
 const PASTE = `python -B ${path.join(HERE, 'ask_la.py')}`;
 // The fake paste, in stages: the owed bodies first, then a fake vLLM's replies, through test_ask.py.
@@ -228,14 +229,19 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
 
   await t.test('the top line reads "not yet", lists why, and every row reads step 5\'s word', async () => {
     assert.equal(await page.textContent('[data-den-sim-top-line-text]'), 'Connected start to finish: not yet');
-    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 12 adapter (9 real tools with a named stand-in, 3 written for this simulation), 7 scripted, 4 missing');
+    assert.equal(await page.textContent('[data-den-sim-count]'), '3 real, 13 adapter (9 real tools with a named stand-in, 4 written for this simulation), 7 scripted, 3 missing');
     assert.ok(await page.locator('[data-den-sim-reason]').count() > 10, 'the reasons are listed');
     for (const [n, word] of Object.entries(STEP5)) assert.equal(await hopStatus(page, n), word, `hop ${n}`);
     assert.deepEqual(await page.locator('[data-den-sim-hops] h4').allTextContents(), ['Recorded once', 'Built when this page started', 'Ran on this click', 'Not built yet, or not reached on this click']);
     // Which rows sit under each heading: a row that didn't run is never under "Ran on this click". Hop 11's ask is recorded.
     const underHeadings = await page.locator('[data-den-sim-hops] h4').evaluateAll(nodes => nodes.map(node => [node.textContent, [...node.nextElementSibling.querySelectorAll('[data-den-sim-hop]')].map(item => Number(item.dataset.denSimHop))]));
-    assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5, 6, 11]], ['Built when this page started', [14]], ['Ran on this click', [7, 8, 9, 10, 12, 13, 15, 17, 18, 19, 20, 21, 22, 23]],
-      ['Not built yet, or not reached on this click', [16, 24, 25, 26]]]);
+    assert.deepEqual(underHeadings, [['Recorded once', [1, 2, 3, 4, 5, 6, 11]], ['Built when this page started', [14, 16]], ['Ran on this click', [7, 8, 9, 10, 12, 13, 15, 17, 18, 19, 20, 21, 22, 23]],
+      ['Not built yet, or not reached on this click', [24, 25, 26]]]);
+    // Hop 16 says what it built, when, and what stands in: Home's formula on assumed numbers, and on authored sockets, whose origins.
+    const sixteenText = await page.textContent('[data-den-sim-hop="16"]');
+    assert.match(sixteenText, /light_model\.mjs built lm-den-sim-1 at page start, before any picture, the same file for every take: Home's own beam formula .*marked fake: true, sha256 [0-9a-f]{12}\./);
+    for (const stand of ["Home's beam formula on assumed numbers, marked fake: true", "the fixture origins are the authored room's public sockets, not your registration export"])
+      assert.ok(sixteenText.includes(`Stand-in: ${stand}.`), `hop 16 names: ${stand}`);
     // Hops 13 to 15 say what changed at step 5: need per track, the couch in the RoomModel, the person state, and who still decides.
     // The two need v0 passes part on the first reply, whose bundle isn't safe to tie to one person: the row says so.
     assert.match(await page.textContent('[data-den-sim-hop="13"]'), /that pass feeds the older brain until step 6\. One need per track in person\.py \(hop 15\), on the replies its bundle was safe to take: trk-\d+ took 4 of 5 replies, 1 held as not safe to tie to one person: starting then engaged, so it engaged at reply 3, where the runner pass engaged at reply 2\./);

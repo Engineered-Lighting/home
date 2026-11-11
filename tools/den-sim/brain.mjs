@@ -156,7 +156,8 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
   const { geometry, inputs } = baseGeometry({ registration, couch, notes });
   const seat = geometry.zones.sofa.seat_m;
   const write = (directory, name, value) => { const file = path.join(directory, name); fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n'); return file; };
-  const start = runPython('brain_run.py', { geometry: write(geometryDirectory, 'brain-geometry.json', geometry), startup: startup || null });
+  const geometryFile = write(geometryDirectory, 'brain-geometry.json', geometry), geometrySha256 = sha256(geometryFile);
+  const start = runPython('brain_run.py', { geometry: geometryFile, startup: startup || null });
   let clicks = 0;
 
   // One click: the chain, then the brain on what it produced, then the dry run, then the receipt.
@@ -229,6 +230,7 @@ export function prepareBrain({ registration, couch, startup, geometryDirectory, 
     child.stdin.end(JSON.stringify(chainRequest({ take, prepared, setDir, roomModel, refs, outputRoot, work, replies, lastAsk })));
     return { promise, work, cancel: () => child.kill() };
   }
-  return { empty_row: start.empty_row, startup: start.startup, runClick, seat_m: seat,
+  // geometry_file: what hop 16 reads the fixture origins from, with the digest taken as it was written.
+  return { empty_row: start.empty_row, startup: start.startup, runClick, seat_m: seat, geometry_file: { path: geometryFile, sha256: geometrySha256 },
     command_status: { pending: true, codec_found: fs.existsSync(path.join(refs.codec.tools, 'c12_runtime_plan.py')) && fs.existsSync(path.join(refs.codec.tools, 'c12_runtime_wire.py')) } };
 }

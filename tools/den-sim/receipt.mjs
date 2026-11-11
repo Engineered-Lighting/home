@@ -176,7 +176,8 @@ export function buildReceipt({ click, takeId, setId, setDir, prepared, refs, sta
   }
   rows.push({ ...start.couch, n: 14, name: TABLE.hops[13].name, reached: true });
   rows.push(byN.get(15) ? { name: TABLE.hops[14].name, reached: true, tools: [], read: [], wrote: [], stand_ins: [], ...byN.get(15) } : null);
-  rows.push(missing(16, 'Not built: no light model exists before any picture yet.', { ran: 'not built at page start' }));
+  // Hop 16, as run.mjs built it at page start: one light model for every take.
+  rows.push(start.light ? { ...start.light, n: 16, name: TABLE.hops[15].name, reached: true } : missing(16, 'Not built: no light model exists before any picture yet.', { ran: 'not built at page start' }));
   rows.push(brain?.row || null);
   rows.push(brain?.feedRow || null, brain?.motionRow || null, start.home && { ...start.home, name: TABLE.hops[19].name, reached: true });
   rows.push(...(command?.rows || [null, null, null]));

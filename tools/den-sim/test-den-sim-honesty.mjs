@@ -75,16 +75,18 @@ function filesUnder(folder) {
   })(folder);
   return out;
 }
-// Every place a needle, or a key named scene or scenario, appears: in names and in text. One key is canon's and not a
-// take's: a Decision's candidates[].scene is the lighting scene a candidate would set, so it alone is let through.
+// Every place a needle, or a key named scene or scenario, appears: in names and in text. Two keys are canon's lighting
+// scenes and not a take's: a Decision's candidates[].scene, the scene a candidate would set, and the coordinator's seed
+// Look in its logged config, looks.<look>.scene. Those two alone are let through.
+const canonScene = (key, at) => key === 'scene' && (at.at(-1) === 'candidates' || at.at(-2) === 'looks');
 function search(entries, needles, keys = ['scene', 'scenario']) {
   const hits = [];
-  const walk = (value, label, parent = null) => {
-    if (Array.isArray(value)) value.forEach(item => walk(item, label, parent));
+  const walk = (value, label, at = []) => {
+    if (Array.isArray(value)) value.forEach(item => walk(item, label, at));
     else if (value && typeof value === 'object') {
       for (const [key, item] of Object.entries(value)) {
-        if (keys.includes(key) && !(key === 'scene' && parent === 'candidates')) hits.push(`${label}: key ${key}`);
-        walk(item, label, key);
+        if (keys.includes(key) && !canonScene(key, at)) hits.push(`${label}: key ${key}`);
+        walk(item, label, [...at, key]);
       }
     }
   };
@@ -223,7 +225,8 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     assert.deepEqual(search(everything, needles), []);
     const hits = search([['runs/planted.json', JSON.stringify({ note: display[1].word, scenario: 1 })], ['runs/name-' + display[0].label, '']], needles);
     assert.equal(hits.length, 3, `control: a planted word, a planted key and a planted name are found: ${hits}`);
-    assert.equal(search([['runs/planted.json', JSON.stringify({ candidates: [{ scene: {} }], scene: 'x' })]], []).length, 1, 'control: a scene key outside a Decision\'s candidates is still found');
+    assert.equal(search([['runs/planted.json', JSON.stringify({ candidates: [{ scene: {} }], looks: { 'reading@0': { scene: {} } }, scene: 'x', note: { scene: 1 } })]], []).length, 2,
+      'control: a scene key anywhere but canon\'s two places is still found');
   });
 
   await t.test('test 19 on a click: every Python process the click ran refused sockets, and nothing was served from beyond loopback', async () => {

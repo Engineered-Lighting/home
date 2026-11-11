@@ -9,7 +9,7 @@
     "rung-2-observe": "257eca52",
     "claude/rung-3-track-local-514d6b": "a3298878",
     "rung-5-bundle": "358a09d2",
-    "den-core-live": "03721630",
+    "den-core-live": "0d2a421d",
     "den-register": "d310ef57",
     "den-take": "257eca52",
     "den-light": "8bcb37b3",
@@ -24,7 +24,7 @@
     }
   },
   "codec": {
-    "note": "On no git ref, so it is read by path and pinned by these sha256 digests: a click whose codec files differ reads not yet. It is older than the release origin/main pins in room_production_canonical_provider.py.",
+    "note": "On no git ref, so it is read by path and pinned by these sha256 digests: a click whose codec files differ reads not yet. Only its line endings differ from the release origin/main pins in room_production_canonical_provider.py: these files are LF, and those pins hash the same text with CRLF.",
     "tools": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\tools",
     "contracts": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\contracts\\c12",
     "sha256": {

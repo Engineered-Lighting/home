@@ -7,23 +7,25 @@ module names (synth, records, method, check). Every process refuses all sockets.
 
 It is never told the scene. It gets a take folder, the set it sits in, and the reply store. Hops 11 and 12
 rebuild each router request's exact body from the take's own pixels and look Qwen's recorded reply up by
-the body's sha256 (step_ask); nothing here opens the truth folder or the display file. Hop 15 is person.py
-(step_person), which feeds nothing until step 6: the older brain still decides, through person_to_aim, part
-of hop 17's row and the one piece that exists nowhere else.
+the body's sha256 (step_ask); nothing here opens the truth folder or the display file. Hop 10 is one occupancy
+event from the track list, hop 15 is person.py (step_person), with need v0 once per track, and hop 17 is rung 9's
+coordinator in spot mode, run once on those two through den-core's real runner (step_decide).
 
 Reads {"take", "take_digest", "take_json_sha256", "check_file", "check_sha256", "detector", "set",
-"room_model": {"path", "sha256", "by", "label"}, "refs", "tools_root", "work", "replies", "last_ask"}
-as JSON on stdin, and "owed" for prepare.py --owed: the digests are the ones the take's prepare-receipt.json
-recorded for frames.csv, take.json and its check, and detector is its hop 6 part. The room model is the one
-hop 14 wrote the couch into at page start. Prints hop 3's and hop 4's re-checks by hash ({"n": 3, "recheck": ...}),
-the picture with the person boxes of its frame's row ({"picture": ...}), one JSON line per hop, each with its
-word, the files it read and wrote with their digests, its tools against their pins, and its stand-ins; then
-{"hop": "done", ...} for the brain, {"hop": "owed", ...} for --owed, or {"hop": "stopped", ...} at the hop the
-click was at when it stopped, never a hop 0.
+"room_model": {"path", "sha256", "by", "label"}, "light_model": {"path", "sha256", "label"}, "refs", "tools_root",
+"work", "replies", "last_ask"} as JSON on stdin, and "owed" for prepare.py --owed: the digests are the ones the take's
+prepare-receipt.json recorded for frames.csv, take.json and its check, and detector is its hop 6 part. The room model
+is the one hop 14 wrote the couch into at page start, and the light model the one hop 16 built then. Prints hop 3's and
+hop 4's re-checks by hash ({"n": 3, "recheck": ...}), the picture with the person boxes of its frame's row
+({"picture": ...}), one JSON line per hop, each with its word, the files it read and wrote with their digests, its tools
+against their pins, and its stand-ins; then {"hop": "done", ...} when a Decision lights a spot, {"hop": "owed", ...} for
+--owed, or {"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
 """
 import base64
+import contextlib
 import csv
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -63,7 +65,9 @@ QWEN_LIVE = ['qwen_live.py', 'qwen_scene.py', 'qwen_transport.py', 'occupancy_ga
 TREES = {'observe': ('rung-2-observe', ['tools/den-observe', 'tools/den-take', *detect.WORKERS]),
          'track': ('claude/rung-3-track-local-514d6b', ['tools/den-track']),
          'bundle': ('rung-5-bundle', ['tools/den-bundle']),
-         'core': ('den-core-live', ['tools/den-core', 'ha-config/custom_components/den_lighting', LAB + 'la_fact_log.py', *(LAB + name for name in QWEN_LIVE)])}
+         # The lighting brain's package beside den-core, at the same commit: spot_rule.py imports its aim.py (plan, hop 17's Out).
+         'core': ('den-core-live', ['tools/den-core', 'stack/services/lighting-brain/lighting_brain', 'ha-config/custom_components/den_lighting',
+                                    LAB + 'la_fact_log.py', *(LAB + name for name in QWEN_LIVE)])}
 CAMERA_ID, FRAME_PX = 'den-virtual', [640, 360]
 ROUTE_FROM_S, ROUTE_TO_S = 2.0, 19.5  # inside the check's 20 s usable part: requests at 2, 6, 10, 14 and 18 s
 # Hops 11 and 12 (plan lines 477-521). The time label is fixed so bodies stay stable; the JPEG settings are the model test's.
@@ -72,9 +76,8 @@ JPEG = dict(format='JPEG', quality=85, subsampling=2, optimize=False, progressiv
 SITE_ID, ENGINE_EPOCH, SOURCE_ID, TEXT_SCOPE = 'den-sim', 'den-sim-direct', 'den_sim_la_direct', 'reply_kept_render_only'
 FAKE_ROOT, NOT_SEEN = 'fake-vllm', 'Qwen has not seen these exact frames'
 REPLY_FIELDS = {'asked_unix', 'host', 'root', 'http_status', 'raw', 'elapsed_s'}
-COCO17 =('nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder', 'left_elbow', 'right_elbow',
-          'left_wrist', 'right_wrist', 'left_hip', 'right_hip', 'left_knee', 'right_knee', 'left_ankle', 'right_ankle')
-READING_STATES = ('engaged', 'ending')
+# Hop 17: the coordinator's spot mode on hop 16's four channels (plan, hop 17).
+CHANNELS, SPOT_DOMAIN = ['F1.spot', 'F2.spot', 'F3.spot', 'F4.spot'], 'virtual-den-4'
 TABLE = {hop['n']: hop for hop in json.loads((HERE / 'hops.json').read_text(encoding='utf-8'))['hops']}
 
 
@@ -147,10 +150,12 @@ def head_tools(*paths):
     return [dict(path=path, pin='HEAD', expected=expected.get(path), actual=actual.get(path)) for path in paths]
 
 
-def archive_trees(refs, tools_root):
+def archive_trees(refs, tools_root, keys=None):
     """One folder per pinned ref, written once. A folder whose marker is missing, or names other paths, is rebuilt."""
     trees = {}
     for key, (ref_name, paths) in TREES.items():
+        if keys and key not in keys:
+            continue
         sha = refs[ref_name]
         tree = Path(tools_root) / ('%s-%s' % (key, sha))
         trees[key] = tree
@@ -227,6 +232,22 @@ def rgb_plane(np, frame):
     """One frame file's picture plane, decoded as the Lab decodes it."""
     with zipfile.ZipFile(io.BytesIO(Path(frame).read_bytes())) as archive:
         return nv12_to_rgb(np, np.load(io.BytesIO(archive.read('rgb_nv12.npy')), allow_pickle=False))
+
+
+def spot_rule(core_tree):
+    """den-core's spot_rule.py at its pin, from its archive by file path: the lighting brain's aim.py on a PersonState."""
+    spec = importlib.util.spec_from_file_location('den_sim_spot_rule', Path(core_tree) / 'tools' / 'den-core' / 'spot_rule.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def step_startup(request):
+    """The startup line, with your two files saved: each fixture of hop 16's light model against the stated facing and the
+    spot, through spot_rule.py, in words only."""
+    core = archive_trees(request['refs'], request['tools_root'], keys=('core',))['core']
+    fixtures = json.loads(Path(request['light_model']).read_text(encoding='utf-8'))['fixtures']
+    return dict(startup=spot_rule(core).startup_line(fixtures, request['seat_m'], request['facing_unit'], request['spot_m']))
 
 
 def step_picture(request):
@@ -533,71 +554,80 @@ def person_words(card):
     return '%s %s, %s, spot %s, engagement %s' % (card['track_id'], distance, couch, card['region'] or 'none', card['engagement'])
 
 
-def need_words(core, cards):
-    """Hop 13's row: which need v0 pass feeds what, and where the two passes part. The runner pass takes every reply;
-    person.py's need per track takes only the replies its bundle was safe to tie to one person, so it can engage later."""
-    runner = 'need v0 on those lines in den-core\'s runner: %s; that pass feeds the older brain until step 6.' % (' then '.join(core['states']) or 'no change')
+def need_words(cards):
+    """Hop 13's row: need v0 runs once per track, in person.py, on only the replies its bundle was safe to tie to one person."""
     tracks = []
     for card in cards:
         held = card['replies'] - card['need_replies']
-        words = '%s took %d of %d replies%s: %s' % (card['track_id'], card['need_replies'], card['replies'],
-                                                   ', %d held as not safe to tie to one person' % held if held else '', ' then '.join(card['need_states']) or 'no change')
-        if len(cards) == 1 and card['replies'] == core['facts'] and card['engaged_reply'] != core['engaged_reply']:
-            words += ', so it engaged %s, where the runner pass engaged %s' % tuple(
-                'at reply %d' % n if n else 'at no reply' for n in (card['engaged_reply'], core['engaged_reply']))
-        tracks.append(words)
-    return '%s One need per track in person.py (hop 15), on the replies its bundle was safe to take: %s.' % (runner, '; '.join(tracks) or 'not run')
+        tracks.append('%s took %d of %d replies%s: %s' % (card['track_id'], card['need_replies'], card['replies'],
+                                                         ', %d held as not safe to tie to one person' % held if held else '', ' then '.join(card['need_states']) or 'no change'))
+    return 'need v0 once per track, in person.py (hop 15), on the replies its bundle was safe to take: %s. Nothing else runs need on a click.' % ('; '.join(tracks) or 'not run')
 
 
-def step_core(request):
-    """Hop 13: need v0 in den-core's real runner, on hop 12's fact lines. Not run.py: its --facts path stamps
-    synthetic false, and these pixels are synthetic even when the words are real. The lines go to the runner
-    directly, as #424 does, because sources.py would refuse the rewritten source id."""
+def first_confirmed(tracks, observations):
+    """Hop 10: the time of the first confirmed Track line, dated by the newest capture_ts of the observations it names, as
+    person.py dates a Track line, which carries no time of its own. None when no track confirmed."""
+    seen = {obs['obs_id']: obs for obs in observations}
+    times = [(max(seen[oid]['capture_ts'] for oid in line['last_obs_ids']), line['track_id']) for line in tracks
+             if line.get('state') == 'confirmed' and line.get('last_obs_ids') and all(oid in seen for oid in line['last_obs_ids'])]
+    return min(times) if times else (None, None)
+
+
+def step_decide(request):
+    """Hop 17: rung 9's coordinator in spot mode, once, on hop 10's occupancy and hop 15's person states, through den-core's
+    real runner with the plant off and no tail (plan, hop 17's In); then events.write, coordinator_outputs in a new folder,
+    with its two printed lines kept off stdout, and check.py's replay of the log. A click with no Decision still writes an
+    empty decisions.jsonl. Returns the Decisions' words, never a coordinate."""
     sys.path.insert(0, str(Path(request['core_tree']) / 'tools' / 'den-core'))
+    import check
+    import coordinator
+    import events
+    import run
     import runner
-    import sources
+    items = [(row['t'], row['kind'], row['data']) for row in read_jsonl(request['occupancy'])]
+    items += [(state['emitted_ts'], 'person_state', state) for state in read_jsonl(request['person_states'])]
+    items.sort(key=lambda item: (item[0], item[1] != 'occupancy'))   # occupancy first when the times are equal
+    policy = coordinator.make_policy(dict(channels=CHANNELS, actuator_domain=SPOT_DOMAIN, light_model=dict(source='file', path=request['light_model'])))
+    started = time.perf_counter()
+    header, log = runner.run(runner.tagged(items, 'synthetic'), [policy], synthetic=True, tail_s=0, plant=False)
+    ms = (time.perf_counter() - started) * 1000
+    out = Path(request['out'])
+    out.mkdir()
+    events.write(out / 'log.jsonl', header, log)
+    with contextlib.redirect_stdout(io.StringIO()):
+        run.coordinator_outputs(out, log, policy.light)
+    checked = check.check(out / 'log.jsonl')
+    words = coordinator._spot_rule().words
+    decisions = read_jsonl(out / 'decisions.jsonl')
+    return dict(checked=dict(ok=checked['ok'], reason=checked['reason']), events=len(items), lines=len(log) + 1, ms=round(ms, 1), model=policy.light.version,
+                decisions=[decision_view(d, words) for d in decisions])
 
-    items = []
-    for line in Path(request['facts']).read_text(encoding='utf-8').splitlines():
-        value = json.loads(line)
-        items.append((sources.fact_time(value['available_at']), 'facts', value))
-    header, log = runner.run(runner.tagged(items, 'synthetic'), runner.load_policies(['need']), synthetic=True, sources=['synthetic'])
-    Path(request['log']).write_text('\n'.join(json.dumps(row) for row in [header, *log]) + '\n', encoding='utf-8')
-    # The runner's ticks go on after the last reply, until need calls the support expired. This take is up to the last reply.
-    last_input = max(t for t, _, _ in items)
-    states = [row for row in log if row['kind'] == 'person_state' and row['t'] <= last_input]
-    latest = states[-1]['data'] if states else {}
-    engagement = latest.get('focused_engagement') or {}
-    engaged = next((row['t'] for row in states if row['data']['focused_engagement']['state'] == 'engaged'), None)
-    return dict(states=[row['data']['focused_engagement']['state'] for row in states], facts=len(items), events=len(log),
-                engaged_reply=None if engaged is None else sum(1 for t, _, _ in items if t <= engaged),
-                person=dict(state=engagement.get('state'), kind=engagement.get('kind'),
-                            support=((latest.get('field_support') or {}).get('focused_engagement') or {}).get('support_status')))
+
+def decision_view(decision, words):
+    """One Decision in words for the card: what it lit and at what level against the target, and each refusal."""
+    lit = [channel for channel in CHANNELS if decision['requested_scene'][channel]['on']]
+    target = next(iter(decision['targets'].values()), None)
+    return dict(decision_id=decision['decision_id'], trigger=decision['trigger'], lit=lit, level=[decision['requested_scene'][c]['level'] for c in lit],
+                predicts=decision['predicted']['surfaces'].get('sofa-book'), asked=target and target['value'], note=target and target['note'],
+                readers=sorted(decision['targets']), refusals=[dict(channel=row['channel'], track_id=row['track_id'], reason=row['reason'], words=words(row['reason']))
+                                                           for row in decision['skipped']],
+                costlier=sorted({c for row in decision['candidates'] if row['why'] != 'chosen' for c in row['scene']} - set(lit)),
+                steps={c: [step['kind'] for step in decision['applied_scene'][c]['steps']] for c in CHANNELS if decision['applied_scene'][c]['steps']},
+                why=decision['why'])
 
 
-def person_to_aim(bundles, person):
-    """Part of hop 17's row, standing in for rung 6 and K7: PersonState has no shoulders, and nothing in
-    the pipeline joins room-level reading to a track. It joins them here because there is exactly one
-    track, and takes the joints from the newest entry of that track's bundles that has both shoulders, so a
-    real detector's frame that lost a shoulder can't stop the beam. Head pitch is left unknown, because nothing
-    in the chain measures it. It asserts jev and deep_stack health, which brain_run.py passes on."""
-    tracks = sorted({bundle['track_id'] for bundle in bundles})
-    if len(tracks) != 1:
-        return None, 'the adapter joins room reading to the only track, and found %d' % len(tracks)
-    series = [entry for bundle in bundles for entry in bundle['keypoint_series']]
-    if not series:
-        return None, 'the bundles hold no keypoints'
-    def joints_of(entry):
-        return {COCO17[joint['j']] if isinstance(joint['j'], int) else joint['j']: joint.get('xyz') for joint in entry['joints_room']}
-    both = [entry for entry in series if joints_of(entry).get('left_shoulder') and joints_of(entry).get('right_shoulder')]
-    if not both:
-        return None, 'no bundle entry has both shoulders in the room frame'
-    newest = max(both, key=lambda entry: entry['ts'])
-    joints = joints_of(newest)
-    reading = person['state'] in READING_STATES and person['kind'] == 'reading' and person['support'] == 'observed'
-    return dict(label='reading' if reading else 'other', person=dict(track_id=str(tracks[0]), shoulders_m=dict(left=joints['left_shoulder'], right=joints['right_shoulder']),
-                                                                    head_m=joints.get('nose'), head_pitch_deg=None, approximate=True),
-                asserted=dict(jev=True, deep_stack=True, camera=True), head_pitch='unknown', from_bundle_at=newest['ts']), None
+def no_reader(cards):
+    """Why the coordinator wrote no Decision, read from the PersonStates (hop 15's cards): nobody was reading."""
+    said = ['%s: engagement %s%s' % (card['track_id'], card['engagement'], '' if card['on_couch'] is None else ', on the couch %s' % ('yes' if card['on_couch'] else 'no'))
+            for card in cards]
+    return 'nobody is reading (%s)' % ('; '.join(said) or 'no person state')
+
+
+def no_beam(view):
+    """Why a Decision lit nothing: every fixture refused, or no reader at a spot."""
+    if view['refusals'] and view['readers']:
+        return 'every fixture refused: %s' % ', '.join('%s %s' % (row['channel'].split('.')[0], row['words']) for row in view['refusals'])
+    return 'no beam: %s' % view['why'].split(': ', 1)[-1].rstrip('.')
 
 
 def read_jsonl(path):
@@ -741,9 +771,17 @@ def chain(request):
     if not bundles:
         raise Stop(9, 'a person was seen for %d frames, too briefly to ask' % found['with_person'], answer=True)
 
-    emit(10, 'SCRIPTED', 'The track list decides whether the older brain runs at all: %d track(s), so it does. That brain\'s own occupancy is still '
-         'typed in brain_run.py until step 6.' % track_run['counts']['tracks'],
-         tools=head_tools('tools/den-sim/brain_run.py'), stand_ins=["the older brain's occupancy typed in brain_run.py; the track list only decides that it runs"])
+    # Hop 10: one occupancy event at the first confirmed track, from the track list. No track confirmed, no event, and the
+    # coordinator is never run (plan, hop 10).
+    at(10)
+    first, track = first_confirmed(lines, read_jsonl(observe / 'observations.jsonl'))
+    ten = dict(tools=head_tools(*own), read=[click.read(observe / 'observations.jsonl', 7), click.read(work / 'track' / 'tracks.jsonl', 8)], stand_ins=named(10, 0))
+    if first is None:
+        emit(10, 'ADAPTER', 'No track confirmed, so no occupancy event: the coordinator is not run.', wrote=[], **ten)
+        raise Stop(10, 'no track confirmed, so nobody is in the room for the coordinator', answer=True)
+    (work / 'occupancy.jsonl').write_text(json.dumps(dict(t=first, kind='occupancy', data=dict(value='on', via='den-track')), sort_keys=True) + '\n', encoding='utf-8', newline='\n')
+    emit(10, 'ADAPTER', 'One occupancy event, on via den-track, at the first confirmed Track line (%s), dated by the observations it names: what the '
+         'coordinator reads as someone in the room. The live source, Frigate on a Pi with Hailo, has no virtual stream.' % track, wrote=[click.file(work / 'occupancy.jsonl')], **ten)
     # Hops 11 and 12: each request's exact body, rebuilt from the take's own pixels, and its recorded reply by
     # the body's sha256. A failure in that process is hop 11's.
     at(11)
@@ -804,39 +842,63 @@ def chain(request):
              'the chain\'s and its source id rewritten, and a re-ask could differ.' % (root, ', '.join(days) or 'an unknown day', said), root=root, reply='real',
              ran='recorded %s, looked up now' % ', '.join(days) if days else 'looked up now', **twelve, stand_ins=named(12, 0, 1))
 
-    # Hop 13: need v0 on those lines, in den-core's real runner, which feeds the older brain until step 6. Hop 15:
-    # person.py, with one need per track. It feeds nothing yet, so whatever it says, the beam is decided as before.
-    at(13)
-    started = time.monotonic()
-    core = click.own_step('core', dict(core_tree=str(trees['core']), facts=str(work / 'facts.jsonl'), log=str(work / 'den-core-log.jsonl')))
-    core_ms, core_tools = round((time.monotonic() - started) * 1000), [t for t in tools['core'] if t['path'].startswith('tools/den-core/')]
+    # Hop 13 and 15: person.py, with need v0 once per track (the runner's pass fed only the older brain, and went with it).
     at(15)
     started = time.monotonic()
+    core_tools = [t for t in tools['core'] if t['path'].startswith('tools/den-core/')]
     try:
         person = click.own_step('person', dict(core_tree=str(trees['core']), work=str(work), room_model=room['path']))
     except Stop as failed:
         person = dict(missing=failed.why)
-    emit(13, 'ADAPTER', need_words(core, person.get('tracks') or []), ms=core_ms,
-         tools=core_tools + head_tools('tools/den-sim/person.py'), read=[click.read(work / 'facts.jsonl', 12)],
-         wrote=[click.file(work / 'den-core-log.jsonl')], stand_ins=named(13, 0), person=core['person'])
+    person_ms = round((time.monotonic() - started) * 1000)
+    emit(13, 'ADAPTER', need_words(person.get('tracks') or []), ms=person_ms, tools=[t for t in core_tools if t['path'] == 'tools/den-core/need.py'] + head_tools('tools/den-sim/person.py'),
+         read=[click.read(work / 'facts.jsonl', 12)], wrote=[], stand_ins=named(13, 0))
     fifteen = dict(tools=head_tools(*own, 'tools/den-sim/person.py') + [t for t in core_tools if t['path'] == 'tools/den-core/need.py'],
                    read=[click.read(observe / 'observations.jsonl', 7), click.read(work / 'track' / 'tracks.jsonl', 8), click.read(work / 'bundles.jsonl', 9),
                          click.read(work / 'asks.jsonl', 12), click.read(work / 'facts.jsonl', 12), room_read])
-    later = 'Nothing reads it until step 6: the older brain still decides the beam, under its own 1.5 m rule.'
     if person['missing']:
-        emit(15, 'MISSING', 'No person state: %s. %s' % (person['missing'], later), started, note=person['missing'], wrote=[], stand_ins=[], **fifteen)
-    else:
-        emit(15, 'ADAPTER', 'person.py wrote %d person states in canon\'s names, from need v0 per track and rules on the bundles\' joints, unscored: %s. %s'
-             % (person['states'], '; '.join(map(person_words, person['tracks'])) or 'no reply to state', later), started,
-             wrote=[click.file(work / 'person_states.jsonl')], stand_ins=named(15, 0, 1), person=person['tracks'], **fifteen)
+        emit(15, 'MISSING', 'No person state: %s.' % person['missing'], started, note=person['missing'], wrote=[], stand_ins=[], **fifteen)
+        raise Stop(15, person['missing'])
+    emit(15, 'ADAPTER', 'person.py wrote %d person states in canon\'s names, from need v0 per track and rules on the bundles\' joints, unscored: %s. The coordinator '
+         'reads them (hop 17).' % (person['states'], '; '.join(map(person_words, person['tracks'])) or 'no reply to state'), started,
+         wrote=[click.file(work / 'person_states.jsonl')], stand_ins=named(15, 0, 1), person=person['tracks'], **fifteen)
 
+    # Hop 17: the coordinator in spot mode, once, on the light model hop 16 built at page start.
     at(17)
-    adapter, problem = person_to_aim(bundles, core['person'])
-    if problem:
-        raise Stop(17, problem)
-    print(json.dumps(dict(hop='done', ok=True, adapter=adapter, camera_m=camera_position(room['path']), reply='fake' if root == FAKE_ROOT else 'real', root=root,
-                          adapter_reads=[click.read(work / 'bundles.jsonl', 9), click.read(work / 'den-core-log.jsonl', 13)],
-                          adapter_tools=head_tools(*own), work=str(work)), allow_nan=False), flush=True)
+    started = time.monotonic()
+    model = request.get('light_model') or {}
+    if not model.get('path'):
+        raise Stop(17, 'no light model was built at page start, so the coordinator has nothing to decide with')
+    model_read = dict(path=model['label'], sha256=sha256_file(model['path']) if Path(model['path']).is_file() else None,
+                      recorded=dict(kind='light model', by='light_model.mjs at page start', sha256=model['sha256']))
+    decided = click.own_step('decide', dict(core_tree=str(trees['core']), occupancy=str(work / 'occupancy.jsonl'), person_states=str(work / 'person_states.jsonl'),
+                                            light_model=model['path'], out=str(work / 'decide')))
+    brain = [t for t in tools['core'] if t['path'].startswith('stack/services/lighting-brain/')]
+    seventeen = dict(tools=head_tools(*own) + core_tools + brain, read=[click.read(work / 'occupancy.jsonl', 10), click.read(work / 'person_states.jsonl', 15), model_read],
+                     wrote=[click.file(work / 'decide' / name) for name in ('log.jsonl', 'decisions.jsonl', 'surfaces.json')], stand_ins=named(17, 0, 1),
+                     decisions=decided['decisions'], checked=decided['checked'], model=decided['model'])
+    replay = 'check.py: %s' % decided['checked']['reason']
+    if not decided['checked']['ok']:
+        emit(17, 'MISSING', 'The coordinator ran, and its log did not replay: %s.' % replay, started, note=replay, **seventeen)
+        raise Stop(17, replay)
+    views, ran = decided['decisions'], 'rung 9\'s coordinator in spot mode (virtual-den-4, synthetic) ran once on %d events in %.0f ms, %s' % (
+        decided['events'], decided['ms'], replay)
+    lit = [view for view in views if view['lit']]
+    if not views:
+        why = no_reader(person['tracks'])
+        emit(17, 'ADAPTER', '%s, and wrote no Decision: %s, so every spot stays off.' % (ran, why), started, **seventeen)
+        raise Stop(17, why, answer=True)
+    last = views[-1]
+    if not lit:
+        why = no_beam(last)
+        emit(17, 'ADAPTER', '%s. %d Decision%s, no beam: %s' % (ran, len(views), '' if len(views) == 1 else 's', last['why']), started, **seventeen)
+        raise Stop(17, why, answer=True)
+    chosen = lit[-1]
+    emit(17, 'ADAPTER', '%s. %d Decision%s: %s' % (ran, len(views), '' if len(views) == 1 else 's', chosen['why']), started, **seventeen)
+    states = read_jsonl(work / 'person_states.jsonl')
+    placed = [state['position']['xyz'][:2] for state in states if state.get('position')]
+    print(json.dumps(dict(hop='done', ok=True, camera_m=camera_position(room['path']), reply='fake' if root == FAKE_ROOT else 'real', root=root,
+                          person_m=placed[-1] if placed else None, decide='decide', work=str(work)), allow_nan=False), flush=True)
 
 
 def read_last_ask(path):
@@ -904,7 +966,7 @@ def main():
         runpy.run_path(script, run_name='__main__')
         return
     if len(sys.argv) == 3 and sys.argv[1] == '--step':
-        print(json.dumps(dict(ask=step_ask, core=step_core, person=step_person, picture=step_picture)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
+        print(json.dumps(dict(ask=step_ask, decide=step_decide, person=step_person, picture=step_picture, startup=step_startup)[sys.argv[2]](json.load(sys.stdin)), allow_nan=False))
         return
     request = json.load(sys.stdin)
     try:

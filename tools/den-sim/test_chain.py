@@ -10,7 +10,10 @@
 - no_track: a person box with no track never reads nobody, and only person observations are counted;
 - person_words: hop 15's row says a distance, which half of the couch test failed, the spot and the engagement;
 - first_confirmed: hop 10's occupancy at the first confirmed Track line, and none for a tentative one;
-- decision_view, no_beam and no_reader: hop 17's words for what lit, each refusal and why no beam;
+- decision_view, no_beam and no_reader: hop 17's words for what lit, each refusal, the fixtures that cost more or tied,
+  and why no beam, a missing head and an off that cost less among them;
+- ending: the click ends on its last Decision, so one that lit nothing after a beam stops at 17 with the beam gone off;
+- need_row: hop 13 reads MISSING when person.py stopped before need's states reached anything;
 - the click path calls no fake_detector, and no older lighting brain.
 
 Each has a control that must make it fail. The parts on real rows need DEN_SIM_SET=<a prepared set>, and only
@@ -224,21 +227,63 @@ class Occupancy(unittest.TestCase):
 class Decided(unittest.TestCase):
     """Hop 17's words, from a Decision: what lit, each refusal in den-core's own words, and why no beam."""
 
-    def view(self, lit=None, skipped=(), targets=("trk-1",)):
+    def view(self, lit=None, skipped=(), targets=("trk-1",), costs=None, why="reading_look: no beam for trk-1.", decision_id="decide-1-1"):
         scene = {c: {"on": c == lit, "level": 0.7874 if c == lit else 0.0} for c in chain.CHANNELS}
         applied = {c: {"steps": [{"kind": "move"}, {"kind": "fade_in"}] if c == lit else []} for c in chain.CHANNELS}
-        decision = {"decision_id": "decide-1-1", "trigger": "person_state change", "requested_scene": scene, "applied_scene": applied,
+        chosen = lit or "off"
+        candidates = [{"track_id": "trk-1", "cost": cost, "scene": {} if c == "off" else {c: {"on": True}}, "why": "chosen" if c == chosen else "rejected"}
+                      for c, cost in (costs or {}).items()]
+        decision = {"decision_id": decision_id, "trigger": "person_state change", "requested_scene": scene, "applied_scene": applied,
                     "targets": {t: {"value": 300, "note": "modeled lux, assumed lumens"} for t in targets}, "predicted": {"surfaces": {"sofa-book": 272.6 if lit else 0.0}},
-                    "skipped": [{"channel": c, "track_id": "trk-1", "reason": r} for c, r in skipped], "candidates": [], "why": "reading_look: no beam for trk-1."}
+                    "skipped": [{"channel": c, "track_id": "trk-1", "reason": r} for c, r in skipped], "candidates": candidates, "why": why}
         return chain.decision_view(decision, lambda reason: reason.split(":")[0].replace("_", " "))
 
     def test_what_lit_each_refusal_and_why_no_beam(self):
         lit = self.view(lit="F2.spot", skipped=[("F1.spot", "in_front_of_reader")])
-        self.assertEqual((lit["lit"], lit["level"], lit["predicts"], lit["asked"], lit["steps"]), (["F2.spot"], [0.7874], 272.6, 300, {"F2.spot": ["move", "fade_in"]}))
+        self.assertEqual((lit["lit"], lit["level"], lit["predicts"], lit["asked"], lit["steps"], lit["off"]), (["F2.spot"], [0.7874], 272.6, 300, {"F2.spot": ["move", "fade_in"]}, None))
         refused = self.view(skipped=[("F1.spot", "in_front_of_reader"), ("F2.spot", "too_far"), ("F3.spot", "pan_tilt_infeasible:tilt_limit"), ("F4.spot", "beam_through_head")])
         self.assertEqual(chain.no_beam(refused), "every fixture refused: F1 in front of reader, F2 too far, F3 pan tilt infeasible, F4 beam through head")
         self.assertEqual(chain.no_beam(self.view(targets=())), "no beam: no beam for trk-1", "control: no reader at a spot is not a refusal")
         self.assertEqual(chain.no_reader([{"track_id": "trk-1", "engagement": "none", "on_couch": True}]), "nobody is reading (trk-1: engagement none, on the couch yes)")
+
+    def test_no_head_and_off_cheaper_are_not_every_fixture_refusing(self):
+        # No head: every fixture says no_head, and the why is the missing head, said once.
+        headless = self.view(skipped=[(c, "no_head") for c in chain.CHANNELS])
+        self.assertEqual((headless["off"], chain.no_beam(headless)), ("the person state of trk-1 has no head", "no beam: the person state of trk-1 has no head"))
+        # Two fixtures refused and two allowed, off cheaper than both: off won, and the refusals follow.
+        mixed = self.view(skipped=[("F3.spot", "too_far"), ("F4.spot", "beam_through_head")], costs={"off": 1.0, "F1.spot": 1.0001, "F2.spot": 1.0002})
+        self.assertEqual(chain.no_beam(mixed), "no beam: off cost less than every fixture allowed (F1, F2); refused: F3 too far, F4 beam through head")
+        self.assertEqual(mixed["costlier"], ["F1.spot", "F2.spot"])
+        self.assertTrue(chain.no_beam(self.view(skipped=[(c, "too_far") for c in chain.CHANNELS])).startswith("every fixture refused: "), "control: all four refused")
+
+    def test_allowed_fixtures_that_cost_more_or_tied(self):
+        view = self.view(lit="F1.spot", skipped=[("F4.spot", "too_far")], costs={"off": 1.0, "F1.spot": 0.03, "F2.spot": 0.03, "F3.spot": 0.2})
+        self.assertEqual((view["costlier"], view["tied"]), (["F3.spot"], ["F2.spot"]))
+        self.assertEqual(self.view(lit="F1.spot", costs={"off": 1.0, "F1.spot": 0.03, "F2.spot": 0.031})["tied"], [], "control: a cost above is not a tie")
+
+    def test_the_click_ends_on_its_last_decision(self):
+        cards = [{"track_id": "trk-1", "engagement": "none", "on_couch": True}]
+        first = self.view(lit="F1.spot", why="reading_look: F1.spot lit for trk-1 at level 1.0.")
+        self.assertEqual(chain.ending([first], cards), (". 1 Decision: reading_look: F1.spot lit for trk-1 at level 1.0.", None))
+        # A later Decision that turns every spot off: the click stops at 17 with the beam gone off, never on the earlier one.
+        dark = self.view(why="base: every spot off.", decision_id="decide-2-2")
+        said, why = chain.ending([first, dark], cards)
+        self.assertEqual(why, "the beam went off: nobody is reading (trk-1: engagement none, on the couch yes)")
+        self.assertEqual(said, ". 2 Decisions: decide-1-1 lit F1.spot (reading_look: F1.spot lit for trk-1 at level 1.0.), then the last lit nothing: base: every spot off.")
+        # A reader still there, every fixture now refused: the refusals are why.
+        refused = self.view(skipped=[(c, "in_front_of_reader") for c in chain.CHANNELS], decision_id="decide-2-2")
+        self.assertEqual(chain.ending([first, refused], cards)[1], "the beam went off: every fixture refused: F1 in front of reader, F2 in front of reader, "
+                                                                 "F3 in front of reader, F4 in front of reader")
+        # Control: lit again after the dark one, the click goes on to the beam.
+        self.assertIsNone(chain.ending([first, dark, first], cards)[1])
+        self.assertEqual(chain.ending([], cards)[1], "nobody is reading (trk-1: engagement none, on the couch yes)")
+        self.assertEqual(chain.ending([refused], cards)[1], chain.no_beam(refused), "never lit: no beam, not gone off")
+
+    def test_need_reads_missing_when_person_py_stopped_first(self):
+        word, said = chain.need_row(dict(missing="the room model's current revision holds no seat surface sofa"))
+        self.assertEqual((word, said), ("MISSING", "need v0 did not run to a person state: person.py stopped first: the room model's current revision holds no seat surface sofa."))
+        card = dict(track_id="trk-1", replies=5, need_replies=5, need_states=["starting", "engaged"])
+        self.assertEqual(chain.need_row(dict(missing=None, tracks=[card]))[0], "ADAPTER", "control: person.py ran, so need did")
 
 
 class NoBrain(unittest.TestCase):

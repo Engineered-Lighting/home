@@ -18,7 +18,7 @@ prepare-receipt.json recorded for frames.csv, take.json and its check, and detec
 is the one hop 14 wrote the couch into at page start, and the light model the one hop 16 built then. Prints hop 3's and
 hop 4's re-checks by hash ({"n": 3, "recheck": ...}), the picture with the person boxes of its frame's row
 ({"picture": ...}), one JSON line per hop, each with its word, the files it read and wrote with their digests, its tools
-against their pins, and its stand-ins; then {"hop": "done", ...} when a Decision lights a spot, {"hop": "owed", ...} for
+against their pins, and its stand-ins; then {"hop": "done", ...} when the click's last Decision lights a spot, {"hop": "owed", ...} for
 --owed, or {"hop": "stopped", ...} at the hop the click was at when it stopped, never a hop 0.
 """
 import base64
@@ -564,6 +564,14 @@ def need_words(cards):
     return 'need v0 once per track, in person.py (hop 15), on the replies its bundle was safe to take: %s. Nothing else runs need on a click.' % ('; '.join(tracks) or 'not run')
 
 
+def need_row(person):
+    """Hop 13's word and words, from what person.py returned: need v0 ran in it, per track, unless person.py stopped first,
+    and then need's states reached nothing."""
+    if person['missing']:
+        return 'MISSING', 'need v0 did not run to a person state: person.py stopped first: %s.' % person['missing']
+    return 'ADAPTER', need_words(person.get('tracks') or [])
+
+
 def first_confirmed(tracks, observations):
     """Hop 10: the time of the first confirmed Track line, dated by the newest capture_ts of the observations it names, as
     person.py dates a Track line, which carries no time of its own. None when no track confirmed."""
@@ -604,16 +612,21 @@ def step_decide(request):
 
 
 def decision_view(decision, words):
-    """One Decision in words for the card: what it lit and at what level against the target, and each refusal."""
+    """One Decision in words for the card: what it lit and at what level against the target, each refusal, the allowed
+    fixtures that cost more than the chosen or tied it, and, when it lit nothing, why (off)."""
     lit = [channel for channel in CHANNELS if decision['requested_scene'][channel]['on']]
     target = next(iter(decision['targets'].values()), None)
-    return dict(decision_id=decision['decision_id'], trigger=decision['trigger'], lit=lit, level=[decision['requested_scene'][c]['level'] for c in lit],
-                predicts=decision['predicted']['surfaces'].get('sofa-book'), asked=target and target['value'], note=target and target['note'],
-                readers=sorted(decision['targets']), refusals=[dict(channel=row['channel'], track_id=row['track_id'], reason=row['reason'], words=words(row['reason']))
-                                                           for row in decision['skipped']],
-                costlier=sorted({c for row in decision['candidates'] if row['why'] != 'chosen' for c in row['scene']} - set(lit)),
+    chosen = {row['track_id']: row['cost'] for row in decision['candidates'] if row['why'] == 'chosen'}
+    offered = [(c, row['cost'] - chosen.get(row['track_id'], row['cost'])) for row in decision['candidates'] if row['why'] != 'chosen' for c in row['scene']]
+    view = dict(decision_id=decision['decision_id'], trigger=decision['trigger'], rule=decision['why'].split(':')[0], lit=lit,
+                level=[decision['requested_scene'][c]['level'] for c in lit], predicts=decision['predicted']['surfaces'].get('sofa-book'),
+                asked=target and target['value'], note=target and target['note'], readers=sorted(decision['targets']),
+                refusals=[dict(channel=row['channel'], track_id=row['track_id'], reason=row['reason'], words=words(row['reason'])) for row in decision['skipped']],
+                costlier=sorted({c for c, more in offered if more > 0} - set(lit)), tied=sorted({c for c, more in offered if more == 0} - set(lit)),
                 steps={c: [step['kind'] for step in decision['applied_scene'][c]['steps']] for c in CHANNELS if decision['applied_scene'][c]['steps']},
                 why=decision['why'])
+    view['off'] = beam_off(view)
+    return view
 
 
 def no_reader(cards):
@@ -623,11 +636,50 @@ def no_reader(cards):
     return 'nobody is reading (%s)' % ('; '.join(said) or 'no person state')
 
 
+def beam_off(view):
+    """Why a Decision lit nothing, in short words, or None when it lit: its rule turned every spot off, or no reader is at a
+    spot, or per reader its person state has no head, every fixture refused, or off cost less than each fixture allowed."""
+    if view['lit']:
+        return None
+    if view['rule'] != 'reading_look' or not view['readers']:
+        return view['why'].split(': ', 1)[-1].rstrip('.')
+    parts, whose = [], (lambda track: '') if len(view['readers']) == 1 else (lambda track: ' for %s' % track)
+    for track in view['readers']:
+        mine = [row for row in view['refusals'] if row['track_id'] == track]
+        refused = {row['channel'] for row in mine}
+        if mine and all(row['reason'] == 'no_head' for row in mine):
+            parts.append('the person state of %s has no head' % track)
+        elif refused >= set(CHANNELS):
+            parts.append('every fixture refused%s' % whose(track))
+        else:
+            parts.append('off cost less than every fixture allowed%s (%s)' % (whose(track), ', '.join(c.split('.')[0] for c in CHANNELS if c not in refused)))
+    return '; '.join(parts)
+
+
+def ending(views, cards):
+    """Hop 17's ending, keyed on the click's last Decision, since the feed plays every one: (the row's words after the run's,
+    and the stop's why, or None when the last Decision lit). One that lit nothing after another that lit is the beam going
+    off, an answer, never the earlier beam."""
+    if not views:
+        why = no_reader(cards)
+        return ', and wrote no Decision: %s, so every spot stays off.' % why, why
+    lit, last, decisions = [view for view in views if view['lit']], views[-1], '%d Decision%s' % (len(views), '' if len(views) == 1 else 's')
+    if last['lit']:
+        return '. %s: %s' % (decisions, last['why']), None
+    if lit:
+        went = no_reader(cards) if last['rule'] != 'reading_look' else no_beam(last).replace('no beam: ', '', 1)
+        return ('. %s: %s lit %s (%s), then the last lit nothing: %s' % (decisions, lit[-1]['decision_id'], ', '.join(lit[-1]['lit']), lit[-1]['why'], last['why']),
+                'the beam went off: %s' % went)
+    return '. %s, no beam: %s' % (decisions, last['why']), no_beam(last)
+
+
 def no_beam(view):
-    """Why a Decision lit nothing: every fixture refused, or no reader at a spot."""
-    if view['refusals'] and view['readers']:
-        return 'every fixture refused: %s' % ', '.join('%s %s' % (row['channel'].split('.')[0], row['words']) for row in view['refusals'])
-    return 'no beam: %s' % view['why'].split(': ', 1)[-1].rstrip('.')
+    """The stop's words for a Decision that lit nothing: why, then each refusal but a missing head, which the why says."""
+    off = view.get('off') or beam_off(view)
+    named = ', '.join('%s %s' % (row['channel'].split('.')[0], row['words']) for row in view['refusals'] if row['reason'] != 'no_head')
+    if off.startswith('every fixture refused'):
+        return '%s: %s' % (off, named)
+    return 'no beam: %s%s' % (off, '; refused: %s' % named if named else '')
 
 
 def read_jsonl(path):
@@ -850,8 +902,10 @@ def chain(request):
     except Stop as failed:
         person = dict(missing=failed.why)
     person_ms = round((time.monotonic() - started) * 1000)
-    emit(13, 'ADAPTER', need_words(person.get('tracks') or []), ms=person_ms, tools=[t for t in core_tools if t['path'] == 'tools/den-core/need.py'] + head_tools('tools/den-sim/person.py'),
-         read=[click.read(work / 'facts.jsonl', 12)], wrote=[], stand_ins=named(13, 0))
+    need_word, need_said = need_row(person)
+    emit(13, need_word, need_said, ms=person_ms, tools=[t for t in core_tools if t['path'] == 'tools/den-core/need.py'] + head_tools('tools/den-sim/person.py'),
+         read=[click.read(work / 'facts.jsonl', 12)], wrote=[], stand_ins=named(13, 0) if need_word == 'ADAPTER' else [],
+         **(dict(note=person['missing']) if person['missing'] else {}))
     fifteen = dict(tools=head_tools(*own, 'tools/den-sim/person.py') + [t for t in core_tools if t['path'] == 'tools/den-core/need.py'],
                    read=[click.read(observe / 'observations.jsonl', 7), click.read(work / 'track' / 'tracks.jsonl', 8), click.read(work / 'bundles.jsonl', 9),
                          click.read(work / 'asks.jsonl', 12), click.read(work / 'facts.jsonl', 12), room_read])
@@ -884,18 +938,10 @@ def chain(request):
         raise Stop(17, replay)
     views, ran = decided['decisions'], 'rung 9\'s coordinator in spot mode (virtual-den-4, synthetic) ran once on %d events in %.0f ms, %s' % (
         decided['events'], decided['ms'], replay)
-    lit = [view for view in views if view['lit']]
-    if not views:
-        why = no_reader(person['tracks'])
-        emit(17, 'ADAPTER', '%s, and wrote no Decision: %s, so every spot stays off.' % (ran, why), started, **seventeen)
+    said, why = ending(views, person['tracks'])
+    emit(17, 'ADAPTER', '%s%s' % (ran, said), started, **seventeen)
+    if why:
         raise Stop(17, why, answer=True)
-    last = views[-1]
-    if not lit:
-        why = no_beam(last)
-        emit(17, 'ADAPTER', '%s. %d Decision%s, no beam: %s' % (ran, len(views), '' if len(views) == 1 else 's', last['why']), started, **seventeen)
-        raise Stop(17, why, answer=True)
-    chosen = lit[-1]
-    emit(17, 'ADAPTER', '%s. %d Decision%s: %s' % (ran, len(views), '' if len(views) == 1 else 's', chosen['why']), started, **seventeen)
     states = read_jsonl(work / 'person_states.jsonl')
     placed = [state['position']['xyz'][:2] for state in states if state.get('position')]
     print(json.dumps(dict(hop='done', ok=True, camera_m=camera_position(room['path']), reply='fake' if root == FAKE_ROOT else 'real', root=root,

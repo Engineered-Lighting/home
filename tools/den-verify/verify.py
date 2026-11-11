@@ -1,14 +1,15 @@
 """den-verify: rung 10's verify, run over records already on disk.
 
     python tools\\den-verify\\verify.py slots
-    python tools\\den-verify\\verify.py run --decisions D --light-states L --model M --out DIR
+    python tools\\den-verify\\verify.py run --decisions D --light-states L --model M [--surfaces S] --out DIR
 
-It reads JSON Lines files and one light-model.json and writes three files into
---out: decisions.verified.jsonl, light_states.verified.jsonl and report.json.
-It never opens a network connection, sends nothing to any light and contacts
-no camera, Jetson, LA host or Home Assistant. A scored run refuses while
-VERIFY-V1.md has an open slot; --preview runs on the proposed values and
-writes only report-preview.json.
+It reads JSON Lines files, one light-model.json and any surfaces.json, and writes
+three files into --out: decisions.verified.jsonl, light_states.verified.jsonl and
+report.json. It never opens a network connection, sends nothing to any light and
+contacts no camera, Jetson, LA host or Home Assistant. A scored run refuses while
+VERIFY-V1.md has an open slot, and on a fake backend; --preview runs on the
+proposed values and writes only report-preview.json. What it cannot read is one
+sentence and exit 2.
 """
 import argparse
 import hashlib
@@ -28,6 +29,7 @@ from records import Clock, read_jsonl, write_json, write_jsonl  # noqa: E402
 from score import Run  # noqa: E402
 
 OUTPUTS = ("decisions.verified.jsonl", "light_states.verified.jsonl", "report.json")
+INPUTS = ("decisions", "light_states", "model", "surfaces", "corrections", "occupancy", "gold")
 MOST_OFFSET_H = 14  # the world's clocks reach UTC-12 to UTC+14
 SAID = {"no surface map": "no surface map (--surfaces)"}
 
@@ -48,6 +50,14 @@ def _refuse(text):
     encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
     print(text.encode(encoding, "backslashreplace").decode(encoding))
     return 2
+
+
+def refused_backend(model):
+    """Why a scored run can't stand on this model's backend, or None. Plumbing is never a gate."""
+    if not model.fake:
+        return None
+    return (f"refused: light model {model.version} runs on {model.backend}. A scored run needs a Stage 1 model through den-light's "
+            "predict.py; add --preview to see this one at work")
 
 
 def cmd_slots(args):
@@ -82,7 +92,9 @@ def cmd_run(args):
     offset = args.utc_offset_h
     if offset is not None and not (math.isfinite(offset) and abs(offset) <= MOST_OFFSET_H):
         return _refuse(f"refused: --utc-offset-h {offset} is no clock's: it takes hours, -{MOST_OFFSET_H} to {MOST_OFFSET_H}")
-    model = LightModel.load(args.model)
+    model = LightModel.load(args.model, args.surfaces)
+    if not args.preview and refused_backend(model):
+        return _refuse(refused_backend(model))
     clock = Clock(None if offset is None else round(offset * 3600))
     run = Run(values, model, read_jsonl(args.decisions, records.decision_problem), records.read_frames(args.light_states),
               corrections=read_jsonl(args.corrections, records.correction_problem),
@@ -91,8 +103,8 @@ def cmd_run(args):
     decisions, states, report = run.run()
     report["method"] = {"file": m.file, "sha256": m.sha256, "block_sha256": m.block_sha256,
                         "open": m.describe_open(), "values": values}
-    report["inputs"] = {k: _sha(getattr(args, k)) for k in
-                        ("decisions", "light_states", "model", "corrections", "occupancy", "gold")}
+    report["inputs"] = {k: _sha(getattr(args, k)) for k in INPUTS}
+    report["inputs"]["predict_py"] = model.predict_sha256
     out.mkdir(parents=True, exist_ok=True)
     if args.preview:
         report["scored"] = False
@@ -113,6 +125,10 @@ def cmd_run(args):
     left, noise = report["excluded_held_or_superseded"], report["below_meter_noise"]
     if left:
         _say(f"left out of the hit rate: {left} point(s) lit by held or superseded bulbs")
+    unknown = report["decisions"]["unknown_state"]
+    if unknown:
+        _say(f"{len(unknown)} decision(s) have a bulb in an unknown state: "
+             f"{sum(u['points'] for u in unknown)} point(s) that depend on it were not judged")
     stale = report["decisions"]["read_frame_stale"]
     if stale:
         _say(f"{len(stale)} decision(s) read a frame from before a step landed: nothing taken from that frame was judged")
@@ -137,6 +153,8 @@ def main(argv=None):
     r.add_argument("--decisions", required=True, help="Decision records, JSON Lines")
     r.add_argument("--light-states", required=True, help="LightState records, JSON Lines")
     r.add_argument("--model", required=True, help="light-model.json from rung 8")
+    r.add_argument("--surfaces", help="den-core's surfaces.json, {surface_id: [point_id, ...]}; the default is the model's own, "
+                                      "else its point ids")
     r.add_argument("--corrections", help="Correction records (their holds), JSON Lines")
     r.add_argument("--occupancy", help="occupancy intervals {start, end, people}, JSON Lines")
     r.add_argument("--gold", help="gold need intervals with R_eval marks, JSON Lines")

@@ -17,7 +17,7 @@ Stage 1's `predict()` over the session's `light-model.json`, so
 | `method.py` | Reads that block (CRLF or LF), lists open slots and the pending decisions. |
 | `records.py` | JSON Lines in and out, clock strings, LightState ids, schema field names. |
 | `settle.py` | The settle rule: den_lighting's 2 s fades (5 s on a restore), probes at 0 s; and when a read frame is stale. |
-| `light_model.py` | The one adapter to rung 8's model: every prediction goes through it, to rung 8 Stage 1's `predict()` in `tools/den-light/predict.py`. |
+| `light_model.py` | The one adapter to rung 8's model: every prediction goes through it, to rung 8 Stage 1's `predict()` in `tools/den-light/predict.py`, and `--surfaces` gives its map. |
 | `score.py` | `Decision.verify`, `LightState.residual` and the report. |
 | `verify.py` | The command line. |
 | `synthetic.py`, `test_verify.py` | Synthetic fixtures from `schemas.json` and the tests. |
@@ -52,11 +52,16 @@ python tools\den-verify\verify.py slots
 A preview on the proposed values, which writes only `report-preview.json`:
 
 ```powershell
-python tools\den-verify\verify.py run --decisions C:\den-verify\decisions.jsonl --light-states C:\den-verify\light_states.jsonl --corrections C:\den-verify\corrections.jsonl --model C:\den-light\light-model.json --out C:\den-verify\run-1\preview --preview
+python tools\den-verify\verify.py run --decisions C:\den-verify\decisions.jsonl --surfaces C:\den-verify\surfaces.json --light-states C:\den-verify\light_states.jsonl --corrections C:\den-verify\corrections.jsonl --model C:\den-light\light-model.json --out C:\den-verify\run-1\preview --preview
 ```
 
 A scored run is the same command without `--preview`, into a new `--out`
-folder; it refuses while `VERIFY-V1.md` has an open slot. Optional inputs:
+folder; it refuses while `VERIFY-V1.md` has an open slot, and on a model marked
+`fake: true`. Plumbing is never a gate. The report names the backend (`backend`)
+and pins `predict.py`'s sha256 (`predict_sha256`). The model needs den-light's
+`predict.py` beside this tool, in `tools\den-light`, and is refused without it.
+Its block ids are not surfaces, so give den-core's `surfaces.json` with
+`--surfaces`: with no map, a Decision's `room` is not verified. Optional inputs:
 `--occupancy` and `--gold` (formats in `VERIFY-V1.md`), and `--utc-offset-h -7`
 when the records' clock strings are not in this PC's time zone. Run folders
 stay on the PC: no records, frames or reports go into git.
@@ -76,8 +81,11 @@ The console's first line gives how many decisions were verified and how many not
 then the hit rate and the verdict. A decision counts as verified only when something
 was judged: at least one point read against a prediction and not left out. The next
 line counts the rest by reason, and the report lists each with why
-(`decisions.not_verified`). The console then says what the light model ran on, how
-many points were left out of the hit
+(`decisions.not_verified`). A lit bulb with no level, or a null entry for a bulb never
+seen, is unknown, never 0, and what depends on it is not judged. One decision the
+model cannot predict, for a bulb with no colour temperature say, gets `verify: null`
+with the reason, and the run goes on. The console then says what the light model ran
+on, how many points were left out of the hit
 rate (lit by held or superseded bulbs where the decision's own bulbs could not
 show), how many decisions read a frame from before a step landed, so nothing taken
 from that frame was judged, how many counted points have a change below the meter's noise, with the
@@ -88,4 +96,6 @@ read. A run with nothing left to count reads `insufficient`.
 
 Running on real records needs the owner's go-ahead, and the records come from
 rungs that have not run yet (rung 7's metering frames, rung 8's model, rung 9's
-decisions).
+decisions). `test_seam_den_core.py` runs the real tools together on synthetic data;
+it needs den-core and den-light beside this folder, so it runs on the merged tree,
+or with `DEN_CORE_DIR` and `DEN_LIGHT_DIR` set, which only the tests read.

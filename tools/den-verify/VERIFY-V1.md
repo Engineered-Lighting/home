@@ -36,6 +36,12 @@ For each point at the verify frame:
   copy's revision is already in it, or has lapsed; nothing writes `ended` after
   capture, so the copy is what says so. With no revision on either side, a hold
   counts only if it began after the decision. Requested values are never used.
+  A lit bulb with no level, a bulb never seen (a null entry), and a read-back with no
+  level and no pin to take are unknown, never 0. Every point that bulb can reach has
+  no prediction, whatever the reading: `unverifiable`, not a hit or a miss, with
+  the bulb named in the point's `why` and the decision in `decisions.unknown_state`.
+  The state before only matters through the read frame, so under `zero` a bulb
+  unknown before stops only its increments, and widens no bound.
 - `residual` = (measured − predicted) / predicted, null when the prediction is
   not positive.
 - `status`:

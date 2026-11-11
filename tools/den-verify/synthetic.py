@@ -86,7 +86,8 @@ def v11_model():
         # one captured temperature: the walkthrough's radial fill has no cct_k
         channel("F1", "radial_4+5", None, "radial", {2700: {"counter-1": 100.0, "armchair-book": 80.0}},
                 [0, 88.9, 254], [0, 0.25, 1]),
-        channel("F2", "spot", None, "gimbal spot", {2700: {"counter-1": 0.0, "armchair-book": 700.0}},
+        # 685 so the applied scene gives armchair-book the decision's own 300: 0.4 x 685 + 20 + the spot's 6 lx spill
+        channel("F2", "spot", None, "gimbal spot", {2700: {"counter-1": 0.0, "armchair-book": 685.0}},
                 [0, 114.3, 254], [0, 0.4, 1]),
     ], unit="lx")
 

@@ -12,6 +12,7 @@ import socket
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import light_model
 import method
@@ -32,6 +33,14 @@ def closed(overrides=None):
 def score(decisions, frames, model, overrides=None, **kw):
     run = Run(closed(overrides), LightModel(model), decisions, frames, clock=Clock(syn.UTC_OFFSET_S), **kw)
     return run.run()
+
+
+def logged(model, decision, names):
+    """predicted.surfaces as den-core logs it: the model's light for the decision's own read-backs, to 3 places."""
+    own = {b: {"level": a["level"], "cct_k": a["cct_k"]} for b, a in decision["inputs"]["actuator_state"].items()}
+    own.update({b: dict(a["readback"]) for b, a in decision["applied_scene"].items()})
+    light = LightModel(model).predict(own)
+    return {**{n: None if light[n] is None else round(light[n], 3) for n in names}, "unit": model["basis_unit"]}
 
 
 def by_id(records, key, value):
@@ -193,7 +202,7 @@ class HeldAndSuperseded(unittest.TestCase):
             targets={"A": {"surface_id": "desk-1", "lx": 300}, "B": {"surface_id": "sofa-1", "lx": 300}},
             hold_set={"revision": 4, "held": [{"entity_id": B1, "channels": [B1],
                                                "pinned": {"level_pct": 30, "cct_k": 2700, "source": "read-back"}}]})
-        dec["predicted"]["surfaces"] = {"desk-1": 0, "sofa-1": 0, "wall-1": 0, "counter-1": 0, "unit": "relative"}
+        dec["predicted"]["surfaces"] = logged(self.model, dec, ("desk-1", "sofa-1", "wall-1", "counter-1"))
         after = syn.light_state(t + 5, {
             "desk-1": 400 * k * 0.8,           # within
             "sofa-1": 400 * k * 0.3 * 0.6,     # 40% low, but the held bulb gives all of it
@@ -1884,19 +1893,25 @@ class RealPredict(unittest.TestCase):
         theirs = light_model.predict.predict(by_channel, self.model)["surfaces"]
         self.assertEqual(self.lm.predict(by_channel), ours)
         parts = self.lm.contributions(self.state)
+        self.assertIsNone(ours["r00c02"])  # excluded: predict() itself has nothing there
         for sid, value in ours.items():
+            if sid == "r00c02":
+                continue
             self.assertAlmostEqual(value, theirs[sid], places=9)
             self.assertAlmostEqual(sum(p[sid] for p in parts.values()), value, places=9)
 
-    def test_excluded_point_is_no_surface_and_stays_unverifiable(self):
+    def test_an_excluded_point_has_no_prediction(self):
         self.assertIsNone(light_model.predict.predict({}, self.model)["surfaces"]["r00c02"])
-        self.assertEqual(sorted(self.lm.surfaces), ["desk-1", "sofa-1"])
+        self.assertEqual(self.lm.predict({}), {"desk-1": 0.0, "sofa-1": 0.0, "r00c02": None})
+        self.assertIsNone(self.lm.predict(self.state)["r00c02"])
+
+    def test_a_decision_naming_an_excluded_point_leaves_it_unverifiable(self):
         t = syn.T0
         k = self.lm.predict({B0: {"level": 1, "cct_k": 2700}})["desk-1"]
         ref = syn.light_state(t, {"desk-1": 0.1 * k, "r00c02": 1}, anchored=False, ident="ls-ref")
         dec = syn.hue_decision("d-ex", t + 0.5, {B0: 0.1}, {B0: {"level": 0.5, "steps": send(t + 0.6)}}, "ls-ref",
                                targets={"A": {"surface_id": "desk-1"}})
-        dec["predicted"]["surfaces"] = {"desk-1": 0, "r00c02": 0, "unit": "relative"}
+        dec["predicted"]["surfaces"] = logged(self.model, dec, ("desk-1", "r00c02"))
         after = syn.light_state(t + 4, {"desk-1": 0.5 * k, "r00c02": 5}, anchored=False)
         decisions, _, report = score([dec], [ref, after], self.model)
         self.assertEqual(point(decisions[0], "desk-1")["status"], "within")
@@ -1915,7 +1930,7 @@ class RealPredict(unittest.TestCase):
         with self.assertRaisesRegex(KeyError, "no channel 'light.den_attic'"):
             self.lm.predict({"light.den_attic": {"level": 0.5, "cct_k": 2700}})
         self.assertEqual(self.lm.predict({"light.den_attic": {"level": 0, "cct_k": None}}),
-                         {"desk-1": 0.0, "sofa-1": 0.0})  # a channel that is off needs nothing
+                         {"desk-1": 0.0, "sofa-1": 0.0, "r00c02": None})  # a channel that is off needs nothing
 
     def test_one_captured_temperature_needs_no_cct_k_and_a_level_caps_at_full(self):
         single = LightModel(syn.hue_model({"desk-1": {B0: 400}}, kelvins=(2700,)))

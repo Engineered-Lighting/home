@@ -269,6 +269,269 @@ class WhatTheConsoleSays(Cli):
         self.assertIn("light model lm-hue-test: predict.py (rung 8 Stage 1, tools/den-light)", out)
 
 
+class UnknownIsNeverZero(Cli):
+    """A lit bulb with no level, or a null entry, is unknown: what depends on it is unverifiable, not a hit or a miss."""
+    # B0 lights p0 and p1; B1 lights p1 and p2; p3 is lit by B0 alone, so B1's state says nothing there
+    POINTS = {"p0": {B0: 100.0}, "p1": {B0: 100.0, B1: 100.0}, "p2": {B1: 100.0}, "p3": {B0: 50.0}}
+    TARGETS = {f"T{i}": {"surface_id": p} for i, p in enumerate(POINTS)}
+
+    def decision(self, b1_before, b1_applied=None, hold_set=None):
+        """B0 goes 0.2 to 0.8. B1's own entry in actuator_state is b1_before, and in applied_scene b1_applied, if given."""
+        dec = syn.hue_decision("d", T + 0.5, {B0: 0.2, B1: 0.5}, {B0: {"level": 0.8, "steps": send(T + 0.5)}}, "ls-r", targets=self.TARGETS, hold_set=hold_set)
+        dec["inputs"]["actuator_state"][B1] = b1_before
+        if b1_applied is not None:
+            dec["applied_scene"][B1] = b1_applied
+        return dec
+
+    def frames(self, b1=0.5, scale=1.0):
+        def light(b0, b1_level):
+            return {p: scale * (v.get(B0, 0) * b0 + v.get(B1, 0) * b1_level) for p, v in self.POINTS.items()}
+
+        return [syn.light_state(T, light(0.2, 0.5), anchored=False, ident="ls-r"), syn.light_state(T + 5, light(0.8, b1), anchored=False)]
+
+    def go(self, dec, frames=None, overrides=None, **kw):
+        return run([dec], frames or self.frames(), self.POINTS, overrides=overrides, **kw)
+
+    SAYS_NOTHING = ("null", None), ("empty", {}), ("on with no level", {"on": True}), ("on with a null level", {"on": True, "level": None, "cct_k": 2700}), ("a null level", {"level": None})
+
+    def test_before_the_decision_it_leaves_what_it_reaches_unverifiable(self):
+        for name, entry in self.SAYS_NOTHING:
+            with self.subTest(name):
+                decisions, _, report = self.go(self.decision(entry))
+                d = decisions[0]
+                for p in ("p1", "p2"):
+                    self.assertEqual(point(d, p)["status"], "unverifiable", p)
+                    self.assertIn("unknown state", point(d, p)["why"])
+                    self.assertIn(syn.hue_channel(B1), point(d, p)["why"])  # the model's own name for it
+                    self.assertIn("before", point(d, p)["why"])
+                    self.assertIsNone(point(d, p)["residual"])
+                for p in ("p0", "p3"):  # B1 gives them nothing, at any level
+                    self.assertEqual(point(d, p)["status"], "within", p)
+                self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (2, 0))
+                self.assertEqual(report["points"]["unverifiable"], 2)
+                self.assertEqual(report["decisions"]["verified"], 1)
+
+    def test_the_report_says_which_decisions_and_why(self):
+        _, _, report = self.go(self.decision(None))
+        [entry] = report["decisions"]["unknown_state"]
+        self.assertEqual((entry["decision_id"], entry["points"]), ("d", 2))
+        self.assertIn(syn.hue_channel(B1), entry["why"])
+
+    def test_no_reading_turns_it_into_a_hit_or_a_miss(self):
+        for scale in (0.0, 0.5, 1.0, 2.0, 100.0):
+            decisions, _, report = self.go(self.decision(None), self.frames(scale=scale))
+            self.assertEqual(point(decisions[0], "p1")["status"], "unverifiable", scale)
+            self.assertEqual(report["points"]["unverifiable"], 2, scale)
+            self.assertEqual(report["hit_rate"]["hits"] + report["hit_rate"]["misses"], 2, scale)
+
+    def test_with_every_point_depending_on_it_the_decision_is_not_verified_and_says_unknown_state(self):
+        points = {"p1": {B0: 100.0, B1: 100.0}, "p2": {B1: 100.0}}
+        dec = self.decision(None)
+        dec["targets"] = {"A": {"surface_id": "p1"}, "B": {"surface_id": "p2"}}
+        frames = [syn.light_state(T, {"p1": 70.0, "p2": 50.0}, anchored=False, ident="ls-r"), syn.light_state(T + 5, {"p1": 130.0, "p2": 50.0}, anchored=False)]
+        decisions, _, report = run([dec], frames, points)
+        self.assertEqual(report["decisions"]["verified"], 0)
+        self.assertEqual(report["hit_rate"]["verdict"], "insufficient")
+        entry = not_verified(report)
+        self.assertEqual(entry["kind"], "unknown state")
+        self.assertIn(syn.hue_channel(B1), entry["reason"])
+        self.assertIsNone(decisions[0]["verify"]["within_tolerance"])
+
+    def test_a_correct_reading_of_canon_fields_keeps_working(self):
+        for name, entry in (("lit", {"on": True, "level": 0.5, "cct_k": 2700}), ("no on key", {"level": 0.5, "cct_k": 2700})):
+            with self.subTest(name):
+                _, _, report = self.go(self.decision(entry))
+                self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"], report["points"]["unverifiable"]), (4, 0, 0))
+        self.assertEqual(self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}), self.frames(b1=0.1))[2]["hit_rate"]["misses"], 2)
+
+    def test_an_off_bulb_is_level_0_with_or_without_a_level(self):
+        for entry in ({"on": False}, {"on": False, "level": None, "cct_k": None}, {"on": False, "level": 0.0}, {"on": False, "level": 0.7}, {"on": True, "level": 0, "cct_k": None}):
+            with self.subTest(entry=entry):
+                frames = self.frames(b1=0.0)
+                frames[0] = syn.light_state(T, {p: v.get(B0, 0) * 0.2 for p, v in self.POINTS.items()}, anchored=False, ident="ls-r")
+                decisions, _, report = self.go(self.decision(entry), frames)
+                self.assertEqual(point(decisions[0], "p1")["status"], "within")
+                self.assertEqual(report["points"]["unverifiable"], 1)  # p2: nothing lit and nothing changed
+                self.assertNotIn("unknown", point(decisions[0], "p2")["why"])
+                self.assertEqual(report["decisions"]["unknown_state"], [])
+
+    def test_a_channel_listed_with_no_read_back_level_is_unknown_after(self):
+        before = {"on": True, "level": 0.5, "cct_k": 2700}
+        for name, entry in (("no read-back", {"status": "sent", "steps": []}), ("null read-back", {"status": "sent", "readback": None, "steps": []}),
+                            ("no level", {"status": "sent", "readback": {"cct_k": 2700}, "steps": []}), ("null level", {"status": "sent", "readback": {"on": True, "level": None, "cct_k": 2700}, "steps": []})):
+            with self.subTest(name):
+                decisions, _, report = self.go(self.decision(before, entry))
+                self.assertEqual(point(decisions[0], "p1")["status"], "unverifiable")
+                self.assertIn("after", point(decisions[0], "p1")["why"])
+                self.assertEqual((report["hit_rate"]["hits"], report["hit_rate"]["misses"]), (2, 0))
+
+    def test_a_null_entry_in_applied_scene_is_unknown_too(self):
+        dec = self.decision({"on": True, "level": 0.5, "cct_k": 2700})
+        dec["applied_scene"][B1] = None
+        decisions, _, _ = self.go(dec)
+        self.assertEqual(point(decisions[0], "p2")["status"], "unverifiable")
+
+    def test_a_read_back_of_off_is_level_0(self):
+        for entry in ({"on": False}, {"on": False, "level": None}, {"level": 0}):
+            with self.subTest(entry=entry):
+                before = {"on": True, "level": 0.5, "cct_k": 2700}
+                decisions, _, _ = self.go(self.decision(before, {"status": "sent", "readback": entry, "steps": send(T + 0.5)}), self.frames(b1=0.0))
+                self.assertEqual(point(decisions[0], "p2")["status"], "within")
+                self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"within"})
+
+    def test_a_channel_in_the_applied_scene_with_no_entry_before_is_unknown_before(self):
+        dec = self.decision({"on": True, "level": 0.5, "cct_k": 2700}, {"status": "sent", "readback": {"level": 0.5, "cct_k": 2700}, "steps": []})
+        del dec["inputs"]["actuator_state"][B1]
+        decisions, _, _ = self.go(dec)
+        self.assertEqual(point(decisions[0], "p2")["status"], "unverifiable")
+        self.assertIn("before", point(decisions[0], "p2")["why"])
+
+    def test_under_the_zero_background_only_the_state_after_can_stop_the_level_check(self):
+        zero = {"background": "zero"}
+        frames = self.frames()
+        decisions, _, report = self.go(self.decision(None, {"status": "sent", "readback": {"level": 0.5, "cct_k": 2700}, "steps": []}), frames, zero)
+        self.assertEqual(point(decisions[0], "p2")["status"], "within")
+        inc = {i["point_id"]: i for i in decisions[0]["verify"]["increments"]}
+        self.assertEqual(inc["p2"]["status"], "unverifiable")  # the change needs the state before
+        self.assertIsNone(inc["p2"]["predicted_change"])
+        self.assertEqual(inc["p0"]["status"], "within")
+        decisions, _, _ = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, {"status": "sent", "readback": None, "steps": []}), frames, zero)
+        self.assertEqual(point(decisions[0], "p2")["status"], "unverifiable")
+        self.assertIn("after", point(decisions[0], "p2")["why"])
+        # a bulb read nowhere and not listed: nothing says where it is
+        decisions, _, _ = self.go(self.decision(None), frames, zero)
+        self.assertEqual(point(decisions[0], "p2")["status"], "unverifiable")
+
+    def test_under_the_zero_background_an_unknown_bulb_before_widens_nothing(self):
+        # an off reading far off still misses: nothing says the bulb was bright, so no allowance comes of it
+        points = {"p": {B1: 100.0}}
+        dec = self.decision(None, {"status": "sent", "readback": {"level": 0.0}, "steps": send(T + 0.5)})
+        dec["targets"] = {"A": {"surface_id": "p"}}
+        del dec["applied_scene"][B0]
+        del dec["inputs"]["actuator_state"][B0]
+        frames = [syn.light_state(T, {"p": 50.0}, anchored=False, ident="ls-r"), syn.light_state(T + 5, {"p": 50.0}, anchored=False)]
+        decisions, _, report = run([dec], frames, points, overrides={"background": "zero"})
+        self.assertEqual(point(decisions[0], "p")["status"], "unverifiable")
+        self.assertEqual(point(decisions[0], "p")["why"], "prediction not positive")
+        self.assertEqual(report["hit_rate"]["hits"] + report["hit_rate"]["misses"], 0)
+
+    def held_copy(self, pct):
+        return {"revision": 4, "held": [{"entity_id": B1, "channels": [B1], "pinned": {"level_pct": pct, "cct_k": 2700, "source": "read-back"}}]}
+
+    def test_a_listed_channel_with_no_read_back_level_takes_the_copys_pin(self):
+        # the last checker's mutant: `if rb.get("level") is not None:` to `if True:` kept a bulb with no read-back out of the pin
+        for name, entry in (("no read-back", {"status": "held", "steps": []}), ("null read-back", {"status": "held", "readback": None, "steps": []}),
+                            ("null level", {"status": "held", "readback": {"level": None, "cct_k": 2700}, "steps": []})):
+            with self.subTest(name):
+                decisions, states, report = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, entry, self.held_copy(30)), self.frames(b1=0.3))
+                self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"within"})
+                self.assertEqual(report["points"]["unverifiable"], 0)
+                self.assertAlmostEqual(residual(states, T + 5, "p2")["predicted"], 30.0, places=6)
+
+    def test_a_listed_channel_with_a_read_back_level_keeps_it_over_the_copys_pin(self):
+        entry = {"status": "held", "readback": {"level": 0.5, "cct_k": 2700}, "steps": []}
+        _, states, _ = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, entry, self.held_copy(30)))
+        self.assertAlmostEqual(residual(states, T + 5, "p2")["predicted"], 50.0, places=6)
+
+    def test_a_pin_with_no_level_of_its_own_leaves_a_channel_with_no_read_back_unknown(self):
+        entry = {"status": "held", "readback": None, "steps": []}
+        decisions, _, _ = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, entry, self.held_copy(None)))
+        self.assertEqual(point(decisions[0], "p2")["status"], "unverifiable")
+
+    def test_the_copys_null_pin_leaves_a_read_state_as_it_was(self):
+        # not in the applied scene, read at 0.5: the copy adds nothing to that
+        decisions, _, _ = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, None, self.held_copy(None)))
+        self.assertEqual(point(decisions[0], "p2")["status"], "within")
+
+    def test_a_pin_of_off_is_level_0(self):
+        copy = self.held_copy(None)
+        copy["held"][0]["pinned"]["on"] = False
+        decisions, _, _ = self.go(self.decision({"on": True, "level": 0.5, "cct_k": 2700}, {"status": "held", "readback": None, "steps": []}, copy), self.frames(b1=0.0))
+        self.assertEqual(point(decisions[0], "p1")["status"], "within")
+
+    def test_a_person_setting_a_bulb_to_no_known_level_makes_it_unknown_from_then_on(self):
+        correction = {"correction_id": "c", "ts": T + 20, "action": {"settle_s": 0.0}, "snapshot": {"light_state": ["ls-r"]},
+                      "hold": {"entity_id": B1, "channels": [B1], "pinned": {"level_pct": None, "source": "read-back"}, "since": T + 20, "ended": None, "hold_set_revision": 5}}
+        before = {"on": True, "level": 0.5, "cct_k": 2700}
+        dec = self.decision(before, {"status": "sent", "readback": {"level": 0.5, "cct_k": 2700}, "steps": []})
+        frames = self.frames() + [syn.light_state(T + 30, {p: 1.0 for p in self.POINTS}, anchored=False)]
+        decisions, states, report = self.go(dec, frames, corrections=[correction])
+        self.assertEqual({p["status"] for p in decisions[0]["verify"]["points"]}, {"within"})  # read before the person's change
+        s = next(s for s in states if s["ts"] == T + 30)
+        self.assertEqual(sorted(e["surface_id"] for e in s["residual"]), ["p0", "p3"])
+
+    def test_a_residual_has_no_entry_where_the_state_is_unknown(self):
+        _, states, _ = self.go(self.decision(None))
+        self.assertEqual(sorted(e["surface_id"] for e in states[1]["residual"]), ["p0", "p3"])
+
+    def test_a_frame_with_nothing_it_could_write_says_so(self):
+        points = {"p2": {B1: 100.0}}
+        dec = self.decision(None)
+        dec["targets"] = {"A": {"surface_id": "p2"}}
+        _, states, report = run([dec], [syn.light_state(T, {"p2": 50.0}, anchored=False, ident="ls-r"), syn.light_state(T + 5, {"p2": 50.0}, anchored=False)], points)
+        self.assertEqual(states[1]["residual"], [])
+        self.assertIn("d", states[1]["residual_status"])
+        self.assertEqual(report["frames"]["residual_written"], 0)
+
+    def test_the_owner_is_told_on_the_console(self):
+        out, _ = self.preview([self.decision(None)], self.frames(), model(self.POINTS))
+        self.assertIn("1 decision(s) have a bulb in an unknown state: 2 point(s) that depend on it were not judged", out)
+        out.encode("ascii")
+
+
+class AModelErrorStopsOneDecision(Cli):
+    """missing-colour-temperature-crashes-run: verify null with a reason for that decision, and the run goes on."""
+    DUAL = syn.hue_model({"p0": {B0: 100.0, B1: 50.0}}, kelvins=(2202, 6500))
+
+    def records(self, cct_k=None):
+        one = syn.hue_decision("d-1", T + 0.5, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(T + 0.5)}}, "ls-1", targets={"A": {"surface_id": "p0"}})
+        two = syn.hue_decision("d-2", T + 100.5, {B0: 0.2}, {B0: {"level": 0.8, "steps": send(T + 100.5)}}, "ls-2", targets={"A": {"surface_id": "p0"}})
+        for d in (one, two):
+            d["inputs"]["actuator_state"][B0]["cct_k"] = 2700
+        one["applied_scene"][B0]["readback"]["cct_k"] = cct_k
+        v = LightModel(self.DUAL).predict({B0: {"level": 1.0, "cct_k": 2700}})["p0"]
+        frames = [syn.light_state(T, {"p0": v * 0.2}, anchored=False, ident="ls-1"), syn.light_state(T + 5, {"p0": v * 0.8}, anchored=False),
+                  syn.light_state(T + 100, {"p0": v * 0.2}, anchored=False, ident="ls-2"), syn.light_state(T + 105, {"p0": v * 0.8}, anchored=False)]
+        return [one, two], frames
+
+    def assert_goes_on(self, decisions, states, report, *words):
+        first = by_id(decisions, "decision_id", "d-1")
+        self.assertIsNone(first["verify"])
+        entry = not_verified(report, "d-1")
+        self.assertEqual(entry["kind"], "model error")
+        self.assertEqual(first["verify_status"], entry["reason"])
+        for word in words:
+            self.assertIn(word, entry["reason"])
+        self.assertIs(by_id(decisions, "decision_id", "d-2")["verify"]["within_tolerance"], True)
+        self.assertEqual((report["hit_rate"]["hits"], report["decisions"]["verified"]), (1, 1))
+        self.assertEqual(states[1]["residual"], [])
+        self.assertIn("d-1", states[1]["residual_status"])
+        self.assertTrue(states[3]["residual"])
+
+    def test_a_channel_with_no_colour_temperature(self):
+        self.assert_goes_on(*run(*self.records(), data=self.DUAL), "needs cct_k")  # predict.py's own words
+
+    def test_a_channel_at_0_kelvin(self):
+        self.assert_goes_on(*run(*self.records(0), data=self.DUAL), "needs cct_k")  # predict.py refuses 0 K before any division
+
+    def test_a_channel_the_model_has_no_basis_for(self):
+        decisions, frames = self.records(2700)
+        decisions[0]["applied_scene"]["light.other"] = {"status": "sent", "readback": {"level": 0.5, "cct_k": 2700}, "steps": []}
+        self.assert_goes_on(*run(decisions, frames, data=self.DUAL), "light.other")
+
+    def test_through_the_command_line_with_no_traceback(self):
+        decisions, frames = self.records()
+        out, report = self.preview(decisions, frames, self.DUAL)
+        self.assertIn("decisions verified 1 of 2, 1 not verified", out)
+        self.assertIn("1 model error", out)
+        self.assertEqual(report["hit_rate"]["hits"], 1)
+
+    def test_every_decision_failing_is_insufficient_not_a_crash(self):
+        decisions, frames = self.records()
+        _, _, report = run(decisions[:1], frames[:2], data=self.DUAL)
+        self.assertEqual((report["decisions"]["verified"], report["hit_rate"]["verdict"]), (0, "insufficient"))
+
+
 class TwoEvenings(unittest.TestCase):
     """Frames are keyed by ts. Two may share a derived ls-HHMMSS id on different days, and each decision reads its own."""
     DAY = 86400.0

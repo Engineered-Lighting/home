@@ -16,6 +16,8 @@ from records import FRAME_APART_S, SAME_EVENING_S, BadFile, is_number, light_sta
 
 TOLERANCE_STATUS = "relative, either way; target, to validate"
 SCORED_BASES = ("measured", "fallback_patch")
+OWN_ROUNDING = 0.0005 + 1e-9  # how far a Decision's predicted.surfaces, rounded to 3 places, can be from the sum it rounded
+MODEL_ERRORS = (LookupError, TypeError, ValueError, AttributeError, ArithmeticError)  # what a prediction can raise on one decision
 # Why a decision with a verify frame judged nothing, the first of these that any of its points gives.
 NOT_JUDGED = ("read frame stale", "no read frame", "no surface map", "unknown state", "nothing readable", "nothing lit")
 
@@ -47,6 +49,19 @@ def changed_light(now, was, tolerance):
     """
     brighter, moved = max(now, was), abs(now - was)
     return moved / tolerance if moved < tolerance * brighter else brighter
+
+
+def level_of(scene):
+    """The level a record gives a channel: 0 when off, and None, unknown, for a lit bulb with no level or a bulb never seen."""
+    if not scene:
+        return None
+    if scene.get("on") is False:
+        return 0.0
+    return None if scene.get("level") is None else float(scene["level"])
+
+
+def model_error(e):
+    return "model error: " + str(e.args[0] if isinstance(e, KeyError) and e.args else e)
 
 
 def percentile(sorted_values, q):
@@ -85,15 +100,19 @@ class Frame:
         return float(e["value"]), None
 
 
+def pin_level(pinned):
+    """A pin's level_pct: 0 when it says off, None when it gives none."""
+    return 0.0 if pinned.get("level_pct") is None and pinned.get("on") is False else pinned.get("level_pct")
+
+
 class Hold:
-    def __init__(self, entity_id, channels, level, cct_k, since, ended, revision, ref):
-        self.entity_id, self.channels = entity_id, list(channels or [])
+    def __init__(self, entity_id, channels, level, cct_k, since, ended, revision, ref, canon):
+        self.names = {canon(entity_id)} | {canon(f"{entity_id}.{c}") for c in channels or []}
         self.level, self.cct_k = level, cct_k
         self.since, self.ended, self.revision, self.ref = since, ended, revision, ref
 
     def keys(self, state):
-        names = {self.entity_id} | {f"{self.entity_id}.{c}" for c in self.channels}
-        return [k for k in state if k in names]
+        return [k for k in state if k in self.names]
 
     def active(self, t):
         return self.since <= t and (self.ended is None or self.ended > t)
@@ -114,6 +133,7 @@ class Dec:
     def __init__(self, rec, run):
         self.rec = rec
         self.id = rec.get("decision_id")
+        self.canon = run.model.canon
         inputs = rec.get("inputs") or {}
         self.inputs = inputs
         ts, read_ts = rec.get("ts"), inputs.get("light_state_ts")
@@ -125,7 +145,7 @@ class Dec:
         except ValueError:
             raise BadFile(f"decision {self.id}: its clock time {ts!r} has no date, and nothing in the record or the frames gives one") from None
         self.ref, self.no_ref = run.read_frame(inputs, self.ts)
-        self.problem = self.stale_read = None
+        self.problem = self.stale_read = self.differs = None
         self.problem_kind = "no settle time"
         try:
             self.steps = settle.decision_steps(rec, self.resolve, run.m)
@@ -141,10 +161,10 @@ class Dec:
             self.problem, self.problem_kind = f"light model {lm} in the decision, {run.model.version} loaded", "another light model"
 
     def before_state(self):
-        state = {}
+        """The state the decision read: a level of None where it read none, for a channel it lists as well as those it read."""
+        state = {self.canon(ch): {"level": None, "cct_k": None} for ch in self.rec.get("applied_scene") or {}}
         for ch, a in (self.inputs.get("actuator_state") or {}).items():
-            on = a.get("on", True) is not False
-            state[ch] = {"level": float(a.get("level") or 0) if on else 0.0, "cct_k": a.get("cct_k")}
+            state[self.canon(ch)] = {"level": level_of(a), "cct_k": (a or {}).get("cct_k")}
         return state
 
     def state_at(self, t, holds):
@@ -152,11 +172,12 @@ class Dec:
         state = self.before_state()
         held, read_back = set(), set()
         for ch, a in (self.rec.get("applied_scene") or {}).items():
+            ch, a = self.canon(ch), a or {}
             rb = a.get("readback") or {}
             prev = state.get(ch, {})
-            state[ch] = {"level": float(rb.get("level") or 0),
-                         "cct_k": rb.get("cct_k", prev.get("cct_k"))}
-            if rb.get("level") is not None:
+            level = level_of(rb)
+            state[ch] = {"level": level, "cct_k": rb.get("cct_k", prev.get("cct_k"))}
+            if level is not None:
                 read_back.add(ch)
             if a.get("status") in ("held", "superseded"):
                 held.add(ch)
@@ -165,17 +186,20 @@ class Dec:
         pins = []
         for h in hold_set.get("held") or []:
             p = h.get("pinned") or {}
-            pins.append(Hold(h.get("entity_id"), h.get("channels"), p.get("level_pct"), p.get("cct_k"),
-                             -math.inf, None, revision, self.id))
+            pins.append(Hold(h.get("entity_id"), h.get("channels"), pin_level(p), p.get("cct_k"),
+                             -math.inf, None, revision, self.id, self.canon))
         pins += sorted((h for h in holds if h.active(t) and h.after_copy(revision, self.ts)), key=Hold.order)
         for h in pins:
             for ch in h.keys(state):
                 held.add(ch)
                 # this decision's read-back comes after its own copy: a game's vacancy turns a held bulb off and keeps the hold
-                if h.ref == self.id and ch in read_back:
+                own = h.ref == self.id
+                if own and ch in read_back:
                     continue
                 if h.level is not None:
                     state[ch]["level"] = float(h.level) / 100.0
+                elif not own:  # a person set it, after this decision read it, and nothing says where
+                    state[ch]["level"] = None
                 if h.cct_k is not None:
                     state[ch]["cct_k"] = h.cct_k
             if h.revision is not None and (revision is None or h.revision > revision):
@@ -223,9 +247,9 @@ class Dec:
 
     def served_by_changed(self):
         served = set()
-        recipients = self.rec.get("recipients") or {}
+        recipients = {self.canon(ch): r for ch, r in (self.rec.get("recipients") or {}).items()}
         for ch in self.changed:
-            served |= set((recipients.get(ch) or {}).get("served") or [])
+            served |= set((recipients.get(self.canon(ch)) or {}).get("served") or [])
         return served
 
 
@@ -300,9 +324,9 @@ class Run:
         h = c.get("hold")
         if h:
             p = h.get("pinned") or {}
-            self.holds.append(Hold(h.get("entity_id"), h.get("channels"), p.get("level_pct"), p.get("cct_k"),
+            self.holds.append(Hold(h.get("entity_id"), h.get("channels"), pin_level(p), p.get("cct_k"),
                                    resolve(h.get("since") or c.get("ts")), resolve(h.get("ended")),
-                                   h.get("hold_set_revision"), c.get("correction_id")))
+                                   h.get("hold_set_revision"), c.get("correction_id"), self.model.canon))
 
     # -- shared pieces --------------------------------------------------------
 
@@ -320,6 +344,31 @@ class Run:
         extra = self.m["uncertainty_abs_lx"] if unit == "lx" else 0.0
         return self.m["uncertainty_rel"] * abs(value) + extra
 
+    def own_prediction_differs(self, d):
+        """{surface: why} where a Stage 1 model and map do not give what the Decision says they gave for its own read-backs.
+
+        A Decision does not name its map, and its model's version says nothing of the blocks, so this is what can tell a map
+        that is not the one it ran on: a surface read through it would be judged against someone else's numbers. Holds past
+        its copy move what is verified, not this. Nothing to compare on den-verify's own shape, whose fixtures hold placeholders.
+        """
+        if d.differs is None:
+            d.differs = {}
+            if self.model.stage1:
+                logged = (d.rec.get("predicted") or {}).get("surfaces") or {}
+                computed = self.model.predict(d.state_at(d.ts, ())[0])
+                for sid, value in logged.items():
+                    if is_number(value) and is_number(computed.get(sid)) and abs(computed[sid] - value) > OWN_ROUNDING:
+                        d.differs[sid] = (f"{sid}: this model and map give {computed[sid]:.3f} for the decision's own read-backs and its "
+                                          f"predicted.surfaces says {value}: check --surfaces, and that this is the model it ran on")
+        return d.differs
+
+    def no_prediction(self, state, parts, sid, when):
+        """Why a surface has no predicted light: a bulb of unknown state there, or no block of it with a value."""
+        names = [c for c, s in state.items() if s["level"] is None and parts[c][sid] is None]
+        if names:
+            return f"unknown state: {', '.join(names)} has no level {when} this decision", "unknown state"
+        return f"light model {self.model.version} has no value at any block of {sid}: the fit excluded them", "nothing readable"
+
     def evaluate(self, d, frame, t):
         """Every surface the model predicts, at frame f, against d's actual resulting state."""
         m, model = self.m, self.model
@@ -332,6 +381,7 @@ class Run:
         ref = d.ref
         out = {}
         unit_ok = frame.unit == model.basis_unit
+        differs = self.own_prediction_differs(d)
         for sid in model.surfaces:
             row = {"point_id": sid, "unit": frame.unit}
             measured, why = frame.usable(sid, m) if unit_ok else (None, "unit mismatch")
@@ -344,17 +394,29 @@ class Run:
             elif ref.unit == frame.unit:
                 ref_val, rwhy = ref.usable(sid, m)
                 rwhy = rwhy and f"reference frame: {rwhy}"
-            if m["background"] == "zero":
-                background = 0.0
-            else:
-                background = None if ref_val is None else ref_val - before[sid]
-            predicted = None if background is None else background + after[sid]
+            # the state before only matters through the read frame: under zero the level check stands without it
+            light, was_light = after[sid], before[sid]
+            reads_frame = m["background"] != "zero"
+            predicted = None
+            if light is None or (was_light is None and reads_frame):
+                if ref_val is not None or not reads_frame:
+                    rwhy, rkind = (self.no_prediction(before_state, parts_before, sid, "before") if light is not None else
+                                   self.no_prediction(state, parts, sid, "after" if was_light is not None else "before or after"))
+            elif not reads_frame:
+                predicted = light
+            elif ref_val is not None:
+                predicted = ref_val - was_light + light
+            predicted_change = None if light is None or was_light is None else light - was_light
+            if sid in differs:
+                predicted, predicted_change, rwhy, rkind = None, None, differs[sid], "no surface map"
             row.update(measured=measured, why=why, predicted=predicted, ref_value=ref_val,
-                       predicted_change=after[sid] - before[sid])
+                       predicted_change=predicted_change)
             # each channel at its brighter level: one held off gives no light now, and is still why a point moved
             brightest = own = free = held_light = held_moved = 0.0
-            for c in parts:
+            for c in parts if predicted is not None else ():
                 now, was = parts[c][sid], parts_before[c][sid] if c in parts_before else 0.0
+                if was is None:  # under zero, a bulb read nowhere: nothing says it moved, so it widens nothing
+                    was = now
                 if c in held:
                     held_light += max(now, was)
                     held_moved += abs(now - was)
@@ -371,7 +433,7 @@ class Run:
             else:
                 self.judge_level(row, measured, predicted, ref_val, brightest, own, frame.unit)
             # increments: measured change against the model's own change
-            if measured is not None and ref_val is not None:
+            if measured is not None and ref_val is not None and predicted_change is not None:
                 mc = measured - ref_val
                 unc = self.u(measured, frame.unit) + self.u(ref_val, frame.unit)
                 row["increment"] = {
@@ -579,8 +641,8 @@ class Run:
             return None, f"decision {d.id}: {d.stale_read}"
         try:
             rows, revision = self.evaluate(d, frame, frame.ts)
-        except KeyError as e:
-            return None, f"decision {d.id}: {e.args[0]}"
+        except MODEL_ERRORS as e:
+            return None, f"decision {d.id}: {model_error(e)}"
         occ, _ = self.occupied(frame.ts)
         entries = []
         for sid, row in rows.items():
@@ -700,7 +762,7 @@ class Run:
         below_noise = {"count": 0, "hits": 0}
         wide_by_day = {}
         excluded_by_status = {"within": 0, "outside": 0}
-        not_admitted, not_verified, read_frame_stale = [], [], []
+        not_admitted, not_verified, read_frame_stale, unknown_state = [], [], [], []
         spill_counts, inc_counts = {}, {}
 
         def unjudged(d, rec, kind, why):
@@ -717,11 +779,14 @@ class Run:
                 continue
             try:
                 verify, whys, counted = self.verify(d, frame)
-            except KeyError as e:
+            except MODEL_ERRORS as e:  # one decision's: the run goes on
                 rec["verify"] = None
-                unjudged(d, rec, "model error", str(e.args[0]))
+                unjudged(d, rec, "model error", model_error(e))
                 continue
             rec["verify"] = verify
+            unknown = [text for kind, text in whys if kind == "unknown state"]
+            if unknown:
+                unknown_state.append({"decision_id": d.id, "points": len(unknown), "why": unknown[0]})
             if verify["within_tolerance"] is None:
                 unjudged(d, rec, *self.not_judged(verify, whys, counted))
             else:
@@ -801,12 +866,13 @@ class Run:
             rate["verdict"] = judged[1]
         report = {
             "tool": "den-verify", "rung": 10, "scored": self.scored,
-            "model": {"version": self.model.version, "basis_unit": self.model.basis_unit,
-                      "backend": self.model.backend},
+            "backend": self.model.backend, "predict_sha256": self.model.predict_sha256,
+            "model": self.model.describe(),
             "decisions": {"total": len(self.decs), "verified": len(self.decs) - len(not_verified),
                           "not_verified": not_verified,
                           "not_verified_by_kind": dict(Counter(e["kind"] for e in not_verified)),
-                          "not_admitted": not_admitted, "read_frame_stale": read_frame_stale},
+                          "not_admitted": not_admitted, "read_frame_stale": read_frame_stale,
+                          "unknown_state": unknown_state},
             "frames": frame_counts,
             "hit_rate": rate,
             "excluded_held_or_superseded": excluded_held,

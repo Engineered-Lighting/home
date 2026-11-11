@@ -268,9 +268,10 @@ export function createPointsMaterial() {
  *
  *   - point-features.mjs gives each point a normal, an edge strength and its
  *     sample spacing (in a worker, once per load);
- *   - each point is drawn about the size of the surface patch it stands for,
- *     0.9..2.4 px, and overlapping points share their light, so a surface is
- *     equally bright at every zoom;
+ *   - each point is drawn about 3x wider than the surface patch it stands
+ *     for (2..4 px) with a soft falloff, and overlapping points share their
+ *     light, so a surface is an even, quiet grain rather than a speckle of
+ *     separate dots, equally bright at every zoom;
  *   - additive, so the cloud glows; a depth-only pass of the same points,
  *     pushed 4 cm (+1% of depth) back along the view ray, lets near surfaces
  *     hide what is behind them without hiding themselves (additive alone is
@@ -281,8 +282,11 @@ export function createPointsMaterial() {
  * layer and the WebGPU port still start from it. Opt out per browser with
  * localStorage 'apartment3d.pointLook' = 'classic'.
  */
-export const ETCHED_POINT_MIN_PX = 0.9;
-export const ETCHED_POINT_MAX_PX = 2.4;
+export const ETCHED_POINT_MIN_PX = 2.0;
+export const ETCHED_POINT_MAX_PX = 4.0;
+/* Each point is drawn this many times wider than the patch it stands for, with a soft falloff, so
+ * neighbours blend into an even surface instead of a speckle of separate dots. */
+export const ETCHED_POINT_FOOTPRINT = 3.0;
 export const ETCHED_DEPTH_BIAS_M = 0.04;
 export const ETCHED_GAIN_CLOSE = 2.4;
 export const ETCHED_GAIN_OVERVIEW = 3.1;
@@ -298,7 +302,7 @@ uniform float uFadeFar;
 uniform float uViewportPx;
 uniform float uEtchGain;
 
-attribute float intensity;
+attribute float aTone;
 attribute float aEdge;
 attribute float aSpacing;
 
@@ -318,11 +322,12 @@ void main() {
     float facing = clamp(abs(dot(normalize(normalMatrix * normal), normalize(-mvPosition.xyz))), 0.1, 1.0);
     float focalPx = projectionMatrix[1][1] * 0.5 * uViewportPx;
     float spacePx = aSpacing * 0.255 * focalPx / max(depth, 0.2);   // aSpacing: mm / 255
-    float size = clamp(spacePx * (1.0 + 0.5 * aEdge), ${ETCHED_POINT_MIN_PX.toFixed(2)} * uPixelRatio, ${ETCHED_POINT_MAX_PX.toFixed(2)} * uPixelRatio);
-    float cover = clamp(spacePx * spacePx * facing / (size * size), 0.0, 1.0);
+    float size = clamp(spacePx * ${ETCHED_POINT_FOOTPRINT.toFixed(2)}, ${ETCHED_POINT_MIN_PX.toFixed(2)} * uPixelRatio, ${ETCHED_POINT_MAX_PX.toFixed(2)} * uPixelRatio);
+    float cover = clamp(1.4 * spacePx * spacePx * facing / (size * size), 0.0, 1.4);
 
-    float light = 0.02 + 0.45 * pow(intensity, 2.2) + 1.6 * aEdge;
-    vEtch = light * (0.5 + r * r) * mix(0.55, 1.0, facing) * (0.2 + 0.8 * fade) * uEtchGain * cover;
+    // tone and edge are averaged over ~10 cm (point-features.mjs), so surfaces are quiet, not per-point noise
+    float light = 0.02 + 0.35 * pow(aTone, 2.2) + 1.6 * aEdge;
+    vEtch = light * (0.92 + 0.16 * r) * mix(0.55, 1.0, facing) * (0.2 + 0.8 * fade) * uEtchGain * cover;
 
     gl_PointSize = size;
     gl_Position = projectionMatrix * mvPosition;
@@ -341,7 +346,7 @@ void main() {
     if (d > 0.5) discard;
     float cutawayKeep = homeDollhouseKeep();
     if (cutawayKeep <= 0.001) discard;
-    vec3 c = uGlowColor * vEtch * (1.0 - smoothstep(0.15, 0.5, d)) * uOpacity * cutawayKeep;
+    vec3 c = uGlowColor * vEtch * exp(-d * d * 9.0) * uOpacity * cutawayKeep;
     gl_FragColor = vec4(c, max(c.r, max(c.g, c.b)));   // premultiplied, added
 }
 `;
@@ -460,6 +465,7 @@ export async function attachEtchedLook(points, base, { signal } = {}) {
     if (signal?.aborted) throw new DOMException('scene_load_aborted', 'AbortError');
     geometry.setAttribute('normal', new THREE.BufferAttribute(features.normal, 3, true));
     geometry.setAttribute('aEdge', new THREE.BufferAttribute(features.edge, 1, true));
+    geometry.setAttribute('aTone', new THREE.BufferAttribute(features.tone, 1, true));
     geometry.setAttribute('aSpacing', new THREE.BufferAttribute(features.spacing, 1, true));
     const { color, depth, uniforms } = createEtchedPointsMaterials(base);
     const occluder = new THREE.Points(geometry, depth);

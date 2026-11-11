@@ -62,9 +62,17 @@ test('features: normals follow each plane, edges light the crease and the stripe
   assert.ok(mean(nx, kind, 'wall') > 0.97, 'wall normals point out of the wall');
   const edge = Array.from(f.edge, e => e / 255);
   const plain = Math.max(mean(edge, kind, 'floor'), mean(edge, kind, 'wall'));
-  assert.ok(mean(edge, kind, 'crease') > 0.6, `the crease is lit (${mean(edge, kind, 'crease').toFixed(2)})`);
-  assert.ok(mean(edge, kind, 'stripe') > 0.4, `the painted stripe is lit (${mean(edge, kind, 'stripe').toFixed(2)})`);
+  assert.ok(mean(edge, kind, 'crease') > 0.5, `the crease is lit (${mean(edge, kind, 'crease').toFixed(2)})`);
+  // contrast lights less than shape (a photo scan's intensity carries baked light), but it does light
+  const stripe = mean(edge, kind, 'stripe');
+  assert.ok(stripe > 0.15 && stripe <= Features.POINT_FEATURE_CONTRAST_WEIGHT + 0.01, `the painted stripe is lit, softly (${stripe.toFixed(2)})`);
+  assert.ok(stripe < mean(edge, kind, 'crease'), 'a printed edge lights less than a corner');
   assert.ok(plain < 0.1, `plain surfaces stay dark (${plain.toFixed(2)})`);
+  // tone is the intensity averaged over ~10 cm: quiet on plain floor, darker over the stripe
+  const tone = Array.from(f.tone);
+  assert.equal(tone.length, n);
+  assert.ok(Math.abs(mean(tone, kind, 'floor') - 150) < 2, `plain tone follows the scan (${mean(tone, kind, 'floor').toFixed(1)})`);
+  assert.ok(mean(tone, kind, 'stripe') < mean(tone, kind, 'floor') - 20, `the 3 cm stripe darkens its tone, softened over ~10 cm (${mean(tone, kind, 'stripe').toFixed(1)})`);
   const spacing = mean(Array.from(f.spacing), kind, 'floor');
   assert.ok(spacing > 6 && spacing < 16, `spacing near the 10 mm sampling (${spacing.toFixed(1)} mm)`);
   // deterministic
@@ -75,6 +83,7 @@ test('features: normals follow each plane, edges light the crease and the stripe
 test('features: empty and short inputs', () => {
   const empty = Features.computePointFeatures(new Float32Array(0), new Uint8Array(0), 0);
   assert.equal(empty.edge.length, 0);
+  assert.equal(empty.tone.length, 0);
   const one = Features.computePointFeatures(new Float32Array([1, 2, 3]), new Uint8Array([9]), 5);
   assert.equal(one.edge.length, 1);
   assert.equal(one.spacing[0] >= 1, true);

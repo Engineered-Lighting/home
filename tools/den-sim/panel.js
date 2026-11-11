@@ -163,9 +163,11 @@
     return (live.virtualFixturesReadback()?.fixtures || []).map(row => live.virtualFixtureInteractionDescriptor(row.fixture_id)).filter(Boolean);
   };
   const distance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]));
+  // Home's fixture ids carry the site's name: the panel shows the short one, as the Decision card does.
+  const shortId = id => String(id).match(/mount-\d+|fixture-\d+/)?.[0] || id;
   function sample() {
     const fixtures = fixtureDescriptors(), lit = fixtures.find(row => row.state.spotlight.on);
-    values.fixture.textContent = lit ? lit.fixture_id : '–';
+    values.fixture.textContent = lit ? shortId(lit.fixture_id) : '–';
     values.spot.textContent = lit ? `on, level ${fmt(lit.state.spotlight.brightness, 2)}` : fixtures.length ? 'all four off' : '–';
     values.seen.textContent = String(sim.seen.size);
     values.trail.textContent = [...sim.seen.keys()].slice(-6).join('  ') || '–';

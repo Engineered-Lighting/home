@@ -241,7 +241,12 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.match(await page.textContent('[data-den-sim-plain-file]'), /plain file with no signature, so a hand-typed one would pass/);
     assert.equal(await page.locator('[data-den-sim-ask="rq-00002"] [data-den-sim-fields] dt').count(), 10, 'all ten fields');
     assert.match(await page.textContent('[data-den-sim-ask="rq-00002"] [data-den-sim-fields]'), /activity hypothesisreading/);
-    t.diagnostic(`${aims.length} distinct aims, ${aims[0]} to ${aims.at(-1)}, ${held.feed.summary.fixture_id}`);
+    // The read-back row and this log name the fixture by its short id: Home's full id carries the site's name.
+    await page.waitForFunction(() => document.querySelector('[data-den-sim-value="fixture"]').textContent !== '–', null, { timeout: 5000 });
+    const shown = await page.textContent('[data-den-sim-value="fixture"]');
+    assert.match(shown, /^(fixture|mount)-0\d$/);
+    assert.ok(held.feed.summary.fixture_id.endsWith(shown), `${shown} is the lit fixture's short id`);
+    t.diagnostic(`${aims.length} distinct aims, ${aims[0]} to ${aims.at(-1)}, ${shown}`);
   });
 
   await t.test('the top line reads "not yet", lists why, and every row reads step 6\'s word', async () => {
@@ -361,6 +366,9 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.equal(command.ik.status, 'FICTIONAL'); assert.equal(command.ik.physical_eligible, false);
     assert.deepEqual([command.decision.fixture_id, command.decision.target_m, command.decision.level], [status.feed.summary.fixture_id, status.feed.summary.target_m, status.feed.summary.level],
       'the command is compiled from the Decision\'s fixture, target and level');
+    // The fixture's origin and reference, the private geometry's, stay in dry-run.json beside the click: the page never gets them.
+    const served = JSON.stringify(command), kept = JSON.parse(fs.readFileSync(path.join(status.run, `click-${status.click.click}`, 'dry-run.json'), 'utf8'));
+    assert.deepEqual([/aim_origin_m|horizontal_world_reference/.test(served), Object.hasOwn(kept.decision, 'aim_origin_m')], [false, true]);
     assert.match(await page.textContent('[data-den-sim-command]'), /From.*the Decision decide-\d+-\d+: F\d\.spot, its target_m and level/);
     assert.doesNotMatch(await page.textContent('[data-den-sim-command]'), /Home's angles/, 'the brain\'s numbers are gone from the command');
     const controls = await page.locator('#den-sim-panel button').allTextContents();
@@ -379,6 +387,8 @@ test('den simulation: honest and safe', { skip: SKIP, timeout: 600000 }, async t
     assert.deepEqual([stopped.click.stopped.hop, stopped.click.stopped.answer, stopped.feed.summary], [17, true, null]);
     assert.match(stopped.click.stopped.why, /^nobody is reading \(trk-\d+: engagement none, on the couch yes\)$/);
     assert.equal(await page.textContent('[data-den-sim-value="spot"]'), 'all four off');
+    // The panel draws the card from the status it polls, so it can land a moment after the phase does.
+    await page.waitForFunction(() => document.querySelector('[data-den-sim-decision-line]')?.textContent.startsWith('No Decision: '), null, { timeout: 10000 });
     assert.deepEqual(await page.locator('[data-den-sim-decision-line]').allTextContents(), [`No Decision: ${stopped.click.stopped.why}. Every spot stays off.`]);
     assert.equal(await page.isVisible('[data-den-sim-command]'), false, 'no Decision, no command');
     await page.waitForFunction(() => /^The click stopped: nobody is reading/.test(document.querySelector('[data-den-sim-message]').textContent), null, { timeout: 10000 });

@@ -1610,6 +1610,8 @@
     // The Jetson (arm A) is the camera computer; LA reports its own kernel faults.
     preflight_kernel_evidence: arm => 'a health check on ' + (arm === 'b' ? 'the LA computer' : 'the camera computer') + ' flagged a recent system error',
     preflight_kernel_fault: arm => 'a health check on ' + (arm === 'b' ? 'the LA computer' : 'the camera computer') + ' flagged a recent system error',
+    // Not a fault: the system-log scan ran out of time and resumes where it stopped.
+    preflight_kernel_scan_incomplete: arm => 'a health check on ' + hostOf(arm) + ' is still catching up on its system log',
     launch_unproven: arm => arm === 'a' ? 'the camera computer’s worker didn’t come up' : 'the LA worker didn’t come up',
     preflight_vram: 'the LA GPU is busy',
     worker_busy: 'a previous run is still cleaning up',

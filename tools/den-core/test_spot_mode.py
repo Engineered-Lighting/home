@@ -48,10 +48,10 @@ FULL = {"F1.spot": 246.171, "F2.spot": 580.0, "F3.spot": 12.0, "F4.spot": 400.0}
 LEVELS = [1, 28, 57, 85, 113, 142, 170, 198, 200, 227, 254]  # hop 16's: the solve's own brightness values, and 1
 
 
-def light_model():
+def light_model(full=None, fixtures=None):
     """A typed model in hop 16's shape: one basis row per fixture at the one spot, unit relative, fake, with its fixtures."""
     channels, basis, cct, dimming = [], {}, {}, {}
-    for key, value in FULL.items():
+    for key, value in (full or FULL).items():
         channels.append({"channel_key": key, "entity_id": key, "fixture_id": key.split(".")[0], "channel_id": "spot", "kind": "spot",
                          "cct_range_k": [2700, 2700]})
         basis[key + "@2700K"] = {"sofa-book": value}
@@ -61,7 +61,12 @@ def light_model():
             "error": {"median_pct": None, "p90_pct": None}, "channels": channels, "basis": basis, "cct": cct, "dimming": dimming,
             "sample_points": [{"point_id": "sofa-book", "kind": "task", "xyz": SPOT, "normal": [0, 0, 1]}],
             "surfaces": {"sofa-book": ["sofa-book"]}, "aim_points": {"sofa-book": {"point_m": SPOT, "normal": [0, 0, 1]}},
-            "fixtures": copy.deepcopy(FIXTURES), "provenance": {"lumens": "assumed", "beam": "datasheet"}}
+            "fixtures": copy.deepcopy(fixtures or FIXTURES), "provenance": {"lumens": "assumed", "beam": "datasheet"}}
+
+
+def g(u):
+    """The typed model's dimming at brightness u, as light_model writes it."""
+    return round((u / 254) ** 2.5, 6)
 
 
 def person(t, track="trk-1", state="engaged", heading=0.0, head=HEAD, surface="sofa-book"):
@@ -185,6 +190,69 @@ class SpotTest(unittest.TestCase):
         d = self.click(items)[2][-1]
         lit = {c: d["recipients"][c]["targets"][0]["track_id"] for c in CHANNELS if d["requested_scene"][c]["on"]}
         self.assertEqual(lit, {"F1.spot": "trk-1", "F2.spot": "trk-2"})
+
+    def use_model(self, full=None, fixtures=None):
+        self.model.write_text(json.dumps(light_model(full, fixtures)), encoding="utf-8")
+
+    def test_the_heading_turns_clockwise_from_plus_y(self):
+        # Heading 90 faces +x. A sits behind and to the left of the reader at the seat, B in front and to the right: read
+        # counterclockwise, or with sine and cosine swapped, the reader faces -x or +y and the two swap.
+        a, b = [-1.0, 0.7, 2.4], [1.0, -1.3, 2.4]
+        rule = coordinator._spot_rule()
+        fixture = lambda origin: {"aim_origin_m": origin, "horizontal_world_reference": [0, 1, 0], "limits": None}  # noqa: E731
+        for heading, (want_a, want_b) in ((90.0, (None, "in_front_of_reader")), (270.0, ("in_front_of_reader", None))):
+            with self.subTest(heading=heading):
+                reader = person(T0, heading=heading)
+                self.assertEqual((rule.refusal(fixture(a), reader, SPOT), rule.refusal(fixture(b), reader, SPOT)), (want_a, want_b))
+        self.assertEqual(rule.startup_line({"A": fixture(a), "B": fixture(b)}, [0.0, -0.3, 0.45], [1.0, 0.0], SPOT),
+                         ["A clear", "B refused: in front of reader"])
+        # Through the coordinator: facing +x, F1 (to the left and behind) lights and F2 (in front) is refused.
+        d = self.click(scene(heading=90.0))[2][0]
+        self.assertEqual([c for c in CHANNELS if d["requested_scene"][c]["on"]], ["F1.spot"])
+        self.assertIn({"channel": "F2.spot", "reason": "in_front_of_reader", "hold_ref": None, "track_id": "trk-1"}, d["skipped"])
+
+    def test_a_tracked_non_reader_is_not_a_reader(self):
+        # A reading track and a phone track facing the other way: only the reader gets a target, and F2 stays off.
+        items = scene() + [(T0 + 11.4, "person_state", person(T0 + 11.4, track="trk-2", state="none", heading=180.0))]
+        decisions = self.click(items)[2]
+        self.assertEqual([sorted(d["targets"]) for d in decisions], [["trk-1"]])
+        self.assertEqual([c for c in CHANNELS if decisions[0]["requested_scene"][c]["on"]], ["F1.spot"])
+
+    def test_two_readers_who_want_the_same_fixture_get_it_once(self):
+        # Both face +y, so F1 is the only fixture either may have: the first reader keeps it, the second gets no beam, and
+        # F1 is neither refused nor offered for the second.
+        items = scene() + [(T0 + 11.4, "person_state", person(T0 + 11.4, track="trk-2"))]
+        d = self.click(items)[2][-1]
+        lit = {c: d["recipients"][c]["targets"][0]["track_id"] for c in CHANNELS if d["requested_scene"][c]["on"]}
+        self.assertEqual(lit, {"F1.spot": "trk-1"})
+        self.assertIn("no beam for trk-2", d["why"])
+        self.assertEqual(sorted(s["channel"] for s in d["skipped"] if s["track_id"] == "trk-2"), ["F2.spot", "F3.spot", "F4.spot"])
+        self.assertEqual([c["scene_id"] for c in d["candidates"] if c["track_id"] == "trk-2"], ["off"])
+
+    def test_the_look_level_200_is_tried_and_can_win(self):
+        # F1 gives exactly the target at the look's brightness, 200, between the solve's 198 and 227.
+        self.use_model(full={**FULL, "F1.spot": 300 / g(200)})
+        d = self.click(scene())[2][0]
+        self.assertEqual(d["requested_scene"]["F1.spot"]["level"], 200 / 254)
+        self.assertEqual([c["scene_id"] for c in d["candidates"] if c["why"] == "chosen"], ["F1.spot@200"])
+
+    def test_the_excess_weighs_half_the_shortfall_and_off_pulls_a_little(self):
+        # F1 gives 360 at 198 (20% over) and about 246 at 170 (18% short): at half weight the excess costs less, at full it
+        # would not. Each cost is the formula's, the pull toward off included.
+        self.use_model(full={**FULL, "F1.spot": 360 / g(198)})
+        d = self.click(scene(), "excess")[2][0]
+        chosen = [c for c in d["candidates"] if c["why"] == "chosen"]
+        self.assertEqual([c["scene_id"] for c in chosen], ["F1.spot@198"])
+        self.assertAlmostEqual(chosen[0]["cost"], 0.5 * 0.2 ** 2 + 0.001 * 198 / 255, places=6)
+        # A fixture that gives nothing at the spot costs a little more than off at its dimmest level, so off is chosen
+        # over it by the pull, not by a tie.
+        self.use_model(full={**FULL, "F1.spot": 0.0})
+        d = self.click(scene(), "dark")[2][0]
+        self.assertFalse(any(s["on"] for s in d["requested_scene"].values()))
+        f1 = [c for c in d["candidates"] if c["scene_id"].startswith("F1.spot")]
+        self.assertEqual([c["scene_id"] for c in f1], ["F1.spot@28"])
+        self.assertAlmostEqual(f1[0]["cost"], 1.0 + 0.001 * 28 / 255, places=6)
+        self.assertEqual(f1[0]["why"], "rejected: cost %.6f, above the chosen 1.000000" % f1[0]["cost"])
 
     def test_reading_ending_turns_every_spot_off(self):
         decisions = self.click(scene(("starting", "engaged", "ending", "none")))[2]

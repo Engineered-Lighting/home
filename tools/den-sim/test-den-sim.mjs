@@ -31,7 +31,7 @@ import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs'
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import * as Bake from '../../app/src/home-3d/lit-bvh-bake.mjs';
 import * as Lit from '../../app/src/home-3d/lit-model.mjs';
-import { chainRequest } from './brain.mjs';
+import { aimNumbers, chainRequest } from './click.mjs';
 import { nextVersion, writeCouch } from './couch_to_room.mjs';
 import { EVIDENCE_S, decisionDocument, offDocument } from './decision_doc.mjs';
 import { createFeed, planSwing } from './feed.mjs';
@@ -50,11 +50,11 @@ const sleep = ms => new Promise(done => setTimeout(done, ms));
 // The site id, read from the one existing constant rather than written here.
 const SITE = Client.BASE.split('/').at(-1);
 // Click-path code: what a click runs or what serves it. The display file and the recorded side aside.
-const CLICK_PATH = ['run.mjs', 'brain.mjs', 'feed.mjs', 'panel.js', 'receipt.mjs', 'top_line.mjs', 'data-root.mjs', 'hops.json', 'chain.py', 'brain_run.py',
+const CLICK_PATH = ['run.mjs', 'brain.mjs', 'click.mjs', 'feed.mjs', 'panel.js', 'receipt.mjs', 'top_line.mjs', 'data-root.mjs', 'hops.json', 'chain.py',
   'dry_run.py', 'scene/frame_hash.py', 'couch_to_room.mjs', 'person.py', 'light_model.mjs', 'decision_doc.mjs'];
-// The plan's step 4 words up to hop 12, with no sofa mark saved and no reply on file: a click with a
-// person stops at hop 12, "Qwen has not seen these exact frames".
-const STEP4_UNASKED = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
+// The plan's words up to hop 12, with no sofa mark saved and no reply on file: a click with a person stops at hop 12,
+// "Qwen has not seen these exact frames". Hop 10 reads ADAPTER from step 6: occupancy from the track list.
+const STEP4_UNASKED = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'ADAPTER',
   11: 'ADAPTER', 12: 'MISSING' };
 const NOT_SEEN = /^Qwen has not seen these exact frames: 5 of 5 bodies have no reply on file$/;
 
@@ -152,7 +152,8 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
   for (const [name, [change, condition]] of Object.entries(controls)) {
     const got = edited(change);
     assert.equal(got.verdict, 'not yet', name);
-    assert.equal(got.line, 'Connected start to finish: not yet', name);
+    // An aim check that ran out of tolerance names itself; anything else reads plain "not yet".
+    assert.equal(got.line, `Connected start to finish: not yet${name === 'an aim check out of tolerance' ? ': Home did not follow the Decision' : ''}`, name);
     assert.ok(got.reasons.some(reason => reason.condition === condition), `${name} is condition ${condition}: ${JSON.stringify(got.reasons)}`);
   }
   for (const [name, n, why] of [['a phone click', 15, 'not reading: Qwen said phone use'], ['a standing click', 15, 'not on the couch'], ['every fixture refuses', 17, 'no fixture can light the spot']]) {
@@ -162,25 +163,25 @@ test('test 7: the top line reads yes only under the six conditions, and its coun
     assert.notEqual(got.verdict, 'yes');
   }
   assert.match(edited(stoppedAt(15, 'x')).count_line, /11 not reached$/);
-  // Step 5 as built: hop 15 reads ADAPTER and stops nothing, and the older brain still decides. A click whose person is
-  // not on the couch, the brain lighting anyway under its 1.5 m rule, reads "not yet": hops 16 and 24 to 26 aren't built,
-  // and hop 10 is still typed. Never "stopped at Person state": hop 15 feeds nothing until step 6.
-  const stepFive = r => {
-    Object.assign(r.rows[14], { person: [{ track_id: 'trk-1', on_couch: false, failed: ['position'] }] });
-    for (const n of [16, 24, 25, 26]) Object.assign(r.rows[n - 1], { word: 'MISSING', stand_ins: [], tools: [] });
-    Object.assign(r.rows[9], { word: 'SCRIPTED', stand_ins: ["the older brain's occupancy typed in brain_run.py; the track list only decides that it runs"] });
-    r.aim_check = null;
-  };
-  const off = edited(stepFive);
-  assert.equal(off.line, 'Connected start to finish: not yet');
-  assert.deepEqual(off.reasons.filter(reason => reason.hop === 15), [], 'hop 15 itself holds');
-  assert.deepEqual([...new Set(off.reasons.filter(reason => reason.condition === 6).map(reason => reason.hop))], [16, 24, 25, 26]);
-  assert.equal(off.count_line, '3 real, 14 adapter (9 real tools with a named stand-in, 5 written for this simulation), 5 scripted, 4 missing');
-  // The count follows hop 15's word: the same click with hop 15 MISSING counts one written adapter fewer (control).
-  assert.equal(edited(r => { stepFive(r); Object.assign(r.rows[14], { word: 'MISSING', stand_ins: [] }); }).count_line,
-    '3 real, 13 adapter (9 real tools with a named stand-in, 4 written for this simulation), 5 scripted, 5 missing');
-  // If the older brain refuses on that click, the rows before its stop don't hold (16 isn't built), so still "not yet".
-  assert.equal(edited(r => { stepFive(r); stoppedAt(17, 'Not reading · no spotlight')(r); }).verdict, 'not yet');
+  // Step 6 as built: the coordinator decides, hops 10 and 24 read ADAPTER, and only hops 25 and 26, step 7's, read MISSING.
+  // A lit click whose aim check holds reads "not yet" for those two alone; one whose aim check missed says so first.
+  const stepSix = r => { for (const n of [25, 26]) Object.assign(r.rows[n - 1], { word: 'MISSING', stand_ins: [], tools: [] }); };
+  const six = edited(stepSix);
+  assert.equal(six.line, 'Connected start to finish: not yet');
+  assert.deepEqual([...new Set(six.reasons.map(reason => `${reason.condition}:${reason.hop}`))], ['6:25', '6:26'], 'only step 7\'s two hops');
+  assert.equal(six.count_line, '3 real, 17 adapter (9 real tools with a named stand-in, 8 written for this simulation), 4 scripted, 2 missing');
+  const missed = edited(r => { stepSix(r); r.aim_check = { within_tolerance: false, why: 'Home did not follow the Decision' }; });
+  assert.equal(missed.line, 'Connected start to finish: not yet: Home did not follow the Decision');
+  assert.ok(missed.reasons.some(reason => reason.condition === 5 && reason.hop === 24));
+  // Phone, standing, a click where every fixture refuses, and nobody reading, each on step 6's rows: "stopped at", never
+  // "yes" or "not yet", because the rows up to the stop hold; hops 25 and 26 lie past it.
+  for (const [n, why] of [[17, 'nobody is reading (trk-1: engagement none, on the couch yes)'], [17, 'every fixture refused: F1 in front of reader, F2 in front of reader, F3 too far, F4 pan tilt infeasible'],
+    [17, 'no beam: trk-1 reads at handheld, which has no spot: no target'], [6, 'the detector saw nobody, nothing was asked']]) {
+    const got = edited(r => { stepSix(r); stoppedAt(n, why)(r); });
+    assert.deepEqual([got.verdict, got.line], ['stopped', `This click stopped at ${TABLE.hops[n - 1].name}: ${why}. That's the pipeline answering, not a break.`], why);
+  }
+  // Control: the same stop with hop 16 MISSING before it still reads "not yet": a stop is an answer only when the rows hold.
+  assert.equal(edited(r => { stepSix(r); stoppedAt(17, 'nobody is reading')(r); Object.assign(r.rows[15], { word: 'MISSING', stand_ins: [] }); }).verdict, 'not yet');
   assert.equal(edited(r => { r.pressed_again = true; }).line, 'Pressed again: press Reset for a new verdict');
   assert.equal(edited(r => { r.pressed_again = true; r.aim_check = null; }).verdict, 'pressed again', 'a second press needs no fresh aim check');
   assert.equal(edited(r => { r.pressed_again = true; stoppedAt(15, 'not on the couch')(r); }).verdict, 'stopped', 'a second press the pipeline answered still says so');
@@ -590,7 +591,7 @@ test('test 15, typed: the feed starts on the off document, lands a lit Decision 
   assert.throws(() => planSwing(null, BOOK, 1), /^Error: swing_readback_invalid$/);
   // A lit document through present(): every document sent validates, and the last lands on the Decision's point, bound.
   const lit = decisionDocument({ decision: typedDecision(), channels, asks: typedAsks(), personStates: [typedPerson()] });
-  const timeline = state => ({ summary: { lit: true, fixture_id: channels[1].fixture_id }, rows: [{ state, refusal: null, offset_s: 0 }] });
+  const timeline = state => ({ summary: { lit: true, fixture_id: channels[1].fixture_id }, rows: [{ state, refusal: null, offset_s: 0, lit: channels[1].fixture_id }] });
   feed.begin('typed');
   feed.play(timeline(lit.state), [readback]);
   for (const end = Date.now() + 5000; feed.readback().phase !== 'holding' && Date.now() < end;) await sleep(50);
@@ -620,6 +621,48 @@ test('test 15, typed: the feed starts on the off document, lands a lit Decision 
   feed.play(timeline(lit.state), [readback]);
   for (const end = Date.now() + 5000; feed.readback().phase !== 'holding' && Date.now() < end;) await sleep(50);
   assert.deepEqual([feed.readback().phase, feed.readback().refused, feed.current().fixtures[1].spot.on], ['holding', null, true]);
+});
+
+/* ---------- test 17, the command, and test 16's two aim numbers, on invented geometry ---------- */
+
+const dryRun = decision => JSON.parse(execFileSync('python', ['-B', path.join(HERE, 'dry_run.py')], { encoding: 'utf8', windowsHide: true, timeout: 60000,
+  input: JSON.stringify({ take: 'aaaaaaaaaaaa', decision, codec_tools: REFS.codec.tools, codec_contracts: REFS.codec.contracts }) }));
+const NEEDS_CODEC = fs.existsSync(path.join(REFS.codec.tools, 'c12_runtime_plan.py')) ? false : 'needs the codec on disk';
+
+test('test 17: the command comes from the Decision, NOT SENT, a moved target moves the plan bytes, and out of range is refused', { skip: NEEDS_CODEC }, () => {
+  const fixture = INVENTED[0], decision = target => ({ channel: 'F1.spot', fixture_id: fixture.fixture_id, aim_origin_m: fixture.aim_origin_m,
+    horizontal_world_reference: fixture.horizontal_world_reference, target_m: target, level: 198 / 254, cct_k: 2700, decision_id: 'decide-1-1' });
+  const here = dryRun(decision(BOOK)), moved = dryRun(decision([BOOK[0] + 0.3, BOOK[1], BOOK[2]]));
+  assert.deepEqual([here.sent, here.send_path, here.ik.ok, here.ik.status, here.ik.physical_eligible, here.decision.decision_id], [false, null, true, 'FICTIONAL', false, 'decide-1-1']);
+  assert.equal(here.spot.raw_duty, Math.round(198 / 254 * 4096), 'the Decision\'s level, unrounded, as the duty');
+  assert.ok(here.wire.packets.every(row => row.route === '/api/services/zha/issue_zigbee_cluster_command' && row.body.ieee === 'UNCOMMISSIONED'));
+  assert.notEqual(moved.plan.hex, here.plan.hex, 'a target 0.3 m off moves the plan bytes');
+  assert.notDeepEqual(moved.ik.target_centideg, here.ik.target_centideg);
+  assert.equal(dryRun(decision(BOOK)).plan.hex, here.plan.hex, 'control: the same Decision, the same bytes');
+  // Straight behind the fixture: the fictional profile's pan range refuses it, and the command says so instead of compiling.
+  const behind = dryRun(decision([fixture.aim_origin_m[0], fixture.aim_origin_m[1] - 2, 0.75]));
+  assert.deepEqual([behind.ik.ok, behind.plan, behind.wire, behind.sent], [false, null, null, false]);
+  assert.match(behind.ik.reason, /\S/);
+  assert.deepEqual([dryRun(null).ik, dryRun(null).sent, dryRun(null).send_path], [null, false, null], 'no lit Decision, no command');
+  // Control: no send path exists in what compiles or shows the command. A planted HTTP client is found.
+  const sends = /\b(urllib|http\.client|requests|socket\.create_connection|fetch\(|XMLHttpRequest)\b/;
+  assert.deepEqual(['dry_run.py', 'click.mjs'].filter(name => sends.test(read(name))), []);
+  assert.ok(sends.test('import urllib.request\n'), 'control: a planted send is found');
+});
+
+test('test 16, typed: the aim check\'s two numbers hold Home to the Decision within 0.05 degrees, and a beam 0.3 m or 1 m off fails', { skip: NEEDS_CODEC }, () => {
+  const fixture = INVENTED[1], ik = dryRun({ channel: 'F2.spot', fixture_id: fixture.fixture_id, aim_origin_m: fixture.aim_origin_m,
+    horizontal_world_reference: fixture.horizontal_world_reference, target_m: BOOK, level: 1, cct_k: 2700, decision_id: 'decide-1-1' });
+  // Home's own aim on a point, as aimAtTarget computes it: pan from the reference, tilt down from level.
+  const home = point => { const back = readbackNear(fixture, point, 0); return { fixture_id: fixture.fixture_id, display_origin_m: fixture.aim_origin_m, pan_deg: back.pan_deg, tilt_deg: back.tilt_deg, target_point: point }; };
+  const held = aimNumbers({ target: BOOK, command: ik, home: home(BOOK) });
+  assert.deepEqual([held.within_tolerance, held.decision_deg <= .05, held.ik_deg <= .05, held.why], [true, true, true, null], JSON.stringify(held));
+  for (const off of [0.3, 1]) {
+    const missed = aimNumbers({ target: BOOK, command: ik, home: home([BOOK[0] + off, BOOK[1], BOOK[2]]) });
+    assert.deepEqual([missed.within_tolerance, missed.why], [false, 'Home did not follow the Decision'], `${off} m off`);
+    assert.ok(missed.decision_deg > 1 && missed.ik_deg > 1, JSON.stringify(missed));
+  }
+  assert.equal(aimNumbers({ target: BOOK, command: { ik: { ok: false } }, home: home(BOOK) }), null, 'no compiled aim, no check');
 });
 
 /* ---------- test 2 and test 19: searches over code ---------- */
@@ -654,7 +697,7 @@ test('test 19: every Python process a click starts refuses sockets, name lookups
   const events = text => (text.match(/^NETWORK = \(([^)]*)\)/m)?.[1].match(/'[^']+'|"[^"]+"/g) || []).map(event => event.slice(1, -1)).sort();
   const want = events(read('scene/prepare.py'));
   assert.ok(want.includes('socket.gethostbyname') && want.includes('socket.getnameinfo') && want.length === 8, want.join(' '));
-  for (const name of ['chain.py', 'brain_run.py', 'dry_run.py']) {
+  for (const name of ['chain.py', 'dry_run.py']) {
     const text = read(name), hook = text.indexOf('sys.addaudithook(refuse_network)');
     assert.ok(hook > 0 && /if event in NETWORK:/.test(text), `${name} installs the refusal`);
     assert.deepEqual(events(text), want, `${name} refuses what prepare.py refuses`);
@@ -767,7 +810,8 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
   assert.ok(run.output().includes(`Light model (hop 16), built at page start: lm-den-sim-1, fake: true, unit relative, ${first.light_model.label}, sha256 ${sha256(lightFile)}`), run.output());
   assert.equal(JSON.parse(fs.readFileSync(lightFile, 'utf8')).fake, true);
   assert.deepEqual(first.scenes, display.map(({ take, label }) => ({ take, label })), 'the buttons carry labels and take ids, never the words');
-  for (const key of ['seat_m', 'point']) assert.ok(!JSON.stringify({ couch: first.couch, brain: first.brain }).includes(`"${key}"`), `${key} left the startup record`);
+  for (const key of ['seat_m', 'point']) assert.ok(!JSON.stringify({ couch: first.couch, command: first.command }).includes(`"${key}"`), `${key} left the startup record`);
+  assert.equal(first.brain, undefined, 'no older brain in the startup record');
   // The stand-in seat is a square, which has no single longest edge, so its facing is a tie-break, and the page says so.
   assert.match(first.placement.summary, /; the reader faces a tie-break, not the stated rule: no single edge of the seat's zone is longest/);
   const clicks = {};
@@ -783,7 +827,7 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
   const reading = clicks['Reading on the couch'];
   assert.deepEqual(Object.fromEntries(reading.view.rows.filter(row => row.reached).map(row => [row.n, row.word])), Object.fromEntries(Object.entries(STEP4_UNASKED).map(([n, word]) => [Number(n), word])));
   for (const { view } of Object.values(clicks)) assert.deepEqual(view.rows.map(row => row.name), TABLE.hops.map(hop => hop.name), 'every row is named as the table names it');
-  assert.equal(reading.view.top_line.count_line, '2 real, 6 adapter (5 real tools with a named stand-in, 1 written for this simulation), 3 scripted, 1 missing, 14 not reached');
+  assert.equal(reading.view.top_line.count_line, '2 real, 7 adapter (5 real tools with a named stand-in, 2 written for this simulation), 2 scripted, 1 missing, 14 not reached');
   // Each row under what it did on this click; the rows that did not run sit apart, never under "Ran on this click".
   const grouped = Object.entries(Object.groupBy(reading.view.rows, row => row.group)).map(([group, rows]) => [group, rows.map(row => row.n)]);
   assert.deepEqual(Object.fromEntries(grouped), { recorded: [1, 2, 3, 4, 5, 6], click: [7, 8, 9, 10, 11, 12], 'not run': [13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26] });
@@ -794,7 +838,7 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
     assert.deepEqual([view.stopped.hop, view.stopped.answer, NOT_SEEN.test(view.stopped.why)], [12, false, true], label);
     assert.equal(view.rows[11].word, 'MISSING');
     assert.ok(view.rows.filter(row => row.n > 12).every(row => !row.reached), `${label}: no need input`);
-    assert.deepEqual([now.feed.phase, now.feed.summary], ['pipeline_failed', null], `${label}: no brain, no beam`);
+    assert.deepEqual([now.feed.phase, now.feed.summary], ['pipeline_failed', null], `${label}: no Decision, no beam`);
     assert.equal(view.qwen.asks.length, 5);
     assert.ok(view.qwen.asks.every(ask => ask.said === 'no reply on file' && /^[0-9a-f]{12}$/.test(ask.body)));
   }
@@ -827,8 +871,10 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
   assert.deepEqual(rowOf(12).read.map(file => file.path), ['requests.jsonl']);
   assert.deepEqual(rowOf(12).owed.length, 5);
   // Every reason the reading click gives at step 4 with no reply on file, as (condition, hop): each one true
-  // now, and a new or a lost one shows. Hop 5: the stand-in seat and sockets; 10: occupancy still typed; 12: the miss.
-  const want = ['2:5', '2:5', '3:5', '3:10', '3:12', '6:12', 'null:12'];
+  // now, and a new or a lost one shows. Hop 5: the stand-in seat and sockets; 12: the miss. Hop 10 holds from step 6.
+  const want = ['2:5', '2:5', '3:5', '3:12', '6:12', 'null:12'];
+  assert.match(rowOf(10).summary, /^One occupancy event, on via den-track, at the first confirmed Track line \(trk-\d+\)/);
+  assert.deepEqual(rowOf(10).wrote.map(file => file.path), ['occupancy.jsonl']);
   assert.deepEqual(reading.view.top_line.reasons.map(reason => `${reason.condition}:${reason.hop}`).sort(), want.sort());
   assert.equal(reading.receipt.aim_check, null, 'no aim check is claimed');
   // Hop 16 was built at page start: past the stop it keeps its word, greyed, and its reads are held to their writers' digests. On
@@ -850,12 +896,12 @@ test('the real chain on every prepared take with no reply on file: step 4\'s wor
     assert.match(view.top_line.line, /^(This click stopped at Detector and box: the detector saw nobody, nothing was asked|Connected start to finish: not yet)/, label);
     assert.equal(view.rows[5].word, 'ADAPTER', `${label}: the detector ran and saw nobody, it didn't break`);
     assert.ok(view.rows.filter(row => row.n > 6).every(row => !row.reached), label);
-    assert.deepEqual([view.boxes, view.person, now.feed.summary, now.feed.phase], [[], null, null, 'stopped'], `${label}: no box, no person card, no brain, no beam`);
+    assert.deepEqual([view.boxes, view.person, view.decision, now.feed.summary, now.feed.phase], [[], null, null, null, 'stopped'], `${label}: no box, no person card, no Decision, no beam`);
     assert.match(view.picture_note, /The detector's row for this frame holds no person, so no box is drawn\.$/, label);
   }
   // Standing, reported: what the click did and why.
   const standing = clicks['Standing by the couch with a book'];
-  t.diagnostic(`standing: ${standing.view.stopped ? `stopped at hop ${standing.view.stopped.hop}: ${standing.view.stopped.why}` : 'reached the brain'}; ${standing.view.rows[5].summary}`
+  t.diagnostic(`standing: ${standing.view.stopped ? `stopped at hop ${standing.view.stopped.hop}: ${standing.view.stopped.why}` : 'reached the coordinator'}; ${standing.view.rows[5].summary}`
     + `${standing.view.rows[16].reached ? `; ${standing.view.rows[16].summary}` : ''}`);
   // With no reply on file no click reaches hop 15, so no person card, in the panel, the console or run.json.
   const runJson = JSON.parse(fs.readFileSync(path.join(first.run, 'run.json'), 'utf8'));
@@ -1051,9 +1097,9 @@ function coordinatesIn(text, values) {
   return values.flatMap(value => [3, 2].map(places => value.toFixed(places)))
     .filter(token => new RegExp(`(?<![0-9])${token.replace('.', '\\.')}(?![0-9])`).test(text));
 }
-const panelText = now => [now.startup, ...now.private_notes, now.placement.summary, now.feed.live?.why, now.feed.live?.refusal, ...(now.feed.summary?.candidates || []).map(row => row.reason),
-  ...(now.click ? [now.click.top_line.line, now.click.top_line.count_line, ...now.click.top_line.reasons.map(reason => reason.text), now.click.said, ...(now.click.person?.lines || []),
-    ...now.click.rows.flatMap(row => [row.ran, row.summary, ...row.stand_ins])] : [])].filter(Boolean).join('\n');
+const panelText = now => [now.startup, ...now.private_notes, now.placement.summary, now.feed.live?.why, now.feed.live?.refusal, now.feed.stale?.line,
+  ...(now.click ? [now.click.top_line.line, now.click.top_line.count_line, ...now.click.top_line.reasons.map(reason => reason.text), ...(now.click.person?.lines || []),
+    ...(now.click.decision?.lines || []), ...now.click.rows.flatMap(row => [row.ran, row.summary, ...row.stand_ins])] : [])].filter(Boolean).join('\n');
 
 // Python run beside the chain for test 9's controls and test 12's revisions, from files in the test's own scratch folder.
 const PATCHED_STILLS = `import json, sys
@@ -1112,13 +1158,16 @@ async function pictureIndependence(t, { home, privateFolder, fits, corners, read
   const yours = fs.readdirSync(fits, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name)
     .sort((a, b) => (JSON.parse(fs.readFileSync(path.join(fits, a, 'refit-receipt.json'), 'utf8')).inputs.facing ? 1 : 0) - (JSON.parse(fs.readFileSync(path.join(fits, b, 'refit-receipt.json'), 'utf8')).inputs.facing ? 1 : 0));
   const prepared = JSON.parse(fs.readFileSync(path.join(SET, readingTake, 'prepare-receipt.json'), 'utf8'));
+  // The light model hop 16 built at page start on your export and your mark's couch: the same file for every fit, since the spot is your mark's.
+  const lightFile = path.join(fits, yours[0], 'light', 'light-model.json'), lightModel = { path: lightFile, sha256: sha256(lightFile), label: `fits/${yours[0]}/light/light-model.json` };
   const chainOn = (fitFile, name) => {
     const room = path.join(work, name, 'room-model.jsonl'), wrote = writeCouch({ seatFile: markFile, registration, from: fitFile, to: room, source: 'sofa_mark' });
     const request = chainRequest({ take: readingTake, prepared, setDir: SET, roomModel: { path: room, sha256: wrote.sha256, by: 'couch_to_room.mjs in this test', label: `${name}/room-model.jsonl` },
-      refs: REFS, outputRoot: home, work: path.join(work, name, 'click'), replies: path.join(home, 'prepared', 'replies'), lastAsk: path.join(home, 'prepared', 'last-ask.json') });
-    const rows = Object.fromEntries(python([path.join(HERE, 'chain.py')], JSON.stringify(request)).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(row => row.word).map(row => [row.n, row]));
+      lightModel, refs: REFS, outputRoot: home, work: path.join(work, name, 'click'), replies: path.join(home, 'prepared', 'replies'), lastAsk: path.join(home, 'prepared', 'last-ask.json') });
+    const lines = python([path.join(HERE, 'chain.py')], JSON.stringify(request)).split('\n').filter(Boolean).map(line => JSON.parse(line));
+    const rows = Object.fromEntries(lines.filter(row => row.word).map(row => [row.n, row]));
     const bodies = fs.readFileSync(path.join(request.work, 'asks.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line).body_sha256);
-    return { rows, bodies, request, room };
+    return { rows, bodies, request, room, end: lines.at(-1) };
   };
   const filled = JSON.parse(fs.readFileSync(path.join(home, 'test-fill.json'), 'utf8'))[readingTake];
   const runs = { on: chainOn(path.join(fits, yours[0], 'room-model.jsonl'), 'on'), turned: chainOn(path.join(fits, yours[1], 'room-model.jsonl'), 'turned'), across: chainOn(acrossFile, 'across') };
@@ -1129,6 +1178,15 @@ async function pictureIndependence(t, { home, privateFolder, fits, corners, read
   assert.deepEqual(runs.on.rows[15].person.map(card => card.on_couch), [true], `the fit on your mark: ${runs.on.rows[15].summary}`);
   assert.deepEqual(runs.across.rows[15].person.map(card => [card.on_couch, card.failed.includes('position')]), [[false, true]], `the fit 1 m across: ${runs.across.rows[15].summary}`);
   t.diagnostic(`test 9, on your mark: ${runs.on.rows[15].person.map(chainWords).join('; ')}; across: ${runs.across.rows[15].person.map(chainWords).join('; ')}`);
+  // Test 9's beam-off half: across the couch, the reader's spot is handheld, which has no target, so the coordinator lights
+  // nothing and the click stops at hop 17 with its why. On your mark the beam lights if a fixture passes; which one is reported.
+  const lit = done => (done.rows[17]?.decisions || []).filter(view => view.lit.length).map(view => view.lit[0]);
+  assert.deepEqual([lit(runs.across), runs.across.end.hop, runs.across.end.stop?.hop, runs.across.end.stop?.answer], [[], 'stopped', 17, true], JSON.stringify(runs.across.end));
+  assert.match(runs.across.end.stop.why, /handheld, which has no spot: no target/);
+  const onDecision = runs.on.rows[17]?.decisions?.at(-1);
+  assert.ok(onDecision && onDecision.readers.length === 1, 'on your mark the reader at sofa-book gets a target');
+  assert.equal(runs.on.end.hop === 'done', lit(runs.on).length > 0, 'the click goes on to Home exactly when a Decision lit a spot');
+  t.diagnostic(`test 9, the beam on your mark: ${lit(runs.on).length ? `lit ${lit(runs.on).at(-1)}: ${onDecision.why}` : `off: ${runs.on.end.stop?.why}`}; across: ${runs.across.end.stop.why}`);
   // Control: a picture patched to take the placement as an input changes the hashes, and the comparison above fails on it.
   const patched = name => JSON.parse(python([script('patched.py', PATCHED_STILLS), HERE], JSON.stringify({ core_tree: path.join(home, 'tools', `core-${REFS.tools['den-core-live']}`), take: runs[name].request.take,
     take_digest: runs[name].request.take_digest, run_json: path.join(runs[name].request.work, 'observe', 'run.json'), requests: path.join(runs[name].request.work, 'requests.jsonl'),
@@ -1199,6 +1257,11 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
     // The same fit, on the mark: the person card reads on the couch, on the picture's couch placed on your mark.
     assert.deepEqual([now.click.rows[14].word, now.click.person.tracks.map(row => row.on_couch)], ['ADAPTER', [true]], now.click.rows[14].summary);
     assert.ok(now.click.person.lines.includes('On the picture\'s couch, which this simulation placed on your mark.'));
+    // Hop 17 on your export and mark: the coordinator decided, held to the light model hop 16 built, and the card says what.
+    assert.deepEqual([now.click.rows[16].word, now.click.rows[16].reached], ['ADAPTER', true], now.click.rows[16].summary);
+    assert.deepEqual(now.click.top_line.reasons.filter(reason => reason.hop === 17), [], 'hop 17 holds: its tools pinned, its reads vouched, the light model\'s digest the one hop 16 wrote');
+    assert.ok(now.click.decision?.lines.length > 0);
+    t.diagnostic(`the Decision on the sealed invented export and mark: ${now.click.decision.lines.join(' ')}`);
     // Tests 19 and 9: no number of the mark or the camera in any panel text, the console or the harness's logs.
     const shown = panelText(now), logs = ['run.json', 'requests.jsonl', `click-${now.click.click}/argv.jsonl`].filter(name => fs.existsSync(path.join(now.run, name)))
       .map(name => fs.readFileSync(path.join(now.run, name), 'utf8')).join('\n') + run.output() + run.errors();
@@ -1209,7 +1272,7 @@ test('tests 9, 12 and 19: a sealed invented mark reads YOUR SOFA MARK, and no nu
     assert.ok(coordinatesIn(`${text}\ncamera at ${now.camera_m.map(v => v.toFixed(3)).join(', ')}`, camera).length > 0, 'control: the camera as a fit prints it, from what the page gets for its marker, is found');
     assert.ok(coordinatesIn(`${shown}\nseat at ${mark.seat.point_m[0].toFixed(2)}`, markNumbers).length > 0, 'control: a planted number is found');
     const runJson = JSON.parse(fs.readFileSync(path.join(now.run, 'run.json'), 'utf8'));
-    assert.equal(runJson.couch.point, undefined); assert.equal(runJson.brain.seat_m, undefined);
+    assert.equal(runJson.couch.point, undefined); assert.equal(runJson.brain, undefined); assert.equal(runJson.command.seat_m, undefined);
     assert.deepEqual(coordinatesIn(JSON.stringify(runJson), markNumbers), []);
   } finally { await run.stop(); }
   // The re-fit runs only when a digest changed: the same files reuse it, a new facing.json makes another.

@@ -863,6 +863,34 @@ def replace(path, data):
     path.write_bytes(data)
 
 
+# A typed couch and light model in the picture's own frame, for clicks on the set's own fit: the authored couch's middle at
+# the origin, its seat 0.44 m up (shots.json), the figure facing -y, and four invented fixtures, written by couch_to_room.mjs's
+# couchOf and light_model.mjs's lightModel. Public, invented numbers: nothing of any room.
+TYPED = """import fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [here, fit, room, model] = process.argv.slice(1);
+const { couchOf, nextVersion } = await import(pathToFileURL(here + '/couch_to_room.mjs').href);
+const { lightModel } = await import(pathToFileURL(here + '/light_model.mjs').href);
+const seat = { seat: { point_m: [0, 0, 0.44] }, zone: { vertices_m: [[-1, -0.5, 0.44], [1, -0.5, 0.44], [1, 0.5, 0.44], [-1, 0.5, 0.44]], centre_m: [0, 0, 0.44], normal_unit: [0, 0, 1] }, digest: 'typed' };
+const text = fs.readFileSync(fit, 'utf8'), latest = JSON.parse(text.trim().split('\\n').at(-1)), couch = couchOf(seat, 'declared');
+fs.writeFileSync(room, text + JSON.stringify({ ...latest, version: nextVersion(latest.version, latest.room_id), surfaces: couch.surfaces, landmarks: couch.landmarks }) + '\\n');
+const fixtures = [[0.4, 1.4, 2.4, null], [0.2, -2.2, 2.4, null], [0, 9.5, 2.6, null], [-0.6, 1.0, 2.4, { tilt_max_deg: 10 }]].map(([x, y, z, limits]) =>
+  ({ aim_origin_m: [x, y, z], horizontal_world_reference: [0, -1, 0], ...(limits ? { limits } : {}) }));
+fs.writeFileSync(model, JSON.stringify(lightModel({ bookPoint: couch.surfaces[0].geometry.book_point_m, fixtures }), null, 1) + '\\n');
+"""
+
+
+def typed_couch(home, set_dir, info):
+    """(room model, light model) for clicks on this set's own fit, each {path, sha256, ...}."""
+    room, model = home / 'typed' / 'room-model.jsonl', home / 'typed' / 'light-model.json'
+    room.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(['node', '--input-type=module', '-e', TYPED, str(HERE).replace('\\', '/'), str(set_dir / info['fit']['folder'] / 'room-model.jsonl'), str(room), str(model)],
+                   check=True, capture_output=True, encoding='utf-8')
+    digest = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+    return (dict(path=str(room), sha256=digest(room), by='test_ask.py, typed', label='typed/room-model.jsonl'),
+            dict(path=str(model), sha256=digest(model), label='typed/light-model.json'))
+
+
 @NEEDS_SET
 class OnTheSet(unittest.TestCase):
     """Tests 2, 3, 5 and 8 and test 10's controls, on clicks of the prepared set's takes with fake replies in a scratch store."""
@@ -882,6 +910,7 @@ class OnTheSet(unittest.TestCase):
         cls.kept.write_text('{}', encoding='utf-8')
         cls.filled = fill(cls.home, SET, {cls.reading: 'reading', cls.phone: 'phone'})
         cls.info = json.loads((SET / 'set.json').read_text(encoding='utf-8'))
+        cls.room, cls.model = typed_couch(cls.home, SET, cls.info)
 
     @classmethod
     def tearDownClass(cls):
@@ -891,7 +920,8 @@ class OnTheSet(unittest.TestCase):
         """One click of chain.py on this take, in this process: (rows by hop, end line, work folder)."""
         work = Path(tempfile.mkdtemp(dir=self.home, prefix='click-'))
         request, _ = prepare.chain_request(set_dir, self.info, take, self.home / 'prepared', work, self.home / 'tools')
-        request.update(owed=None, last_ask=str(last_ask or self.home / 'prepared' / 'last-ask.json'), replies=str(store or self.home / 'prepared' / 'replies'))
+        request.update(owed=None, last_ask=str(last_ask or self.home / 'prepared' / 'last-ask.json'), replies=str(store or self.home / 'prepared' / 'replies'),
+                       room_model=self.room, light_model=self.model)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             try:
@@ -904,12 +934,18 @@ class OnTheSet(unittest.TestCase):
         return {row['n']: row for row in lines if 'word' in row}, lines[-1], work / take
 
     def decided(self, set_dir, take, store=None):
-        """What the older brain is told on a click, which is all it decides from: the adapter's label and person, and the
-        files that fed it, byte for byte. The brain's own output is compared in test-den-sim-honesty.mjs, through the
-        harness, with its random decision_id masked: that id differs between any two clicks, truth folder or not."""
+        """What the coordinator decided on a click and every file it decided from, byte for byte: the occupancy, the person
+        states, its log, decisions.jsonl and surfaces.json, and where the click ended. Tests 2, 3 and 8 compare these."""
         _, end, work = self.click(set_dir, take, store)
-        files = {name: (work / name).read_bytes() for name in ('requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'den-core-log.jsonl') if (work / name).exists()}
-        return dict(files, adapter=json.dumps(end.get('adapter'), sort_keys=True), stop=json.dumps(end.get('stop'), sort_keys=True))
+        names = ('requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'occupancy.jsonl', 'person_states.jsonl',
+                 'decide/log.jsonl', 'decide/decisions.jsonl', 'decide/surfaces.json')
+        files = {name: (work / name).read_bytes() for name in names if (work / name).exists()}
+        return dict(files, end=json.dumps({key: end.get(key) for key in ('hop', 'stop', 'reply')}, sort_keys=True))
+
+    def lit(self, work):
+        """The channels the click's last Decision lit: [] when it wrote none, or one that lit nothing."""
+        decisions = [json.loads(line) for line in (work / 'decide' / 'decisions.jsonl').read_text(encoding='utf-8').splitlines()] if (work / 'decide' / 'decisions.jsonl').exists() else []
+        return [channel for channel, row in decisions[-1]['requested_scene'].items() if row['on']] if decisions else []
 
     def test_the_fill_asked_reading_and_phone_only(self):
         owed = self.filled['owed']
@@ -946,7 +982,7 @@ class OnTheSet(unittest.TestCase):
             if reply:
                 path.write_text(json.dumps(dict(reply, root='test-root-not-a-model')), encoding='utf-8')
         rows, end, _ = self.click(SET, self.reading, store=store)
-        self.assertEqual((rows[12]['word'], rows[12]['reply'], rows[12]['root'], end['reply'], end['adapter']['label']), ('ADAPTER', 'real', 'test-root-not-a-model', 'real', 'reading'))
+        self.assertEqual((rows[12]['word'], rows[12]['reply'], rows[12]['root'], end['reply'], end['hop']), ('ADAPTER', 'real', 'test-root-not-a-model', 'real', 'done'))
         self.assertEqual(rows[12]['stand_ins'], chain.named(12, 0, 1))
         self.assertRegex(rows[12]['summary'], r"^Qwen's real words, from test-root-not-a-model, recorded once on \d{4}-\d\d-\d\d and looked up by each body's sha256: rq-00001 reading")
         self.assertRegex(rows[12]['ran'], r'^recorded \d{4}-\d\d-\d\d, looked up now$')
@@ -972,15 +1008,17 @@ class OnTheSet(unittest.TestCase):
 
     def test_10_and_8_a_fake_root_reads_scripted_and_the_same_input_gives_the_same_bytes(self):
         rows, end, work = self.click(SET, self.reading)
-        self.assertEqual((rows[11]['word'], rows[12]['word'], rows[13]['word']), ('ADAPTER', 'SCRIPTED', 'ADAPTER'))
-        self.assertEqual((end['hop'], end['adapter']['label'], end['reply']), ('done', 'reading', 'fake'))
+        self.assertEqual((rows[11]['word'], rows[12]['word'], rows[13]['word'], rows[17]['word']), ('ADAPTER', 'SCRIPTED', 'ADAPTER', 'ADAPTER'))
+        self.assertEqual((end['hop'], end['reply']), ('done', 'fake'))
+        self.assertEqual(rows[17]['checked']['ok'], True, rows[17]['checked'])
         text = (work / 'facts.jsonl').read_text(encoding='utf-8')
         for token in ('la-epoch', 'ring-', 'a' * 64):
             self.assertNotIn(token, text)
         once, twice = self.decided(SET, self.reading), self.decided(SET, self.reading)
-        self.assertEqual(once, twice, 'test 8: the same take twice, the same bytes')
-        planted = dict(twice, **{'facts.jsonl': twice['facts.jsonl'].replace(b'"latency_s":', b'"read_at":%.3f,"latency_s":' % time.time(), 1)})
-        self.assertNotEqual(once, planted, 'control: a clock read planted in a record shows')
+        self.assertIn(b'"actuator_domain":"virtual-den-4"', once['decide/decisions.jsonl'].replace(b' ', b''))
+        self.assertEqual(once, twice, 'test 8: the same take twice, the same bytes, Decisions and their log too')
+        planted = dict(twice, **{'decide/decisions.jsonl': twice['decide/decisions.jsonl'].replace(b'"ts":', b'"read_at":%.3f,"ts":' % time.time(), 1)})
+        self.assertNotEqual(once, planted, 'control: a clock read planted in a Decision shows')
         # Test 10's other control: one reply from another root in a copy of the store reads MISSING.
         store = self.home / 'two-roots'
         shutil.copytree(self.home / 'prepared' / 'replies', store, dirs_exist_ok=True)
@@ -1022,29 +1060,38 @@ class OnTheSet(unittest.TestCase):
             os.rename(copy / name, copy / (name + '.x'))
         os.rename(copy / (self.reading + '.x'), copy / self.phone)
         os.rename(copy / (self.phone + '.x'), copy / self.reading)
-        labels = lambda set_dir: {take: self.click(set_dir, take)[1]['adapter']['label'] for take in (self.reading, self.phone)}
-        self.assertEqual(labels(SET), {self.reading: 'reading', self.phone: 'other'})
-        self.assertEqual(labels(copy), {self.reading: 'other', self.phone: 'reading'}, 'phone\'s pixels under reading\'s id read phone, and the reverse')
+        # The beam half: what the coordinator lit, from the take's contents, never its folder's name.
+        beams = lambda set_dir: {take: bool(self.lit(self.click(set_dir, take)[2])) for take in (self.reading, self.phone)}
+        self.assertEqual(beams(SET), {self.reading: True, self.phone: False})
+        self.assertEqual(beams(copy), {self.reading: False, self.phone: True}, 'phone\'s pixels under reading\'s id light nothing, and the reverse lights')
         moved = copy / ('f' * 12)
         shutil.copytree(SET / self.reading, moved, copy_function=os.link)
-        self.assertEqual(self.decided(copy, moved.name), self.decided(SET, self.reading), 'the same take under a new id: byte-identical')
-        # Control: a chain with a table keyed by folder id follows the folder, and fails this test.
-        original = chain.person_to_aim
-        table = {self.reading: 'reading'}
-        current = {}
+        self.assertEqual(self.decided(copy, moved.name), self.decided(SET, self.reading), 'the same take under a new id: byte-identical Decisions')
+        # Control: a chain with a table keyed by folder id follows the folder, and fails this test: it hands the coordinator
+        # reading's person states for the folder named reading, whatever its pixels are.
+        original, table, current = chain.Click.own_step, {self.reading: True}, {}
 
-        def by_folder(bundles, person):
-            got, problem = original(bundles, person)
-            return (dict(got, label=table.get(current['take'], 'other')) if got else got), problem
-        chain.person_to_aim = by_folder
+        def by_folder(click, name, request):
+            got = original(click, name, request)
+            if name == 'person' and not table.get(current['take']):
+                path = Path(request['work']) / 'person_states.jsonl'
+                path.write_text(''.join(json.dumps(dict(state, focused_engagement=dict(state['focused_engagement'], state='none'))) + '\n'
+                                        for state in map(json.loads, path.read_text(encoding='utf-8').splitlines())), encoding='utf-8')
+            if name == 'person' and table.get(current['take']):
+                path = Path(request['work']) / 'person_states.jsonl'
+                path.write_text(''.join(json.dumps(dict(state, focused_engagement=dict(state['focused_engagement'], state='engaged', kind='reading'),
+                                                        field_support=dict(state['field_support'], focused_engagement=dict(state['field_support']['focused_engagement'], support_status='observed')))) + '\n'
+                                        for state in map(json.loads, path.read_text(encoding='utf-8').splitlines())), encoding='utf-8')
+            return got
+        chain.Click.own_step = by_folder
         try:
             followed = {}
             for take in (self.reading, self.phone):
                 current['take'] = take
-                followed[take] = self.click(copy, take)[1]['adapter']['label']
+                followed[take] = bool(self.lit(self.click(copy, take)[2]))
         finally:
-            chain.person_to_aim = original
-        self.assertNotEqual(followed, {self.reading: 'other', self.phone: 'reading'}, 'control: a folder-keyed table does not follow the pixels')
+            chain.Click.own_step = original
+        self.assertNotEqual(followed, {self.reading: False, self.phone: True}, 'control: a folder-keyed table does not follow the pixels')
 
     def test_5_a_changed_still_with_frames_csv_and_the_rows_re_derived_misses_on_the_body_hash(self):
         import numpy as np

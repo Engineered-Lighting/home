@@ -9,8 +9,9 @@
   condition never read as changed weights;
 - no_track: a person box with no track never reads nobody, and only person observations are counted;
 - person_words: hop 15's row says a distance, which half of the couch test failed, the spot and the engagement;
-- person_to_aim takes the newest entry with both shoulders;
-- the click path calls no fake_detector.
+- first_confirmed: hop 10's occupancy at the first confirmed Track line, and none for a tentative one;
+- decision_view, no_beam and no_reader: hop 17's words for what lit, each refusal and why no beam;
+- the click path calls no fake_detector, and no older lighting brain.
 
 Each has a control that must make it fail. The parts on real rows need DEN_SIM_SET=<a prepared set>, and only
 read it: they work on hard-linked copies whose changed files are replaced, never written through.
@@ -207,19 +208,48 @@ class PersonWords(unittest.TestCase):
         self.assertNotEqual(chain.person_words(off), chain.person_words(dict(off, failed=["height"])), "control: the half named follows the result")
 
 
-class PersonToAim(unittest.TestCase):
-    def test_the_newest_entry_with_both_shoulders(self):
-        both = {"ts": 10.0, "joints_room": [{"j": 5, "xyz": [1, 1, 1]}, {"j": 6, "xyz": [2, 1, 1]}]}
-        one = {"ts": 11.0, "joints_room": [{"j": 5, "xyz": [1, 1, 1]}, {"j": 6, "xyz": None}]}
-        person = {"state": "engaged", "kind": "reading", "support": "observed"}
-        got, problem = chain.person_to_aim([{"track_id": 1, "keypoint_series": [both, one]}], person)
-        self.assertIsNone(problem)
-        self.assertEqual(got["from_bundle_at"], 10.0, "the newest entry lost a shoulder, so the one before it is used")
-        self.assertEqual(max([both, one], key=lambda e: e["ts"])["ts"], 11.0, "control: the newest entry alone is the one without")
-        self.assertEqual(chain.person_to_aim([{"track_id": 1, "keypoint_series": [one]}], person)[1], "no bundle entry has both shoulders in the room frame")
-        later = {"ts": 10.5, "joints_room": [{"j": 5, "xyz": [3, 1, 1]}, {"j": 6, "xyz": [4, 1, 1]}]}
-        got, _ = chain.person_to_aim([{"track_id": 1, "keypoint_series": [later, both, one]}], person)
-        self.assertEqual((got["from_bundle_at"], got["person"]["shoulders_m"]["left"]), (10.5, [3, 1, 1]), "of two with both shoulders, the newer")
+class Occupancy(unittest.TestCase):
+    """Hop 10: one occupancy event at the first confirmed Track line, dated by the newest capture_ts it names."""
+
+    def test_the_first_confirmed_line_dated_by_its_observations(self):
+        obs = [{"obs_id": "o%d" % n, "capture_ts": 100.0 + n} for n in range(6)]
+        lines = [{"track_id": "trk-1", "state": "tentative", "last_obs_ids": ["o0"]},
+                 {"track_id": "trk-1", "state": "confirmed", "last_obs_ids": ["o1", "o2"]},
+                 {"track_id": "trk-1", "state": "confirmed", "last_obs_ids": ["o4"]}]
+        self.assertEqual(chain.first_confirmed(lines, obs), (102.0, "trk-1"), "the newest observation the first confirmed line names")
+        self.assertEqual(chain.first_confirmed(lines[:1], obs), (None, None), "control: a tentative track is nobody")
+        self.assertEqual(chain.first_confirmed([dict(lines[1], last_obs_ids=["o9"])], obs), (None, None), "a line naming an observation that isn't there can't be dated")
+
+
+class Decided(unittest.TestCase):
+    """Hop 17's words, from a Decision: what lit, each refusal in den-core's own words, and why no beam."""
+
+    def view(self, lit=None, skipped=(), targets=("trk-1",)):
+        scene = {c: {"on": c == lit, "level": 0.7874 if c == lit else 0.0} for c in chain.CHANNELS}
+        applied = {c: {"steps": [{"kind": "move"}, {"kind": "fade_in"}] if c == lit else []} for c in chain.CHANNELS}
+        decision = {"decision_id": "decide-1-1", "trigger": "person_state change", "requested_scene": scene, "applied_scene": applied,
+                    "targets": {t: {"value": 300, "note": "modeled lux, assumed lumens"} for t in targets}, "predicted": {"surfaces": {"sofa-book": 272.6 if lit else 0.0}},
+                    "skipped": [{"channel": c, "track_id": "trk-1", "reason": r} for c, r in skipped], "candidates": [], "why": "reading_look: no beam for trk-1."}
+        return chain.decision_view(decision, lambda reason: reason.split(":")[0].replace("_", " "))
+
+    def test_what_lit_each_refusal_and_why_no_beam(self):
+        lit = self.view(lit="F2.spot", skipped=[("F1.spot", "in_front_of_reader")])
+        self.assertEqual((lit["lit"], lit["level"], lit["predicts"], lit["asked"], lit["steps"]), (["F2.spot"], [0.7874], 272.6, 300, {"F2.spot": ["move", "fade_in"]}))
+        refused = self.view(skipped=[("F1.spot", "in_front_of_reader"), ("F2.spot", "too_far"), ("F3.spot", "pan_tilt_infeasible:tilt_limit"), ("F4.spot", "beam_through_head")])
+        self.assertEqual(chain.no_beam(refused), "every fixture refused: F1 in front of reader, F2 too far, F3 pan tilt infeasible, F4 beam through head")
+        self.assertEqual(chain.no_beam(self.view(targets=())), "no beam: no beam for trk-1", "control: no reader at a spot is not a refusal")
+        self.assertEqual(chain.no_reader([{"track_id": "trk-1", "engagement": "none", "on_couch": True}]), "nobody is reading (trk-1: engagement none, on the couch yes)")
+
+
+class NoBrain(unittest.TestCase):
+    def test_the_click_path_runs_no_older_brain(self):
+        """Step 6: the older lighting brain, its adapter and its asserted health are off the click path."""
+        code = {path.relative_to(HERE).as_posix(): path.read_text(encoding="utf-8") for path in sorted(HERE.rglob("*"))
+                if path.suffix in (".py", ".mjs", ".js", ".json") and not path.name.startswith("test")}
+        gone = re.compile(r"brain_run|person_to_aim|BrainPublisher|activity_loop|deep_stack|\bjev\b|lighting_brain\.brain\b")
+        self.assertFalse((HERE / "brain_run.py").exists())
+        self.assertEqual([name for name, text in code.items() if gone.search(text)], [])
+        self.assertTrue(gone.search("from activity_loop import ActivityLoop\n"), "control: a planted import of the older brain's loop is found")
 
 
 class NoFake(unittest.TestCase):

@@ -1,10 +1,10 @@
 // The honesty test through the real harness (plan, "Done means"): test 1's outcomes on all five takes with
-// a fake vLLM's replies in a scratch store, test 2's searches over everything a click read, wrote or was
-// served, test 2's delete at page level (the brain's timeline compared with its random decision_id masked),
-// the brain document's flags on a model's words, and test 19 on a click. Test 2's patched-chain control, 3,
-// 5's body-hash half, 8 and 10 are in test_ask.py, which also files the fake replies here: prepare.py --owed
-// into the scratch data root, then ask_la.py through a local transport against a fake vLLM on 127.0.0.1.
-// Nothing reaches LA.
+// a fake vLLM's replies in a scratch store, judged by what the coordinator lit; test 2's searches over everything
+// a click read, wrote or was served, its Decisions, surfaces, Home's documents and the aim check among them; test 2's
+// delete at page level (the Decisions byte-identical); the document's flags on a model's words; and test 19 on a
+// click. Test 2's patched-chain control, 3, 5's body-hash half, 8 and 10 are in test_ask.py, which also files the fake
+// replies here: prepare.py --owed into the scratch data root, then ask_la.py through a local transport against a fake
+// vLLM on 127.0.0.1. Nothing reaches LA.
 //
 //   set DEN_SIM_SET=<a prepared set>, DEN_SIM_HOME, LOCALAPPDATA, TEMP and TMP to scratch folders, then
 //   node --test tools\den-sim\test-den-sim-honesty.mjs
@@ -39,8 +39,21 @@ function harness(home, set = SET) {
   })();
   return { ready, output: () => output, stop: () => { child.kill(); return stopped; } };
 }
-async function click(take) {
-  const reply = await (await fetch(ORIGIN + '/__sim/feed', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify({ take, fixtures: [] }) })).json();
+// Home's report of the four fixtures, as the page posts it, from the authored room's public geometry this harness wrote
+// into its run folder: each fixture aimed straight down its reference, so a lit Decision swings and lands.
+function report(run) {
+  const geometry = JSON.parse(fs.readFileSync(path.join(run, 'brain-geometry.json'), 'utf8'));
+  return geometry.fixtures.map(row => ({ fixture_id: row.fixture_id, display_origin_m: row.aim_origin_m, horizontal_world_reference: row.horizontal_world_reference, pan_deg: 0, tilt_deg: 45 }));
+}
+// Home's read-back at landing, as the page samples it: pan and tilt toward the point, as Home's aimAtTarget computes them.
+function readbackAt(fixture, point) {
+  const d = point.map((v, i) => v - fixture.display_origin_m[i]), n = Math.hypot(...d), u = d.map(v => v / n), ref = fixture.horizontal_world_reference;
+  const r = [ref[0], ref[1]].map(v => v / Math.hypot(ref[0], ref[1])), tilt = Math.asin(-u[2]), flat = Math.cos(tilt);
+  return { fixture_id: fixture.fixture_id, display_origin_m: fixture.display_origin_m, target_point: point,
+    pan_deg: Math.atan2((u[0] * r[1] - u[1] * r[0]) / flat, (u[0] * r[0] + u[1] * r[1]) / flat) * 180 / Math.PI, tilt_deg: tilt * 180 / Math.PI };
+}
+async function click(take, fixtures = []) {
+  const reply = await (await fetch(ORIGIN + '/__sim/feed', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify({ take, fixtures }) })).json();
   assert.ok(reply.ok, JSON.stringify(reply));
   for (const end = Date.now() + 120000; Date.now() < end; await sleep(200)) {
     const now = await status();
@@ -48,8 +61,8 @@ async function click(take) {
   }
   throw Error('the click did not finish');
 }
-// The brain lit a spot on this click: its row says which fixture it chose.
-const lit = done => /^The older brain chose /.test(done.receipt.rows[16].summary || '');
+// The coordinator lit a spot on this click: a Decision on hop 17's row lit a channel.
+const lit = done => (done.receipt.rows[16].decisions || []).some(view => view.lit.length > 0);
 const TEXT = /\.(json|jsonl|csv|md|log|txt)$/;
 function filesUnder(folder) {
   const out = [];
@@ -90,15 +103,30 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
   await run.ready;
   const first = await status();
   assert.deepEqual([first.qwen.owed, first.qwen.last_ask.still_needed, first.qwen.last_ask.root], [0, 0, 'fake-vllm'], 'the page reads the paste\'s record');
-  const clicks = {};
-  for (const scene of display) clicks[scene.label] = await click(scene.take);
+  const clicks = {}, fixtures = report(first.run);
+  for (const scene of display) clicks[scene.label] = await click(scene.take, fixtures);
+  // Reading's beam lands, and the aim check is posted as the page would post it: aim_check.json joins test 2's search.
+  const readingDone = clicks['Reading on the couch'];
+  if (lit(readingDone)) {
+    await clickAgainAndAim(readingDone);
+  }
+  async function clickAgainAndAim(done) {
+    const again = await click(done.click.take, fixtures);
+    for (const end = Date.now() + 60000; (await status()).feed.phase !== 'holding' && Date.now() < end;) await sleep(200);
+    const summary = (await status()).feed.summary, home = readbackAt(fixtures.find(row => row.fixture_id === summary.fixture_id), summary.target_m);
+    const aimed = await (await fetch(ORIGIN + '/__sim/aim', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: ORIGIN }, body: JSON.stringify({ click: again.click.click, home }) })).json();
+    clicks['Reading on the couch'] = { ...again, aimed };
+  }
 
   await t.test('test 1: reading lights, phone and standing stay off, nobody and blank light nothing, and the table says who was asked', () => {
     assert.ok(lit(clicks['Reading on the couch']), clicks['Reading on the couch'].receipt.rows[16].summary);
     for (const label of ['Holding a phone', 'Standing by the couch with a book', 'Nobody there', 'Blank frame']) assert.ok(!lit(clicks[label]), label);
     const asked = Object.fromEntries(Object.entries(clicks).map(([label, done]) => [label, done.click.rows[11].reached ? done.click.rows[11].word : 'not asked']));
     assert.deepEqual(asked, { 'Reading on the couch': 'SCRIPTED', 'Holding a phone': 'SCRIPTED', 'Standing by the couch with a book': 'not asked', 'Nobody there': 'not asked', 'Blank frame': 'not asked' });
-    assert.match(clicks['Holding a phone'].receipt.rows[16].summary, /^The older brain lit nothing: /, 'phone stays off because of what the words said');
+    assert.match(clicks['Holding a phone'].receipt.rows[16].summary, /and wrote no Decision: nobody is reading \(trk-\d+: engagement none/, 'phone stays off because of what the words said');
+    assert.deepEqual([clicks['Holding a phone'].click.stopped.hop, clicks['Holding a phone'].click.stopped.answer], [17, true]);
+    // Reading's aim check, posted as the page posts it from Home's read-back, holds within 0.05 degrees.
+    assert.deepEqual([clicks['Reading on the couch'].aimed?.ok, clicks['Reading on the couch'].aimed?.within_tolerance], [true, true], JSON.stringify(clicks['Reading on the couch'].aimed));
     assert.match(clicks['Holding a phone'].click.qwen.said, /phone_use, holding phone/);
     for (const label of ['Nobody there', 'Blank frame', 'Standing by the couch with a book']) {
       assert.deepEqual(clicks[label].click.stopped, { hop: 6, why: 'the detector saw nobody, nothing was asked', answer: true }, label);
@@ -142,13 +170,13 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
 
   await t.test('test 1\'s control: reading\'s facts filed under phone\'s body hashes make phone light', async () => {
     const owed = owedOf(), readingRaw = JSON.parse(fs.readFileSync(path.join(store, `${owed[reading][1]}.json`), 'utf8')).raw;
-    const swapped = await rewritten(owed[phone], reply => ({ ...reply, raw: readingRaw }), () => click(phone));
+    const swapped = await rewritten(owed[phone], reply => ({ ...reply, raw: readingRaw }), () => click(phone, fixtures));
     assert.ok(lit(swapped), 'phone lights on reading\'s words: the words decide, so test 1 would fail on them');
     assert.ok(swapped.click.top_line.reasons.some(reason => reason.condition === 2 && reason.hop === 12), 'and the replies no longer match the digests last-ask.json holds');
   });
 
-  await t.test('the honesty flags on a model\'s words: inference ran on the activity, and the inputs stay scripted while occupancy is typed', async () => {
-    // Phone: a timeline that lights nothing plays with no fixture report, which these clicks don't send.
+  await t.test('the honesty flags on a model\'s words: inference ran on the activity, and the occupancy is the track list\'s', async () => {
+    // Phone: no Decision, so Home is left the off document, which still says whose words the click used.
     const real = await rewritten(owedOf()[phone], reply => ({ ...reply, root: 'test-root-not-a-model' }), async () => {
       const done = await click(phone);
       return { ...done, state: await (await fetch(ORIGIN + Client.BASE + '/state')).json() };
@@ -156,7 +184,7 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     assert.deepEqual([real.click.rows[11].word, real.click.qwen.reply], ['ADAPTER', 'real']);
     const { inputs, activity, occupancy } = real.state;
     assert.deepEqual([inputs.inference_ran, inputs.activity_scripted, activity.source], [true, false, 'den_sim_la_direct'], 'the activity is the model\'s');
-    assert.deepEqual([inputs.scripted, occupancy.source], [true, 'SIMULATION-scripted'], 'and the document still says its inputs are scripted, since occupancy is typed');
+    assert.deepEqual([inputs.scripted, occupancy.source], [false, 'den_sim_den_track'], 'and with occupancy from the track list, nothing in its inputs is typed');
     assert.match(real.state.why, /Qwen's recorded words/);
     const fake = await click(phone), state = await (await fetch(ORIGIN + Client.BASE + '/state')).json();
     assert.deepEqual([fake.click.qwen.reply, state.inputs.inference_ran, state.inputs.activity_scripted, state.activity.source], ['fake', false, true, 'SIMULATION-scripted'], 'control: a fake vLLM\'s words are no inference');
@@ -176,6 +204,9 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     assert.ok(written.some(([label]) => /asks\.jsonl$/.test(label)) && written.some(([label]) => /argv\.jsonl$/.test(label)));
     // Step 5's outputs join the search: the person states, the couch's room-model revision and the person card's served words.
     assert.ok(written.filter(([label]) => /person_states\.jsonl$/.test(label)).length >= 2, 'reading\'s and phone\'s person states are searched');
+    // Step 6's: the coordinator's log, Decisions and surfaces, Home's documents, the occupancy and the aim check.
+    for (const name of ['decide[\\\\/]log\\.jsonl', 'decide[\\\\/]decisions\\.jsonl', 'decide[\\\\/]surfaces\\.json', 'documents\\.jsonl', 'occupancy\\.jsonl', 'aim_check\\.json'])
+      assert.ok(written.some(([label]) => new RegExp(`${name}$`).test(label)), `${name} is searched`);
     assert.ok(roomModels.some(([label, text]) => /couch[\\/]room-model\.jsonl$/.test(label) && text.includes('"surface_id":"sofa"')), 'the couch\'s revision is searched');
     const cards = Object.values(clicks).filter(done => done.click.person).map(done => [`person card ${done.click.take}`, done.click.person.lines.join('\n')]);
     assert.equal(cards.length, 2, 'reading\'s and phone\'s person cards are searched');
@@ -192,19 +223,20 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     const now = await status();
     assert.equal(now.counters.wrong_host, 0);
     assert.deepEqual(now.refused.filter(row => row.method !== 'GET'), []);
-    // The click's Python processes: chain.py (its tool processes run under its --guarded refusal, the ask and
-    // need steps are chain.py itself), brain_run.py and dry_run.py. Each installs the refusal before it imports
+    assert.ok(now.counters.feed_posts >= display.length && now.counters.aim_posts >= 1, 'the only writes were the feed and the aim check');
+    // The click's Python processes: chain.py (its tool processes run under its --guarded refusal, the ask, person
+    // and coordinator steps are chain.py itself) and dry_run.py. Each installs the refusal before it imports
     // anything; test-den-sim.mjs proves the hook refuses. Here: no process of the click ran anything else.
     const argv = fs.readFileSync(path.join(clicks['Reading on the couch'].run, `click-${clicks['Reading on the couch'].click.click}`, 'argv.jsonl'), 'utf8')
       .split('\n').filter(Boolean).map(line => JSON.parse(line).argv);
     assert.ok(argv.length >= 3 && argv.every(([guarded, file]) => guarded === '--guarded' && /tools[\\/]den-(observe|track|bundle)[\\/]/.test(file)), JSON.stringify(argv));
-    for (const name of ['chain.py', 'brain_run.py', 'dry_run.py', 'ask_one.py']) assert.match(fs.readFileSync(path.join(HERE, name), 'utf8'), /sys\.addaudithook\(/, name);
+    for (const name of ['chain.py', 'dry_run.py', 'ask_one.py']) assert.match(fs.readFileSync(path.join(HERE, name), 'utf8'), /sys\.addaudithook\(/, name);
     const routes = /import ask_la|ask_la\.main|\[["'](ssh|scp)["']|http\.client|urllib|socket\.create_connection/;
-    for (const name of ['chain.py', 'brain.mjs', 'run.mjs']) assert.doesNotMatch(fs.readFileSync(path.join(HERE, name), 'utf8'), routes, `${name}: no route to LA from a click`);
+    for (const name of ['chain.py', 'brain.mjs', 'click.mjs', 'run.mjs']) assert.doesNotMatch(fs.readFileSync(path.join(HERE, name), 'utf8'), routes, `${name}: no route to LA from a click`);
     assert.match("subprocess.run(['ssh', 'x'])", routes, 'control: a planted route is found');
   });
 
-  await t.test('test 2\'s delete through the harness: with the truth folder and the display file gone, the brain decides alike, its random decision_id aside', async () => {
+  await t.test('test 2\'s delete through the harness: with the truth folder and the display file gone, the Decisions are byte-identical', async () => {
     await run.stop();
     // A copy of hard links, without the truth folder or the display file: nothing in it is written through.
     const copy = path.join(home, 'no-truth', path.basename(SET));
@@ -219,19 +251,17 @@ test('tests 1, 2 and 19 through the harness, on a fake vLLM\'s replies', { skip:
     const second = harness(home, copy);
     try {
       await second.ready;
-      const masked = file => JSON.stringify(JSON.parse(fs.readFileSync(file, 'utf8')), (key, value) => key === 'decision_id' ? 'masked' : value);
       const folder = done => path.join(done.run, `click-${done.click.click}`);
-      const files = ['observe/observations.jsonl', 'track/tracks.jsonl', 'requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'den-core-log.jsonl', 'person_states.jsonl'];
-      const timelines = {};
+      const files = ['observe/observations.jsonl', 'track/tracks.jsonl', 'requests.jsonl', 'bundles.jsonl', 'asks.jsonl', 'facts.jsonl', 'occupancy.jsonl', 'person_states.jsonl',
+        'decide/decisions.jsonl', 'decide/surfaces.json'];
+      const decisions = {}, again = report((await status()).run);
       for (const label of ['Reading on the couch', 'Holding a phone']) {
-        const before = clicks[label], after = await click(before.click.take);
+        const before = clicks[label], after = await click(before.click.take, again);
         for (const name of files) assert.ok(fs.readFileSync(path.join(folder(before), name)).equals(fs.readFileSync(path.join(folder(after), name))), `${label}: ${name}`);
-        const [was, now] = [folder(before), folder(after)].map(dir => path.join(dir, 'brain-timeline.json'));
-        assert.equal(masked(now), masked(was), `${label}: the brain's timeline, decision_id masked`);
-        assert.notEqual(fs.readFileSync(now, 'utf8'), fs.readFileSync(was, 'utf8'), `${label}: control: unmasked, the random decision_id differs, so the mask is what lets them match`);
-        timelines[label] = masked(now);
+        decisions[label] = fs.readFileSync(path.join(folder(after), 'decide', 'decisions.jsonl'), 'utf8');
       }
-      assert.notEqual(timelines['Reading on the couch'], timelines['Holding a phone'], 'control: the masked comparison still tells two decisions apart');
+      assert.ok(decisions['Reading on the couch'].includes('"actuator_domain": "virtual-den-4"') || decisions['Reading on the couch'].includes('"actuator_domain":"virtual-den-4"'), 'reading wrote a spot Decision');
+      assert.notEqual(decisions['Reading on the couch'], decisions['Holding a phone'], 'control: the comparison tells reading\'s Decisions from phone\'s none');
     } finally { await second.stop(); }
   });
 });

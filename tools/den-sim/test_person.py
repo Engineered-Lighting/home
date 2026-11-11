@@ -319,7 +319,9 @@ class Canon(unittest.TestCase):
 
 
 class Hop13(unittest.TestCase):
-    def test_the_runner_pass_and_the_need_per_track_give_the_same_states_on_the_same_lines(self):
+    def test_the_need_per_track_gives_den_cores_runner_states_on_the_same_lines(self):
+        """need v0 runs once per track, in person.py, and nowhere else on a click: on the lines it was handed it says what
+        den-core's real runner says on them, so the per-track pass stands in for the runner's room-level one."""
         temp = tempfile.TemporaryDirectory(prefix='den-sim-core-')
         self.addCleanup(temp.cleanup)
         folder = Path(temp.name)
@@ -327,24 +329,30 @@ class Hop13(unittest.TestCase):
             archive.extractall(folder, filter='data')
         fixture = scene(safe=(True,) * 5)
         fixture['facts'][1]['observation']['facts']['activity_hypothesis'] = 'phone_use'   # reading, phone, then reading: a dropped line shows
+        script = folder / 'runner_states.py'
+        script.write_text('\n'.join(['import json, sys', 'sys.path.insert(0, sys.argv[1])', 'import runner, sources',
+                                     'items = [(sources.fact_time(v["available_at"]), "facts", v) for v in map(json.loads, open(sys.argv[2], encoding="utf-8"))]',
+                                     'header, log = runner.run(runner.tagged(items, "synthetic"), runner.load_policies(["need"]), synthetic=True, sources=["synthetic"])',
+                                     'last = max(t for t, _, _ in items)',
+                                     'print(json.dumps([r["data"]["focused_engagement"]["state"] for r in log if r["kind"] == "person_state" and r["t"] <= last]))']), encoding='utf-8')
 
-        def runner(facts):
+        def runner_states(facts):
             (folder / 'facts.jsonl').write_text(''.join(json.dumps(line) + '\n' for line in facts), encoding='utf-8')
-            return chain.step_core(dict(core_tree=str(folder), facts=str(folder / 'facts.jsonl'), log=str(folder / 'log.jsonl')))
-        runner_states = lambda facts: runner(facts)['states']
+            done = subprocess.run([sys.executable, '-B', str(script), str(folder / 'tools' / 'den-core'), str(folder / 'facts.jsonl')], capture_output=True, encoding='utf-8')
+            return json.loads(done.stdout)
         _, [card] = run(fixture)
         self.assertEqual(card['need_states'], runner_states(fixture['facts']))
-        self.assertEqual((card['engaged_reply'], runner(fixture['facts'])['engaged_reply']), (4, 4), 'reading, phone, then reading: both engage at the fourth')
+        self.assertEqual(card['engaged_reply'], 4, 'reading, phone, then reading: engaged at the fourth')
         unsafe = copy.deepcopy(fixture)   # control: the first bundle unsafe, so person.py hands need four of the five lines
         unsafe['asks'][0]['association_safe'] = unsafe['bundles'][0]['association_safe'] = False
         self.assertNotEqual(run(unsafe)[1][0]['need_states'], runner_states(fixture['facts']))
         self.assertEqual(run(unsafe)[1][0]['need_states'], runner_states(fixture['facts'][1:]), 'and on the four it took, the two agree again')
-        # Hop 13's row says where the two passes part: reading on all five, the first held, engages a reply later in person.py.
+        # Hop 13's row says how many replies each track's need took, and how many were held.
         lag = scene()
-        self.assertEqual(chain.need_words(runner(lag['facts']), run(lag)[1]).split('(hop 15), ')[1], 'on the replies its bundle was safe to take: trk-1 took 4 of 5 '
-                         'replies, 1 held as not safe to tie to one person: starting then engaged, so it engaged at reply 3, where the runner pass engaged at reply 2.')
-        safe = scene(safe=(True,) * 5)   # control: nothing held, nothing parts
-        self.assertTrue(chain.need_words(runner(safe['facts']), run(safe)[1]).endswith('trk-1 took 5 of 5 replies: starting then engaged.'))
+        self.assertEqual(chain.need_words(run(lag)[1]).split('(hop 15), ')[1], 'on the replies its bundle was safe to take: trk-1 took 4 of 5 '
+                         'replies, 1 held as not safe to tie to one person: starting then engaged. Nothing else runs need on a click.')
+        safe = scene(safe=(True,) * 5)   # control: nothing held
+        self.assertIn('trk-1 took 5 of 5 replies: starting then engaged.', chain.need_words(run(safe)[1]))
 
 
 if __name__ == '__main__':

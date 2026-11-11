@@ -164,8 +164,12 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
     next();
     return undefined;
   }
-  // 'stopped' when the pipeline answered (the detector saw nobody, no track formed); 'pipeline_failed' when it broke.
-  function fail(reason, as = 'pipeline_failed') { stop(); phase = as; pipeline.failed = reason; }
+  // 'stopped' when the pipeline answered (the detector saw nobody, nobody is reading); 'pipeline_failed' when it broke.
+  // reply: what the click's words came from, when it used any, so the off document it leaves says so.
+  function fail(reason, as = 'pipeline_failed', reply = null) {
+    stop(); phase = as; pipeline.failed = reason;
+    if (reply) { timeline = { summary: null, rows: [], reply }; show(held || emptyRow); }
+  }
   // The off document is what a refused one falls back on, so Home must accept it: if not, the harness stops here, at start.
   const off = Client.validateState(present(emptyRow));
   if (!off.ok) throw Error(`the off document is refused by Home's validator: ${off.reason}`);

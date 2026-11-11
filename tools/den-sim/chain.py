@@ -776,12 +776,11 @@ def chain(request):
     at(10)
     first, track = first_confirmed(lines, read_jsonl(observe / 'observations.jsonl'))
     ten = dict(tools=head_tools(*own), read=[click.read(observe / 'observations.jsonl', 7), click.read(work / 'track' / 'tracks.jsonl', 8)], stand_ins=named(10, 0))
-    if first is None:
-        emit(10, 'ADAPTER', 'No track confirmed, so no occupancy event: the coordinator is not run.', wrote=[], **ten)
-        raise Stop(10, 'no track confirmed, so nobody is in the room for the coordinator', answer=True)
-    (work / 'occupancy.jsonl').write_text(json.dumps(dict(t=first, kind='occupancy', data=dict(value='on', via='den-track')), sort_keys=True) + '\n', encoding='utf-8', newline='\n')
+    events = [dict(t=first, kind='occupancy', data=dict(value='on', via='den-track'))] if first is not None else []
+    (work / 'occupancy.jsonl').write_text(''.join(json.dumps(row, sort_keys=True) + '\n' for row in events), encoding='utf-8', newline='\n')
     emit(10, 'ADAPTER', 'One occupancy event, on via den-track, at the first confirmed Track line (%s), dated by the observations it names: what the '
-         'coordinator reads as someone in the room. The live source, Frigate on a Pi with Hailo, has no virtual stream.' % track, wrote=[click.file(work / 'occupancy.jsonl')], **ten)
+         'coordinator reads as someone in the room. The live source, Frigate on a Pi with Hailo, has no virtual stream.' % track if events else
+         'No track confirmed, so no occupancy event, and the coordinator is not run.', wrote=[click.file(work / 'occupancy.jsonl')], **ten)
     # Hops 11 and 12: each request's exact body, rebuilt from the take's own pixels, and its recorded reply by
     # the body's sha256. A failure in that process is hop 11's.
     at(11)
@@ -869,6 +868,8 @@ def chain(request):
     model = request.get('light_model') or {}
     if not model.get('path'):
         raise Stop(17, 'no light model was built at page start, so the coordinator has nothing to decide with')
+    if not read_jsonl(work / 'occupancy.jsonl'):
+        raise Stop(17, 'no track confirmed, so no occupancy event, and the coordinator is not run', answer=True)
     model_read = dict(path=model['label'], sha256=sha256_file(model['path']) if Path(model['path']).is_file() else None,
                       recorded=dict(kind='light model', by='light_model.mjs at page start', sha256=model['sha256']))
     decided = click.own_step('decide', dict(core_tree=str(trees['core']), occupancy=str(work / 'occupancy.jsonl'), person_states=str(work / 'person_states.jsonl'),

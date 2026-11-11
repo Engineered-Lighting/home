@@ -365,6 +365,8 @@ let activeRun = null, lastClick = null;
 // "Run every scene": the same clicks, one table row each, leaving the top line as the last single click set it.
 const every = { rows: [], roots: [], verdict: null };
 const short = id => String(id).match(/mount-\d+|fixture-\d+/)?.[0] || id;
+// Whose words a stopped click used, from hop 12's row: 'real', 'fake', or none when it never reached the replies.
+const replyOf = receipt => { const twelve = receipt.rows.find(row => row.n === 12); return twelve?.reached !== false && ['real', 'fake'].includes(twelve?.reply) ? twelve.reply : null; };
 function everyRow(take, result) {
   const view = receiptView(result.receipt, channels), twelve = view.rows[11], lit = result.ok && result.timeline?.summary.lit;
   const boxes = view.boxes || [];
@@ -403,7 +405,7 @@ function startClick(body) {
     if (activeRun !== current) return; // Reloaded while it ran: the page has moved on.
     activeRun = null;
     if (all) everyRow(take, result);
-    if (all) { if (result.ok) feed.play(result.timeline, body.fixtures); else feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
+    if (all) { if (result.ok) feed.play(result.timeline, body.fixtures); else feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed', replyOf(result.receipt)); return; }
     const picture = path.join(result.work, 'picture.png');
     lastClick = { click: result.receipt.click, run: runId, view: receiptView(result.receipt, channels), top: result.top, receipt: result.receipt,
       picture: fs.existsSync(picture) ? picture : null, stills: path.join(result.work, 'stills'), work: result.work, decision: result.decision || null };
@@ -415,7 +417,7 @@ function startClick(body) {
       writeRunJson();
     }
     if (lastClick.view.decision) console.log(`Click ${result.receipt.click}: Decision: ${lastClick.view.decision.lines.join(' ')}`);
-    if (!result.ok) { feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
+    if (!result.ok) { feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed', replyOf(result.receipt)); return; }
     commands[result.receipt.click] = result.command;
     context.command = result.command_status;
     feed.play(result.timeline, body.fixtures);

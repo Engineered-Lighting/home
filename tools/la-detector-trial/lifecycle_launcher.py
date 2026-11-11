@@ -14,6 +14,9 @@ UNIT='lab-la-detector-trial.service'
 GATES={'host memory headroom failed':'preflight_memory','gpu memory headroom failed':'preflight_vram',
     'gpu thermal headroom failed':'preflight_thermal','disk headroom failed':'preflight_disk',
     'new failed service':'preflight_failed_unit','new fault or unavailable fault check':'preflight_kernel_fault',
+    # Not a fault: the scan ran out of time (timeout or catch-up budget). Its
+    # clean chunks are recorded, so a later lease resumes from them.
+    'kernel fault scan incomplete':'preflight_kernel_scan_incomplete',
     'model unhealthy':'preflight_model_health','staged source changed':'preflight_source'}
 # The worker's lookup miss after its exact-profile admission; other 409s are not ready.
 READY={'error':'request_unavailable_or_indeterminate','profile_admitted':True}

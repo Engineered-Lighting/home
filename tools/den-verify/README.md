@@ -7,7 +7,9 @@ are already on disk and writes results next to them: it opens no network
 connection and never talks to a camera, the Jetson, LA, Home Assistant or a
 light.
 
-Python 3.8 or later, standard library only.
+Python 3.8 or later, standard library only. Predictions come from rung 8
+Stage 1's `predict()` over the session's `light-model.json`, so
+`tools/den-light` must sit beside this folder, as it does in the repo.
 
 | File | Does |
 |---|---|
@@ -15,8 +17,7 @@ Python 3.8 or later, standard library only.
 | `method.py` | Reads that block (CRLF or LF), lists open slots and the pending decisions. |
 | `records.py` | JSON Lines in and out, clock strings, LightState ids, schema field names. |
 | `settle.py` | The settle rule: den_lighting's 2 s fades (5 s on a restore), probes at 0 s. |
-| `light_model.py` | The one adapter to rung 8's model; every prediction goes through it. |
-| `fake_model.py` | rung 8's prediction rule from its plan, until Stage 1's `predict()` exists. |
+| `light_model.py` | The one adapter to rung 8's model: every prediction goes through it, to rung 8 Stage 1's `predict()` in `tools/den-light/predict.py`. |
 | `score.py` | `Decision.verify`, `LightState.residual` and the report. |
 | `verify.py` | The command line. |
 | `synthetic.py`, `test_verify.py` | Synthetic fixtures from `schemas.json` and the tests. |

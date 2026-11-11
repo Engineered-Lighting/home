@@ -99,6 +99,26 @@ ADAPTER. Without it, the couch is the public stand-in seat sealed around the DEC
 14 stays SCRIPTED. On a click that stops before hop 14, its row keeps the word it was built with,
 greyed.
 
+Then `light_model.mjs` (hop 16) builds the light model, before any picture, and the same file serves every take:
+Home's own beam formula from `lit-model.mjs`, unchanged, from each of the four fixtures' aim origins (the geometry
+`brain.mjs` builds, from your registration export or the authored sockets) to the `sofa-book` spot in that room model.
+It is the Stage-1 shape den-core and den-verify read: channels `F1.spot` to `F4.spot`, one 2700 K basis row per
+fixture at full, Home's dimming curve at the solve's own brightness values, `aim_points`, and per channel its aim
+origin and limits, keyed F1 to F4, so no fixture id enters it. 450 lm is assumed, the 20 degree beam is the datasheet's,
+and there is no occlusion, bounce or daylight, so its unit is `relative` (modeled lux on assumed lumens) and it is marked
+`fake: true`. It holds coordinates, so it is written privately beside the fit, as `light\light-model.json`; its digest
+goes into the startup record, `run.json` and the console, and hop 16's row lists the room model and geometry it read,
+each against the digest its writer took. Hop 16 reads ADAPTER, "built at page start"; on authored sockets its row also
+says the fixture origins are not yours. Nothing decides from it until the coordinator does.
+
+The empty room Home is shown before and between clicks is `decision_doc.mjs`'s off document: four dark fixtures and
+the full field set of Home's contract fixture, its reading evidence unbound. `decision_doc.mjs` also maps one spot
+Decision, in the coordinator's canonical shape, to Home's document; it refuses anything but `virtual-den-4` and
+`synthetic`, takes each fixture's level and colour from the Decision's read-back, its point from the request and its fade
+from the fade-in's two times, and writes `bound: true` only when the reader's person state joins through `asks.jsonl`
+to one request, bundle, track and reply. The click doesn't use it yet. Every document the feed sends goes through Home's
+own validator first: one it refuses stops the click with the validator's reason, and the off document stays.
+
 The click is told the take's folder id and Home's report of the fixtures, never the scene. The
 button labels live in the set's `display.json`, which only the panel reads (without it, the
 buttons show folder ids and every click runs the same), and the scenes' true joints in its
@@ -223,7 +243,7 @@ the digest `last-ask.json` recorded when the paste filed it.
 | 13 Need | Adapter | need v0, standing in for need v1: in den-core's runner, which feeds the older brain until step 6, and one per track in `person.py` |
 | 14 Couch | Scripted, or Adapter with your mark | `couch_to_room.mjs` writes the DECLARED stand-in seat, or your sofa mark, into the pipeline's own RoomModel at page start, with the spot 0.30 m above the seat point |
 | 15 Person state | Adapter | `person.py`: need v0 per track and rules on real joints, unscored. Rung 6 isn't built, and nothing reads it until step 6 |
-| 16 Light model | Missing | Not built yet |
+| 16 Light model | Adapter | `light_model.mjs` at page start: Home's own beam formula on assumed numbers, `fake: true`, unit relative, one private file for every take |
 | 17 Spot decision and aim | Adapter | The older lighting brain, with jev and deep_stack health asserted |
 | 18, 19 Feed into Home, motion | Adapter, scripted | This harness replays the brain's timeline re-timed to now, with 10 Hz steps for the swing |
 | 20 Home client, follower, overlay | Real | Unchanged `app/src`, served from this harness |
@@ -280,8 +300,8 @@ agent prepared there would be invisible to your own PowerShell.
 | `prepared\replies` | Qwen's replies, `<body_sha256>.json`, filed by your paste. Never removed by any tool here |
 | `prepared\last-ask.json` | What your last paste did, and each reply's digest |
 | `prepared\tries.jsonl` | Every try at choosing the picture, append-only, and one line per paste. The page counts the Qwen tries in it |
-| `private` | Your optional files, the brain geometry built from them, and `fits\`, your re-fits, each with `couch\room-model.jsonl`, the copy hop 14 wrote the couch into |
-| `fits` | Re-fits on the authored room's stand-in seat, with their `couch\room-model.jsonl` |
+| `private` | Your optional files, the brain geometry built from them, and `fits\`, your re-fits, each with `couch\room-model.jsonl`, the copy hop 14 wrote the couch into, and `light\light-model.json`, hop 16's light model |
+| `fits` | Re-fits on the authored room's stand-in seat, with their `couch\room-model.jsonl` and `light\light-model.json` |
 | `runs\<stamp>\click-<n>` | Each click's rows, observations, tracks, bundles, den-core log, person states, brain timeline, dry run, picture and `run-receipt.json`, about 1.2 MB. Nothing cleans these up |
 | `tools\<name>-<sha>` | `git archive` of each pinned ref in `refs.json`, about 1 MB. `observe-<sha>` also holds the Lab files the detector imports, so it can be `detect.py`'s `--tools-root`; `core-<sha>` the Lab's `qwen_live.py` and the 7 files it imports. `tools\lifted\` holds what `ask_la.py` lifts |
 
@@ -383,10 +403,12 @@ node --test tools\den-sim\test-den-sim-browser.mjs
 | `brain.mjs` | Builds the geometry and runs one click from end to end |
 | `chain.py` | The frame hash, hop 6's checks on the recorded rows, the pinned tools in their own guarded processes, each request's exact body and its reply's lookup, and the adapter |
 | `couch_to_room.mjs` | Hop 14: your mark, or the stand-in seat, into the click's RoomModel, with the spot |
+| `light_model.mjs` | Hop 16: the light model, Home's own beam formula from each fixture to the spot, built at page start |
+| `decision_doc.mjs` | Hop 18's mapping: a spot Decision to Home's document, and the off document |
 | `person.py` | Hop 15: person states in the architecture's field names, need v0 per track, rules on real joints |
 | `ask_la.py`, `ask_one.py` | Your one paste on this PC, and what it runs on the inference host |
 | `brain_run.py` | The real activity loop, publisher and older brain under a fake clock, and the startup line |
-| `feed.mjs` | Replays the brain's timeline into Home and inserts the motion |
+| `feed.mjs` | Replays the brain's timeline into Home and inserts the motion, each document held to Home's validator |
 | `dry_run.py` | The fixture command for the brain's target |
 | `panel.js` | The strip and panel on the page |
 | `refs.json` | The pinned refs, and the codec's path and digests |

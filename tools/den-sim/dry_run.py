@@ -1,16 +1,18 @@
-"""The exact fixture command for the brain's target: computed, shown, never sent.
+"""The exact fixture command for the coordinator's Decision: computed, shown, never sent.
 
 Real compile_target on a FICTIONAL profile, with its pivot and basis taken from
-the fixture the brain chose. Then the real plan and wire codec, read by path
-because it is on no git ref, sealed with the contract's public test key for a
-fictional device. Then the literal Home Assistant POST with a placeholder ieee,
-and the two CAN A4 frames. Nothing here can send: there is no token, no route and
-no socket. Prints one JSON document to stdout.
+the fixture the Decision lit, on the Decision's target_m. Then the real plan and
+wire codec, read by path because it is on no git ref, sealed with the contract's
+public test key for a fictional device, carrying the Decision's level. Then the
+literal Home Assistant POST with a placeholder ieee, and the two CAN A4 frames.
+Nothing here can send: there is no token, no route and no socket. Prints one JSON
+document to stdout. Home's own angles are read back at landing by the aim check
+(hop 24), never here.
 
-Reads JSON on stdin: {"take", "brain", "codec_tools", "codec_contracts"}, where
-take is the take's folder id. "brain" is null when the brain lit nothing, or else
-{"fixture_id", "aim_origin_m", "horizontal_world_reference", "target_m", "level",
-"cct_k", "pan_deg", "tilt_deg"}.
+Reads JSON on stdin: {"take", "decision", "codec_tools", "codec_contracts"}, where
+take is the take's folder id. "decision" is null when the Decision lit nothing, or
+else {"channel", "fixture_id", "aim_origin_m", "horizontal_world_reference",
+"target_m", "level", "cct_k", "decision_id"}.
 """
 import hashlib
 import importlib.util
@@ -50,7 +52,6 @@ FICTIONAL_DEVICE_ID = bytes(range(0xa0, 0xb0))
 PLACEHOLDER_IEEE = 'UNCOMMISSIONED'
 ZHA_ROUTE = '/api/services/zha/issue_zigbee_cluster_command'
 SPOT_CHANNEL, FULL_DUTY = 21, 4096
-ANGLE_TOLERANCE_DEG = .05
 NOT_GENERATED = 'Clock exchange is not generated: the real host brackets four timestamps against a live device.'
 
 
@@ -58,27 +59,24 @@ def sha256(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def inverse_kinematics(brain):
+def inverse_kinematics(decision):
     """Fixture x is the virtual fixture's forward, y its left and z up, which is the
     right-handed basis the compiler requires. So fixture pan is minus Home's pan, and
-    fixture tilt is measured from straight down, where Home's is from level."""
-    fx, fy = brain['horizontal_world_reference'][:2]
+    fixture tilt is measured from straight down, where Home's is from level: the aim
+    check compares them so at landing."""
+    fx, fy = decision['horizontal_world_reference'][:2]
     length = math.hypot(fx, fy)
     fx, fy = fx / length, fy / length
     profile = fictional_profile()
-    profile['geometry'].update(optical_pivot_m=list(brain['aim_origin_m']), fixture_to_room_basis=[fx, -fy, 0, fy, fx, 0, 0, 0, 1])
+    profile['geometry'].update(optical_pivot_m=list(decision['aim_origin_m']), fixture_to_room_basis=[fx, -fy, 0, fy, fx, 0, 0, 0, 1])
     try:
-        target = compile_target(profile, brain['target_m'], SPEED_FIXTURE_DEG_S, now_home_us=FICTIONAL_NOW_US)
+        target = compile_target(profile, decision['target_m'], SPEED_FIXTURE_DEG_S, now_home_us=FICTIONAL_NOW_US)
     except FixtureProfileRefusal as refusal:
         return dict(ok=False, reason=str(refusal))
-    pan, tilt = target['fixture_angles_deg']
-    pan_gap, tilt_gap = abs(pan + brain['pan_deg']), abs(tilt + brain['tilt_deg'] - 90)
     return dict(ok=True, status='FICTIONAL', profile_id=profile['profile_id'], profile_sha256=digest(profile),
-                physical_eligible=target['physical_eligible'], fixture_angles_deg=[pan, tilt],
+                physical_eligible=target['physical_eligible'], fixture_angles_deg=list(target['fixture_angles_deg']),
                 target_centideg=target['target_centideg'], speed_deg_s=target['speed_deg_s'],
-                quantization_error_rad=target['quantization_error_rad'], range_m=target['range_m'],
-                home_angles_deg=[brain['pan_deg'], brain['tilt_deg']], angle_gap_deg=[pan_gap, tilt_gap],
-                agrees_with_home=pan_gap < ANGLE_TOLERANCE_DEG and tilt_gap < ANGLE_TOLERANCE_DEG)
+                quantization_error_rad=target['quantization_error_rad'], range_m=target['range_m'])
 
 
 def semantic_spot_refusal():
@@ -127,7 +125,7 @@ def seal_everything(codec, wire, ik, duty):
         add('plan_prepare', wire.Operation.PLAN_PREPARE, active, body)
     add('plan_commit', wire.Operation.PLAN_COMMIT, active, wire.plan_commit_body(plan_bytes))
 
-    # Trace the brain's aim into the bytes that would carry it.
+    # Trace the Decision's aim into the bytes that would carry it.
     aim = struct.pack('<2i2H', *ik['target_centideg'], *ik['speed_deg_s'])
     offset = plan_bytes.find(aim)
     assert offset > 0 and plan_bytes.find(aim, offset + 1) < 0
@@ -163,23 +161,23 @@ def can_frames(ik, contracts):
 
 def main():
     request = json.load(sys.stdin)
-    brain = request['brain']
-    out = dict(sent=False, send_path=None, take=request['take'], brain=brain, ik=None, spot=None, plan=None, wire=None, can=None,
+    decision = request['decision']
+    out = dict(sent=False, send_path=None, take=request['take'], decision=decision, ik=None, spot=None, plan=None, wire=None, can=None,
                codec=dict(found=False, tools=request['codec_tools']))
     tools = Path(request['codec_tools'])
     if (tools / 'c12_runtime_plan.py').is_file() and (tools / 'c12_runtime_wire.py').is_file():
         codec, plan_sha = load_by_path(tools, 'c12_runtime_plan')
         wire, wire_sha = load_by_path(tools, 'c12_runtime_wire')
         out['codec'].update(found=True, c12_runtime_plan_sha256=plan_sha, c12_runtime_wire_sha256=wire_sha)
-    if brain is None:
+    if decision is None:
         print(json.dumps(out, allow_nan=False))
         return
-    out['ik'] = inverse_kinematics(brain)
+    out['ik'] = inverse_kinematics(decision)
     if not out['ik']['ok']:
         print(json.dumps(out, allow_nan=False))
         return
-    duty = round(brain['level'] * FULL_DUTY)
-    out['spot'] = dict(raw_duty=duty, full_duty=FULL_DUTY, channel=SPOT_CHANNEL, brain_level=brain['level'], brain_cct_k=brain['cct_k'],
+    duty = round(decision['level'] * FULL_DUTY)
+    out['spot'] = dict(raw_duty=duty, full_duty=FULL_DUTY, channel=SPOT_CHANNEL, decision_level=decision['level'], decision_cct_k=decision['cct_k'],
                        semantic_refusal=semantic_spot_refusal(), semantic_cct_mapping=None)
     out['can'] = can_frames(out['ik'], request['codec_contracts'])
     if out['codec']['found']:

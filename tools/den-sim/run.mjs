@@ -1,8 +1,8 @@
-// Den simulation harness: the real Home on loopback, following the older lighting brain on
+// Den simulation harness: the real Home on loopback, following rung 9's coordinator in spot mode on
 // what the pinned pipeline tools made of a prepared, rendered take. It binds 127.0.0.1 only;
 // the page's CSP is connect-src 'self'; anything not served here is a logged 503; non-GET is
-// refused except the feed; WebSocket upgrades are destroyed. There is no path to a bulb, the
-// camera, the Jetson, LA, Home Assistant or any LAN host.
+// refused except the feed and the aim check; WebSocket upgrades are destroyed. There is no path to
+// a bulb, the camera, the Jetson, LA, Home Assistant or any LAN host.
 //
 //   node tools\den-sim\run.mjs                         your real scan pack, the newest prepared set
 //   node tools\den-sim\run.mjs --room authored         authored room and sockets, no household data
@@ -30,13 +30,15 @@ import { createContentPackHandler } from '../../web-gateway/content-pack-route.m
 import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs';
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
-import { prepareBrain, privateReason, standInSofa } from './brain.mjs';
+import { privateReason, standInSofa, writeGeometry } from './brain.mjs';
+import { aimNumbers, aimRow, createClicks } from './click.mjs';
 import { SPOT_ABOVE_SEAT_M, writeCouch } from './couch_to_room.mjs';
 import { dataRoot, newestPreparedSet, refusedSince } from './data-root.mjs';
 import { offDocument } from './decision_doc.mjs';
 import { BRAIN_BASE, createFeed } from './feed.mjs';
 import { channelTable, writeLightModel } from './light_model.mjs';
 import { TABLE, headTools, personColumn, receiptView, sha256 } from './receipt.mjs';
+import { topLine } from './top_line.mjs';
 
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..'), SRC = path.join(ROOT, 'app/src');
@@ -268,31 +270,35 @@ function sourceIsPinned() {
   catch { return false; }
 }
 const pinned = sourceIsPinned();
-// The startup line: with both of your files saved, each fixture against the stated facing and the
-// spot, through the brain's own aim.py, in words only.
-const stated = couch.source === 'sofa_mark' && placed.transform
-  ? { seat_m: couch.mark.seat.point_m, facing_unit: placed.transform.facing_unit, spot_m: couch.mark.seat.point_m.map((v, i) => v + (i === 2 ? SPOT_ABOVE_SEAT_M : 0)) } : null;
-function startBrain() {
-  try {
-    // An authored room has no household data, so its geometry stays out of the private folder.
-    return prepareBrain({ registration, couch, startup: stated, geometryDirectory: room === 'real' ? PRIVATE : run, runDirectory: run, outputRoot: OUT, notes: privateNotes, refs });
-  } catch (error) {
-    console.error(`The lighting brain could not run, so there is nothing to show. It needs python on the PATH.\n${error.message}`);
+// The fixture geometry: an authored room has no household data, so its geometry stays out of the private folder.
+const geometry = (() => {
+  try { return writeGeometry({ registration, couch, directory: room === 'real' ? PRIVATE : run, notes: privateNotes }); } catch (error) {
+    console.error(`The fixture geometry could not be built, so there is nothing to show.\n${privateReason(error)}`);
     return process.exit(1);
   }
-}
-const brain = startBrain();
-const startup = brain.startup ? `${brain.startup.join(', ')}${brain.startup.some(words => words.endsWith('clear')) ? '' : '. None passes: say which way to turn the reader, and an agent writes facing.json'}` : null;
+})();
 // F1 to F4 to Home's fixture ids, from the geometry brain.mjs wrote: read here, never written down.
-const channels = channelTable(readFile(brain.geometry_file.path));
+const channels = channelTable(readFile(geometry.path));
 // Hop 16, after the couch and before any picture: the light model, one file for every take, private beside the fit.
 // Digests and labels only leave this block: the file holds coordinates.
 const lightIn = (() => {
   if (!couchIn.sha256) return { error: `no room model holds the spot: ${couchIn.error}` };
-  const label = `fits/${placed.folder}/light/light-model.json`;
+  const label = `fits/${placed.folder}/light/light-model.json`, file = path.join(FITS, placed.folder, 'light', 'light-model.json');
   try {
-    return { label, ...writeLightModel({ roomModel: roomModel.path, geometry: brain.geometry_file.path, to: path.join(FITS, placed.folder, 'light', 'light-model.json'), sockets: registration.source }) };
+    return { label, file, ...writeLightModel({ roomModel: roomModel.path, geometry: geometry.path, to: file, sockets: registration.source }) };
   } catch (error) { return { error: `light_model.mjs refused: ${privateReason(error)}` }; }
+})();
+// The startup line: with both of your files saved, each fixture of the light model against the stated facing and the
+// spot, through den-core's spot_rule.py and the lighting brain's aim.py at their pin, in words only.
+const stated = couch.source === 'sofa_mark' && placed.transform && lightIn.file
+  ? { seat_m: couch.mark.seat.point_m, facing_unit: placed.transform.facing_unit, spot_m: couch.mark.seat.point_m.map((v, i) => v + (i === 2 ? SPOT_ABOVE_SEAT_M : 0)) } : null;
+const startup = (() => {
+  if (!stated) return null;
+  try {
+    const said = JSON.parse(execFileSync('python', ['-B', path.join(HERE, 'chain.py'), '--step', 'startup'], { encoding: 'utf8', windowsHide: true, timeout: 120000,
+      input: JSON.stringify({ ...stated, refs: refs.tools, tools_root: path.join(OUT, 'tools'), light_model: lightIn.file }), stdio: ['pipe', 'pipe', 'pipe'] })).startup;
+    return `${said.join(', ')}${said.some(words => words.endsWith('clear')) ? '' : '. None passes: say which way to turn the reader, and an agent writes facing.json'}`;
+  } catch (error) { privateNotes.push(`the startup line could not be read: ${privateReason(error)}`); return null; }
 })();
 
 /* ---------- what this page built when it started: hops 5's re-fit, 14 and 20 ---------- */
@@ -326,7 +332,7 @@ function lightRow() {
   const values = Object.entries(lightIn.at_full).map(([key, value]) => `${key} ${value}`).join(', ');
   return { ...row, model: { version: lightIn.version, sha256: lightIn.sha256, fake: true, unit: 'relative' },
     read: [{ path: roomModel.label, sha256: lightIn.read.room_model, recorded: { kind: 'room model', by: roomModel.by, sha256: roomModel.sha256 } },
-      { path: 'brain-geometry.json', sha256: lightIn.read.geometry, recorded: { kind: 'fixture table', by: 'brain.mjs at page start, as it wrote the geometry', sha256: brain.geometry_file.sha256 } }],
+      { path: 'brain-geometry.json', sha256: lightIn.read.geometry, recorded: { kind: 'fixture table', by: 'brain.mjs at page start, as it wrote the geometry', sha256: geometry.sha256 } }],
     wrote: [{ path: lightIn.label, sha256: lightIn.sha256 }],
     summary: `light_model.mjs built ${lightIn.version} at page start, before any picture, the same file for every take: Home's own beam formula from each fixture to the sofa-book spot, `
       + `450 lm assumed and a 20 degree beam, unit relative (modeled lux on assumed lumens), marked fake: true, sha256 ${lightIn.sha256.slice(0, 12)}. At full, modeled: ${values}. `
@@ -345,19 +351,22 @@ const context = { room, registration: { source: registration.source, label: regi
   set: { id: setInfo.set, recorded: setInfo.recorded, figure: setInfo.figure, way: setInfo.way, takes: scenes.length, refusal: setInfo.refusal || null, notes: prepareNotes },
   placement: { registered: placed.registered, summary: placed.summary }, startup,
   tries: tries && { count: tries.length, reading: tries.filter(row => row.facts?.activity_hypothesis === 'reading').length },
-  brain: { command: brain.command_status },
+  command: { pending: true, codec_found: fs.existsSync(path.join(refs.codec.tools, 'c12_runtime_plan.py')) && fs.existsSync(path.join(refs.codec.tools, 'c12_runtime_wire.py')) },
   light_model: lightIn.error ? { error: lightIn.error } : { label: lightIn.label, sha256: lightIn.sha256, version: lightIn.version, fake: true, unit: 'relative' } };
 // The empty room is decision_doc.mjs's off document: four dark fixtures, until a click has something to show.
 const feed = createFeed({ emptyRow: { state: offDocument(channels), refusal: null }, couchLabel: couch.label });
+const clicker = createClicks({ refs, outputRoot: OUT, runDirectory: run, geometry, channels });
+const lightModel = lightIn.error ? null : { path: lightIn.file, sha256: lightIn.sha256, label: lightIn.label };
 
-/* ---------- one click: the pipeline on a prepared take, then the brain, the receipt and the replay into Home ---------- */
+/* ---------- one click: the pipeline and the coordinator on a prepared take, the receipt, and its Decisions into Home ---------- */
 const commands = {}, pressed = new Set(), clickLines = [], startedAt = new Date().toISOString();
 const writeRunJson = () => fs.writeFileSync(path.join(run, 'run.json'), JSON.stringify({ ...context, started_at: startedAt, origin: ORIGIN, clicks: clickLines }, null, 2) + '\n');
 let activeRun = null, lastClick = null;
 // "Run every scene": the same clicks, one table row each, leaving the top line as the last single click set it.
 const every = { rows: [], roots: [], verdict: null };
+const short = id => String(id).match(/mount-\d+|fixture-\d+/)?.[0] || id;
 function everyRow(take, result) {
-  const view = receiptView(result.receipt), twelve = view.rows[11], lit = result.ok && result.timeline?.summary.lit;
+  const view = receiptView(result.receipt, channels), twelve = view.rows[11], lit = result.ok && result.timeline?.summary.lit;
   const boxes = view.boxes || [];
   // Qwen's words, counted over the requests it answered: "reading x4, unclear x1".
   const said = {};
@@ -366,8 +375,8 @@ function everyRow(take, result) {
   every.rows.push({ take, click: view.click, box: boxes.length ? boxes.map(box => `person ${box.score.toFixed(2)}`).join(', ') : view.boxes ? 'none' : 'rows did not hold',
     person: personColumn(view.person),
     qwen: !twelve.reached ? 'not asked' : twelve.word === 'MISSING' ? `MISSING: ${twelve.summary.split(':')[0]}` : `${twelve.word === 'SCRIPTED' ? 'fake vLLM, scripted: ' : 'asked: '}${words}`,
-    root: view.qwen?.root || null, beam: lit ? `lit, ${result.timeline.summary.fixture_id.match(/mount-\d+/)?.[0] || result.timeline.summary.fixture_id}` : 'off',
-    why: result.receipt.stopped ? `hop ${result.receipt.stopped.hop}: ${result.receipt.stopped.why.replace(/^Qwen has not seen these exact frames: /, '')}` : lit ? '' : result.timeline?.summary.refusal || '' });
+    root: view.qwen?.root || null, beam: lit ? `lit, ${result.timeline.summary.channel.split('.')[0]} (${short(result.timeline.summary.fixture_id)}), ${view.decision?.level}` : 'off',
+    why: result.receipt.stopped ? `hop ${result.receipt.stopped.hop}: ${result.receipt.stopped.why.replace(/^Qwen has not seen these exact frames: /, '')}` : lit ? '' : result.reason || '' });
   every.roots = [...new Set(every.rows.map(row => row.root).filter(Boolean))];
   every.verdict = every.roots.length > 1 ? `replies from two models (${every.roots.join(', ')}): a table uses one` : null;
 }
@@ -380,7 +389,7 @@ function startClick(body) {
   const pressedAgain = !all && pressed.has(take);
   if (!all) { pressed.add(take); lastClick = null; }
   const runId = feed.begin(take);
-  const current = activeRun = brain.runClick({ take, prepared: prepared[take], setDir: SET, roomModel, startRecord: { ...start, home: homeRow() }, pressedAgain,
+  const current = activeRun = clicker.runClick({ take, prepared: prepared[take], setDir: SET, roomModel, lightModel, startRecord: { ...start, home: homeRow() }, pressedAgain,
     replies: REPLIES, lastAsk: LAST_ASK }, row => feed.hop({ n: row.n, word: row.word, summary: row.summary, ms: row.ms }));
   // A click that can't be shown fails with why, on the page and in the console: it never ends the harness.
   const failed = error => {
@@ -396,8 +405,8 @@ function startClick(body) {
     if (all) everyRow(take, result);
     if (all) { if (result.ok) feed.play(result.timeline, body.fixtures); else feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
     const picture = path.join(result.work, 'picture.png');
-    lastClick = { click: result.receipt.click, run: runId, view: receiptView(result.receipt), top: result.top, receipt: result.receipt, said: result.said || null,
-      picture: fs.existsSync(picture) ? picture : null, stills: path.join(result.work, 'stills') };
+    lastClick = { click: result.receipt.click, run: runId, view: receiptView(result.receipt, channels), top: result.top, receipt: result.receipt,
+      picture: fs.existsSync(picture) ? picture : null, stills: path.join(result.work, 'stills'), work: result.work, decision: result.decision || null };
     // The person card's words, distances only: in the console, run.json and the panel.
     if (lastClick.view.person) {
       const { lines, track_lines: own } = lastClick.view.person, words = lines.slice(0, own ?? lines.length).join(' ');
@@ -405,12 +414,34 @@ function startClick(body) {
       clickLines.push({ click: result.receipt.click, take, person: words });
       writeRunJson();
     }
+    if (lastClick.view.decision) console.log(`Click ${result.receipt.click}: Decision: ${lastClick.view.decision.lines.join(' ')}`);
     if (!result.ok) { feed.fail(result.reason, result.receipt.stopped?.answer ? 'stopped' : 'pipeline_failed'); return; }
     commands[result.receipt.click] = result.command;
-    context.brain.command = result.command_status;
+    context.command = result.command_status;
     feed.play(result.timeline, body.fixtures);
   }).catch(failed);
   return { ok: true, run: runId };
+}
+// Hop 24, at landing: the page posts Home's read-back of the lit fixture, sampled from its real overlay, and the harness
+// holds it to the Decision and the dry run's inverse kinematics, writes aim_check.json beside the click, and re-reads the
+// top line. Only the last single click that lit a spot is checked, once its beam has landed.
+function aimCheck(body) {
+  const click = lastClick, phase = feed.readback().phase;
+  if (!click?.decision || body?.click !== click.click || !['holding', 'refused'].includes(phase)) return { ok: false, reason: 'no_landed_decision' };
+  const home = body.home || {};
+  if (home.fixture_id !== click.decision.fixture_id) return { ok: false, reason: 'not_the_decisions_fixture' };
+  const numbers = aimNumbers({ target: click.decision.target_m, command: commands[click.click], home });
+  if (!numbers) return { ok: false, reason: 'aim_readback_invalid' };
+  const file = path.join(click.work, 'aim_check.json');
+  fs.writeFileSync(file, JSON.stringify({ schema: 'den-sim-aim-check-1', click: click.click, decision_id: click.decision.decision_id, channel: click.decision.channel, ...numbers,
+    rule: 'the Decision\'s target against Home\'s target point, at the fixture; inverse kinematics against Home\'s read-back: fixture pan = -Home\'s pan, fixture tilt = 90 - Home\'s tilt',
+    home: { pan_deg: home.pan_deg, tilt_deg: home.tilt_deg }, sampled_by: 'panel.js from Home\'s overlay' }, null, 1) + '\n');
+  const own = name => ({ path: name, sha256: sha256(path.join(click.work, name)) });
+  const row = aimRow(numbers, { read: [{ ...own('decide/decisions.jsonl'), from_hop: 17 }, { ...own('dry-run.json'), from_hop: 21 }], wrote: [own('aim_check.json')] });
+  const receipt = { ...click.receipt, aim_check: numbers, rows: click.receipt.rows.map(item => item.n === 24 ? row : item) };
+  fs.writeFileSync(path.join(click.work, 'run-receipt.json'), JSON.stringify(receipt, null, 1) + '\n');
+  Object.assign(click, { receipt, top: topLine(TABLE, receipt), view: receiptView(receipt, channels) });
+  return { ok: true, ...numbers };
 }
 function cancelClick() {
   activeRun?.cancel();
@@ -453,7 +484,7 @@ function homePage() {
 }
 
 /* ---------- the log ---------- */
-const refused = new Map(), counters = { served: 0, refused: 0, upgrades_destroyed: 0, feed_posts: 0, wrong_host: 0 };
+const refused = new Map(), counters = { served: 0, refused: 0, upgrades_destroyed: 0, feed_posts: 0, aim_posts: 0, wrong_host: 0 };
 const logFile = path.join(run, 'requests.jsonl');
 function record(kind, method, pathname, status) {
   counters[kind === 'upgrade' ? 'upgrades_destroyed' : 'refused']++;
@@ -503,6 +534,11 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req); counters.feed_posts++;
       return send(res, 200, startClick(body));
     }
+    if (pathname === '/__sim/aim' && req.method === 'POST') {
+      if (req.headers.origin !== ORIGIN) return refuse(res, req.method, pathname, 403);
+      const body = await readJson(req); counters.aim_posts++;
+      return send(res, 200, aimCheck(body));
+    }
     if (req.method !== 'GET') return refuse(res, req.method, pathname, 405);
     if (pathname === '/' && !url.search) { res.writeHead(302, { Location: '/?apartmentRedesign=1&worldZoom=off' }); return res.end(); }
     if (pathname === '/' || pathname === '/index.html') {
@@ -514,7 +550,7 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/__sim/panel.js') return send(res, 200, fs.readFileSync(path.join(HERE, 'panel.js')), { 'Content-Type': TYPES['.js'] });
     if (pathname === '/__sim/status') {
       // The person's point, the target and the camera marker's point reach the page here, because Home's markers need them. The panel prints none.
-      const click = lastClick && { ...lastClick.view, run: lastClick.run, top_line: lastClick.top, picture: !!lastClick.picture, said: lastClick.said };
+      const click = lastClick && { ...lastClick.view, run: lastClick.run, top_line: lastClick.top, picture: !!lastClick.picture };
       return send(res, 200, { ...context, scenes, camera_m: cameraM, feed: feed.readback(), click, counters, refused: [...refused.values()], run,
         qwen: qwenStatus(), every: { ...every, running: !!activeRun } });
     }

@@ -1,18 +1,18 @@
-// Feeds Home the older lighting brain's decisions for the den simulation. The brain
-// ran in brain_run.py on what the pipeline produced. This adapter replays its timeline to
-// Home's real client, follower and overlay, re-timed to now. Home's follower has no
-// motion model, so the 30 deg/s swing is scripted: documents stepping target_m at
-// 10 Hz are inserted before the brain's own lit state. Do not use sweep:true: the
+// Feeds Home the coordinator's Decisions for the den simulation (hops 18 and 19). Each Decision
+// came through decision_doc.mjs, one mapping, into Home's own document; this feed plays them to
+// Home's real client, follower and overlay, re-timed to now, and keeps the last one lit. Home's
+// follower has no motion model, so the 30 deg/s swing is scripted: documents stepping target_m at
+// 10 Hz are inserted before the lit Decision's own document. Do not use sweep:true: the
 // follower's next state write ends a sweep at once, and the head snaps regardless.
 import Client from '../../app/src/home-lighting-brain-client.js';
 
 export const BRAIN_BASE = Client.BASE;
 const STEP_MS = 100, RATE_DEG_S = 30, STEP_DEG = RATE_DEG_S * STEP_MS / 1000;
-// The brain's reading evidence lasts 2.8 s and Home stops a spot when it expires, so
-// the hold is re-timed faster than that, as if the reader keeps reading.
+// A Decision's reading evidence lasts 2.8 s and Home stops a spot when it expires, so the
+// last Decision's document is re-timed faster than that, as if the reader keeps reading.
 const HEARTBEAT_MS = 1000;
 const LEVEL_START = .25, MAX_TRAVEL_M = 8;
-const SCRIPTED = 'SIMULATION-scripted', LA_DIRECT = 'den_sim_la_direct';
+const SCRIPTED = 'SIMULATION-scripted', LA_DIRECT = 'den_sim_la_direct', DEN_TRACK = 'den_sim_den_track';
 const SOURCE_CLOCKS = ['interval_start', 'observed_at', 'available_at', 'valid_until'];
 const DEG = Math.PI / 180;
 
@@ -57,40 +57,48 @@ export function planSwing(fixture, target, level) {
   return { angle_deg: round(angle), rows };
 }
 
-const litFixture = row => row.state.fixtures.find(item => item.spot.on) || null;
+const litFixture = row => row.lit ? row.state.fixtures.find(item => item.fixture_id === row.lit && item.spot.on) || null : null;
 
 export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   const clients = new Set();
   // run: one number per click, so a page can tell this click's status from one fetched before it was pressed.
   let revision = 0, eventId = 0, docsSent = 0, current = null, held = null, timer = null, stepper = null, runs = 0;
-  let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null }, refused = null;
+  let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null }, refused = null, clock = null, landed = new Set();
 
   // What the words came from on this click: 'real' when the click used a real model's recorded reply,
   // 'fake' for a fake vLLM's, and null before any reply was used (the empty room).
   const reply = () => timeline?.reply || null;
   const words = () => ({ real: "Qwen's recorded words", fake: "a fake vLLM's scripted words" })[reply()] || 'no reply used';
-  // A document that labels itself (decision_doc.mjs's, "SIMULATION · ...") keeps its own words after the click's; the brain's are the brain's.
+  // A Decision's document labels itself ("SIMULATION · ..."): it keeps its own words after the click's.
   const own = /^SIMULATION · /;
-  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, recorded detector rows, ${words()} · ${own.test(why) ? why.replace(own, '') : `brain: ${why}`}`.slice(0, 240);
-  // The brain's state, unchanged but for its clocks and honest labels. Re-timing from
-  // the row each time means repeating a row never stretches its evidence.
+  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, recorded detector rows, ${words()} · ${why.replace(own, '')}`.slice(0, 240);
+  // A Decision's document, unchanged but for its clocks and honest labels. Re-timing from the row each time means
+  // repeating a row never stretches its evidence.
   function present(row, step = null) {
     const doc = structuredClone(row.state), now = nowMs() / 1000, shift = now - doc.generated_at, evidence = doc.reading_evidence;
     for (const source of [evidence.activity, evidence.pose]) if (source) for (const key of SOURCE_CLOCKS) source[key] += shift;
     for (const key of ['activity_valid_until', 'pose_valid_until']) if (evidence[key] !== null) evidence[key] += shift;
     doc.generated_at = now; doc.state_revision = ++revision;
     doc.why = labelled(step ? `${doc.why} · beam swinging, motion scripted` : doc.why);
-    doc.decisions = doc.decisions.map(item => ({ ...item, at: item.at + shift, why: `SIMULATION · ${item.why}`.slice(0, 240) }));
-    // Occupancy stays typed until step 6, so the inputs stay scripted: only the activity is the model's, and only
-    // when a real reply was used.
-    doc.occupancy.source = SCRIPTED; doc.activity.source = reply() === 'real' ? LA_DIRECT : SCRIPTED;
-    doc.inputs = { ...doc.inputs, scripted: true, activity_scripted: reply() !== 'real', inference_ran: reply() === 'real' };
+    doc.decisions = doc.decisions.map(item => ({ ...item, at: item.at + shift, why: `SIMULATION · ${item.why.replace(own, '')}`.slice(0, 240) }));
+    // A click's occupancy is the track list's (hop 10), and its activity a model's words only when a real reply was used.
+    if (timeline) doc.occupancy.source = DEN_TRACK;
+    doc.activity.source = reply() === 'real' ? LA_DIRECT : SCRIPTED;
+    doc.inputs = { ...doc.inputs, scripted: reply() !== 'real', activity_scripted: reply() !== 'real', inference_ran: reply() === 'real' };
     if (step) {
-      const lit = doc.fixtures.find(item => item.spot.on);
+      const lit = doc.fixtures.find(item => item.fixture_id === row.lit);
       lit.spot = { ...lit.spot, level: step.level, target_m: step.target_m, fade_s: 0 };
       lit.ambient = { ...lit.ambient, fade_s: 0 };
     }
     return doc;
+  }
+  // The page's stale-reply line: once the last reply's validity has passed on the chain's clock, as the feed keeps the
+  // last Decision lit, how old that reply is (plan, hop 18 step 6).
+  function stale() {
+    const summary = timeline?.summary;
+    if (!clock || !summary?.lit || !Number.isFinite(summary.last_reply_at) || !['holding', 'swinging'].includes(phase)) return null;
+    const chainNow = clock.chain + (nowMs() / 1000 - clock.wall), age = chainNow - summary.last_reply_at;
+    return age > summary.evidence_s ? { age_s: Math.round(age), line: `Last reply ${Math.round(age)} s old. The live system would drop this beam.` } : null;
   }
   function send(doc) {
     current = doc; docsSent++;
@@ -110,39 +118,47 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   function show(row) { held = row; return publish(present(row)); }
   function stop() { clearTimeout(timer); clearInterval(stepper); timer = stepper = null; }
   function clear(nextPhase, nextTake) {
-    stop(); phase = nextPhase; take = nextTake; swing = null; timeline = null; pipeline = { rows: [], failed: null }; refused = null;
+    stop(); phase = nextPhase; take = nextTake; swing = null; timeline = null; pipeline = { rows: [], failed: null }; refused = null; clock = null;
     show(emptyRow);
   }
   const reset = () => clear('idle', null);
-  function startSwing(row, fixture) {
+  // One lit Decision: the swing from Home's read-back to its target_m, then its own document lands the beam. then: what
+  // comes after it on this click. A fixture already landed on this click is already there, so it swings no further.
+  function startSwing(row, fixture, then) {
     const lit = litFixture(row);
     let plan;
     try { plan = planSwing(fixture, lit.spot.target_m, lit.spot.level); } catch (error) { return fail(`the swing was refused: ${error.message}`); }
+    if (landed.has(lit.fixture_id)) plan = { angle_deg: 0, rows: [plan.rows.at(-1)] };
     held = row; phase = 'swinging';
     swing = { fixture_id: lit.fixture_id, angle_deg: plan.angle_deg, steps: plan.rows.length - 1, rate_deg_s: RATE_DEG_S,
       started_at_ms: nowMs(), finished_at_ms: null, final_target_m: lit.spot.target_m };
     let k = 0;
     const step = () => {
       if (k < plan.rows.length - 1) return publish(present(row, plan.rows[k++]));
-      stop(); phase = 'holding'; swing.finished_at_ms = nowMs();
-      return show(row); // The brain's own lit state lands the beam.
+      stop(); phase = 'holding'; swing.finished_at_ms = nowMs(); landed.add(lit.fixture_id);
+      const shown = show(row); // The Decision's own document lands the beam.
+      if (shown) then();
+      return shown;
     };
-    if (step()) stepper = setInterval(step, STEP_MS);
+    if (step() && phase === 'swinging') stepper = setInterval(step, STEP_MS);
     return undefined;
   }
-  // The brain's timeline, once the pipeline has produced what it decided from.
-  function play(brainTimeline, fixtures) {
-    const { summary, rows } = brainTimeline;
-    const fixture = summary.lit ? fixtures.find(row => validFixture(row) && row.fixture_id === summary.fixture_id) : null;
-    if (summary.lit && !fixture) return fail('The brain chose a fixture this page has no readback for.');
-    stop(); phase = 'qualifying'; timeline = brainTimeline;
+  // A click's Decisions, as decision_doc.mjs mapped them, in order, each after the last by its gap on the chain's clock.
+  // played: { summary, rows: [{ state, refusal, offset_s, lit: Home's fixture id or null }], reply }; fixtures: the click's report.
+  function play(played, fixtures) {
+    const { rows } = played;
+    const reports = Object.fromEntries(rows.filter(row => row.lit).map(row => [row.lit, fixtures.find(item => validFixture(item) && item.fixture_id === row.lit)]));
+    if (Object.values(reports).some(report => !report)) return fail('A Decision lit a fixture this page has no read-back for.');
+    stop(); phase = 'qualifying'; timeline = played; landed = new Set();
+    clock = { wall: nowMs() / 1000, chain: rows[0]?.state.generated_at ?? 0 };
     let k = 0;
     const next = () => {
       const row = rows[k++];
-      if (litFixture(row)) return startSwing(row, fixture);
+      const after = () => { if (k < rows.length) timer = setTimeout(next, Math.max(0, rows[k].offset_s - row.offset_s) * 1000); };
+      if (litFixture(row)) return startSwing(row, reports[row.lit], after);
       if (!show(row)) return undefined;
-      if (k < rows.length) timer = setTimeout(next, (rows[k].offset_s - row.offset_s) * 1000);
-      else phase = 'refused';
+      if (k === rows.length) phase = 'refused';   // the last Decision lights nothing
+      after();
       return undefined;
     };
     next();
@@ -165,7 +181,7 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
       clients.add(res); res.on('close', () => clients.delete(res));
     },
     readback: () => ({ phase, take, run: runs, docs_sent: docsSent, state_revision: revision, swing, step_ms: STEP_MS, rate_deg_s: RATE_DEG_S, streams: clients.size,
-      live: held && { why: held.state.why, refusal: held.refusal, mode: held.state.mode }, summary: timeline?.summary || null, pipeline, refused }),
+      live: held && { why: held.state.why, refusal: held.refusal, mode: held.state.mode }, summary: timeline?.summary || null, pipeline, refused, stale: stale() }),
     dispose() { stop(); clearInterval(heartbeat); for (const res of clients) res.end(); clients.clear(); },
   };
 }

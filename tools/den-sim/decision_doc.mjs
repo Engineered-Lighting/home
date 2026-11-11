@@ -8,7 +8,7 @@ import Client from '../../app/src/home-lighting-brain-client.js';
 import { LANDMARK_ID } from './couch_to_room.mjs';
 
 export const DOMAIN = 'virtual-den-4', ACTUATION = 'synthetic', VERSION = 'den-sim-decision-doc-1';
-// As the brain's reader binding (brain_run.py): the feed re-times a document once a second, so evidence never lapses while shown.
+// As the older brain's reader binding did: the feed re-times a document once a second, so evidence never lapses while shown.
 export const EVIDENCE_S = 2.8;
 const SITE = Client.BASE.split('/').at(-1), ROOM = 'den', OFF_CCT_K = 2700, LABEL = 'SIMULATION · ';
 const vec = v => Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);

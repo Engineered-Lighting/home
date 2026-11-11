@@ -33,8 +33,15 @@ function slerp(a, b, t) {
   return unit(a.map((v, i) => (Math.sin((1 - t) * angle) * v + Math.sin(t * angle) * b[i]) / k));
 }
 
-// The whole swing as data: one row per document, last row exactly on the target.
+const validFixture = row => row && Client.FIXTURE_IDS.includes(row.fixture_id) && vec(row.display_origin_m)
+  && vec(row.horizontal_world_reference) && Number.isFinite(row.pan_deg) && Number.isFinite(row.tilt_deg);
+
+// The whole swing as data: one row per document, last row exactly on the target. fixture: Home's read-back of where the
+// fixture points, which the click brought; target: the point to land on, a Decision's target_m (plan, hop 19). A swing
+// with no read-back or no point is refused, never guessed.
 export function planSwing(fixture, target, level) {
+  if (!validFixture(fixture)) throw Error('swing_readback_invalid');
+  if (!vec(target) || !Number.isFinite(level)) throw Error('swing_target_invalid');
   const origin = fixture.display_origin_m, toTarget = target.map((v, i) => v - origin[i]), reach = Math.hypot(...toTarget);
   const from = directionFromAim(fixture.pan_deg, fixture.tilt_deg, fixture.horizontal_world_reference), to = toTarget.map(v => v / reach);
   const angle = Math.acos(Math.min(1, Math.max(-1, dot(from, to)))) / DEG, steps = Math.max(1, Math.ceil(angle / STEP_DEG));
@@ -50,21 +57,21 @@ export function planSwing(fixture, target, level) {
   return { angle_deg: round(angle), rows };
 }
 
-const validFixture = row => row && Client.FIXTURE_IDS.includes(row.fixture_id) && vec(row.display_origin_m)
-  && vec(row.horizontal_world_reference) && Number.isFinite(row.pan_deg) && Number.isFinite(row.tilt_deg);
 const litFixture = row => row.state.fixtures.find(item => item.spot.on) || null;
 
 export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   const clients = new Set();
   // run: one number per click, so a page can tell this click's status from one fetched before it was pressed.
   let revision = 0, eventId = 0, docsSent = 0, current = null, held = null, timer = null, stepper = null, runs = 0;
-  let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null };
+  let phase = 'idle', take = null, swing = null, timeline = null, pipeline = { rows: [], failed: null }, refused = null;
 
   // What the words came from on this click: 'real' when the click used a real model's recorded reply,
   // 'fake' for a fake vLLM's, and null before any reply was used (the empty room).
   const reply = () => timeline?.reply || null;
   const words = () => ({ real: "Qwen's recorded words", fake: "a fake vLLM's scripted words" })[reply()] || 'no reply used';
-  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, recorded detector rows, ${words()} · brain: ${why}`.slice(0, 240);
+  // A document that labels itself (decision_doc.mjs's, "SIMULATION · ...") keeps its own words after the click's; the brain's are the brain's.
+  const own = /^SIMULATION · /;
+  const labelled = why => `SIMULATION · a rendered take on the ${couchLabel} couch, recorded detector rows, ${words()} · ${own.test(why) ? why.replace(own, '') : `brain: ${why}`}`.slice(0, 240);
   // The brain's state, unchanged but for its clocks and honest labels. Re-timing from
   // the row each time means repeating a row never stretches its evidence.
   function present(row, step = null) {
@@ -85,22 +92,32 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
     }
     return doc;
   }
-  function publish(doc) {
-    const checked = Client.validateState(doc);
-    if (!checked.ok) throw Error('brain document refused by Home validator: ' + checked.reason);
+  function send(doc) {
     current = doc; docsSent++;
     const frame = `id: ${++eventId}\nevent: state\ndata: ${JSON.stringify(doc)}\n\n`;
     for (const res of clients) res.write(frame);
   }
-  function show(row) { held = row; publish(present(row)); }
+  // Every document goes through Home's own validator first. One it refuses never reaches a client and never ends the
+  // harness: the click stops with the validator's reason, and the off document stays (plan, hop 18 "Fails").
+  function publish(doc) {
+    const checked = Client.validateState(doc);
+    if (checked.ok) { send(doc); return true; }
+    stop(); refused = { reason: checked.reason, at_ms: nowMs() }; held = emptyRow; phase = 'pipeline_failed'; swing = null;
+    pipeline.failed = `Home's validator refused the document (${checked.reason}), so the off document stays and all four spots stay off`;
+    send(present(emptyRow));
+    return false;
+  }
+  function show(row) { held = row; return publish(present(row)); }
   function stop() { clearTimeout(timer); clearInterval(stepper); timer = stepper = null; }
   function clear(nextPhase, nextTake) {
-    stop(); phase = nextPhase; take = nextTake; swing = null; timeline = null; pipeline = { rows: [], failed: null };
+    stop(); phase = nextPhase; take = nextTake; swing = null; timeline = null; pipeline = { rows: [], failed: null }; refused = null;
     show(emptyRow);
   }
   const reset = () => clear('idle', null);
   function startSwing(row, fixture) {
-    const lit = litFixture(row), plan = planSwing(fixture, lit.spot.target_m, lit.spot.level);
+    const lit = litFixture(row);
+    let plan;
+    try { plan = planSwing(fixture, lit.spot.target_m, lit.spot.level); } catch (error) { return fail(`the swing was refused: ${error.message}`); }
     held = row; phase = 'swinging';
     swing = { fixture_id: lit.fixture_id, angle_deg: plan.angle_deg, steps: plan.rows.length - 1, rate_deg_s: RATE_DEG_S,
       started_at_ms: nowMs(), finished_at_ms: null, final_target_m: lit.spot.target_m };
@@ -110,8 +127,8 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
       stop(); phase = 'holding'; swing.finished_at_ms = nowMs();
       return show(row); // The brain's own lit state lands the beam.
     };
-    step();
-    stepper = setInterval(step, STEP_MS);
+    if (step()) stepper = setInterval(step, STEP_MS);
+    return undefined;
   }
   // The brain's timeline, once the pipeline has produced what it decided from.
   function play(brainTimeline, fixtures) {
@@ -123,7 +140,7 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
     const next = () => {
       const row = rows[k++];
       if (litFixture(row)) return startSwing(row, fixture);
-      show(row);
+      if (!show(row)) return undefined;
       if (k < rows.length) timer = setTimeout(next, (rows[k].offset_s - row.offset_s) * 1000);
       else phase = 'refused';
       return undefined;
@@ -133,6 +150,10 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
   }
   // 'stopped' when the pipeline answered (the detector saw nobody, no track formed); 'pipeline_failed' when it broke.
   function fail(reason, as = 'pipeline_failed') { stop(); phase = as; pipeline.failed = reason; }
+  // The off document is what a refused one falls back on, so Home must accept it: if not, the harness stops here, at start.
+  const off = Client.validateState(present(emptyRow));
+  if (!off.ok) throw Error(`the off document is refused by Home's validator: ${off.reason}`);
+  revision = 0;
   reset();
   const heartbeat = setInterval(() => { if (phase !== 'swinging') show(held); }, HEARTBEAT_MS);
   return {
@@ -144,7 +165,7 @@ export function createFeed({ emptyRow, couchLabel, nowMs = () => Date.now() }) {
       clients.add(res); res.on('close', () => clients.delete(res));
     },
     readback: () => ({ phase, take, run: runs, docs_sent: docsSent, state_revision: revision, swing, step_ms: STEP_MS, rate_deg_s: RATE_DEG_S, streams: clients.size,
-      live: held && { why: held.state.why, refusal: held.refusal, mode: held.state.mode }, summary: timeline?.summary || null, pipeline }),
+      live: held && { why: held.state.why, refusal: held.refusal, mode: held.state.mode }, summary: timeline?.summary || null, pipeline, refused }),
     dispose() { stop(); clearInterval(heartbeat); for (const res of clients) res.end(); clients.clear(); },
   };
 }

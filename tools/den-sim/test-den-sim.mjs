@@ -5,8 +5,9 @@
 // what the harness served; test 6 on real clicks (the argv, the models' names, an edited rows file);
 // test 5's frame hash on a click; test 9's step-5 parts (bodies unchanged under re-fits, a fit 1 m off
 // the mark not on the couch, nothing printed), test 12 and test 19's private half on a sealed invented
-// export and mark in a scratch data root; and the site id. Each check has a control
-// that must make it fail. Hop 6's own conditions, one by one, are in test_chain.py.
+// export and mark in a scratch data root; test 14, the light model against Home's directCpu and den-core's
+// check_shape; test 15's parts on typed spot Decisions, decision_doc.mjs and the feed; and the site id. Each check
+// has a control that must make it fail. Hop 6's own conditions, one by one, are in test_chain.py.
 //
 //   set DEN_SIM_SET=<a prepared set>, DEN_SIM_HOME and LOCALAPPDATA to scratch folders, then
 //   node --test tools\den-sim\test-den-sim.mjs
@@ -28,8 +29,13 @@ import Sofa from '../../app/src/home-lighting-sofa-target.js';
 import { sealRegisteredDeskTarget } from '../../app/src/home-3d/registered-desk-target.mjs';
 import { readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { authoredDocument } from '../fixtures/apartment-home-shell-fixtures.mjs';
+import * as Bake from '../../app/src/home-3d/lit-bvh-bake.mjs';
+import * as Lit from '../../app/src/home-3d/lit-model.mjs';
 import { chainRequest } from './brain.mjs';
 import { nextVersion, writeCouch } from './couch_to_room.mjs';
+import { EVIDENCE_S, decisionDocument, offDocument } from './decision_doc.mjs';
+import { createFeed, planSwing } from './feed.mjs';
+import { LEVELS, channelTable, lightModel } from './light_model.mjs';
 import { buildReceipt, finalRow, personColumn, pictureNote, receiptView, sha256 } from './receipt.mjs';
 import { topLine } from './top_line.mjs';
 
@@ -45,7 +51,7 @@ const sleep = ms => new Promise(done => setTimeout(done, ms));
 const SITE = Client.BASE.split('/').at(-1);
 // Click-path code: what a click runs or what serves it. The display file and the recorded side aside.
 const CLICK_PATH = ['run.mjs', 'brain.mjs', 'feed.mjs', 'panel.js', 'receipt.mjs', 'top_line.mjs', 'data-root.mjs', 'hops.json', 'chain.py', 'brain_run.py',
-  'dry_run.py', 'scene/frame_hash.py', 'couch_to_room.mjs', 'person.py'];
+  'dry_run.py', 'scene/frame_hash.py', 'couch_to_room.mjs', 'person.py', 'light_model.mjs', 'decision_doc.mjs'];
 // The plan's step 4 words up to hop 12, with no sofa mark saved and no reply on file: a click with a
 // person stops at hop 12, "Qwen has not seen these exact frames".
 const STEP4_UNASKED = { 1: 'SCRIPTED', 2: 'SCRIPTED', 3: 'ADAPTER', 4: 'ADAPTER', 5: 'ADAPTER', 6: 'ADAPTER', 7: 'REAL', 8: 'REAL', 9: 'ADAPTER', 10: 'SCRIPTED',
@@ -408,6 +414,212 @@ test('the hop table: 26 hops, each with its pin, and adapters that name their st
     [['light model'], [16, 17, 26]], [['fixture table'], [16, 18, 21]]];
   const short = PLAN.flatMap(([kinds, hops]) => hops.flatMap(n => kinds.filter(kind => !TABLE.hops[n - 1].recorded_inputs.includes(kind)).map(kind => `${n}: ${kind}`)));
   assert.deepEqual(short, []);
+});
+
+/* ---------- test 14, the light model, and test 15's parts on typed Decisions, the mapper ---------- */
+
+// Invented public geometry, nothing from any room: four fixture origins and the spot. Fixture ids from Home's own constant, at run time.
+const BOOK = [0.4, 1.1, 0.75];
+const INVENTED = Client.FIXTURE_IDS.map((fixture_id, i) => ({ fixture_id, aim_origin_m: [[1.5, 1.5, 2.5], [-1.2, 1.0, 2.4], [2.5, -1.0, 2.6], [0.2, 0.4, 2.5]][i],
+  horizontal_world_reference: [[0, 1, 0], [1, 0, 0], [0, -1, 0], [-1, 0, 0]][i], ...(i === 2 ? { limits: { pan_min_deg: -170, pan_max_deg: 170, tilt_min_deg: 0, tilt_max_deg: 135 } } : {}) }));
+// Home's own tracer with nothing in the way: one spot at the level, aimed at the point and packed as lit-view.mjs packs it, on an upward normal.
+function homeDirect(origin, point, level, lumens = Lit.LIT_ASSUMED_LUMENS.spot) {
+  const half = Lit.spotHalfAngle(20), packed = Bake.packLights([{ origin, direction: point.map((v, i) => v - origin[i]), cosOuter: Math.cos(half),
+    cosInner: Math.cos(half * (1 - Lit.SPOT_PENUMBRA)), candela: Lit.candelaFromLumens(lumens, half) * Lit.litDimmingFraction(level), color: Lit.cctToLinearRgb(2700) }]);
+  return Bake.luminance(Bake.directCpu(Bake.buildBvh(new Float32Array(0)), packed.data, packed.count, ...point, 0, 0, 1));
+}
+// Each channel at every level in its table, against Home's directCpu at Home's lumens: what differs by more than 0.01.
+const homeMisses = model => model.channels.flatMap(({ channel_key: channel, fixture_id: key }) => model.dimming[channel].levels.flatMap((u, i) => {
+  const mine = model.basis[`${channel}@2700K`]['sofa-book'] * model.dimming[channel].g[i], home = homeDirect(model.fixtures[key].aim_origin_m, model.aim_points['sofa-book'].point_m, u / 254);
+  return Math.abs(mine - home) <= .01 ? [] : [`${channel} at ${u}: ${mine} against Home's ${home}`];
+}));
+// den-core at its pin, from its archive as a click lays it out: check_shape and describe on the file, and fake_light's value at each
+// brightness value den-core's own solve tries, from its gate.
+const CHECK_SHAPE = `import json, sys
+sys.path.insert(0, sys.argv[1])
+import chain
+chain.TREES = {'core': chain.TREES['core']}   # only den-core's archive, at refs.json's den-core-live
+core = chain.archive_trees(json.loads(sys.argv[2]), sys.argv[3])['core']
+sys.path.insert(0, str(core / 'tools' / 'den-core'))
+import coordinator, light_adapter
+model = json.load(open(sys.argv[4], encoding='utf-8'))
+shape = light_adapter.check_shape(model, sys.argv[4])
+loaded, logged = light_adapter.describe({'source': 'file', 'path': sys.argv[4]})
+light = light_adapter.LightModel(loaded, surfaces=logged.get('surfaces'))
+slots = coordinator.gate_config(coordinator.load_gate())['slots']
+solved = sorted({round(255 * (n + 1) / slots['solve_steps']) for n in range(slots['solve_steps'])} | {slots['look_brightness']})
+values = {key: {b: light.predict({key: {'on': True, 'brightness': b, 'kelvin': 2700}})['sofa-book'] for b in solved} for key in sorted(light.keys)}
+print(json.dumps(dict(shape=shape, backend=logged['backend'], unit=logged['unit'], fake=logged['fake'], aims=light.aims('F1.spot'), surfaces=light.surfaces, values=values)))
+`;
+
+test('test 14: the light model is Home\'s formula, equal to directCpu within 0.01 at every solved level, and den-core\'s check_shape accepts it', t => {
+  const model = lightModel({ bookPoint: BOOK, fixtures: INVENTED });
+  assert.deepEqual([model.version, model.fake, model.basis_unit, model.spot_model, model.glare, model.channels.map(row => row.entity_id), Object.keys(model.fixtures), model.surfaces],
+    ['lm-den-sim-1', true, 'relative', null, null, ['F1.spot', 'F2.spot', 'F3.spot', 'F4.spot'], ['F1', 'F2', 'F3', 'F4'], { 'sofa-book': ['sofa-book'] }]);
+  assert.deepEqual(model.aim_points['sofa-book'].point_m, BOOK);
+  assert.ok(!JSON.stringify(model).includes(SITE), 'no fixture id, so no place name, enters the model');
+  assert.equal(model.provenance.lumens.value, 450);
+  assert.deepEqual(homeMisses(model), [], 'every channel at every level in its table equals Home\'s directCpu within 0.01');
+  // Control: the same geometry on other lumens is not Home's light.
+  assert.ok(homeMisses(lightModel({ bookPoint: BOOK, fixtures: INVENTED, lumens: 500 })).length > 0, 'control: 500 lm is caught');
+  assert.throws(() => lightModel({ bookPoint: BOOK, fixtures: INVENTED.slice(0, 3) }), /^Error: geometry_fixtures_incomplete$/);
+  assert.throws(() => lightModel({ bookPoint: [0, 0, Number.NaN], fixtures: INVENTED }), /^Error: book_point_missing$/);
+  // den-core reads the file as a click would: check_shape and describe accept it, fake_light reads it, and at each brightness value its own
+  // solve tries, fake_light's value is Home's within 0.01 (255 read as Hue's full 254, as the coordinator's level does).
+  const tmp = scratch('den-sim-light-');
+  t.after(() => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+  const file = path.join(tmp, 'light-model.json'), script = path.join(tmp, 'check_shape.py');
+  fs.writeFileSync(file, JSON.stringify(model, null, 1) + '\n'); fs.writeFileSync(script, CHECK_SHAPE);
+  const got = JSON.parse(execFileSync('python', ['-B', '-X', 'utf8', script, HERE, JSON.stringify(REFS.tools), path.join(tmp, 'tools'), file],
+    { encoding: 'utf8', windowsHide: true, timeout: 120000 }).trim().split('\n').at(-1));
+  assert.deepEqual([got.shape, got.unit, got.fake, got.aims, got.surfaces], [null, 'relative', true, [null], { room: ['sofa-book'], 'sofa-book': ['sofa-book'] }]);
+  assert.match(got.backend, /^fake_light/);
+  const solved = Object.keys(got.values['F1.spot']).map(Number);
+  assert.ok(solved.length >= 9 && solved.every(b => LEVELS.includes(Math.min(b, 254))), `the table holds every solved level: ${solved}`);
+  const off = Object.entries(got.values).flatMap(([channel, values]) => Object.entries(values).flatMap(([b, value]) => {
+    const home = homeDirect(model.fixtures[channel.split('.')[0]].aim_origin_m, BOOK, Math.min(Number(b), 254) / 254);
+    return Math.abs(value - home) <= .01 ? [] : [`${channel} at ${b}: ${value} against ${home}`];
+  }));
+  assert.deepEqual(off, [], 'den-core\'s reading of the file is Home\'s light at every solved level');
+  t.diagnostic(`at full: ${Object.entries(got.values).map(([channel, values]) => `${channel} ${Math.round(values[solved.at(-1)])}`).join(', ')}; solved levels ${solved.join(', ')}`);
+});
+
+// A spot Decision in canon's shape as hop 17 step 7 writes it, typed here on invented numbers: one reader, F2 lit at full on the spot.
+const T0 = 1800000000, STATE = `trk-1@${T0 + 10.5}`, BODY = 'b'.repeat(64);
+const CHANNEL_KEYS = ['F1.spot', 'F2.spot', 'F3.spot', 'F4.spot'];
+function typedDecision({ lit = 'F2.spot', target = [...BOOK], domain = 'virtual-den-4', actuation = 'synthetic', tracks = ['trk-1'] } = {}) {
+  const t = T0 + 11, move = 2.4, fade = 2.0, on = channel => channel === lit;
+  return { decision_id: `decide-${t * 1000}-1`, ts: t, trigger: { kind: 'person_state' }, policy: 'decide', actuator_domain: domain, ...(actuation ? { actuation } : {}),
+    targets: Object.fromEntries(tracks.map(track => [track, { surface_id: 'sofa-book', lx: null, value: 300, unit: 'relative', note: 'modeled lux, assumed lumens' }])),
+    requested_scene: Object.fromEntries(CHANNEL_KEYS.map(channel => [channel, { on: on(channel), level: on(channel) ? 1.0 : 0.0, cct_k: on(channel) ? 2700 : null,
+      target_cct_k: on(channel) ? 2700 : null, clip_reason: null, aim: on(channel) ? 'sofa-book' : null, ...(on(channel) && target ? { target_m: target } : {}) }])),
+    applied_scene: Object.fromEntries(CHANNEL_KEYS.map(channel => [channel, { status: on(channel) ? 'sent' : 'kept',
+      readback: { on: on(channel), level: on(channel) ? 1.0 : 0.0, cct_k: on(channel) ? 2700 : null }, aim_source: 'commanded', aim_status: 'unknown',
+      steps: on(channel) ? [{ kind: 'move', sent_at: t, result: { at: t + move } }, { kind: 'fade_in', sent_at: t + move, result: { at: t + move + fade } }] : [] }])),
+    skipped: CHANNEL_KEYS.filter(channel => channel !== lit).map(channel => ({ channel, reason: 'in_front_of_reader' })),
+    predicted: { surfaces: { room: 0.0, 'sofa-book': lit ? 246.2 : 0.0, unit: 'relative' }, eyes: [] },
+    why: lit ? `reading_look: lit ${lit}; 3 refused` : 'reading_look: every spot off; 4 refused',
+    inputs: { person_state: tracks.map(track => track === 'trk-1' ? STATE : `${track}@${T0 + 9}`),
+      actuator_state: Object.fromEntries(CHANNEL_KEYS.map(channel => [channel, { on: false, level: 0.0, cct_k: null }])), light_state: null, light_state_ts: null } };
+}
+const typedPerson = (change = {}) => ({ state_id: STATE, track_id: 'trk-1', emitted_ts: T0 + 10.5,
+  sources: { focused_engagement: [{ origin: 'qwen', ref: BODY }], working_region: [{ origin: 'rules', ref: 'bnd-00003' }, { origin: 'rules', ref: 'sofa-seat' }] }, ...change });
+const typedAsks = (change = {}) => [
+  { request_id: 'rq-00002', bundle_id: 'bnd-00002', track_id: 'trk-1', sent_ts: T0 + 6, association_safe: true, body_sha256: 'a'.repeat(64),
+    stills: [{ rgb_seq: 1, observed_at: T0 + 3 }, { rgb_seq: 2, observed_at: T0 + 6 }], root: 'fake-vllm', facts: { activity_hypothesis: 'reading' }, elapsed_s: 0.6 },
+  { request_id: 'rq-00003', bundle_id: 'bnd-00003', track_id: 'trk-1', sent_ts: T0 + 10, association_safe: true, body_sha256: BODY,
+    stills: [{ rgb_seq: 3, observed_at: T0 + 7 }, { rgb_seq: 4, observed_at: T0 + 8.5 }, { rgb_seq: 5, observed_at: T0 + 10 }], root: 'fake-vllm', facts: { activity_hypothesis: 'reading' },
+    elapsed_s: 0.5, ...change }];
+// Home's read-back of a fixture, aimed a few degrees off the target, so a swing to it is short.
+function readbackNear(fixture, target, offDeg = 7) {
+  const d = target.map((v, i) => v - fixture.aim_origin_m[i]), n = Math.hypot(...d), u = d.map(v => v / n), ref = fixture.horizontal_world_reference;
+  const r = [ref[0], ref[1]].map(v => v / Math.hypot(ref[0], ref[1])), tilt = Math.asin(-u[2]), flat = Math.cos(tilt);
+  const pan = Math.atan2((u[0] * r[1] - u[1] * r[0]) / flat, (u[0] * r[0] + u[1] * r[1]) / flat);
+  return { fixture_id: fixture.fixture_id, display_origin_m: fixture.aim_origin_m, horizontal_world_reference: ref, pan_deg: pan * 180 / Math.PI + offDeg, tilt_deg: tilt * 180 / Math.PI };
+}
+// A stand-in for an event-stream client: every document the feed sends it.
+const streamClient = () => { const docs = []; return { docs, writeHead() {}, on() {}, end() {}, write(frame) { const data = /^data: (.*)$/m.exec(frame); if (data) docs.push(JSON.parse(data[1])); } }; };
+
+test('test 15, typed: decision_doc.mjs maps a spot Decision to a document Home accepts, lit and off, and refuses what it must', () => {
+  const channels = channelTable({ fixtures: INVENTED });
+  assert.deepEqual(channels.map(row => [row.channel, row.fixture_id]), CHANNEL_KEYS.map((channel, i) => [channel, Client.FIXTURE_IDS[i]]));
+  // Lit: Home accepts it, F2 carries the Decision's point, level and colour from its read-back, and the fade from its fade_in's two times.
+  const lit = decisionDocument({ decision: typedDecision(), channels, asks: typedAsks(), personStates: [typedPerson()] });
+  assert.deepEqual([lit.ok, lit.reason, lit.lit, lit.unbound], [true, null, ['F2.spot'], null]);
+  assert.equal(Client.validateState(lit.state).ok, true, Client.validateState(lit.state).reason);
+  assert.deepEqual(lit.state.fixtures[1].spot, { on: true, level: 1, cct_k: 2700, target_m: BOOK, fade_s: 2 });
+  assert.ok([0, 2, 3].every(i => !lit.state.fixtures[i].spot.on && lit.state.fixtures[i].spot.target_m === null));
+  assert.deepEqual([lit.state.mode, lit.state.decision_id, lit.state.generated_at], ['reading', typedDecision().decision_id, T0 + 11]);
+  assert.match(lit.state.why, /^SIMULATION · reading_look: lit F2\.spot; 3 refused$/);
+  // bound: true on the whole join, the evidence citing its ids: request, bundle, track and reply, and the PersonState.
+  const evidence = lit.state.reading_evidence;
+  assert.equal(evidence.bound, true);
+  assert.deepEqual([evidence.activity.request_id, evidence.activity.bundle_id, evidence.activity.track_id, evidence.activity.reply_body_sha256], ['rq-00003', 'bnd-00003', 'trk-1', BODY]);
+  assert.deepEqual([evidence.pose.state_id, evidence.pose.track_id, evidence.pose.bundle_id], [STATE, 'trk-1', 'bnd-00003']);
+  assert.deepEqual([evidence.activity_valid_until, evidence.pose_valid_until, evidence.activity.available_at], [T0 + 11 + EVIDENCE_S, T0 + 11 + EVIDENCE_S, T0 + 10.5]);
+  // Off: the contract fixture's whole field set, the evidence unbound, occupancy and activity empty, four dark fixtures.
+  const off = offDocument(channels), contract = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/contracts/den/fixtures/brain-state-reading.json'), 'utf8'));
+  assert.equal(Client.validateState(off).ok, true);
+  assert.deepEqual(Object.keys(off).sort(), Object.keys(contract).sort());
+  assert.deepEqual([off.reading_evidence, off.occupancy, off.activity, off.decision_id], [{ bound: false, activity: null, pose: null, activity_valid_until: null, pose_valid_until: null }, {}, {}, null]);
+  assert.deepEqual(off.fixtures.map(row => [row.fixture_id, row.spot.on, row.spot.target_m]), Client.FIXTURE_IDS.map(id => [id, false, null]));
+  assert.match(off.why, /^SIMULATION · /);
+  // A reader with no beam: a Decision with no steps, every spot off, still a document Home accepts.
+  const none = decisionDocument({ decision: typedDecision({ lit: null }), channels, asks: typedAsks(), personStates: [typedPerson()] });
+  assert.deepEqual([none.ok, none.lit, none.state.mode, Client.validateState(none.state).ok, none.state.fixtures.every(row => !row.spot.on)], [true, [], 'off', true, true]);
+  assert.match(none.state.why, /^SIMULATION · reading_look: every spot off; 4 refused$/);
+  // Controls: a Hue Decision, a Decision not marked synthetic, and a lit row with no point are refused, with their reasons.
+  const hue = { ...typedDecision(), actuator_domain: 'hue-den-4', requested_scene: { 'light.den_1': { on: true, brightness: 200, kelvin: 2700, level: 200 / 254, cct_k: 2700 } } };
+  assert.deepEqual([decisionDocument({ decision: hue, channels }).ok, decisionDocument({ decision: hue, channels }).reason], [false, 'decision_not_virtual_den_4']);
+  assert.equal(decisionDocument({ decision: typedDecision({ actuation: null }), channels }).reason, 'decision_not_synthetic');
+  assert.equal(decisionDocument({ decision: typedDecision({ target: null }), channels, asks: typedAsks(), personStates: [typedPerson()] }).reason, 'lit_row_without_point: F2.spot');
+  assert.throws(() => offDocument(channels.slice(0, 3)), /^Error: channel_table_invalid$/);
+  // With the join broken anywhere, bound: true is never written, and Home then refuses the lit document.
+  const broken = {
+    'the reply is in no ask': [typedDecision(), typedAsks({ body_sha256: 'c'.repeat(64) }), [typedPerson()]],
+    'the ask names another bundle': [typedDecision(), typedAsks({ bundle_id: 'bnd-00004' }), [typedPerson()]],
+    'the ask names another track': [typedDecision(), typedAsks({ track_id: 'trk-2' }), [typedPerson()]],
+    'no reply was on file': [typedDecision(), typedAsks({ root: null, facts: null }), [typedPerson()]],
+    'the PersonState the Decision names is not the click\'s': [typedDecision(), typedAsks(), [typedPerson({ state_id: `trk-1@${T0 + 9}` })]],
+    'the PersonState cites another reply': [typedDecision(), typedAsks(), [typedPerson({ sources: { ...typedPerson().sources, focused_engagement: [{ origin: 'qwen', ref: 'a'.repeat(64) }] } })]],
+    'no person states': [typedDecision(), typedAsks(), []],
+    'two readers': [typedDecision({ tracks: ['trk-1', 'trk-2'] }), typedAsks(), [typedPerson()]],
+  };
+  for (const [name, [decision, asks, personStates]] of Object.entries(broken)) {
+    const got = decisionDocument({ decision, channels, asks, personStates });
+    assert.deepEqual([got.ok, got.state.reading_evidence.bound, typeof got.unbound], [true, false, 'string'], name);
+    assert.equal(Client.validateState(got.state).reason, 'state_reading_evidence_unbound', name);
+  }
+});
+
+test('test 15, typed: the feed starts on the off document, lands a lit Decision on its point, and keeps the off document when Home refuses one', async t => {
+  const channels = channelTable({ fixtures: INVENTED }), client = streamClient();
+  const feed = createFeed({ emptyRow: { state: offDocument(channels), refusal: null }, couchLabel: 'TEST' });
+  t.after(() => feed.dispose());
+  feed.attach(client);
+  // The start: the off document through feed.mjs's own present(), four dark fixtures.
+  const first = feed.current();
+  assert.equal(Client.validateState(first).ok, true);
+  assert.deepEqual([first.decision_id, first.reading_evidence.bound, first.fixtures.every(row => !row.spot.on)], [null, false, true]);
+  assert.match(first.why, /^SIMULATION · a rendered take on the TEST couch, recorded detector rows, no reply used · no Decision: all four spots off$/);
+  // The swing ends exactly on the point it is given, the Decision's target_m, and refuses no read-back or no point.
+  const readback = readbackNear(INVENTED[1], BOOK), plan = planSwing(readback, BOOK, 1);
+  assert.deepEqual(plan.rows.at(-1), { target_m: BOOK, level: 1 });
+  assert.ok(plan.rows.length >= 3 && plan.rows.length < 6, `a short swing: ${plan.angle_deg} degrees`);
+  assert.throws(() => planSwing(readback, null, 1), /^Error: swing_target_invalid$/);
+  assert.throws(() => planSwing(null, BOOK, 1), /^Error: swing_readback_invalid$/);
+  // A lit document through present(): every document sent validates, and the last lands on the Decision's point, bound.
+  const lit = decisionDocument({ decision: typedDecision(), channels, asks: typedAsks(), personStates: [typedPerson()] });
+  const timeline = state => ({ summary: { lit: true, fixture_id: channels[1].fixture_id }, rows: [{ state, refusal: null, offset_s: 0 }] });
+  feed.begin('typed');
+  feed.play(timeline(lit.state), [readback]);
+  for (const end = Date.now() + 5000; feed.readback().phase !== 'holding' && Date.now() < end;) await sleep(50);
+  const landed = feed.current();
+  assert.equal(feed.readback().phase, 'holding');
+  assert.equal(Client.validateState(landed).ok, true);
+  assert.deepEqual([landed.fixtures[1].spot.target_m, landed.fixtures[1].spot.level, landed.fixtures[1].spot.fade_s, landed.reading_evidence.bound], [BOOK, 1, 2, true]);
+  assert.ok(landed.reading_evidence.activity_valid_until > Date.now() / 1000, 'the evidence is re-timed to now');
+  assert.match(landed.why, /^SIMULATION · a rendered take on the TEST couch, .* · reading_look: lit F2\.spot; 3 refused$/);
+  assert.ok(client.docs.filter(doc => doc.fixtures[1].spot.on).length >= 3, 'the swing\'s steps and its landing');
+  assert.ok(client.docs.every(doc => Client.validateState(doc).ok), 'every document sent is one Home accepts');
+  // Home refuses a lit document whose join broke: the click stops with the validator's reason, nothing refused is sent,
+  // the harness carries on, and the off document stays, re-timed on the next heartbeat.
+  const unbound = decisionDocument({ decision: typedDecision(), channels, asks: typedAsks({ bundle_id: 'bnd-00004' }), personStates: [typedPerson()] });
+  const sent = client.docs.length;
+  feed.begin('refused');
+  assert.doesNotThrow(() => feed.play(timeline(unbound.state), [readback]));
+  const after = feed.readback();
+  assert.deepEqual([after.phase, after.refused?.reason], ['pipeline_failed', 'state_reading_evidence_unbound']);
+  assert.match(after.pipeline.failed, /^Home's validator refused the document \(state_reading_evidence_unbound\), so the off document stays/);
+  await sleep(1200);
+  const kept = feed.current();
+  assert.deepEqual([kept.decision_id, kept.fixtures.every(row => !row.spot.on), Client.validateState(kept).ok], [null, true, true]);
+  assert.ok(client.docs.slice(sent).length >= 2 && client.docs.slice(sent).every(doc => doc.decision_id === null && doc.fixtures.every(row => !row.spot.on)), 'only the off document went out');
+  // Control: the same document with its join whole lands lit, as above, so the refusal is the join's.
+  feed.begin('control');
+  feed.play(timeline(lit.state), [readback]);
+  for (const end = Date.now() + 5000; feed.readback().phase !== 'holding' && Date.now() < end;) await sleep(50);
+  assert.deepEqual([feed.readback().phase, feed.readback().refused, feed.current().fixtures[1].spot.on], ['holding', null, true]);
 });
 
 /* ---------- test 2 and test 19: searches over code ---------- */

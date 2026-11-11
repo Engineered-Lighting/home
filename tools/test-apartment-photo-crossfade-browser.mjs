@@ -26,9 +26,9 @@ async function pixelsInPage() {
   const depths = () => {
     const rows = [e.pointsMaterial.depthWrite];
     for (const points of e.apartmentRoot.children.filter(node => node.isPoints)) points.traverse(node => {
-      // The etched look's additive colour points never write depth; its depth pass carries the self-occlusion.
+      // The etched look's colour points never write depth; its depth pass carries the self-occlusion.
       for (const material of Array.isArray(node.material) ? node.material : node.material ? [node.material] : []) {
-        if (!material.userData?.additive) rows.push(material.depthWrite);
+        if (!material.userData?.noDepthWrite) rows.push(material.depthWrite);
       }
     });
     return rows;

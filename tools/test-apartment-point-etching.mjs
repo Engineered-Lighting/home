@@ -103,7 +103,8 @@ test('etched materials share the classic per-frame uniforms and never write colo
   }
   assert.equal(depth.uniforms.uWallNear, base.uniforms.uWallNear);
   assert.equal(color.depthWrite, false);
-  assert.equal(color.userData.additive, true);
+  assert.equal(color.userData.noDepthWrite, true);
+  assert.equal(color.blendEquation, THREE.MaxEquation, 'a pixel shows its brightest point, never a sum');
   assert.equal(color.blending, THREE.CustomBlending);
   assert.equal(depth.colorWrite, false);
   assert.equal(depth.depthWrite, true);
@@ -141,7 +142,7 @@ test('opt-out is per browser and tolerant of storage failures', () => {
   assert.equal(Pointcloud.etchedLookOptedOut(null), false);
 });
 
-test('modes.js keeps additive point materials out of the depth buffer', () => {
+test('modes.js keeps the etched colour points out of the depth buffer', () => {
   const modes = fs.readFileSync(path.join(SRC, 'home-3d/modes.js'), 'utf8');
-  assert.ok(modes.includes('material.depthWrite = material.userData?.additive ? false : depthWrite;'));
+  assert.ok(modes.includes('material.depthWrite = material.userData?.noDepthWrite ? false : depthWrite;'));
 });

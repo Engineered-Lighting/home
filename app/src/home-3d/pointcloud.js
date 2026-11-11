@@ -261,35 +261,34 @@ export function createPointsMaterial() {
 }
 
 /*
- * The etched look (WebGL only): the engineered.lighting site's etching, from
- * the point cloud itself. Light comes from edges and a steep curve on the
- * scan's own intensity, on true black, so plain walls fall away and furniture,
- * frames and seams are drawn in light.
+ * The etched look (WebGL only), after the engineered.lighting site: walls and
+ * floors read as even planes of fine points, and edges (corners, seams,
+ * outlines, printed patterns) are drawn brighter on top, on true black.
  *
- *   - point-features.mjs gives each point a normal, an edge strength and its
- *     sample spacing (in a worker, once per load);
- *   - each point is drawn about 3x wider than the surface patch it stands
- *     for (2..4 px) with a soft falloff, and overlapping points share their
- *     light, so a surface is an even, quiet grain rather than a speckle of
- *     separate dots, equally bright at every zoom;
- *   - additive, so the cloud glows; a depth-only pass of the same points,
- *     pushed 4 cm (+1% of depth) back along the view ray, lets near surfaces
- *     hide what is behind them without hiding themselves (additive alone is
- *     an x-ray through every wall).
+ *   - point-features.mjs gives each point a normal, an edge strength, a tone
+ *     (intensity averaged over ~10 cm) and its sample spacing, in a worker,
+ *     once per load. Tone and edge are neighbourhood values, so a plane is
+ *     even rather than a speckle of each point's own photo grain;
+ *   - each point is a crisp dot about the size of the patch it stands for
+ *     (1.4..3 px, edges a little larger);
+ *   - max blending: a pixel shows its brightest point, never a sum, so where
+ *     points happen to bunch up a plane doesn't flare into blotches;
+ *   - max blending ignores draw order, so a depth-only pass of the same
+ *     points, pushed 4 cm (+1% of depth) back along the view ray, lets near
+ *     surfaces hide what is behind them without hiding themselves.
  *
  * The classic material stays the cloud's base: the engine writes its uniforms
  * every frame, the etched materials share those uniform objects, and the lit
  * layer and the WebGPU port still start from it. Opt out per browser with
  * localStorage 'apartment3d.pointLook' = 'classic'.
  */
-export const ETCHED_POINT_MIN_PX = 2.0;
-export const ETCHED_POINT_MAX_PX = 4.0;
-/* Each point is drawn this many times wider than the patch it stands for, with a soft falloff, so
- * neighbours blend into an even surface instead of a speckle of separate dots. */
-export const ETCHED_POINT_FOOTPRINT = 3.0;
+export const ETCHED_POINT_MIN_PX = 1.4;
+export const ETCHED_POINT_MAX_PX = 3.0;
+/* Each point's dot, relative to the patch of surface it stands for: just enough overlap to read as a plane. */
+export const ETCHED_POINT_FOOTPRINT = 1.3;
 export const ETCHED_DEPTH_BIAS_M = 0.04;
-export const ETCHED_GAIN_CLOSE = 2.4;
-export const ETCHED_GAIN_OVERVIEW = 3.1;
+export const ETCHED_GAIN_CLOSE = 1.15;
+export const ETCHED_GAIN_OVERVIEW = 1.35;
 export const POINT_LOOK_KEY = 'apartment3d.pointLook';
 
 export const etchedVertexShader = /* glsl */ `
@@ -322,12 +321,11 @@ void main() {
     float facing = clamp(abs(dot(normalize(normalMatrix * normal), normalize(-mvPosition.xyz))), 0.1, 1.0);
     float focalPx = projectionMatrix[1][1] * 0.5 * uViewportPx;
     float spacePx = aSpacing * 0.255 * focalPx / max(depth, 0.2);   // aSpacing: mm / 255
-    float size = clamp(spacePx * ${ETCHED_POINT_FOOTPRINT.toFixed(2)}, ${ETCHED_POINT_MIN_PX.toFixed(2)} * uPixelRatio, ${ETCHED_POINT_MAX_PX.toFixed(2)} * uPixelRatio);
-    float cover = clamp(1.4 * spacePx * spacePx * facing / (size * size), 0.0, 1.4);
+    float size = clamp(spacePx * ${ETCHED_POINT_FOOTPRINT.toFixed(2)} * (1.0 + 0.3 * aEdge), ${ETCHED_POINT_MIN_PX.toFixed(2)} * uPixelRatio, ${ETCHED_POINT_MAX_PX.toFixed(2)} * uPixelRatio);
 
-    // tone and edge are averaged over ~10 cm (point-features.mjs), so surfaces are quiet, not per-point noise
-    float light = 0.02 + 0.35 * pow(aTone, 2.2) + 1.6 * aEdge;
-    vEtch = light * (0.92 + 0.16 * r) * mix(0.55, 1.0, facing) * (0.2 + 0.8 * fade) * uEtchGain * cover;
+    // tone and edge are neighbourhood values (point-features.mjs), so a plane is even, not per-point grain
+    float light = 0.10 + 0.55 * pow(aTone, 1.4) + 1.1 * aEdge;
+    vEtch = light * (0.92 + 0.16 * r) * mix(0.55, 1.0, facing) * (0.2 + 0.8 * fade) * uEtchGain;
 
     gl_PointSize = size;
     gl_Position = projectionMatrix * mvPosition;
@@ -346,8 +344,8 @@ void main() {
     if (d > 0.5) discard;
     float cutawayKeep = homeDollhouseKeep();
     if (cutawayKeep <= 0.001) discard;
-    vec3 c = uGlowColor * vEtch * exp(-d * d * 9.0) * uOpacity * cutawayKeep;
-    gl_FragColor = vec4(c, max(c.r, max(c.g, c.b)));   // premultiplied, added
+    vec3 c = uGlowColor * vEtch * (1.0 - smoothstep(0.3, 0.5, d)) * uOpacity * cutawayKeep;
+    gl_FragColor = vec4(c, max(c.r, max(c.g, c.b)));   // premultiplied; max-blended
 }
 `;
 
@@ -409,14 +407,15 @@ export function createEtchedPointsMaterials(base) {
         fragmentShader: etchedFragmentShader,
         transparent: true,
         blending: THREE.CustomBlending,
-        blendEquation: THREE.AddEquation,
+        blendEquation: THREE.MaxEquation,
+        blendEquationAlpha: THREE.MaxEquation,
         blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
         blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneFactor,
         depthWrite: false,
         depthTest: true,
     });
-    // modes.js keeps an additive material's depth writes off; the depth pass carries occlusion
-    color.userData.additive = true;
+    // modes.js keeps this material's depth writes off; the depth pass carries occlusion
+    color.userData.noDepthWrite = true;
     color.userData.classicPoints = base;
     const depth = new THREE.ShaderMaterial({
         name: 'apartment-points-etched-depth',

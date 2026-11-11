@@ -160,7 +160,7 @@ export function computePointFeatures(positions, intensity, count, { cell = POINT
     }
     for (let i = 0; i < n; i++) {
         const c = cellOf[i];
-        edge[i] = Math.round(be[c] * 255);
+        edge[i] = Math.round(Math.min(1, 0.75 * ce[c] + 0.25 * be[c]) * 255);
         tone[i] = Math.round(ct[c]);
         normal[i * 3] = Math.round(cn[c * 3] * 127);
         normal[i * 3 + 1] = Math.round(cn[c * 3 + 1] * 127);

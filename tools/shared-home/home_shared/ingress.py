@@ -16,6 +16,7 @@ import math
 import re
 import socket
 import ssl
+import sys
 import threading
 import time
 from types import MappingProxyType
@@ -244,7 +245,13 @@ class PrivateTLSIngress(HTTPServer):
     Shutdown closes active sockets; slots remain charged until handler cleanup,
     including any in-progress admitted backend call. No automatic engine restart.
     """
-    allow_reuse_address = False
+    # On Linux, SO_REUSEADDR only lets a restarted listener bind past the old
+    # instance's closing connections (TIME_WAIT, orphaned FIN-WAIT-2). It never
+    # binds beside a live listener: that is still EADDRINUSE. Without it a restart
+    # fails for up to about a minute after shutdown closed a client's connection.
+    # Elsewhere (Windows) the flag would let another socket take a port in use, so
+    # it stays off.
+    allow_reuse_address = sys.platform.startswith("linux")
 
     def __init__(self, address: tuple[str, int], gateway: Gateway, *, certificate: str,
                  private_key: str, client_ca: str,

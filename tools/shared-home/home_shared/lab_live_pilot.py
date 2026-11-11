@@ -788,8 +788,11 @@ class PilotLiveIngress(PrivateTLSIngress):
         bindings = list((kwargs.get("identities") or {}).values())
         if bindings.count(live.binding) != 1 or bindings.count(pilot.binding) != 1 or len(bindings) != 2:
             raise AdmissionError("exactly the camera and live identities must be registered")
-        super().__init__(address, pilot, **kwargs)
+        # Set before binding: a failed bind calls server_close(), which closes the
+        # live admission too. Set after, that close raised AttributeError and hid
+        # the bind error itself.
         self.live, self.lab = live, None
+        super().__init__(address, pilot, **kwargs)
         self.RequestHandlerClass = (_person_live_handler() if live.config.protocol == "lab-live-person-scene-1"
                                     else _PilotLiveHandler)
 

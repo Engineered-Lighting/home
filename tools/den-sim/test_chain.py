@@ -254,6 +254,9 @@ class Decided(unittest.TestCase):
         mixed = self.view(skipped=[("F3.spot", "too_far"), ("F4.spot", "beam_through_head")], costs={"off": 1.0, "F1.spot": 1.0001, "F2.spot": 1.0002})
         self.assertEqual(chain.no_beam(mixed), "no beam: off cost less than every fixture allowed (F1, F2); refused: F3 too far, F4 beam through head")
         self.assertEqual(mixed["costlier"], ["F1.spot", "F2.spot"])
+        # Every fixture allowed, off cheaper than each, and no refusal at all: off won, never a missing head.
+        cheap = self.view(costs={"off": 1.0, "F1.spot": 1.1, "F2.spot": 1.2, "F3.spot": 1.3, "F4.spot": 1.4})
+        self.assertEqual(chain.no_beam(cheap), "no beam: off cost less than every fixture allowed (F1, F2, F3, F4)")
         self.assertTrue(chain.no_beam(self.view(skipped=[(c, "too_far") for c in chain.CHANNELS])).startswith("every fixture refused: "), "control: all four refused")
 
     def test_allowed_fixtures_that_cost_more_or_tied(self):

@@ -34,13 +34,7 @@ from test_verify import Quiet, by_id, closed, point, residual, send  # noqa: E40
 
 B0, B1, B2, B3 = syn.HUE
 KELVINS = (2202, 3294, 6535)
-NEEDS_REAL = "needs tools/den-light/predict.py beside this folder"
-REAL_PREDICT = light_model.PREDICT_PATH if light_model.PREDICT_PATH.is_file() else None
-
-
-def real_backend():
-    """den-light's predict module, as the adapter imported it: a patch that changes nothing."""
-    return mock.patch.object(light_model, "predict", light_model.predict)
+REAL_PREDICT = light_model.PREDICT_PATH  # den-light's, beside this folder on this branch
 
 
 def no_sibling():
@@ -132,15 +126,8 @@ def values_at(truth, state, surfaces):
     return out
 
 
-@unittest.skipUnless(REAL_PREDICT, NEEDS_REAL)
 class Stage1Backend(Temp):
     """den-light's own predict.py behind the adapter."""
-
-    def setUp(self):
-        super().setUp()
-        patcher = real_backend()
-        patcher.start()
-        self.addCleanup(patcher.stop)
 
     def test_it_is_den_lights_own_file_found_last_on_the_path_and_pinned(self):
         model = LightModel(stage1_model(FOUR))
@@ -760,12 +747,11 @@ class WrongStage1Model(Temp):
         light_model.check_shape(model, "the model")
 
     def test_nothing_refused_here_would_have_got_through_to_the_backend(self):
-        with real_backend():
-            LightModel(stage1_model(FOUR))
-            for name, change in self.WRONG:
-                model = {**stage1_model(FOUR), **change}
-                with self.subTest(name), self.assertRaises(BadFile):
-                    LightModel({k: v for k, v in model.items() if v is not None or k not in change})
+        LightModel(stage1_model(FOUR))
+        for name, change in self.WRONG:
+            model = {**stage1_model(FOUR), **change}
+            with self.subTest(name), self.assertRaises(BadFile):
+                LightModel({k: v for k, v in model.items() if v is not None or k not in change})
 
 
 class WhyASurfaceHasNoPrediction(unittest.TestCase):

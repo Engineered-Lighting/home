@@ -1,6 +1,6 @@
 """The rules the lighting seam fixed: what "verified" means, unknown state, a person's change, two evenings, unknown causes.
 
-On den-verify's own synthetic shape, so they hold with or without den-light. test_light_model.py has Stage 1's shape and
+On synthetic models in Stage 1's shape, through den-light's predict.py. test_light_model.py has the adapter's own tests and
 test_seam_den_core.py the real tools. Everything here is synthetic.
 
     python -B -m unittest discover -s tools/den-verify -p "test_*.py"

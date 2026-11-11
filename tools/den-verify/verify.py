@@ -7,8 +7,8 @@ It reads JSON Lines files, one light-model.json and any surfaces.json, and write
 three files into --out: decisions.verified.jsonl, light_states.verified.jsonl and
 report.json. It never opens a network connection, sends nothing to any light and
 contacts no camera, Jetson, LA host or Home Assistant. A scored run refuses while
-VERIFY-V1.md has an open slot, and on a fake backend; --preview runs on the
-proposed values and writes only report-preview.json. What it cannot read is one
+VERIFY-V1.md has an open slot, and on a model marked fake; --preview runs on
+the proposed values and writes only report-preview.json. What it cannot read is one
 sentence and exit 2.
 """
 import argparse
@@ -56,8 +56,8 @@ def refused_backend(model):
     """Why a scored run can't stand on this model's backend, or None. Plumbing is never a gate."""
     if not model.fake:
         return None
-    return (f"refused: light model {model.version} runs on {model.backend}. A scored run needs a Stage 1 model through den-light's "
-            "predict.py; add --preview to see this one at work")
+    return (f"refused: light model {model.version} runs on {model.backend}. A scored run needs a model that is not marked "
+            "fake; add --preview to see this one at work")
 
 
 def cmd_slots(args):

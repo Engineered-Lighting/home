@@ -363,7 +363,7 @@ class Seam(unittest.TestCase):
                               capture_output=True, text=True, env=env, timeout=120)
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         report = json.loads((out / "report-preview.json").read_text("utf-8"))
-        self.assertEqual(report["backend"], "den-light predict.py")
+        self.assertEqual(report["backend"], light_model.BACKEND)
         self.assertEqual(report["hit_rate"]["verdict"], "pass")
 
     def test_den_cores_readme_line_for_this_tool_runs_as_it_is_written(self):
@@ -394,7 +394,7 @@ class Seam(unittest.TestCase):
         self.assertLess(report["excluded_held_or_superseded"], 5)
         self.assertEqual(hr["verdict"], "pass")
         self.assertEqual(report["points"]["outside"], 0)
-        self.assertEqual(report["backend"], "den-light predict.py")
+        self.assertEqual(report["backend"], light_model.BACKEND)
         self.assertTrue(printed.startswith(f"decisions verified {n} of {n}, 0 not verified; hit rate 1.0 ("), printed)
         self.assertIn("gate 0.85: pass (preview)", printed)
 
@@ -759,7 +759,7 @@ class Seam(unittest.TestCase):
         with mock.patch.object(light_model, "PREDICT_PATH", HERE / "no-such-folder" / "predict.py"):
             code, printed, report, _ = self.verify(self.frames_list)
         self.assertEqual(code, 2, printed)
-        self.assertIn("tools/den-light/predict.py", printed)
+        self.assertIn("there is none: run on a tree with tools/den-light", printed)
         self.assertIsNone(report)
 
     def test_any_value_anywhere_in_a_real_file_is_never_a_traceback(self):

@@ -362,8 +362,8 @@ class Run:
         A Decision does not name its map, and its model's version says nothing of the blocks, so this is what can tell a map that
         is not the one the run was made on: a surface read through it would be judged against someone else's numbers. One map
         goes with one run, so one Decision showing it speaks for all: an off gives 0 through any map, and would pass through a
-        wrong one. Holds past a copy move what is verified, not this. Nothing to compare on den-verify's own shape, whose
-        fixtures hold placeholders; a Decision the model cannot predict is reported as that.
+        wrong one. Holds past a copy move what is verified, not this. Every model here is Stage 1's shape, the synthetic
+        ones too, so their fixtures log what the model gives; a Decision the model cannot predict is reported as that.
 
         A logged null is the same wrong map where this gives a number, unless a bulb has no level or the model lacks it, which
         rung 9 logs as null at every surface. So is a map's surface the Decision does not list: it lists its run's whole map, or

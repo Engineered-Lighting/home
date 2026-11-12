@@ -145,6 +145,19 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         uniforms: { uTint: { value: new THREE.Vector3(1, 0.55, 0.2) }, uOpacity: { value: 0 } } });
     const pool = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), poolMat); pool.name = 'body-floor-pool'; pool.position.z = 0.012; pool.renderOrder = 3; root.add(pool);
 
+    // The WebGPU path (?renderer=webgpu) can't run the GLSL above: there the layer hides it and draws through the TSL
+    // twin in apartment-body-webgpu.mjs, from the same buffers and uniforms (the particles and the held object).
+    let twin = null;
+    if (engine.renderer?.isWebGPURenderer === true) {
+        for (const o of [...root.children]) o.visible = false;
+        const cb = new URL(import.meta.url).search;
+        import(`./apartment-body-webgpu.mjs${cb}`).then(({ createBodySprites }) => {
+            if (disposed) return;
+            twin = createBodySprites({ B: now0.B, shared, body: holo.uniforms, held: objectMat.uniforms });
+            for (const o of twin.objects) root.add(o);
+        }).catch(error => console.warn('[home-3d] body layer: WebGPU twin unavailable', error));
+    }
+
     let disposed = false, rafId = null, last = null, frames = [], period = 0.15, presence = 0, centroid = null, joints = {}, trackId = null, seen = null, poolOn = true;
     let speed = 0, prevCentroid = null, object = null;
     const scratch = new THREE.Vector3(), camWorld = new THREE.Vector3();
@@ -245,6 +258,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         poolMat.uniforms.uOpacity.value = poolOn ? presence * look.pool * (1 - 0.5 * zt) : 0;
         if (centroid) pool.position.set(centroid[0], centroid[1], 0.012);
         spawnMotes(step, n, now0.B); stepMotes(step);
+        twin?.update(now0.B.n);
     }
 
     if (animate && typeof requestAnimationFrame === 'function') {
@@ -269,12 +283,14 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
             for (let i = 0; i < B.n; i += 3) if (B.kind[i] === KIND.heldObject && B.alpha[i] > 0.3) objectPoints.push([B.pos[i * 3], B.pos[i * 3 + 1], B.pos[i * 3 + 2]]);
             return { trackId, presence, centroid: centroid && centroid.slice(), joints: { ...joints }, speed, objectPoints, object: objectPoints.length > 8 ? object : null };
         },
-        status: () => ({ trackId, frames: frames.length, points: now0.B.n, presence, period_s: period, since_s: seen == null ? null : now() - seen }),
+        status: () => ({ trackId, frames: frames.length, points: now0.B.n, presence, period_s: period, since_s: seen == null ? null : now() - seen,
+            webgpu: !!twin }),
         dispose() {
             if (disposed) return;
             disposed = true;
             if (rafId != null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(rafId);
             parent.remove(root);
+            if (twin) { root.remove(...twin.objects); twin.dispose(); }   // their quad is three's shared Sprite geometry
             release(root);
         },
     };

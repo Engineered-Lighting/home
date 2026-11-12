@@ -74,6 +74,8 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-body-frame\.mjs|tools\/test-apartment-body-frame\.mjs)$/, ["test-apartment-body-frame.mjs", "test-apartment-body-layer.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-body-layer\.mjs|tools\/test-apartment-body-layer\.mjs)$/, ["test-apartment-body-layer.mjs"]],
   [/^(?:app\/src\/home-3d\/apartment-body-(?:annotation-model|labels)\.mjs|tools\/test-apartment-body-annotation-model\.mjs)$/, ["test-apartment-body-annotation-model.mjs"]],
+  // Any body module: the ports rule (no GLSL without a WebGPU twin) and the twin itself.
+  [/^(?:app\/src\/home-3d\/apartment-body-[\w-]+\.mjs|tools\/test-apartment-body-webgpu\.mjs)$/, ["test-apartment-webgpu-ports.mjs", "test-apartment-body-webgpu.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],

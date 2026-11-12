@@ -4,6 +4,7 @@ Lifecycle services own process/resource enforcement. This adapter owns the paire
 session and never treats a timeout as proof that a remote worker has stopped.
 """
 from copy import deepcopy
+import logging
 import threading
 import time
 import uuid
@@ -14,17 +15,46 @@ import uuid
 POSE_EXPERIMENTS = frozenset({'placement-best', 'vjepa-onoff','apartment-viewing'})
 LIVE_EXPERIMENTS = frozenset({'placement-same'}) | POSE_EXPERIMENTS
 
+# Why a preparation ended without a recording ('worker_preparation_uncertain'
+# for anything else). Only 'cancelled' follows a Stop; the rest are worker or
+# lease outcomes that a later start may not repeat.
+PREPARATION_REASONS = frozenset({'cancelled', 'worker_preparation_failed', 'worker_preparation_timeout',
+                                 'insufficient_worker_lease', 'paired_start_failed', 'worker_busy'})
+# The reason a recording row is stopped with once its workers were proven
+# terminal by reconciliation, after the process that prepared them was gone.
+RECONCILED_REASON = 'worker_cleanup_reconciled'
+# Stop reasons that are worker outcomes, never an operator's Stop.
+WORKER_STOP_REASONS = (PREPARATION_REASONS - {'cancelled'}) | {'worker_preparation_uncertain', RECONCILED_REASON}
+TERMINAL_RECEIPTS = frozenset({'stopped', 'failed'})
+# A cleanup that could not prove both workers released (an arm still stopping,
+# e.g. behind LA's preflight scan, or a supervisor that could not be read) is
+# retried by reap after this delay, doubling up to the cap.
+CLEANUP_RETRY_SECONDS, CLEANUP_RETRY_MAX_SECONDS = 15, 300
+# Indeterminate rows no worker item of this process owns are reconciled at
+# the first reap after startup, then at this interval.
+ORPHAN_CHECK_SECONDS = 60
+# A supervisor with no lease for a recorded request id proves its start never
+# arrived only once any start request still in flight has long ended.
+ABSENT_GRACE_SECONDS = 120
+_log = logging.getLogger('perception_lab.managed_pair')
+
 
 class ManagedPair:
     deferred_start = True
 
     def __init__(self, store, clients, factory, catalog, *, clock=time.time, prepare_seconds=40, reasoning_available=False, reasoning_readiness=None,
-                 analysis_jobs=None, caption_readiness=None, spatial_readiness=None, continuous_la_only=False):
+                 analysis_jobs=None, caption_readiness=None, spatial_readiness=None, continuous_la_only=False, stop_wait_seconds=10):
         if set(clients) != {'a', 'b'}:
             raise ValueError('Exactly two provisioned lifecycle clients required')
         self.store, self.clients, self.factory = store, clients, factory
         self.catalog, self.clock = deepcopy(catalog), clock
         self.prepare_seconds = prepare_seconds
+        # How long one cleanup waits for a stopping worker. A longer stop is
+        # not an error: reap retries the cleanup until the receipt is terminal.
+        self.stop_wait_seconds = stop_wait_seconds
+        # Durable reconciliation of indeterminate rows: the first reap runs it.
+        self.orphan_check_at = 0
+        self.orphan_thread = None
         if type(continuous_la_only) is not bool:
             raise ValueError('continuous_la_only must be boolean')
         self.continuous_la_only = continuous_la_only
@@ -177,7 +207,8 @@ class ManagedPair:
                 return {'state': 'blocked', 'reason': 'experiment_pair_not_provisioned'}
             item = {'session': session, 'request_id': str(uuid.uuid4()), 'cancel': threading.Event(),
                     'receipts': {}, 'inner': None, 'phase': 'starting', 'reason': None,
-                    'attempted': set(), 'thread': None, 'inner_stopped': False}
+                    'attempted': set(), 'thread': None, 'inner_stopped': False,
+                    'requested_at': self.clock(), 'cleanup_attempts': 0, 'retry_at': None}
             # Only the commissioned automatic apartment loop uses LA alone.
             # Ordinary Lab comparisons retain both workers and both receipts.
             item['execution_arms'] = ('b',) if (self.continuous_la_only
@@ -243,9 +274,7 @@ class ManagedPair:
                 self.store.transition(item['session']['id'], 'recording')
                 item['phase'] = 'recording'
         except Exception as exc:
-            allowed = {'cancelled', 'worker_preparation_failed', 'worker_preparation_timeout',
-                       'insufficient_worker_lease', 'paired_start_failed', 'worker_busy'}
-            item['reason'] = str(exc) if str(exc) in allowed else 'worker_preparation_uncertain'
+            item['reason'] = str(exc) if str(exc) in PREPARATION_REASONS else 'worker_preparation_uncertain'
             self._cleanup(item)
 
     def _drain(self, item):
@@ -272,27 +301,53 @@ class ManagedPair:
         if item['phase'] == 'stopped' and self.current is item:
             self.current = None
 
+    def _release_arm(self, client, request_id, requested_at, session_id=None):
+        """Stop one lifecycle request unless its receipt is terminal, waiting
+        briefly while it stops. Returns (receipt, released); raises when the
+        supervisor cannot be read. With session_id, the receipt must be bound to
+        that session before anything is stopped.
+
+        A supervisor holding no lease for the request proves release only once
+        a start still in flight could no longer reach it: the identity is
+        written before any start is sent, so it may never have arrived."""
+        from worker_lifecycle_client import RequestNotFound
+        try:
+            receipt = client.status(request_id)
+        except RequestNotFound:
+            absent = self.clock() - requested_at >= ABSENT_GRACE_SECONDS
+            return {'state': 'absent' if absent else 'unknown', 'reason': 'request_not_found'}, absent
+        if session_id is not None and (receipt.get('request_id') != request_id or receipt.get('session_id') != session_id):
+            raise ValueError('Lifecycle receipt bound to another session')
+        if receipt['state'] not in TERMINAL_RECEIPTS:
+            receipt = client.stop(request_id, receipt['engine_epoch'])
+        deadline = time.monotonic() + self.stop_wait_seconds
+        while receipt['state'] == 'stopping' and time.monotonic() < deadline:
+            time.sleep(.1)
+            receipt = client.status(request_id)
+        return receipt, receipt['state'] in TERMINAL_RECEIPTS
+
     def _cleanup(self, item):
         drained = self._drain(item)
         released = True
         for arm in item['attempted']:
             try:
-                client = self.clients[arm]
-                receipt = client.status(item['request_id'])
-                if receipt['state'] not in {'stopped', 'failed'}:
-                    receipt = client.stop(item['request_id'], receipt['engine_epoch'])
-                deadline = time.monotonic() + 10
-                while receipt['state'] == 'stopping' and time.monotonic() < deadline:
-                    time.sleep(.1)
-                    receipt = client.status(item['request_id'])
+                receipt, done = self._release_arm(self.clients[arm], item['request_id'], item['requested_at'])
                 item['receipts'][arm] = receipt
-                released = receipt['state'] in {'stopped', 'failed'} and released
+                released = done and released
             except Exception:
                 released = False
         with self.lock:
             # Worker receipts decide release; an undrained local future only
             # delays clearing admission until reap sees it drained.
             item['phase'] = ('stopped' if drained else 'draining') if released else 'indeterminate'
+            if not released:
+                # Not a final state: an arm still stopping (LA's preflight scan
+                # can outlast any fixed wait) or an unreadable supervisor. Reap
+                # retries this cleanup, so the session settles once every
+                # receipt is terminal instead of blocking admission for good.
+                item['cleanup_attempts'] += 1
+                item['retry_at'] = self.clock() + min(
+                    CLEANUP_RETRY_MAX_SECONDS, CLEANUP_RETRY_SECONDS * 2 ** (item['cleanup_attempts'] - 1))
             sid = item['session']['id']
             workers = {arm: {'state': r.get('state'), 'reason': r.get('reason')} for arm, r in item['receipts'].items()}
             self.store.append_event(sid, 'workers.cleanup', {
@@ -351,7 +406,90 @@ class ManagedPair:
                 # rechecked, once per reap, until it completes.
                 item['thread'] = threading.Thread(target=self._finish_drain, args=(item,), daemon=True)
                 item['thread'].start()
+            elif (item and item['phase'] == 'indeterminate' and not item['thread'].is_alive()
+                  and not self.closed and self.clock() >= item['retry_at']):
+                # Release was not proven last time. The same cleanup reads,
+                # and if needed stops, only this session's own requests.
+                item['thread'] = threading.Thread(target=self._cleanup, args=(item,), daemon=True)
+                item['thread'].start()
+            if (not self.closed and self.clock() >= self.orphan_check_at
+                    and not (self.orphan_thread and self.orphan_thread.is_alive())):
+                self.orphan_check_at = self.clock() + ORPHAN_CHECK_SECONDS
+                self.orphan_thread = threading.Thread(target=self._reconcile_orphans_quietly, daemon=True)
+                self.orphan_thread.start()
         return {'state': 'reconciled'}
+
+    def _reconcile_orphans_quietly(self):
+        try:
+            self.reconcile_orphans()
+        except Exception as error:
+            # Class only: the next pass retries; the row stays indeterminate.
+            _log.warning('perception-lab orphan reconciliation failed: error_class=%s', type(error).__name__)
+
+    def reconcile_orphans(self):
+        """Settle indeterminate rows that no worker item of this process owns.
+
+        Such a row outlived the process that prepared its workers (a Lab
+        restart drops the in-memory item, and Store.recover marks every row it
+        was running indeterminate) or never reached them. While it stays, the
+        Store refuses every new recording on its camera. It moves to 'stopped'
+        only when each lifecycle request its durable 'workers.preparing' event
+        names is proven terminal by that supervisor's receipt for the same
+        session (a non-terminal one is stopped, as cleanup would), or proven
+        never reserved. Without that event no request was ever sent. Records
+        are kept; any doubt leaves the row for the next pass. Returns the ids
+        settled."""
+        settled = []
+        for session in self.store.indeterminate_sessions():
+            with self.lock:
+                if self.closed:
+                    break
+                if self.current is not None and self.current['session']['id'] == session['id']:
+                    continue
+            evidence = self._orphan_release(session)
+            if evidence is None:
+                continue
+            with self.lock:
+                # Re-checked under the lock that guards admission and cleanup:
+                # the row must still be exactly the one that was proven.
+                if self.closed or (self.current is not None and self.current['session']['id'] == session['id']):
+                    continue
+                if self.store.settle_indeterminate(session['id'], session['revision'], RECONCILED_REASON, evidence):
+                    settled.append(session['id'])
+                    _log.info('perception-lab reconciled an indeterminate recording: workers=%s',
+                              ','.join(f"{arm}:{w['state']}" for arm, w in sorted(evidence['workers'].items())) or 'none')
+        return settled
+
+    def _orphan_release(self, session):
+        """Evidence that every worker request of an unowned session is
+        released, or None while any is unproven."""
+        found = self.store.latest_event(session['id'], 'workers.preparing')
+        prior = {'state': session['state'], 'reason': session['reason'], 'revision': session['revision']}
+        if found is None:
+            return {'request_id': None, 'workers': {}, 'prior': prior}
+        prepared_at, preparing = found
+        request_id = preparing.get('request_id') if isinstance(preparing, dict) else None
+        # Older events name no arms: both were prepared.
+        arms = preparing.get('execution_arms', ['a', 'b']) if isinstance(preparing, dict) else None
+        if (not isinstance(request_id, str) or not isinstance(arms, list) or not arms
+                or not set(arms) <= set(self.clients) or type(prepared_at) not in (int, float)):
+            return None
+        variant = 'pose' if session['experiment_id'] in POSE_EXPERIMENTS else 'detector'
+        workers = {}
+        for arm in sorted(set(arms)):
+            client = self.clients[arm]
+            try:
+                adopt = getattr(client, 'adopt', None)
+                if callable(adopt):
+                    # The previous process's binding, from its durable record.
+                    adopt(request_id, session['id'], variant)
+                receipt, released = self._release_arm(client, request_id, prepared_at, session_id=session['id'])
+            except Exception:
+                return None
+            if not released:
+                return None
+            workers[arm] = {'state': receipt['state'], 'reason': receipt.get('reason')}
+        return {'request_id': request_id, 'workers': workers, 'prior': prior}
 
     def set_reasoning(self,session,enabled):
         with self.lock:
@@ -363,7 +501,9 @@ class ManagedPair:
         return {'state': 'blocked', 'reason': 'stop_before_changing_comparison'}
 
     def close(self, timeout=10):
-        self.closed = True
+        # Under the lock: an orphan reconciliation writes only while open.
+        with self.lock:
+            self.closed = True
         # Queued analysis is cancelled now; paired workers stop without waiting
         # for it. An in-flight admitted step keeps the store open (drained
         # False) until its worker exits.
@@ -371,9 +511,15 @@ class ManagedPair:
             self.analysis.close()
         with self.lock:
             item = self.current
+            orphans = self.orphan_thread
         if item:
             self.stop_session(item['session'])
             item['thread'].join(timeout)
+        if orphans is not None:
+            # It only reads and stops this Lab's own orphaned requests; once
+            # closed it writes nothing, so a slow supervisor read never holds
+            # shutdown beyond this bound.
+            orphans.join(min(timeout, 5))
         if self.current is None and not self.clients_closed:
             for client in self.clients.values():
                 if callable(getattr(client, 'close', None)):

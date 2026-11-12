@@ -26,7 +26,10 @@ async function pixelsInPage() {
   const depths = () => {
     const rows = [e.pointsMaterial.depthWrite];
     for (const points of e.apartmentRoot.children.filter(node => node.isPoints)) points.traverse(node => {
-      for (const material of Array.isArray(node.material) ? node.material : node.material ? [node.material] : []) rows.push(material.depthWrite);
+      // The x-ray look's copy points never write depth (x-ray has none); the classic material still follows the rule.
+      for (const material of Array.isArray(node.material) ? node.material : node.material ? [node.material] : []) {
+        if (!material.userData?.noDepthWrite) rows.push(material.depthWrite);
+      }
     });
     return rows;
   };

@@ -32,7 +32,7 @@ function start(attachLayer) {
         save: { state: 'idle', text: '' }, conflict: null, toast: '', toastAt: 0, drag: null, down: null, swallowUntil: 0,
     };
     const ui = {};
-    const tagEls = new Map(), handleEls = new Map();
+    const tagEls = new Map(), handleEls = new Map(), nearEls = new Map();
     let raf = 0;
 
     /* ---------------- engine and mount ---------------- */
@@ -69,7 +69,7 @@ function start(attachLayer) {
         window.removeEventListener('pointerup', onUp, true);
         window.removeEventListener('click', onClick, true);
         S.layer?.dispose(); S.root?.remove();
-        tagEls.clear(); handleEls.clear();
+        tagEls.clear(); handleEls.clear(); nearEls.clear();
         S.engine = S.layer = S.root = S.host = S.view = null;
         S.open = false; S.pending = null; S.drag = null;
     }
@@ -258,7 +258,7 @@ function start(attachLayer) {
         const root = document.createElement('div');
         root.className = 'home-den-labels';
         root.dataset.denLabels = '1';
-        root.innerHTML = `<div class="home-den-labels-tags"></div><div class="home-den-labels-handles"></div>
+        root.innerHTML = `<div class="home-den-labels-tags"></div><div class="home-den-labels-near"></div><div class="home-den-labels-handles"></div>
             ${signedIn ? `<button type="button" class="home-den-labels-toggle" data-act="open" aria-label="Label objects in the den">Labels</button>
             <div class="home-den-labels-banner" role="status" hidden></div>
             <div class="home-den-labels-hint" role="status" hidden></div>
@@ -266,6 +266,7 @@ function start(attachLayer) {
             <aside class="home-den-labels-panel" aria-label="Den labels" hidden></aside>
             <div class="home-den-labels-modal" hidden></div>` : ''}`;
         ui.tags = root.querySelector('.home-den-labels-tags');
+        ui.near = root.querySelector('.home-den-labels-near');
         ui.handles = root.querySelector('.home-den-labels-handles');
         ui.toggle = root.querySelector('.home-den-labels-toggle');
         ui.banner = root.querySelector('.home-den-labels-banner');
@@ -580,6 +581,7 @@ function start(attachLayer) {
             el.style.display = shown ? '' : 'none';
         }
         for (const [id, el] of tagEls) if (!live.has(id)) { el.remove(); tagEls.delete(id); }
+        drawNear();
         const l = S.open && signedIn ? byId(S.sel) : null, want = new Set();
         if (l) for (const spec of handleSpecs(l)) {
             want.add(spec.key);
@@ -596,6 +598,26 @@ function start(attachLayer) {
             ui.pop.style.transform = `translate(${Math.round(Math.min(Math.max(8, left), room - W - 8))}px, ${Math.round(Math.min(Math.max(10, s.y - 40), root.height - (ui.pop.offsetHeight || 300) - 10))}px)`;
         }
         if (S.toast && performance.now() - S.toastAt >= 4000) { S.toast = ''; drawHint(); }
+    }
+
+    /* What's near each person, under their marker: den-live works it out from these labels (step 2 of the labels plan)
+     * and the people layer keeps it (window.HomeDenLiveView.markers()). The same words go to Qwen as "Seated …". */
+    function drawNear() {
+        let markers = [];
+        try { markers = window.HomeDenLiveView?.markers?.() || []; } catch (_) { markers = []; }
+        const live = new Set();
+        for (const m of markers) {
+            if (!m?.near || !Array.isArray(m.xy_m)) continue;
+            live.add(m.track_id);
+            let el = nearEls.get(m.track_id);
+            if (!el) { el = document.createElement('div'); el.className = 'home-den-labels-person'; ui.near.appendChild(el); nearEls.set(m.track_id, el); }
+            if (el.textContent !== m.near) el.textContent = m.near;
+            const s = toScreen([m.xy_m[0], m.xy_m[1], 0]);
+            el.style.transform = `translate(${Math.round(s.x)}px, ${Math.round(s.y + 20)}px) translateX(-50%)`;
+            el.style.display = s.behind ? 'none' : '';
+            el.classList.toggle('is-coasting', !!m.coasting);
+        }
+        for (const [id, el] of nearEls) if (!live.has(id)) { el.remove(); nearEls.delete(id); }
     }
 
     /* ---------------- keys ---------------- */

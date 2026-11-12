@@ -84,6 +84,8 @@ export function attachApartmentPeopleLayer(engine, { now = () => performance.now
             m.sigma = track.sigma_m ?? .3;
             m.heading = track.heading_deg ?? null;
             m.coasting = track.state === 'coasting';
+            // What's near them, from the den's labels (den-live's room_labels): words only, at most 160 characters.
+            m.near = typeof track.near === 'string' && track.near.length <= 160 ? track.near : null;
             m.seen = at;
         }
         return true;
@@ -135,7 +137,7 @@ export function attachApartmentPeopleLayer(engine, { now = () => performance.now
         /* What the page shows beside the markers: the stream's mode and camera status, and how long since an event. */
         status: () => ({ ...status, tracks: markers.size, since_s: status.at == null ? null : now() - status.at }),
         markers: () => [...markers.values()].map(m => ({ track_id: m.id, xy_m: [m.spring.x, m.spring.y], coasting: m.coasting,
-            heading_deg: m.heading, trail: m.points.length })),
+            heading_deg: m.heading, trail: m.points.length, near: m.near ?? null })),
         dispose() {
             if (disposed) return;
             disposed = true;

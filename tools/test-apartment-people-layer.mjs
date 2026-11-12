@@ -109,3 +109,13 @@ test('the status says what the stream said, and how long ago', () => {
     assert.equal(status.camera.why, 'too dark');
     assert.ok(Math.abs(status.since_s - 3) < 1e-6);
 });
+
+test("each marker keeps what's near it from den-live's labels, words only", () => {
+    const f = fixture();
+    f.layer.update(f.event([f.track('t-1', [1, 2], { near: 'at the desk, beside the 3D printer' }), f.track('t-2', [3, 3]),
+        f.track('t-3', [0, 0], { near: 'x'.repeat(161) })]));
+    const near = Object.fromEntries(f.layer.markers().map(m => [m.track_id, m.near]));
+    assert.deepEqual(near, { 't-1': 'at the desk, beside the 3D printer', 't-2': null, 't-3': null });
+    f.layer.update(f.event([f.track('t-1', [1, 2], { near: null })]));
+    assert.equal(f.layer.markers().find(m => m.track_id === 't-1').near, null);
+});

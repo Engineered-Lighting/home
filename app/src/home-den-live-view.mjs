@@ -9,19 +9,30 @@
  * Otherwise it closes the stream and disposes the layer, so a device elsewhere in Home holds no stream (den-live
  * serves at most 16). It reaches nothing but HomeDenLive.stream, on this page's own origin, and writes nothing.
  * A heartbeat is an SSE comment, which EventSource never shows; den-live sends an event at least once a second while
- * its loop runs (an idle one says why), so 3 s with no event reads as "stream stopped". */
+ * its loop runs (an idle one says why), so 3 s with no event reads as "stream stopped".
+ * The live body, for signed-in Home only (the gateway never serves its path to a look-only device): when the shell
+ * names HomeDenLive.body, it mounts the Recording body layer and its labels (home-3d/apartment-body-*.mjs) beside the
+ * markers, holds a second EventSource on that path while the den's view shows, and feeds the layer each `body` frame
+ * whose content_revision is the engine's. Without frames the body simply isn't drawn; the markers don't change. */
 const config = window.HomeDenLive;
 const STOPPED_MS = 3000, REOPEN_MS = 5000, TICK_MS = 500;
 
 if (config && typeof config.stream === 'string' && typeof config.site === 'string' && typeof window.EventSource === 'function') {
     const cb = new URL(import.meta.url).search || '';
     const { attachApartmentPeopleLayer, validPeopleEvent } = await import(`./home-3d/apartment-people-layer.mjs${cb}`);
-    start(attachApartmentPeopleLayer, validPeopleEvent);
+    const signedIn = window.HomeLookOnly?.active !== true;
+    const bodyKit = signedIn && typeof config.body === 'string'
+        ? await Promise.all([import(`./home-3d/apartment-body-layer.mjs${cb}`), import(`./home-3d/apartment-body-labels.mjs${cb}`)])
+            .then(([layerModule, labelModule]) => ({ attachLayer: layerModule.attachApartmentBodyLayer, attachLabels: labelModule.attachApartmentBodyLabels }))
+            .catch(error => { console.warn('[den-live] body layer unavailable', error); return null; })
+        : null;
+    start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit);
 }
 
-function start(attachApartmentPeopleLayer, validPeopleEvent) {
+function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
     const lookOnly = window.HomeLookOnly?.active === true;
     let engine = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
+    let bodyLayer = null, bodyLabels = null, bodySource = null, bodyFrames = 0, bodyAt = 0;
 
     /* The den's room view is on screen: the den's engine, its canvas shown at room scale, the page visible. */
     function denEngine() {
@@ -44,16 +55,42 @@ function start(attachApartmentPeopleLayer, validPeopleEvent) {
         if (layer && sameScan(event)) layer.update(event);
         render();
     }
+    function onBody(message) {
+        let frame;
+        try { frame = JSON.parse(message.data); } catch (_) { return; }
+        if (!bodyLayer || (frame.home != null && frame.home !== config.home) || !sameScan(frame)) return;
+        if (bodyLayer.update(frame)) { bodyFrames += 1; bodyAt = performance.now(); }
+    }
     function open() {
         source = new EventSource(config.stream);
         openedAt = performance.now(); closedAt = 0;
         source.addEventListener('people', onPeople);
         // EventSource retries a dropped stream itself; a refused one (an HTTP error) it closes for good.
         source.addEventListener('error', () => { if (source?.readyState === EventSource.CLOSED && !closedAt) closedAt = performance.now(); });
+        if (bodyKit && !bodySource) {
+            bodySource = new EventSource(config.body);
+            bodySource.addEventListener('body', onBody);
+        }
+    }
+    function disposeBody() {
+        bodyLabels?.dispose(); bodyLayer?.dispose();
+        bodyLabels = bodyLayer = null;
+    }
+    function mountBody(current) {
+        if (!bodyKit) return;
+        disposeBody();
+        const host = current.renderer?.domElement?.parentElement;
+        if (!host) return;
+        try {
+            bodyLayer = bodyKit.attachLayer(current);
+            bodyLabels = bodyKit.attachLabels({ engine: current, host, layer: bodyLayer });
+        } catch (error) { console.warn('[den-live] body layer not mounted', error); disposeBody(); }
     }
     function close() {
         source?.close(); source = null;
+        bodySource?.close(); bodySource = null;
         layer?.dispose(); layer = null; engine = null;
+        disposeBody();
         latest = null; lastAt = 0;
         chip?.remove();
     }
@@ -66,8 +103,9 @@ function start(attachApartmentPeopleLayer, validPeopleEvent) {
             engine = current;
             layer = attachApartmentPeopleLayer(current);
             if (latest && sameScan(latest)) layer.update(latest);
+            mountBody(current);
         }
-        if (source && closedAt && performance.now() - closedAt > REOPEN_MS) { source.close(); source = null; }
+        if (source && closedAt && performance.now() - closedAt > REOPEN_MS) { source.close(); source = null; bodySource?.close(); bodySource = null; }
         if (!source) open();
         place();
         render();
@@ -134,7 +172,9 @@ function start(attachApartmentPeopleLayer, validPeopleEvent) {
     window.HomeDenLiveView = Object.freeze({
         status: () => ({ stream: source ? ['connecting', 'open', 'closed'][source.readyState] : 'none', mounted: !!layer,
             siteId: engine?.siteId ?? null, events, banner: chip?.dataset.banner ?? null, chip: chip?.isConnected === true,
-            layer: layer ? layer.status() : null }),
+            layer: layer ? layer.status() : null,
+            body: bodyKit ? { stream: bodySource ? ['connecting', 'open', 'closed'][bodySource.readyState] : 'none', mounted: !!bodyLayer,
+                frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null, layer: bodyLayer ? bodyLayer.status() : null } : null }),
         markers: () => layer ? layer.markers() : [],
     });
 }

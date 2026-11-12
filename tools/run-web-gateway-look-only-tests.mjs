@@ -72,6 +72,11 @@ function unitTests() {
   assert("den-live reads state and stream only", denLiveRouteKind("GET", "/v1/homes/den/stream") === "read"
     && denLiveRouteKind("GET", "/v1/homes/den/events") === null && denLiveRouteKind("POST", "/v1/homes/den/state") === null
     && denLiveRouteKind("HEAD", "/v1/homes/den/stream") === null && denLiveRouteKind("GET", "/v1/homes/den/state?x") === null);
+  assert("den-live's body path is its own kind, GET only", denLiveRouteKind("GET", "/v1/homes/den/body") === "body"
+    && denLiveRouteKind("HEAD", "/v1/homes/den/body") === null && denLiveRouteKind("GET", "/v1/homes/den/body?x") === null
+    && denLiveRouteKind("GET", "/v1/homes/den/body/x") === null);
+  assert("look-only reads the markers but never the body", lookOnlyKind("GET", "/api/den-live/v1/homes/den/stream") === "den-live"
+    && lookOnlyKind("GET", "/api/den-live/v1/homes/den/body") === null);
   const headers = denLiveHeaders({ cookie: "home_web_auth=x", authorization: "Bearer abc", accept: "text/event-stream",
     "last-event-id": "4", "x-forwarded-for": "1.2.3.4" }, "http://127.0.0.1:8111/api/den-live");
   assert("den-live gets no cookie, credential or forwarding header", JSON.stringify(Object.keys(headers).sort())

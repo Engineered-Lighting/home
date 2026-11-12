@@ -50,6 +50,11 @@ const FRESH_APARTMENT_MODULES = new Set([
   // The live den view's markers: the generic rule above covers .js and .jsx only.
   "/home-den-live-view.mjs",
   "/home-3d/apartment-people-layer.mjs",
+  // The live body (signed-in Home): the Recording layer, its labels and their frame contract and rules.
+  "/home-3d/apartment-body-frame.mjs",
+  "/home-3d/apartment-body-layer.mjs",
+  "/home-3d/apartment-body-labels.mjs",
+  "/home-3d/apartment-body-annotation-model.mjs",
 ]);
 const HEAVY_APARTMENT_ASSET = /^\/assets\/apartment\/.*\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i;
 const NEVER_CACHE_PREFIXES = [

@@ -13,12 +13,15 @@ export const DEN_LIVE_HOME = "den";
 export const DEN_SITE = /^\/api\/apartment\/v1\/sites\/([a-z0-9][a-z0-9-]{0,63})\//.exec(REGISTRATION_ROUTE)[1];
 
 const READ = /^\/v1\/homes\/den\/(?:state|stream)$/;
+// The live body (den-live-body-1 frames) has a path of its own, so it can stay with signed-in Home: look-only.mjs
+// passes "read" only, never "body".
+const BODY = /^\/v1\/homes\/den\/body$/;
 
-// "read" | null. GET only: den-live's stream answers no HEAD on the stream path, and nothing takes a query string.
+// "read" | "body" | null. GET only: den-live's streams answer no HEAD, and nothing takes a query string.
 export function denLiveRouteKind(method, suffix) {
   const raw = String(suffix || "");
-  if (raw.includes("?") || raw.includes("#") || raw.includes("%")) return null;
-  return method === "GET" && READ.test(raw) ? "read" : null;
+  if (raw.includes("?") || raw.includes("#") || raw.includes("%") || method !== "GET") return null;
+  return READ.test(raw) ? "read" : BODY.test(raw) ? "body" : null;
 }
 
 export function denLiveEnabled(env = process.env) {
@@ -33,9 +36,9 @@ export function denLiveHeaders(reqHeaders, target) {
   return headers;
 }
 
-// The page shell's line telling Home where the den's markers come from.
+// The page shell's line telling Home where the den's markers, and for signed-in Home its body, come from.
 export function denLiveRuntime() {
   const base = `${DEN_LIVE_PREFIX}/v1/homes/${DEN_LIVE_HOME}/`;
   return `window.HomeDenLive=Object.freeze({home:${JSON.stringify(DEN_LIVE_HOME)},site:${JSON.stringify(DEN_SITE)},`
-    + `state:${JSON.stringify(base + "state")},stream:${JSON.stringify(base + "stream")}});`;
+    + `state:${JSON.stringify(base + "state")},stream:${JSON.stringify(base + "stream")},body:${JSON.stringify(base + "body")}});`;
 }

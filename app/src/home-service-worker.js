@@ -55,6 +55,7 @@ const FRESH_APARTMENT_MODULES = new Set([
   "/home-3d/apartment-body-layer.mjs",
   "/home-3d/apartment-body-labels.mjs",
   "/home-3d/apartment-body-annotation-model.mjs",
+  "/home-3d/apartment-body-webgpu.mjs",
 ]);
 const HEAVY_APARTMENT_ASSET = /^\/assets\/apartment\/.*\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i;
 const NEVER_CACHE_PREFIXES = [

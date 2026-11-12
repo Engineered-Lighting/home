@@ -446,8 +446,8 @@ class Unit(unittest.TestCase):
 
     def test_the_stream_binds_loopback_only(self):
         self.assertEqual(people_stream.PeopleStream.__init__.__kwdefaults__['host'], '127.0.0.1')
-        self.assertIn('people_stream.PeopleStream(port=stream_port)', (HERE / 'run_local.py').read_text(encoding='utf-8'),
-                      'the service passes a port only: the host stays loopback')
+        self.assertIn('people_stream.PeopleStream(port=stream_port, labels=labels)', (HERE / 'run_local.py').read_text(encoding='utf-8'),
+                      'the service passes a port and the labels store only: the host stays loopback')
 
 
 class InstallScript(unittest.TestCase):

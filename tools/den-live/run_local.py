@@ -19,6 +19,12 @@ The loop itself is serve(), which step 4's LA service (run_service.py) runs too,
 It refuses to start without step 2's registration, the camera token, the detector's venv, or Node. Every 10 s it
 prints one line of words and counts: the camera, frames a second, people, how far behind, drops. Never a coordinate.
 Nothing is kept: no frames, no tracks. Only the tracker's method copy goes in <data root>\\private\\live\\.
+
+The den's labels (room_labels.py) are kept in <data root>\\private\\labels\\ and served on the stream's labels path, so
+the page's Labels tool reads and saves them. With --labels-only it starts just that and the page, on your scan, to label
+the den: no camera, detector or registration (the labels plan's step 1).
+
+    python -B C:\\claude\\home\\.claude\\worktrees\\den-labels-live\\tools\\den-live\\run_local.py --labels-only
 """
 import argparse
 import json
@@ -37,6 +43,7 @@ sys.path.insert(0, str(HERE))
 import body_link  # noqa: E402  the live body, made in the detector's process and never waited for
 import perceive  # noqa: E402
 import register_now as rn  # noqa: E402  the method file's numbers: the gate, and whether the camera's correction is required
+import room_labels  # noqa: E402  the den's labels, kept and served beside the stream
 import sofa_check as sc  # noqa: E402  the data root, the pinned archives, the venv, say
 import source  # noqa: E402
 import stream as people_stream  # noqa: E402
@@ -44,9 +51,11 @@ import stream as people_stream  # noqa: E402
 say, Stop = sc.say, sc.Stop
 ROOT = HERE.parents[1]
 LIVE_PAGE = HERE / "live_page.mjs"
-# Home with the live view's layers: this checkout when it holds the body layer too (claude/den-live-body), else the
-# claude/den-live-home worktree beside it.
-APP = ROOT if (ROOT / "app" / "src" / "home-3d" / "apartment-body-layer.mjs").is_file() else ROOT.parent / "den-live-home"
+# Home with the live view's layers: the claude/den-labels-home worktree beside this one when it holds the Labels tool,
+# else this checkout when it holds the body layer too (claude/den-live-body), else the claude/den-live-home worktree.
+LABELS_APP = ROOT.parent / "den-labels-home"
+APP = (LABELS_APP if (LABELS_APP / "app" / "src" / "home-den-labels-view.mjs").is_file()
+       else ROOT if (ROOT / "app" / "src" / "home-3d" / "apartment-body-layer.mjs").is_file() else ROOT.parent / "den-live-home")
 PAGE_PORT, STREAM_PORT = 18190, 8111
 STATUS_EVERY_S = 10.0
 CAMERA_ID = "den-oak"
@@ -217,7 +226,36 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
                  detector_argv=[str(venv), "-B", str(HERE / "detect_worker.py"), "--tools-root", str(trees["observe"]),
                                 "--state", str(root / "state" / "detector")],
                  stream_port=stream_port, busy="is another run_local.py still open?", until=until,
-                 status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page)
+                 status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page,
+                 labels=room_labels.Store(root / "private" / "labels", say=say))
+
+
+def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="real", page_extra=(), page_port=PAGE_PORT,
+                stream_port=STREAM_PORT):
+    """The labels plan's step 1: only the labels store, on the stream's labels path, and Home on your scan, so you can
+    label the den. No camera, detector or registration. Returns the labels document as it was when stopped."""
+    if not (Path(app) / "app" / "src" / "home-den-labels-view.mjs").is_file():
+        raise Stop("the Home checkout with the Labels tool isn't at %s" % app)
+    store = room_labels.Store(Path(root) / "private" / "labels", say=say)
+    try:
+        out = people_stream.PeopleStream(port=stream_port, labels=store)
+    except OSError:
+        raise Stop("port %d is busy: is another run_local.py still open?" % stream_port) from None
+    out.start()
+    proc = None
+    try:
+        proc, url = page(app, page_room, (*page_extra, "--labels-only"), page_port=page_port, stream_port=stream_port)
+        count = len(store.get()["labels"])
+        say("Labels: open %s, then press Labels in the den's view. Ctrl+C stops it." % url)
+        say("Your labels stay on this PC, in your private den-live folder (%d so far)." % count)
+        open_page(url)
+        while not (until and until()):
+            time.sleep(0.2)
+        return store.get()
+    finally:
+        if proc is not None:
+            stop_page(proc)
+        out.close()
 
 
 def start_body(perceiver, out, detector, revision):
@@ -239,10 +277,12 @@ def start_body(perceiver, out, detector, revision):
 
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
-          busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True):
+          busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
+          labels=None):
     """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
     only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
-    registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup."""
+    registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup. labels is
+    the den's labels Store, served on the stream's labels path."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None
@@ -278,7 +318,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
             raise Stop(str(exc)) from None
         perceiver.detector = detector
         try:
-            out = people_stream.PeopleStream(port=stream_port)
+            out = people_stream.PeopleStream(port=stream_port, labels=labels)
         except OSError:
             raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
         if body:
@@ -323,11 +363,22 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
 
 def main(argv=None, *, root=None, camera_url=None, token_file=None, venv=sc.VENV_PY, console=sc.has_console, **kw):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.parse_args(argv)
+    parser.add_argument("--labels-only", action="store_true", help="only the labels store and the page, to label the den")
+    args = parser.parse_args(argv)
     if not console():
         say("live: refused, no console. Paste the line into PowerShell yourself.")
         return 2
     root = Path(root) if root else sc.data_root()
+    if args.labels_only:
+        try:
+            labels_only(root=root, app=kw.pop("app", APP), **kw)
+            return 0
+        except Stop as exc:
+            say("labels: stopped: %s" % exc)
+            return 2
+        except KeyboardInterrupt:
+            say("labels: stopped. Your saved labels are kept; paste the line again to go on.")
+            return 0
     try:
         observe_tree = sc.archive(root / "tools", "observe")
         sys.path.insert(0, str(observe_tree / "tools" / "den-take"))

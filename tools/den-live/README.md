@@ -367,3 +367,31 @@ python -B -X utf8 tools\den-live\test_service.py
 - The walk test's distances, lag, empty den and second person run against a fake stream.
 - The scan page's spots mode runs on the authored room.
 - The service's end-to-end test needs the venv and a prepared den-sim set. The release's needs the venv's models and rtmlib's wheel. The scan page's needs Node.
+
+## Labels for your den
+
+You label the den's objects in Home: the sofa, the desk, each painting, the 3D printer. den-live keeps the one document (`den-room-labels-1`, `room_labels.py`) and serves it on the stream server: `GET` and `PUT /api/den-live/v1/homes/den/labels`. A save replaces the whole document, a compare-and-swap on its revision. The lighting coordinator reads the labels in this process (`Store.confirmed()`), and the Qwen ask gets one line about the seated person from `line_for()`, for example "Seated at the desk, beside the 3D printer.".
+
+### Step 1: label your den, on this PC
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-labels-live\tools\den-live\run_local.py --labels-only
+```
+
+It starts only the labels store and Home on your scan, from the `claude/den-labels-home` worktree. No camera, detector or registration is needed. Open the page it prints, go to the den's view and press **Labels**. Click something in the scan, type its name, fit its box, then **Save**. Ctrl+C stops it.
+
+- **Where they're kept:** your private den-live folder, `labels\room-labels.json`. `room-labels-history.jsonl` beside it holds the last 100 saves.
+- **A file that won't read** is set aside as `room-labels.bad-<time>.json`, and den-live starts with none rather than refusing.
+- **The live loop serves them too.** `run_local.py` without `--labels-only` serves the same labels beside the markers. The LA service keeps its own copy in its state folder, `labels\`.
+
+### Tests
+
+```powershell
+python -B -m unittest test_room_labels
+```
+
+(from `tools\den-live`). They cover:
+- the record's checks, which use the same refusal words as Home's `home-den-labels-core.mjs`;
+- the store's compare-and-swap, its atomic write, its history and the set-aside file;
+- the line from where a person is;
+- the two routes, on a real loopback server.

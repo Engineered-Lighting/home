@@ -6,10 +6,16 @@
     GET /api/den-live/v1/homes/<home>/body     text/event-stream: `event: body` per body frame (den-live-body-1, from
                                               the detector process), and the same heartbeat. A path of its own, so the
                                               gateway can keep bodies to signed-in Home while the markers stay look-only
+    GET /api/den-live/v1/homes/<home>/labels   the den's labels document (den-room-labels-1, room_labels.py)
+    PUT /api/den-live/v1/homes/<home>/labels   saves the whole document: a compare-and-swap on its revision (200 with the
+                                              new document, 409 with the current one, 400 with a reason). A JSON body
+                                              of at most 64 KB with its Content-Length; the gateway lets only
+                                              signed-in Home send it
 
-It answers GET and HEAD only, for its own Host only (127.0.0.1:<port>), to at most max_clients streams at once. A slow
-client's backlog is capped: its oldest events go first, since only the newest position matters. The same paths are
-the gateway route step 4 adds in front of LA's service, so the page's code doesn't change between the steps.
+It answers GET and HEAD, and PUT on the labels path only, for its own Host only (127.0.0.1:<port>), to at most
+max_clients streams at once. A slow client's backlog is capped: its oldest events go first, since only the newest
+position matters. The same paths are the gateway route step 4 adds in front of LA's service, so the page's code
+doesn't change between the steps.
 """
 import json
 import socket
@@ -19,6 +25,7 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE = "/api/den-live/v1/homes/"
+LABELS_MAX_BYTES = 65536
 BACKLOG = 8
 BODY_BACKLOG = 2   # body frames are large and only the newest matters
 
@@ -29,8 +36,9 @@ class _Client:
 
 
 class PeopleStream:
-    def __init__(self, *, home="den", host="127.0.0.1", port=8111, max_clients=16, heartbeat_s=2.0):
+    def __init__(self, *, home="den", host="127.0.0.1", port=8111, max_clients=16, heartbeat_s=2.0, labels=None):
         self.home, self.host, self.max_clients, self.heartbeat_s = home, host, max_clients, heartbeat_s
+        self.labels = labels   # a room_labels.Store, or None: then the labels paths answer 503
         self.latest, self.clients, self.lock, self.closing = None, set(), threading.Lock(), threading.Event()
         self.body_latest, self.body_clients = None, set()
         self.served = self.refused = 0
@@ -80,8 +88,42 @@ class PeopleStream:
                     return self.sse()
                 if path == BASE + stream.home + "/body":
                     return self.sse(body=True)
+                if path == BASE + stream.home + "/labels":
+                    if stream.labels is None:
+                        return self.answer(503, {"ok": False, "error": "labels_unavailable"})
+                    stream.served += 1
+                    return self.answer(200, stream.labels.get())
                 stream.refused += 1
                 return self.answer(404, {"ok": False, "error": "not_served"})
+
+            def do_PUT(self):
+                """The labels save. Checks run before the body is read: Host, path, length, query, type; then JSON."""
+                self.close_connection = True
+                if self.headers.get("Host") != "%s:%d" % (host, stream.port):
+                    stream.refused += 1
+                    return self.answer(403, {"ok": False, "error": "host"})
+                path, _, query = self.path.partition("?")
+                if path != BASE + stream.home + "/labels":
+                    stream.refused += 1
+                    return self.answer(405, {"ok": False, "error": "method"})
+                length = self.headers.get("Content-Length")
+                if self.headers.get("Transfer-Encoding") or length is None or not length.isdigit():
+                    return self.answer(411, {"ok": False, "error": "length_required"})
+                if int(length) > LABELS_MAX_BYTES:
+                    return self.answer(413, {"ok": False, "error": "too_large"})
+                if query or "?" in self.path:
+                    return self.answer(400, {"ok": False, "error": "query"})
+                if not (self.headers.get("Content-Type") or "").lower().startswith("application/json"):
+                    return self.answer(415, {"ok": False, "error": "content_type"})
+                if stream.labels is None:
+                    return self.answer(503, {"ok": False, "error": "labels_unavailable"})
+                try:
+                    doc = json.loads(self.rfile.read(int(length)).decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    return self.answer(400, {"ok": False, "error": "json_invalid"})
+                status, body = stream.labels.put(doc)
+                stream.served += 1
+                return self.answer(status, body)
 
             def sse(self, body=False):
                 client = _Client(BODY_BACKLOG if body else BACKLOG)

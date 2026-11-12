@@ -263,13 +263,15 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     live = state / "live"
     live.mkdir(parents=True, exist_ok=True)
     roll(live / "detector.log")
+    # The den's labels: kept in the service's own state, read and saved through the gateway's den-live route.
+    (state / "labels").mkdir(parents=True, exist_ok=True)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,
                     floor=None, packs=config["content_packs"], site=config["site"], picked_on=picked_on, state=live,
                     detector_argv=[config["venv_python"], "-B", str(HERE / "detect_worker.py"), "--tools-root",
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
-                    status_every_s=status_every_s)
+                    status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say))
 
 
 def stopping(_signum, _frame):

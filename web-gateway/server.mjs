@@ -23,7 +23,8 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLiveEnabled, denLiveHeaders, denLiveRouteKind, denLiveRuntime } from "./den-live-route.mjs";
+import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveEnabled, denLiveHeaders, denLiveRouteKind,
+  denLiveRuntime } from "./den-live-route.mjs";
 import { REDACTED, hasBody, lookOnlyClient, lookOnlyEnabled, lookOnlyKind, lookOnlyPackIndex, lookOnlyRuntime } from "./look-only.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -1108,7 +1109,7 @@ function proxyHeaders(reqHeaders, route, suffix, method) {
     }
     return headers;
   }
-  if (route.prefix === DEN_LIVE_PREFIX) return denLiveHeaders(reqHeaders, route.target);
+  if (route.prefix === DEN_LIVE_PREFIX) return denLiveHeaders(reqHeaders, route.target, method);
   if (route.prefix === LIGHTING_BRAIN_PREFIX) {
     return lightingBrainRouteKind(method, suffix) === "producer"
       ? lightingBrainProducerHeaders(reqHeaders, route.target)
@@ -1247,7 +1248,7 @@ function sendIndex(req, res, filePath, { lookOnly = false } = {}) {
     const haProxyRuntime = haTokenProxy.enabled
       ? `window.__HOME_WEB_HA_TOKEN_PROXY=true;window.__HOME_WEB_HA_TOKEN=${jsString(HA_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}${DEN_LIVE_ENABLED ? denLiveRuntime() : ""}${lookOnly ? lookOnlyRuntime() : ""}</script>`;
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}${DEN_LIVE_ENABLED ? denLiveRuntime() + denLabelsRuntime() : ""}${lookOnly ? lookOnlyRuntime() : ""}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -2089,6 +2090,11 @@ const server = http.createServer({
     sendJson(res, 400, { ok: false, error: "unexpected_body" });
   } else if (disabledRoute) {
     sendCapabilityDisabled(res, `legacy_proxy:${disabledRoute.prefix.slice("/proxy/".length)}`);
+  } else if (route?.prefix === DEN_LIVE_PREFIX && req.method === "PUT") {
+    // The den's labels save (den-live-route.mjs): signed in (requireAuth above), its own header, a framed JSON body.
+    const problem = denLabelsSaveProblem(req.headers);
+    if (problem) { req.resume(); sendJson(res, problem[0], { ok: false, error: problem[1] }); }
+    else proxyHttp(req, res, route);
   } else if (route) proxyHttp(req, res, route);
   else serveStatic(req, res);
 });

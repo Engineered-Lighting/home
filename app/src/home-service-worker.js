@@ -56,6 +56,10 @@ const FRESH_APARTMENT_MODULES = new Set([
   "/home-3d/apartment-body-labels.mjs",
   "/home-3d/apartment-body-annotation-model.mjs",
   "/home-3d/apartment-body-webgpu.mjs",
+  // The den's labels and the Labels tool.
+  "/home-den-labels-view.mjs",
+  "/home-den-labels-core.mjs",
+  "/home-3d/apartment-labels-layer.mjs",
 ]);
 const HEAVY_APARTMENT_ASSET = /^\/assets\/apartment\/.*\.(?:ply|spz|glb|wasm|jpg|jpeg|png|webp)$/i;
 const NEVER_CACHE_PREFIXES = [

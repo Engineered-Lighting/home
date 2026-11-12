@@ -9,7 +9,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLiveHeaders, denLiveRouteKind } from "../web-gateway/den-live-route.mjs";
+import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind } from "../web-gateway/den-live-route.mjs";
 import { isTailnetAddress, lookOnlyKind, lookOnlyPackIndex } from "../web-gateway/look-only.mjs";
 import { REGISTRATION_ROUTE, initRegistration, readActiveBinding } from "../web-gateway/equipment-registration.mjs";
 import { SITES } from "../web-gateway/home-location.mjs";
@@ -82,6 +82,25 @@ function unitTests() {
   assert("den-live gets no cookie, credential or forwarding header", JSON.stringify(Object.keys(headers).sort())
     === JSON.stringify(["accept", "host", "last-event-id"]) && headers.host === "127.0.0.1:8111", headers);
   assert("no site is written in the rules: the den's site comes from the registration route", REGISTRATION_ROUTE.includes(`/sites/${DEN_SITE}/`));
+  assert("the den's labels are a read, and PUT on their path is the one write", denLiveRouteKind("GET", "/v1/homes/den/labels") === "read"
+    && denLiveRouteKind("PUT", "/v1/homes/den/labels") === "labels" && denLiveRouteKind("PUT", "/v1/homes/den/state") === null
+    && denLiveRouteKind("POST", "/v1/homes/den/labels") === null && denLiveRouteKind("PUT", "/v1/homes/den/labels?x") === null
+    && denLiveRouteKind("DELETE", "/v1/homes/den/labels") === null);
+  assert("look-only reads the labels and never saves them", lookOnlyKind("GET", "/api/den-live/v1/homes/den/labels") === "den-live"
+    && lookOnlyKind("PUT", "/api/den-live/v1/homes/den/labels") === null);
+  const save = { "x-home-den-labels": "1", "content-type": "application/json", "content-length": "120" };
+  assert("a labels save passes with its header, JSON and a framed length", denLabelsSaveProblem(save) === null);
+  assert("a labels save without its header is refused", denLabelsSaveProblem({ ...save, "x-home-den-labels": undefined })?.[0] === 403);
+  assert("a labels save that isn't JSON is refused", denLabelsSaveProblem({ ...save, "content-type": "text/plain" })?.[0] === 415);
+  assert("a labels save with no length, or chunked, is refused", denLabelsSaveProblem({ ...save, "content-length": undefined })?.[0] === 411
+    && denLabelsSaveProblem({ ...save, "transfer-encoding": "chunked" })?.[0] === 411);
+  assert("a labels save over 64 KB is refused", denLabelsSaveProblem({ ...save, "content-length": "65537" })?.[0] === 413);
+  const putHeaders = denLiveHeaders({ cookie: "home_web_auth=x", authorization: "Bearer abc", "x-home-den-labels": "1",
+    "content-type": "application/json", "content-length": "120", accept: "application/json" }, "http://127.0.0.1:8111/api/den-live", "PUT");
+  assert("a labels save reaches den-live with its body's type and length, and no credential", JSON.stringify(Object.keys(putHeaders).sort())
+    === JSON.stringify(["accept", "content-length", "content-type", "host"]), putHeaders);
+  assert("the shell names the den's labels document", denLabelsRuntime().startsWith("window.HomeDenLabels=Object.freeze(")
+    && denLabelsRuntime().includes(`${DEN_LIVE_PREFIX}/v1/homes/den/labels`));
 }
 
 function freePort() {
@@ -277,7 +296,29 @@ async function integrationTests() {
     assert("a signed-in device reads den-live's state, with no credential passed on", r.status === 200
       && !upstream.seen.at(-1)?.headers.authorization && !upstream.seen.at(-1)?.headers.cookie, upstream.seen.at(-1)?.headers);
     r = await exchange(servePort, { method: "POST", url: `${DEN_LIVE_PREFIX}/v1/homes/den/state`, headers: { Authorization: basic }, body: "{}" });
-    assert("nobody writes to den-live through the gateway", r.status === 403, r.status);
+    assert("nobody writes to den-live's state through the gateway", r.status === 403, r.status);
+
+    // The den's labels: everyone reads them; only signed-in Home saves them, with its header and a framed JSON body.
+    const labels = `${DEN_LIVE_PREFIX}/v1/homes/den/labels`, doc = "{\"schema\":\"den-room-labels-1\",\"revision\":0}";
+    assert("the shells name the den's labels", r && (await exchange(servePort, { url: "/" })).body.includes("window.HomeDenLabels=")
+      && (await exchange(servePort, { url: "/", headers: { Authorization: basic } })).body.includes("window.HomeDenLabels="));
+    r = await exchange(servePort, { url: labels, headers: { Accept: "application/json" } });
+    assert("look-only reads the den's labels", r.status === 200 && upstream.seen.at(-1)?.url === labels, r.status);
+    upstream.seen.length = 0;
+    r = await exchange(servePort, { method: "PUT", url: labels, headers: { "Content-Type": "application/json", "x-home-den-labels": "1" }, body: doc });
+    assert("look-only can't save labels", r.status === 401 && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { method: "PUT", url: labels, headers: { Authorization: basic, "Content-Type": "application/json" }, body: doc });
+    assert("a signed-in save without its header is refused before den-live", r.status === 403 && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { method: "PUT", url: labels, headers: { Authorization: basic, "Content-Type": "text/plain", "x-home-den-labels": "1" }, body: doc });
+    assert("a signed-in save that isn't JSON is refused before den-live", r.status === 415 && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { method: "PUT", url: labels, headers: { Authorization: basic, "Content-Type": "application/json", "x-home-den-labels": "1" },
+      body: "x".repeat(65537) });
+    assert("a signed-in save over 64 KB is refused before den-live", r.status === 413 && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { method: "PUT", url: labels, headers: { Authorization: basic, Cookie: "home_web_auth=x", "Content-Type": "application/json",
+      "x-home-den-labels": "1" }, body: doc });
+    const saved = upstream.seen.at(-1);
+    assert("a signed-in save reaches den-live with its body and no credential", r.status === 200 && saved?.method === "PUT" && saved.body === doc
+      && !saved.headers.authorization && !saved.headers.cookie && !saved.headers["x-home-den-labels"], saved);
   } finally {
     gateway.child.kill();
   }

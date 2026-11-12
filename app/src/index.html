@@ -191,6 +191,8 @@
       .catch((e) => { console.error('[home-3d] engine load failed', e); window.Home3D.error = e; window.__home3dResolve(null); });
     // The live den view's markers. The module does nothing unless the gateway's shell names den-live.
     import('./home-den-live-view.mjs' + cb).catch((e) => console.warn('[den-live] view load failed', e));
+    // The den's labels, and signed in, the Labels tool. It does nothing unless the shell names the labels document.
+    import('./home-den-labels-view.mjs' + cb).catch((e) => console.warn('[den-labels] view load failed', e));
   </script>
   <!-- Boot loader. Explicit sequential fetch -> (Babel.transform) -> execute,
        replacing Babel-standalone's automatic <script type="text/babel">

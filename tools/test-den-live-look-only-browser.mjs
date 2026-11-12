@@ -34,6 +34,7 @@ const OTHER_SITE = SITES.find(site => site !== DEN_SITE);
 const USER = 'owner', PASSWORD = 'correct-horse-battery-staple';
 const TAILNET_CLIENT = '100.101.102.103';
 const STREAM = `${DEN_LIVE_PREFIX}/v1/homes/den/stream`, STATE = `${DEN_LIVE_PREFIX}/v1/homes/den/state`;
+const BODY = `${DEN_LIVE_PREFIX}/v1/homes/den/body`;
 const TARGETS = ['HOME_WEB_HA_TARGET', 'HOME_WEB_METRICS_TARGET', 'HOME_WEB_VLLM_TARGET', 'HOME_WEB_VISION_TARGET',
   'HOME_WEB_INTELLIGENCE_TARGET', 'HOME_WEB_SUPERVISOR_TARGET', 'HOME_WEB_S2S_TARGET', 'HOME_WEB_TRACKER_TARGET',
   'HOME_WEB_VIDEO_LABELER_TARGET', 'HOME_WEB_FRIGATE_TARGET', 'HOME_WEB_AGENT_BFF_TARGET'];
@@ -44,7 +45,7 @@ const freePort = () => new Promise(resolve => {
 
 let run, den, upstream, gateway, relay, origin, browser;
 // What the fake den-live sends: live | other-scan | camera-offline | too-dark | heartbeats-only.
-const fake = { scenario: 'live', seq: 0, streams: new Set(), opened: 0, seen: [] };
+const fake = { scenario: 'live', seq: 0, streams: new Set(), opened: 0, bodies: new Set(), bodiesOpened: 0, seen: [] };
 
 function peopleEvent() {
   const now = Date.now() / 1000, base = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform-1',
@@ -72,6 +73,14 @@ function startUpstream() {
         res.write(`id: ${event.seq}\nevent: people\ndata: ${JSON.stringify(event)}\n\n`);
       }, 250);
       req.on('close', () => { clearInterval(timer); fake.streams.delete(res); });
+      return;
+    }
+    if (req.method === 'GET' && req.url === BODY) {
+      // The live body's own stream (signed-in only). No frames: this test is about who opens it and when it closes.
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+      res.write('retry: 1000\n\n');
+      fake.bodies.add(res); fake.bodiesOpened += 1;
+      req.on('close', () => fake.bodies.delete(res));
       return;
     }
     const body = req.url === STATE ? { people: peopleEvent() } : { ok: false, error: 'not_served_by_fake' };
@@ -326,6 +335,8 @@ test('signed in: full Home\'s den view shows the markers, and leaving the den cl
     assert.equal(view.unified, true, 'this is full Home');
     assert.match(view.chip, /Den · live/); assert.doesNotMatch(view.chip, /look-only/);
     assert.equal(fake.streams.size, 1);
+    for (let i = 0; i < 40 && fake.bodies.size === 0; i++) await sleep(100);
+    assert.equal(fake.bodies.size, 1, 'signed-in Home holds one body stream in the den view');
     await screenshot(page, 'signed-in');
     assert.deepEqual(seen.responses.filter(response => response.url.startsWith(DEN_LIVE_PREFIX) && response.status !== 200), []);
 
@@ -336,6 +347,7 @@ test('signed in: full Home\'s den view shows the markers, and leaving the den cl
     assert.equal(left.mounted, false); assert.equal(left.chip, false);
     await sleep(500);
     assert.equal(fake.streams.size, 0, 'den-live holds no stream for a device elsewhere in Home');
+    assert.equal(fake.bodies.size, 0, 'nor a body stream');
   } finally {
     await context.close();
   }

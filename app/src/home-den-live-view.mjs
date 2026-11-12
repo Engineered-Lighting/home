@@ -16,10 +16,13 @@
  * whose content_revision is the engine's. Without frames the body simply isn't drawn; the markers don't change. */
 const config = window.HomeDenLive;
 const STOPPED_MS = 3000, REOPEN_MS = 5000, TICK_MS = 500;
+let qwenLine = () => '';   // home-den-live-qwen.mjs: what den-live's Qwen ask last said, a line in the chip
 
 if (config && typeof config.stream === 'string' && typeof config.site === 'string' && typeof window.EventSource === 'function') {
     const cb = new URL(import.meta.url).search || '';
     const { attachApartmentPeopleLayer, validPeopleEvent } = await import(`./home-3d/apartment-people-layer.mjs${cb}`);
+    qwenLine = await import(`./home-den-live-qwen.mjs${cb}`).then(module => module.qwenLine)
+        .catch(error => { console.warn('[den-live] Qwen line unavailable', error); return () => ''; });
     const signedIn = window.HomeLookOnly?.active !== true;
     const bodyKit = signedIn && typeof config.body === 'string'
         ? await Promise.all([import(`./home-3d/apartment-body-layer.mjs${cb}`), import(`./home-3d/apartment-body-labels.mjs${cb}`)])
@@ -120,6 +123,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
             chip.dataset.denLiveChip = '1';
             chip.innerHTML = '<p class="home-den-live-chip-title"><span class="home-den-live-chip-dot" aria-hidden="true"></span>'
                 + '<span class="home-den-live-chip-name"></span></p><p class="home-den-live-chip-facts"></p>'
+                + '<p class="home-den-live-chip-qwen"></p>'
                 + '<p class="home-den-live-chip-banner" role="status" aria-live="polite"></p>';
             chip.querySelector('.home-den-live-chip-name').textContent = `Den · live${lookOnly ? ' · look-only' : ''}`;
         }
@@ -161,6 +165,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
         chip.dataset.banner = kind;
         if (chip.title !== title) chip.title = title;
         setText(chip.querySelector('.home-den-live-chip-facts'), facts);
+        setText(chip.querySelector('.home-den-live-chip-qwen'), fresh && sameScan(latest) ? qwenLine(latest, (now - lastAt) / 1000) : '');
         setText(chip.querySelector('.home-den-live-chip-banner'), words);
     }
 

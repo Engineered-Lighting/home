@@ -148,10 +148,15 @@ If a change intentionally has no release note, mark the PR with the
   - keep explicit resource limits (den-live's unit is capped at
     `MemoryMax=3G` and `CPUQuota=150%`);
   - keep a rollback path.
-- **The guard is the background monitor's back-off.** den-live slows its
-  Qwen asks at step 1 and stops them at step 2. A monitor that's configured but
-  has gone quiet counts as step 1. den-live never clears failures, rewrites
-  incident baselines or restarts unrelated services.
+- **Its guards today are its own limits:** one Qwen request at a time, at
+  least 2 s apart, at most 30 a minute, and the unit's memory and CPU caps.
+- **den-live can follow the background monitor's back-off,** once it can read
+  the monitor's level: it slows its Qwen asks at step 1 and stops them at
+  step 2, and a monitor that's configured but has gone quiet counts as step 1.
+  The monitor's status isn't readable by den-live's service user yet, so it
+  doesn't follow it yet.
+- den-live never clears failures, rewrites incident baselines or restarts
+  unrelated services.
 - **Physical output stays disabled.** This approval is virtual-only, as above.
 - This approval does not bypass tool approval review or any enforced execution
   boundary.

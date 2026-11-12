@@ -7,7 +7,11 @@
                                               the detector process), and the same heartbeat. A path of its own, so the
                                               gateway can keep bodies to signed-in Home while the markers stay look-only
 
-It answers GET and HEAD only, for its own Host only (127.0.0.1:<port>), to at most max_clients streams at once. A slow
+    GET|POST /api/den-live/v1/homes/<home>/<route>  `routes`: {(method, "/<route>"): handler(body) -> (status, json)},
+                                              the coordinator's (coordinator_live.py). POST bodies are JSON, at most
+                                              64 KB; the gateway lets POST through for signed-in Home only
+
+Otherwise it answers GET and HEAD only, for its own Host only (127.0.0.1:<port>), to at most max_clients streams at once. A slow
 client's backlog is capped: its oldest events go first, since only the newest position matters. The same paths are
 the gateway route step 4 adds in front of LA's service, so the page's code doesn't change between the steps.
 """
@@ -34,6 +38,7 @@ class PeopleStream:
         self.latest, self.clients, self.lock, self.closing = None, set(), threading.Lock(), threading.Event()
         self.body_latest, self.body_clients = None, set()
         self.served = self.refused = 0
+        self.routes = {}   # {(method, "/suffix"): handler(body) -> (status, json)}
         stream = self
 
         class Server(ThreadingHTTPServer):
@@ -73,6 +78,9 @@ class PeopleStream:
                     stream.refused += 1
                     return self.answer(403, {"ok": False, "error": "host"})
                 path = self.path.split("?", 1)[0]
+                route = stream.routes.get(("GET", path[len(BASE + stream.home):])) if path.startswith(BASE + stream.home + "/") else None
+                if route is not None:
+                    return self.routed(route, None)
                 if path == BASE + stream.home + "/state":
                     stream.served += 1
                     return self.answer(200, {"people": stream.latest})
@@ -82,6 +90,33 @@ class PeopleStream:
                     return self.sse(body=True)
                 stream.refused += 1
                 return self.answer(404, {"ok": False, "error": "not_served"})
+
+            def do_POST(self):
+                if self.headers.get("Host") != "%s:%d" % (host, stream.port):
+                    stream.refused += 1
+                    return self.answer(403, {"ok": False, "error": "host"})
+                path = self.path.split("?", 1)[0]
+                route = stream.routes.get(("POST", path[len(BASE + stream.home):])) if path.startswith(BASE + stream.home + "/") else None
+                try:
+                    size = int(self.headers.get("Content-Length") or 0)
+                except ValueError:
+                    size = -1
+                if route is None or not 0 <= size <= 65536:   # a path with no POST route answers 501, as before routes
+                    stream.refused += 1
+                    return self.answer(501 if route is None else 413, {"ok": False, "error": "not_served" if route is None else "too_large"})
+                try:
+                    body = json.loads(self.rfile.read(size).decode("utf-8") or "null")
+                except ValueError:
+                    return self.answer(400, {"ok": False, "error": "not_json"})
+                return self.routed(route, body)
+
+            def routed(self, route, body):
+                try:
+                    status, payload = route(body)
+                except Exception as exc:   # a route's failure is its own: a type name, never its text
+                    status, payload = 500, {"ok": False, "error": type(exc).__name__}
+                stream.served += 1
+                return self.answer(status, payload)
 
             def sse(self, body=False):
                 client = _Client(BODY_BACKLOG if body else BACKLOG)

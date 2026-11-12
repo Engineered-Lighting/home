@@ -47,6 +47,8 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ask  # noqa: E402  the Qwen ask (inference plan, step 2)
+import coordinator_live  # noqa: E402  the den lighting coordinator (coordinator plan, step 3)
+import ha_link  # noqa: E402  its Home Assistant link
 import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
 import run_local as rl  # noqa: E402  the loop (serve), the scan's floor, the receipt's revision
@@ -167,6 +169,64 @@ def asks_starter(fixed, config_path, *, site, state, camera_id):
             reader.halt.set()
         say("The Qwen ask is on: only while Frigate sees someone in the den and den-live sees them seated.")
         return asker, stop
+    return start
+
+
+LIGHT = re.compile(r"^light\.[a-z0-9_]{1,80}$")
+SENSOR = re.compile(r"^(sensor|switch)\.[a-z0-9_]{1,80}$")
+
+
+def coordinator_settings(config, fixed):
+    """(the coordinator block's settings, None) when the settings file sets the coordinator up, else (None, why). The
+    block: lights (den_lighting's room lights, one per socket), and optionally utc_offset_h, status_entity,
+    switch_entity, and fixtures_file (an absolute path to the fixtures' rows, for the spot). It uses the asks block's Home
+    Assistant (ha_url and the ha-token.txt credential): one den-live user and token for both."""
+    block = config.get("coordinator")
+    if block is None:
+        return None, "the settings file doesn't set the coordinator up"
+    if not isinstance(block, dict):
+        return None, "the settings file's coordinator block isn't one"
+    if fixed is None:
+        return None, "it needs the asks block's Home Assistant link (ha_url, and the ha-token.txt credential)"
+    lights = block.get("lights")
+    if not (isinstance(lights, list) and lights and all(isinstance(e, str) and LIGHT.match(e) for e in lights)
+            and len(set(lights)) == len(lights)):
+        return None, "its lights must be den_lighting's room lights, light.<name>, each once"
+    offset = block.get("utc_offset_h", 0)
+    if type(offset) not in (int, float) or not -14 <= offset <= 14:
+        return None, "its utc_offset_h must be hours from UTC"
+    for key in ("status_entity", "switch_entity"):
+        if block.get(key) is not None and not (isinstance(block[key], str) and SENSOR.match(block[key])):
+            return None, "its %s isn't an entity id" % key
+    fixtures = {}
+    if block.get("fixtures_file") is not None:
+        try:
+            fixtures = json.loads(Path(block["fixtures_file"]).read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None, "its fixtures_file doesn't read"
+        if not isinstance(fixtures, dict):
+            return None, "its fixtures_file isn't an object of fixture rows"
+    return {"lights": lights, "utc_offset_h": float(offset), "fixtures": fixtures,
+            "status_entity": block.get("status_entity") or coordinator_live.STATUS_ENTITY,
+            "switch_entity": block.get("switch_entity") or coordinator_live.SWITCH_ENTITY}, None
+
+
+def coordinator_starter(settings, fixed, *, state, tree):
+    """serve()'s coordinator: (service, stop), or None when it can't start. Its failure never stops the markers."""
+    def start():
+        try:
+            core = coordinator_live.load_core(tree)
+            ha = ha_link.HaClient(fixed["ha_url"], fixed["token"], cafile=fixed.get("ha_ca_file"))
+            service = coordinator_live.CoordinatorService(
+                core, state_dir=state, lights=settings["lights"], fixtures=settings["fixtures"], ha=ha,
+                utc_offset_h=settings["utc_offset_h"], status_entity=settings["status_entity"],
+                switch_entity=settings["switch_entity"])
+            service.start()
+        except Exception as exc:   # a type name only: its text could hold the URL
+            say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
+            return None
+        say("The lighting coordinator is on: it follows the \"Den lighting coordinator\" switch in Home Assistant.")
+        return service, service.close
     return start
 
 
@@ -345,13 +405,17 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     if fixed is None:
         say("The Qwen ask is off: %s." % why)
     starter = None if fixed is None else asks_starter(fixed, config_path, site=config["site"], state=state, camera_id=camera_id)
+    lighting, why = coordinator_settings(config, fixed)
+    if lighting is None:
+        say("The lighting coordinator is off: %s." % why)
+    coordinator = None if lighting is None else coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"])
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,
                     floor=None, packs=config["content_packs"], site=config["site"], picked_on=picked_on, state=live,
                     detector_argv=[config["venv_python"], "-B", str(HERE / "detect_worker.py"), "--tools-root",
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
-                    status_every_s=status_every_s, asks=starter)
+                    status_every_s=status_every_s, asks=starter, coordinator=coordinator)
 
 
 def stopping(_signum, _frame):

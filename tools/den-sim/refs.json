@@ -13,7 +13,8 @@
     "den-register": "d310ef57",
     "den-take": "257eca52",
     "den-light": "8bcb37b3",
-    "den-verify": "82a8ef38"
+    "den-verify": "82a8ef38",
+    "den-coordinator": "11f694de"
   },
   "lifted": {
     "note": "What ask_la.py lifts for the owner's paste, by git archive at these commits into <data root>\\tools\\, each file held to its blob before anything runs: the sofa look's LA helpers (la.py for the host and the ssh and scp argument lists, ask.py for the requests, the GPU gate and the reply check, copied to LA unchanged; its timezone helper is never called, because the time label is fixed) and qwen_scene.py, the same blob the click archives at den-core-live.",

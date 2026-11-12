@@ -426,6 +426,7 @@ class ServiceLive(unittest.TestCase):
                   r"^The live body is on, in the detector's process\. It learns the empty room",
                   r"^The live body is off: [a-z '(),:0-9]+\. The markers go on\.$",
                   r"^The Qwen ask is off: [A-Za-z '(),:0-9_./<>-]+\.$",
+                  r"^The lighting coordinator is off: [A-Za-z '(),:0-9_./<>-]+\.$",
                   r'^camera [a-z]+(: [a-z ]+)? \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames')
         self.assertTrue(all(any(re.search(s, line) for s in shapes) for line in text.splitlines() if line.strip()), text)
 

@@ -50,7 +50,8 @@ APP = ROOT if (ROOT / "app" / "src" / "home-3d" / "apartment-body-layer.mjs").is
 PAGE_PORT, STREAM_PORT = 18190, 8111
 STATUS_EVERY_S = 10.0
 CAMERA_ID = "den-oak"
-TREES = ("observe", "track", "register")   # the pinned trees the loop loads: den-observe and den-take, den-track, den-register
+TREES = ("observe", "track", "register", "coordinator")   # the pinned trees the loop loads: den-observe and den-take,
+# den-track, den-register, and the den lighting coordinator's core (den-core and the lighting brain's aim)
 
 
 class Refusal(Stop):
@@ -243,11 +244,13 @@ def start_body(perceiver, out, detector, revision):
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          asks=None):
+          asks=None, coordinator=None):
     """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
     only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
     registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup.
-    asks(detector) -> (ask.Asker, its cleanup), when given, is the Qwen ask (the LA service's, when its settings say so)."""
+    asks(detector) -> (ask.Asker, its cleanup), when given, is the Qwen ask (the LA service's, when its settings say so).
+    coordinator() -> (coordinator_live.CoordinatorService, its cleanup), when given, is the den lighting coordinator: a
+    loop observer after the ask, and its routes on the people stream."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None
@@ -296,7 +299,17 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                 asker = None
         mailbox = source.Mailbox()
         src = source.CameraSource(take, camera, mailbox)
-        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=asker[0].observe if asker else None)
+        lighting = None
+        if coordinator is not None:
+            try:
+                lighting = coordinator()   # (service, stop), or None when it can't start
+            except Exception as exc:  # the coordinator's failure never stops the markers; a type name only
+                say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
+                lighting = None
+            if lighting is not None:
+                out.routes.update(lighting[0].routes())
+        observers = ([asker[0].observe] if asker else []) + ([lighting[0].observe] if lighting else [])
+        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observers)
         out.start()
         src.start()
         loop.start()
@@ -315,7 +328,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
         return {"counts": dict(perceiver.counts), "sessions": perceiver.sessions, "latest": out.latest, "drops": mailbox.dropped,
                 "received": mailbox.received, "status": status_line(perceiver, out.latest),
                 "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped},
-                "asks": None if asker is None else dict(asker[0].counts)}
+                "asks": None if asker is None else dict(asker[0].counts),
+                "coordinator": None if lighting is None else dict(lighting[0].counts)}
     finally:
         for thread in (loop, src):
             if thread is not None:
@@ -325,6 +339,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                 thread.join(5)
         if asker is not None:
             asker[1]()
+        if lighting is not None:
+            lighting[1]()
         if detector is not None:
             detector.close()
         if link is not None:

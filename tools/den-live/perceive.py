@@ -159,6 +159,8 @@ class DetectorWorker:
         self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log)
         self.frame_timeout_s, self.next_id = frame_timeout_s, 0
         self.on_body = None
+        self.on_stills = None   # the Qwen ask's stills (ask.py): replies whose first key is stills_id
+        self.write_lock = threading.Lock()   # the loop and the ask's sender both write requests
         self.replies = queue.Queue()
         threading.Thread(target=self._read, daemon=True, name="den-live-detector-reader").start()
         try:
@@ -173,12 +175,13 @@ class DetectorWorker:
     def _read(self):
         try:
             for raw in self.proc.stdout:
-                if raw.startswith(b'{"body_'):   # the body's replies, as json.dumps writes them: first key body_*
+                stills = raw.startswith(b'{"stills_id"')   # the ask's stills, as json.dumps writes them: first key stills_id
+                if raw.startswith(b'{"body_') or stills:   # the body's replies, as json.dumps writes them: first key body_*
                     try:
                         reply = json.loads(raw.decode("utf-8"))
                     except ValueError:
-                        reply = {"body_id": None, "error": "ProtocolError"}
-                    handler = self.on_body
+                        reply = {"stills_id" if stills else "body_id": None, "error": "ProtocolError"}
+                    handler = self.on_stills if stills else self.on_body
                     if handler is not None:
                         try:
                             handler(reply)
@@ -190,19 +193,20 @@ class DetectorWorker:
             pass
         finally:
             self.replies.put(None)
-            handler = self.on_body
-            if handler is not None:
-                try:
-                    handler(None)   # the process stopped
-                except Exception:
-                    pass
+            for handler in (self.on_body, self.on_stills):
+                if handler is not None:
+                    try:
+                        handler(None)   # the process stopped
+                    except Exception:
+                        pass
 
     def send_alone(self, header):
         """A header with no bundle after it (the live body's setup and requests). Raises Stop if the process is gone."""
         data = json.dumps(header, separators=(",", ":")).encode("utf-8")
         try:
-            self.proc.stdin.write(struct.pack(">I", len(data)) + data)
-            self.proc.stdin.flush()
+            with self.write_lock:
+                self.proc.stdin.write(struct.pack(">I", len(data)) + data)
+                self.proc.stdin.flush()
         except (OSError, ValueError):
             raise Stop("the detector process stopped (its log: %s)" % self.log.name) from None
 
@@ -224,8 +228,9 @@ class DetectorWorker:
         header = json.dumps({"id": self.next_id, "rgb_seq": bundle.rgb_seq, "t_host": bundle.t_host,
                              "delay_s": round(delay_s, 4)}).encode("utf-8")
         try:
-            self.proc.stdin.write(struct.pack(">I", len(header)) + header + struct.pack(">I", len(bundle.data)) + bundle.data)
-            self.proc.stdin.flush()
+            with self.write_lock:
+                self.proc.stdin.write(struct.pack(">I", len(header)) + header + struct.pack(">I", len(bundle.data)) + bundle.data)
+                self.proc.stdin.flush()
         except OSError:
             raise Stop("the detector process stopped (its log: %s)" % self.log.name) from None
         reply = self._line(self.frame_timeout_s, "a frame")
@@ -280,6 +285,7 @@ class Perceiver:
         self.last_t_host = self.last_capture = None
         self.arrivals, self.lags, self.drops, self.transits = deque(), deque(), deque(), deque()
         self.problem = None
+        self.last_frame = None   # the last fully processed frame, for the Qwen ask (process() sets it)
         self._new_core()
 
     def _new_core(self):
@@ -352,6 +358,7 @@ class Perceiver:
         """One bundle to one event, or None when the frame is dropped (counted; the loop says why if it lasts).
         now_mono is this PC's monotonic clock now. Raises Stop when the registration no longer fits the camera."""
         t = self.t
+        self.last_frame = None
         went_back = self.last_t_host is not None and bundle.t_host < self.last_t_host - EPOCH_BACK_S
         if bundle.session != self.session or went_back:   # a camera restart starts a new epoch: new tracks, a new clock
             self.session, self.sessions = bundle.session, self.sessions + 1
@@ -400,7 +407,7 @@ class Perceiver:
                   and (o.get("kind") == "keypoints" or (o.get("kind") == "person_box" and (o.get("score") or 0) >= PERSON_MIN))}
         frames, _counts = t.records.frames_from_observations(observations, self.track_method.tracker)
         detections = frames[0]["detections"] if frames else []
-        tracks, supported = [], []
+        tracks, supported, association = [], [], {}
         for track, state in self.core.step(capture_mono, detections):
             if strong.intersection(track.obs_ids):
                 self.strong.add(track.id)
@@ -418,8 +425,15 @@ class Perceiver:
                            "heading_deg": record["heading"]["deg"] if fresh else None,
                            "age_s": round(max(0.0, capture_mono - track.last_seen), 3)})
             supported.append(set(track.obs_ids))
+            # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
+            association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
         self.lags.append((now_mono, now_mono - capture_mono))
         event = self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
+        # For the Qwen ask (ask.py): this frame's detection id (the detector's process keeps the frame under it), its
+        # times, and each confirmed track's pose heights for the seated test.
+        self.last_frame = {"id": getattr(self.detector, "next_id", None), "session": self.sessions, "capture_ts": event["capture_ts"],
+                           "capture_mono": capture_mono, "arrival_unix": bundle.arrival_unix,
+                           "poses": track_poses(observations, tracks, supported), "association": association}
         # The live body, made in the detector's process from the bundle it kept: only while the detector keeps up (a
         # frame older than FRESH_S is left out), and never waited for.
         if self.body is not None and now_mono - capture_mono <= FRESH_S:
@@ -431,6 +445,28 @@ class Perceiver:
 COCO = ("nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder", "right_shoulder", "left_elbow",
         "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle",
         "right_ankle")   # den-observe's coco17 joints_room order
+
+
+def pose_joints(pose):
+    """A pose observation's room joints {name: [xyz, status]}, supported or uncertain only."""
+    joints = {}
+    for entry in pose.get("joints_room") or []:
+        j = entry.get("j")
+        if isinstance(j, int) and 0 <= j < len(COCO) and entry.get("xyz") and entry.get("status") in ("supported", "uncertain"):
+            joints[COCO[j]] = [entry["xyz"], entry["status"]]
+    return joints
+
+
+def track_poses(observations, tracks, supported):
+    """{track_id: room joints} for each confirmed track a pose supports in this frame (the seated test's input)."""
+    poses = {o["obs_id"]: o for o in observations if o.get("kind") == "keypoints" and o.get("validity") == "valid"}
+    out = {}
+    for track, obs_ids in zip(tracks, supported):
+        if track["state"] != "confirmed":
+            continue
+        pose = next((poses[o] for o in sorted(obs_ids) if o in poses), None)
+        out[track["track_id"]] = pose_joints(pose) if pose is not None else {}
+    return out
 
 
 def body_person(observations, tracks, supported):
@@ -466,10 +502,15 @@ class Loop(threading.Thread):
     """The newest bundle from the mailbox, perceived, published. When no event has gone out for idle_s (no frame, or
     every frame dropped), an idle event says why, so the page never reads a running loop as stopped."""
 
-    def __init__(self, source, mailbox, perceiver, publish, *, idle_s=1.0, clock=time.monotonic):
+    def __init__(self, source, mailbox, perceiver, publish, *, idle_s=1.0, clock=time.monotonic, observe=None):
+        """observe: one observer or a list of them, observe(event, frame), in order. Each sees each event before it's
+        published and returns it, perhaps with more in it (the Qwen ask, ask.Asker.observe; later the end-to-end plan's
+        person state). frame is the perceiver's last_frame for an event of a processed frame, else None. An observer's
+        failure is its own: the event goes on as it was."""
         super().__init__(daemon=True, name="den-live-loop")
         self.source, self.mailbox, self.perceiver, self.publish = source, mailbox, perceiver, publish
         self.idle_s, self.clock = idle_s, clock
+        self.observers = list(observe) if isinstance(observe, (list, tuple)) else ([observe] if observe else [])
         self.halt = threading.Event()
         self.stop_reason = self.stop_error = None
 
@@ -480,9 +521,15 @@ class Loop(threading.Thread):
                 bundle = self.mailbox.take(self.idle_s)
                 now_mono = self.clock()
                 event = None if bundle is None else self.perceiver.process(bundle, self.source.state(), now_mono)
+                frame = self.perceiver.last_frame if event is not None else None
                 if event is None and now_mono - last >= self.idle_s:
                     event = self.perceiver.idle(self.source.state(), now_mono)
                 if event is not None:
+                    for observe in self.observers:
+                        try:
+                            event = observe(event, frame) or event
+                        except Exception:   # an observer's failure is its own; the markers go on
+                            pass
                     self.publish(event)
                     last = now_mono
         except Stop as exc:

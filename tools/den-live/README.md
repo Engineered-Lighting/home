@@ -367,3 +367,80 @@ python -B -X utf8 tools\den-live\test_service.py
 - The walk test's distances, lag, empty den and second person run against a fake stream.
 - The scan page's spots mode runs on the authored room.
 - The service's end-to-end test needs the venv and a prepared den-sim set. The release's needs the venv's models and rtmlib's wheel. The scan page's needs Node.
+
+## The Qwen ask (inference plan, Part 1)
+
+den-live asks Qwen what someone in the den is doing, but only once Frigate has noticed someone. With nobody there, Qwen is never asked.
+
+**When it asks.** All of these must hold:
+- Frigate's den occupancy sensor reads on in the den home's Home Assistant (`occupancy.py`).
+  - It's read twice a second and held for 2 minutes after the sensor last read on, den_lighting's own vacancy, because Frigate can lose a reader sitting still. Standing up still stops the asks at once, through the seated check.
+  - If it reads unknown, or nothing reads for 10 s, nothing is asked.
+  - The reader never follows a redirect, so the token goes to Home Assistant only.
+- A confirmed track is seated (`seated.py`: the coordinator's `body.seated()`, copied unchanged until den-live carries its code).
+  - Becoming seated needs 2 s of hips 0.30 to 0.75 m above the floor (or the face below 1.30 m with no pair of hips) and a torso moving under 0.15 m/s.
+  - Staying seated needs only low hips, so shifting along the sofa doesn't drop you.
+- The settings say `asks_on`, and the back-off monitor is below its step 2.
+  - At step 1, it asks at most every 4 s.
+  - If `backoff_status` is set but the monitor's file is missing, unreadable or over 10 minutes old, it counts as step 1.
+- The gate is checked again just before each question is posted.
+
+**The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
+
+**What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
+- Three stills from the last 3 s, made into JPEGs in the detector's process (`stills.py`).
+- Today's Lab question, with three changes:
+  - "hobby" and "craft" are added;
+  - the old camera placement is removed;
+  - `near_person`, the labeling plan's line, is sent while `labels_to_qwen` is on and exactly one person is tracked.
+
+  `test_ask.py` holds the rest to the Lab's pinned `qwen_scene.py`.
+
+**What it keeps.** One line per ask in `days/<UTC date>/asks.jsonl` in the service's state folder, kept 14 days. It holds:
+- words and numbers only: no image and no reply text;
+- each still's capture and arrival times;
+- when the ask was decided, sent and answered;
+- the model, its token counts and the parsed answer;
+- the labels fields.
+
+**What it gives.**
+- **The stream:** `health.qwen {state, why, last_reply_at, reply_s_median, asks_per_min, backoff_level}` on every event.
+  - Each track it asked about gets `activity {word, close_up, at}` for 30 s, but only when den-track was sure, through the stills' window, whose answer it was.
+  - The state reads `unavailable` after 3 failed questions in a row, or 3 sets of pictures that didn't come.
+- **In-process:** each answer goes to `Asker.on_reply` hooks as `{"fact": <la-fact-log-1 line>, "ask": <the log line>}`.
+  - The log line carries `association {safe, status, since_at}`: whether den-track held the asked track confident through the stills' window, and since before it.
+  - The end-to-end plan's person state holds a reply that isn't safe.
+
+**Setting it up on LA.** The asks block in `/etc/den-live/config.json`:
+
+```json
+"asks": {"ha_url": "https://<den home's Home Assistant>:<port>", "ha_entity": "binary_sensor.<Frigate's den occupancy>",
+         "vllm_url": "http://127.0.0.1:8000", "time_zone": "<IANA zone>", "backoff_status": "<the monitor's status.json>",
+         "asks_on": true, "labels_to_qwen": true, "min_interval_s": 2, "max_per_minute": 30}
+```
+
+- **The credential:** the token is `ha-token.txt` among the service's credentials.
+- **Without the block, or with a bad one,** the ask is off and the journal says why in one sentence. That includes a token that's missing and an ask that fails as it starts. The markers go on either way.
+- **Changing a switch:** `asks_on`, `labels_to_qwen`, `min_interval_s` and `max_per_minute` are re-read whenever the file changes, so no restart is needed.
+  - A block taken out, or a value that doesn't read, turns the asks off until it reads again. The health line says why.
+  - The pace can't go past AGENTS.md's bound: `min_interval_s` 2 to 60, `max_per_minute` 1 to 30.
+- **The unit needs, at the install (inference plan step 3):**
+  - a `LoadCredential` for `ha-token.txt`;
+  - an `IPAddressAllow` for Home Assistant's address;
+  - a `backoff_status` path that `ProtectHome` doesn't hide.
+
+### Tests
+
+```powershell
+python -B -m unittest discover -s tools\den-live -p "test_ask.py"
+```
+
+- Stand-ins for Qwen, Home Assistant and the detector. No camera, no host and no picture of anyone.
+- **The question:** only the planned changes from the Lab's pinned question, a stable body, strict replies, and the Lab log's exact keys.
+- **The gate:**
+  - no ask while Frigate says nobody or unknown, or while standing;
+  - about every 2 s while seated;
+  - the 30 s back-off, and "Qwen isn't answering" after 3 failures;
+  - the switch, and both of the monitor's steps.
+- **The label line:** sent for one person only, with its switch on, and a bad line doesn't stop the ask.
+- **The detector's channel:** stills replies never reach the rows' queue.

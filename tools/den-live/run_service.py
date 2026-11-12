@@ -18,6 +18,10 @@ Its inputs, all from systemd:
 - --config, the settings file install.sh writes (/etc/den-live/config.json): camera_url, content_packs (the gateway's
   content-pack folder), site (the den's site, as the gateway names it), venv_python, models and stream_port.
 
+The Qwen ask (ask.py, inference plan step 2) runs here when the settings file has an asks block and the credentials hold
+ha-token.txt: only while Frigate's den occupancy reads on and den-live sees someone seated. Without them, or with a block
+that's wrong, the ask is off and one journal line says why; the markers go on (README, "The Qwen ask").
+
 It refuses to start with one sentence and exit 3 when an input is missing or doesn't match, and systemd doesn't
 restart it (RestartPreventExitStatus=3): a missing credential, a receipt that didn't register the room model's camera,
 a scan revision other than the one step 2 picked on, or a registration the camera no longer fits. Any other stop exits
@@ -42,6 +46,8 @@ from urllib.parse import urlsplit
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import ask  # noqa: E402  the Qwen ask (inference plan, step 2)
+import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
 import run_local as rl  # noqa: E402  the loop (serve), the scan's floor, the receipt's revision
 import sofa_check as sc  # noqa: E402  say, Stop, the pinned trees' markers
@@ -90,6 +96,78 @@ def read_config(path):
     if type(port) is not int or not 1024 <= port <= 65535:
         raise Refusal("its settings file's stream_port isn't a port number")
     return config
+
+
+HA_TOKEN = "ha-token.txt"       # the den home's Home Assistant: the den-live user's long-lived token (a credential)
+ENTITY = re.compile(r"^binary_sensor\.[a-z0-9_]{1,80}$")
+ZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
+
+
+def asks_settings(config, folder):
+    """(the asks block's fixed settings and the token, None) when the settings file sets the Qwen ask up, else (None, why).
+    The block: ha_url (the den home's Home Assistant), ha_entity (Frigate's den occupancy sensor), vllm_url (LA's own
+    vLLM, on loopback only), and optionally time_zone, backoff_status, ha_ca_file and the switches ask.Settings re-reads.
+    A block that's wrong turns the asks off with one sentence; the markers never stop for it."""
+    block = config.get("asks")
+    if block is None:
+        return None, "the settings file doesn't set the Qwen ask up"
+    if not isinstance(block, dict):
+        return None, "the settings file's asks block isn't one"
+    try:
+        url, vllm = urlsplit(str(block.get("ha_url") or "")), urlsplit(str(block.get("vllm_url") or ""))
+        ha_port, vllm_port = url.port, vllm.port   # urlsplit raises here on a port that isn't one
+    except ValueError:
+        return None, "its ha_url or vllm_url has a port that isn't one"
+    if (url.scheme not in ("http", "https") or not url.hostname or not ha_port or url.username or url.password
+            or url.path not in ("", "/") or url.query or url.fragment):
+        return None, "its ha_url must look like https://<address>:<port>"
+    if not isinstance(block.get("ha_entity"), str) or not ENTITY.match(block["ha_entity"]):
+        return None, "its ha_entity must be a binary_sensor's id"
+    if (vllm.scheme != "http" or vllm.hostname not in ("127.0.0.1", "localhost") or not vllm_port or vllm.username
+            or vllm.path not in ("", "/")):
+        return None, "its vllm_url must be LA's own vLLM, http://127.0.0.1:<port>"
+    if block.get("time_zone") is not None and not (isinstance(block["time_zone"], str) and ZONE.match(block["time_zone"])):
+        return None, "its time_zone isn't a time zone's name"
+    for key in ("backoff_status", "ha_ca_file"):
+        if block.get(key) is not None and not (isinstance(block[key], str) and Path(block[key]).is_absolute()):
+            return None, "its %s isn't an absolute path" % key
+    if block.get("ha_ca_file") is not None and not Path(block["ha_ca_file"]).is_file():
+        return None, "its ha_ca_file isn't there"
+    try:
+        token = (Path(folder) / HA_TOKEN).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None, "the service's Home Assistant token credential (%s) is missing" % HA_TOKEN
+    except ValueError:
+        return None, "the service's Home Assistant token credential doesn't read"
+    if not token or any(c.isspace() for c in token):
+        return None, "the service's Home Assistant token credential doesn't read"
+    return dict(block, token=token), None
+
+
+def asks_starter(fixed, config_path, *, site, state, camera_id):
+    """serve()'s asks: Frigate's occupancy read, then the Qwen ask, on the loop's detector."""
+    def start(detector):
+        """(asker, stop), or None when it can't start: the ask's failure never stops the markers."""
+        reader = None
+        try:
+            reader = occupancy.Occupancy(occupancy.fetcher(fixed["ha_url"], fixed["token"], fixed["ha_entity"],
+                                                           cafile=fixed.get("ha_ca_file")))
+            asker = ask.Asker(detector=detector, occupancy=reader, post=ask.poster(fixed["vllm_url"]), state=state,
+                              site_id=site, camera_id=camera_id, settings=ask.Settings(config_path),
+                              backoff=ask.Backoff(fixed.get("backoff_status")), zone=fixed.get("time_zone"))
+            reader.start()
+        except Exception as exc:  # a type name only: its text could hold the URL
+            if reader is not None:
+                reader.halt.set()
+            say("The Qwen ask is off: it didn't start (%s). The markers go on." % type(exc).__name__)
+            return None
+
+        def stop():
+            asker.close()
+            reader.halt.set()
+        say("The Qwen ask is on: only while Frigate sees someone in the den and den-live sees them seated.")
+        return asker, stop
+    return start
 
 
 def gateway_packs(pid, proc=Path("/proc")):
@@ -263,13 +341,17 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     live = state / "live"
     live.mkdir(parents=True, exist_ok=True)
     roll(live / "detector.log")
+    fixed, why = asks_settings(config, paths["room_model"].parent)
+    if fixed is None:
+        say("The Qwen ask is off: %s." % why)
+    starter = None if fixed is None else asks_starter(fixed, config_path, site=config["site"], state=state, camera_id=camera_id)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,
                     floor=None, packs=config["content_packs"], site=config["site"], picked_on=picked_on, state=live,
                     detector_argv=[config["venv_python"], "-B", str(HERE / "detect_worker.py"), "--tools-root",
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
-                    status_every_s=status_every_s)
+                    status_every_s=status_every_s, asks=starter)
 
 
 def stopping(_signum, _frame):

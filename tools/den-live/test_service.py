@@ -10,6 +10,7 @@ scan page's needs Node. Each skips without them. Private strings the tests plant
 id is read as run_local reads it, an address and a token are random. Everything written is under TEMP.
 """
 import atexit
+import base64
 import contextlib
 import dataclasses
 import hashlib
@@ -424,8 +425,89 @@ class ServiceLive(unittest.TestCase):
         shapes = (r'^Floor: ', r'^Registration den-virtual@\S+; the camera', r'^Starting the detector',
                   r"^The live body is on, in the detector's process\. It learns the empty room",
                   r"^The live body is off: [a-z '(),:0-9]+\. The markers go on\.$",
+                  r"^The Qwen ask is off: [A-Za-z '(),:0-9_./<>-]+\.$",
                   r'^camera [a-z]+(: [a-z ]+)? \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames')
         self.assertTrue(all(any(re.search(s, line) for s in shapes) for line in text.splitlines() if line.strip()), text)
+
+
+class Stand(BaseHTTPRequestHandler):
+    """A stand-in for the den home's Home Assistant (GET a state) and LA's vLLM (POST a chat completion), on loopback."""
+    seen = None
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, value):
+        data = json.dumps(value).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        self.seen['ha'].append((self.path, self.headers.get('Authorization')))
+        self.reply({'entity_id': self.path.rsplit('/', 1)[-1], 'state': 'on'})
+
+    def do_POST(self):
+        self.seen['bodies'].append(self.rfile.read(int(self.headers['Content-Length'])))
+        facts = {'people_visible': 'one', 'subject_posture': 'sitting', 'held_object': 'book', 'book_state': 'open',
+                 'gaze_target': 'book', 'typing_visible': 'no', 'screen_facing_subject': 'not_visible',
+                 'activity_hypothesis': 'reading', 'visible_basis': ['book_in_hands'], 'change_vs_prior': 'no_prior'}
+        self.reply({'model': 'qwen3-vl-30b', 'usage': {'prompt_tokens': 900, 'completion_tokens': 50},
+                    'choices': [{'message': {'role': 'assistant', 'content': json.dumps(facts)}, 'finish_reason': 'stop'}]})
+
+
+@unittest.skipUnless(HAVE_SET and sc.VENV_PY.is_file() and HAVE_BINARIES, 'needs the detector venv and a prepared den-sim set')
+class ServiceAsks(unittest.TestCase):
+    def test_the_service_asks_qwen_about_the_seated_reader(self):
+        seen = {'ha': [], 'bodies': []}
+        handler = type('Seen', (Stand,), {'seen': seen})
+        stand = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=stand.serve_forever, daemon=True).start()
+        self.addCleanup(stand.shutdown)
+        url = 'http://127.0.0.1:%d' % stand.server_address[1]
+        camera = ts.FakeCamera(FIT / 'camera-calibration.json', READING)
+        self.addCleanup(camera.close)
+        self.addCleanup(camera.assert_allowed_paths)
+        service = Service(camera.url, camera.token)
+        config = json.loads(service.config.read_text(encoding='utf-8'))
+        config['asks'] = {'ha_url': url, 'ha_entity': 'binary_sensor.den_person_occupancy', 'vllm_url': url}
+        service.config.write_text(json.dumps(config), encoding='utf-8')
+        (service.cred / rs.HA_TOKEN).write_text('tok3n', encoding='utf-8')
+        found, started = {}, time.monotonic()
+
+        def until():
+            if time.monotonic() - started > 30 and time.monotonic() - found.get('asked', 0) > 1:
+                found['asked'] = time.monotonic()
+                try:
+                    with urllib.request.urlopen('http://127.0.0.1:%d/api/den-live/v1/homes/den/state' % service.port, timeout=5) as reply:
+                        people = json.loads(reply.read())['people']
+                except OSError:
+                    people = None
+                if people and any(t.get('activity') for t in people.get('tracks') or []):
+                    found['state'] = people
+            return 'state' in found or time.monotonic() - started > 150
+        code, text = quiet(rs.main, ['--config', str(service.config)], env=service.env, until=until, status_every_s=5,
+                           trees=service.trees(), camera_id='den-virtual', require_correction=False)
+        self.assertEqual(code, 0, text)
+        self.assertIn('The Qwen ask is on', text)
+        people = found.get('state')
+        self.assertIsNotNone(people, text)
+        self.assertEqual(people['health']['qwen']['state'], 'asking')
+        self.assertEqual(people['tracks'][0]['activity']['word'], 'reading')
+        self.assertTrue(seen['ha'] and all(auth == 'Bearer tok3n' for _, auth in seen['ha']))
+        body = json.loads(seen['bodies'][-1])   # the first ask can come before 3 s of frames, with 2 stills
+        images = [p['image_url']['url'] for p in body['messages'][1]['content'] if p['type'] == 'image_url']
+        self.assertIn(len(images), (2, 3))
+        for image in images:
+            jpeg = base64.b64decode(image.split(',', 1)[1])
+            self.assertTrue(jpeg.startswith(b'\xff\xd8') and len(jpeg) > 5000, 'a real still from the detector process')
+        lines = [json.loads(line) for path in (service.state / 'days').rglob('asks.jsonl')
+                 for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(lines and lines[0]['outcome'] == 'completed', lines)
+        self.assertFalse(any(p.suffix in ('.npz', '.jpg') for p in service.state.rglob('*')), 'no frame or still kept')
+        self.assertNotIn('tok3n', text)
 
 
 class Unit(unittest.TestCase):

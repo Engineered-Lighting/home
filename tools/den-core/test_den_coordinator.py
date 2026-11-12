@@ -180,10 +180,46 @@ class CoordinatorTest(unittest.TestCase):
         self.assertNotIn("F2", last["jobs"])
         self.assertIn("F4", last["jobs"])  # the next light behind the reader takes over
 
-    def test_coming_back_on_resumes_real_fixtures(self):
-        run = Run(fixtures={"F2": dict(report.demo_room()["fixtures"]["F2"], real=True)})
+    def test_on_resumes_only_what_offs_own_automation_stopped(self):
+        rows = report.demo_room()["fixtures"]
+        run = Run(fixtures={"F2": dict(rows["F2"], real=True, stopped=True, stopped_by="coordinator_off"),
+                            "F4": dict(rows["F4"], real=True, stopped=True, stopped_by="hand")})
         run.send("ha", 0.0, {"on": True, "occupied": True, "game_running": False})
-        self.assertEqual([i["fixture_id"] for i in run.intents("resume")], ["F2"])
+        self.assertEqual([i["fixture_id"] for i in run.intents("resume")], ["F2"])   # the owner's own Stop on F4 holds
+
+    def test_a_latched_stop_makes_a_fixture_unusable(self):
+        rows = report.demo_room()["fixtures"]
+        run, t = self._reading(fixtures={"F2": dict(rows["F2"], real=True)})
+        run.send("fixture", t, {"fixture_id": "F2", "status": "installed", "stopped": True, "stopped_by": "hand"})
+        run.sit(t, 1.0)
+        self.assertNotIn("F2", run.kinds("decision")[-1]["jobs"])
+
+    def test_actuation_says_what_was_driven(self):
+        run, _ = self._reading()
+        self.assertEqual(run.kinds("decision")[-1]["actuation"], "virtual")   # no real fixture: Home only
+        rows = report.demo_room()["fixtures"]
+        real = Run(fixtures={fid: dict(row, real=(fid == "F2")) for fid, row in rows.items()})
+        self.on(real)
+        real.send("fixture", 0.0, {"fixture_id": "F2", "status": "installed"})
+        t = real.sit(0.0, 3.0)
+        real.send("fixture", t, {"fixture_id": "F2", "status": "installed"})   # a fresh status
+        real.send("person_state", t, reading_state(t)["data"])
+        self.assertEqual(real.kinds("decision")[-1]["actuation"], "live")
+        off = Run()
+        off.send("ha", 0.0, {"on": False, "occupied": True, "game_running": False})
+        off.sit(0.0, 3.0)
+        self.assertEqual(off.kinds("decision")[-1]["actuation"], "shadow")
+
+    def test_dim_falls_back_to_dark_without_dim_motion(self):
+        rows = report.demo_room()["fixtures"]
+        profile = dict(scurve.FICTIONAL_PROFILE, dim_motion=False)
+        run, t = self._reading(fixtures={fid: dict(row, profile=profile) for fid, row in rows.items()},
+                               settings={"move_style": "dim"})
+        before = len(run.intents("aim_move"))
+        run.sit(t, 3.0, xy=(READER_XY[0] - 0.3, READER_XY[1]))
+        moves = [i for i in run.intents("aim_move")[before:] if i["fixture_id"] == "F2" and i["level"] > 0]
+        self.assertTrue(moves)
+        self.assertFalse(moves[-1]["lit_during_move"])
 
     def test_learning_then_a_bulb_plan(self):
         run = Run()

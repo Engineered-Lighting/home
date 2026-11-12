@@ -52,6 +52,6 @@ FICTIONAL_PROFILE = {
     "label": "fictional-v2", "fictional": True,
     "axes": [dict(FICTIONAL_AXIS), dict(FICTIONAL_AXIS)],
     "range": {"pan": [-175.0, 175.0], "tilt": [-85.0, 85.0]},
-    "lit_motion": True, "retarget_mid_move": False,
+    "lit_motion": True, "dim_motion": True, "retarget_mid_move": False,
     "path_margin_cdeg": 50, "settle_s": 0.2, "beam_fwhm_deg": 20.0, "lumens": 450.0,
 }

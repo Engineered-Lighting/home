@@ -61,13 +61,16 @@ COMMAND_VALID_MS = 1500
 
 def _usable(row, t, desk_until=None):
     """Virtual fixtures always; a real one when installed (or `desk` while the owner's desk test is on), with a
-    fresh status, not in fault, not held by hand, and not refused in the last 60 s."""
+    fresh status, not in fault, not held by hand, not latched by a Stop, and not refused in the last 60 s."""
     if not row.get("real"):
         return True
     fresh = row.get("status_at") is not None and t - row["status_at"] <= STATUS_STALE_S
     status_ok = row.get("status") == "installed" or (row.get("status") == "desk" and desk_until is not None and t < desk_until)
-    return (status_ok and fresh and not row.get("hand") and not row.get("fault")
+    return (status_ok and fresh and not row.get("hand") and not row.get("fault") and not row.get("stopped")
             and t >= row.get("refused_until", -math.inf))
+
+
+OFF_STOP = "coordinator_off"   # the source Home Assistant's "Off presses every fixture's Stop" automation reports
 
 
 def profile_sha256(profile):
@@ -107,7 +110,9 @@ class Coordinator:
             if was_on and not self.ha["on"]:
                 self._all_off()  # Home Assistant pressed every Stop; nothing is lit now
             if not was_on and self.ha["on"]:
-                out += [self._intent("resume", fid) for fid, row in self.fixtures.items() if row.get("real")]
+                # On resumes only what Off's own automation stopped: a Stop the owner pressed holds until they Resume
+                out += [self._intent("resume", fid) for fid, row in self.fixtures.items()
+                        if row.get("real") and row.get("stopped") and row.get("stopped_by") == OFF_STOP]
             if data.get("last_correction"):
                 out += self._learn(t, data["last_correction"])
         elif kind == "fixture":
@@ -283,6 +288,8 @@ class Coordinator:
             move["predicted_s"] = round(scurve.move_time(delta, profile["axes"]), 3)
             lit_both = spot["on"] and on
             style = self.settings["move_style"] if profile.get("lit_motion") else "dark"
+            if style == "dim" and not profile.get("dim_motion"):
+                style = "dark"   # a fixture that can't dim while moving moves dark
             if lit_both and style != "dark" and person and person["head"]:
                 ok, closest = eye.path_clear(row["aim_origin_m"], row["horizontal_world_reference"], spot["joints"],
                                              new_joints, math.dist(row["aim_origin_m"], job["target"]), person["head"])
@@ -332,7 +339,8 @@ class Coordinator:
         refused = sorted({"%s %s" % (n["fixture"], n["reason"]) for n in notes if n.get("fixture")})
         return {"kind": "decision", "data": {
             "decision_id": self.decision_id, "version": DECISION_VERSION, "ts": t, "policy": POLICY,
-            "actuator_domain": DOMAIN, "actuation": "live" if live else "shadow",
+            "actuator_domain": DOMAIN,
+            "actuation": "shadow" if not live else ("live" if any(c["real"] for c in changes.values()) else "virtual"),
             "situation": {"activity": act, "key": key, "people": len(people)},
             "jobs": {fid: {"kind": j["kind"], "who": j["who"], "score": j["score"]} for fid, j in sorted(jobs.items())},
             "spots": spots, "notes": notes,

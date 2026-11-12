@@ -70,6 +70,10 @@ const MAP = [
   [/^tools\/(?:test-apartment-shell-audit(?:-echo|-behaviour)?-browser|fixtures\/apartment-shell-audit(?:-server|-probes)?)\.mjs$/, ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
+  // The live body: its frame contract, the Recording layer and its label rules.
+  [/^(?:app\/src\/home-3d\/apartment-body-frame\.mjs|tools\/test-apartment-body-frame\.mjs)$/, ["test-apartment-body-frame.mjs", "test-apartment-body-layer.mjs"]],
+  [/^(?:app\/src\/home-3d\/apartment-body-layer\.mjs|tools\/test-apartment-body-layer\.mjs)$/, ["test-apartment-body-layer.mjs"]],
+  [/^(?:app\/src\/home-3d\/apartment-body-(?:annotation-model|labels)\.mjs|tools\/test-apartment-body-annotation-model\.mjs)$/, ["test-apartment-body-annotation-model.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],

@@ -78,6 +78,8 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-body-[\w-]+\.mjs|tools\/test-apartment-body-webgpu\.mjs)$/, ["test-apartment-webgpu-ports.mjs", "test-apartment-body-webgpu.mjs"]],
   // The live den view's people layer: markers from den-live's people stream.
   [/^(?:app\/src\/home-3d\/apartment-people-layer\.mjs|tools\/test-apartment-people-layer\.mjs)$/, ["test-apartment-people-layer.mjs"]],
+  // The live den view and look-only Home, through the real gateway (step 4).
+  [/^(?:app\/src\/(?:home-den-live-view\.mjs|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-site-registry\.js|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/(?:test-den-live-look-only-browser|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["test-den-live-look-only-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
@@ -202,6 +204,7 @@ const MAP = [
     "run-native-agent-security-tests", "run-web-gateway-lighting-brain-tests.mjs",
   ]],
   [/^tools\/run-web-gateway-lighting-brain-tests\.mjs$/, ["run-web-gateway-lighting-brain-tests.mjs"]],
+  [/^(?:web-gateway\/(?:server|den-live-route|look-only|home-location|content-pack-route|equipment-registration|lighting-brain-route|lighting-layer)\.mjs|tools\/(?:run-web-gateway-look-only-tests|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["run-web-gateway-look-only-tests.mjs"]],
   // Ahead-of-time JSX: the loaders, the build, the gateway's verified
   // manifest and the hooks that run the build on deploy and installer builds.
   [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],

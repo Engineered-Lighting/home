@@ -1037,3 +1037,27 @@ button.hg-no-press:active {
     .apt-home-shell .apt-ui-room-toolbar [aria-label="Fit room"] { display: inline-flex; font-size: 0; gap: 0; }
   }
 }
+
+/* ── The live den view (home-den-live-view.mjs) and look-only (HomeLookOnlyApp) ──
+ * The chip sits in the room view's top left, a glass card like the room toolbar's, and stays out of the pointer's
+ * way. Look-only has no Home column, so the room takes the whole stage. */
+.home-den-live-chip { position: absolute; top: 12px; left: 12px; z-index: 5; max-width: min(300px, calc(100% - 24px)); margin: 0;
+  padding: 7px 11px 8px; border: 1px solid var(--hg-border, rgba(255,255,255,.1)); border-radius: 10px; background: var(--apt-glass, rgba(8,9,11,.78));
+  color: var(--hg-fg-1, #ededed); font: 400 12.5px/1.45 'Geist', ui-sans-serif, system-ui, sans-serif; pointer-events: none;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.home-den-live-chip p { margin: 0; }
+[data-apt-legacy-toolbar] > .home-den-live-chip { position: static; order: 99; flex: 0 0 auto; }
+.home-den-live-chip-title { display: flex; align-items: center; gap: 7px; color: var(--hg-fg-0, #fff); font-weight: 560; }
+.home-den-live-chip-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--hg-fg-4, #767676); }
+.home-den-live-chip[data-state="live"] .home-den-live-chip-dot { background: var(--apt-ok, #91e6bd); }
+.home-den-live-chip[data-state="attention"] .home-den-live-chip-dot { background: var(--hg-warn, #ffb224); }
+.home-den-live-chip-facts { color: var(--hg-fg-2, #a1a1a1); font-variant-numeric: tabular-nums; }
+.home-den-live-chip-facts:empty, .home-den-live-chip-banner:empty { display: none; }
+.home-den-live-chip-banner { margin-top: 4px!important; color: var(--hg-warn, #ffb224); overflow-wrap: anywhere; }
+.apt-home-shell[data-look-only] .apt-home-stage { top: 52px!important; right: 0!important; bottom: 0!important; }
+.apt-home-shell .apt-home-look-only { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hg-fg-1); font-size: 13px; font-weight: 500; }
+.apt-home-shell .apt-home-look-only-status { margin: 0; padding: 72px 16px 0; color: var(--hg-fg-2); text-align: center; }
+.apt-home-shell .apt-home-look-only-signin { margin-left: auto; flex: 0 0 auto; padding: 6px 10px; border: 1px solid var(--hg-border, rgba(255,255,255,.1));
+  border-radius: 8px; color: var(--hg-fg-1, #ededed); font-size: 13px; text-decoration: none; }
+.apt-home-shell .apt-home-look-only-signin:hover, .apt-home-shell .apt-home-look-only-signin:focus-visible { color: var(--hg-fg-0, #fff); border-color: var(--hg-fg-3, #8f8f8f); }
+@container apartment-home (width < 600px) { .apt-home-shell[data-look-only] .apt-home-wordmark { display: inline; } }

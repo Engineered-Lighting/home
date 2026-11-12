@@ -64,6 +64,8 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 DEN_SIM, DETECT = ROOT / "tools" / "den-sim", ROOT / "tools" / "den-detect"
 sys.path.insert(0, str(DETECT))
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))   # source.py, the camera's client
 import detect  # noqa: E402  its WORKERS, lock and guard; the models load only in the venv, under --analyse
 
 LAB = "stack/services/perception-lab/"
@@ -75,7 +77,10 @@ TREES = {"observe": ("rung-2-observe", ("tools/den-observe", "tools/den-take", *
          "track": ("claude/rung-3-track-local-514d6b", ("tools/den-track",)),   # step 3's live loop
          "core": ("den-core-live", tuple(LAB + name for name in QWEN_LIVE))}
 REMOTE = "/dev/shm/den-live-check"
-VENV_PY = Path.home() / "ml" / "den-detector" / "Scripts" / "python.exe"
+try:
+    VENV_PY = Path.home() / "ml" / "den-detector" / "Scripts" / "python.exe"
+except RuntimeError:   # no home folder known (a service's environment): only this PC's pastes use it
+    VENV_PY = Path("den-detector-venv-not-on-this-host")
 PERSON_MIN, KEYPOINT_MIN, DEPTH_GAP_S = 0.5, 0.4, 0.067   # den-detect's crop line; den-observe's keypoint_score_min and max_depth_gap_s
 FACE, SHOULDERS, HIPS, WRISTS = (0, 1, 2, 3, 4), (5, 6), (11, 12), (9, 10)   # COCO-17
 TORSO = (5, 6, 11, 12)
@@ -121,13 +126,27 @@ def refs():
     return json.loads((DEN_SIM / "refs.json").read_text(encoding="utf-8"))["tools"]
 
 
-def archive(tools_root, key, pins=None):
-    """One folder per pinned tree, written once by git archive; a folder whose marker names other paths is rebuilt."""
+def tree_path(tools_root, key, pins=None):
+    """(folder, sha, paths, marker) of one pinned tree under tools_root: the marker its .complete file holds once whole."""
     ref_name, paths = TREES[key]
     sha = (pins or refs())[ref_name]
-    tree = Path(tools_root) / ("%s-%s" % (key, sha))
-    marker = "%s %s\n" % (sha, " ".join(paths))
-    if (tree / ".complete").is_file() and (tree / ".complete").read_text(encoding="utf-8") == marker:
+    return Path(tools_root) / ("%s-%s" % (key, sha)), sha, paths, "%s %s\n" % (sha, " ".join(paths))
+
+
+def archived(tools_root, key, pins=None):
+    """The pinned tree's folder when it's whole (its marker names these paths at this sha), else None. No git."""
+    tree, _sha, _paths, marker = tree_path(tools_root, key, pins)
+    try:
+        return tree if (tree / ".complete").read_text(encoding="utf-8") == marker else None
+    except OSError:
+        return None
+
+
+def archive(tools_root, key, pins=None):
+    """One folder per pinned tree, written once by git archive; a folder whose marker names other paths is rebuilt."""
+    tree, sha, paths, marker = tree_path(tools_root, key, pins)
+    ref_name = TREES[key][0]
+    if archived(tools_root, key, pins):
         return tree
     done = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar", sha, *paths], capture_output=True)
     if done.returncode:
@@ -138,6 +157,48 @@ def archive(tools_root, key, pins=None):
         tar.extractall(tree, filter="data")
     (tree / ".complete").write_text(marker, encoding="utf-8")
     return tree
+
+
+TOKEN_HEADING = "## Step 2, once: the camera token"
+
+
+def token_lines(tree):
+    """The three lines that save the camera token, verbatim from den-take's README, step 2, in the pinned observe tree
+    (git archive of den-take at refs.json's pin). None when they aren't there in the shape they had. They're read at run
+    time, never copied into den-live: they name the den camera host's address and account."""
+    try:
+        text = (Path(tree) / "tools" / "den-take" / "README.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    except (OSError, UnicodeDecodeError):
+        return None
+    _, heading, rest = text.partition(TOKEN_HEADING + "\n")
+    _, fence, block = rest.partition("```powershell\n")
+    lines = block.partition("```")[0].splitlines()
+    if not (heading and fence) or len(lines) != 3 or not lines[0].startswith("New-Item ") or not lines[2].endswith(".Length"):
+        return None
+    return lines
+
+
+def token_refusal(exc, token_file, tree):
+    lines = token_lines(tree)
+    if not lines:
+        return "%s. The token file is %s; den-take's README, step 2, has the lines that save it" % (exc, token_file)
+    return ("%s. The token file is %s. These three lines, from den-take's README, step 2, save it. Paste them into "
+            "PowerShell; the last prints only the token's length, which should be 24 or more. Never open the file or paste "
+            "the token anywhere.\n%s" % (exc, token_file, "\n".join(lines)))
+
+
+def open_camera(take, url, token_file, tree):
+    """den-take's client for the camera, held to /frame.npz and /calibration (source.AllowedCamera). A token file that
+    doesn't read stops with the three lines that save it (token_refusal)."""
+    import source
+    try:
+        token = take.read_token(token_file)
+    except take.Refused as exc:
+        raise Stop(token_refusal(exc, token_file, tree)) from None
+    try:
+        return source.camera_client(take, url, token)
+    except take.Refused as exc:
+        raise Stop(str(exc)) from None
 
 
 def load(path, name):
@@ -596,10 +657,7 @@ def run(*, root, camera_url, token_file, venv, transport, timing, speak, wait, n
     import take
     if not Path(venv).is_file():
         raise Stop("the detector's venv is not at %s" % venv)
-    try:
-        camera = take.Camera(camera_url, take.read_token(token_file))
-    except take.Refused as exc:
-        raise Stop("%s. The token file is %s; den-take's README, step 2, has the two lines that save it" % (exc, token_file)) from None
+    camera = open_camera(take, camera_url, token_file, observe)
     folder = private_folder(root, take, now)
     say("Frames go to %s" % folder)
     stats = grab(take, camera, folder, timing, speak, wait)

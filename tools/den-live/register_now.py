@@ -468,11 +468,13 @@ def left_png(R, work, take_dir):
 
 def scan_page(work, take_dir, mode, *, opener=webbrowser.open, extra=()):
     """node scan_pick.mjs, which prints 'ready <url>' when it listens; its exit code says what the page did:
-    0 saved (pick) or Done (show). However this ends, Node doesn't outlive it."""
+    0 saved (pick, spots) or Done (show). However this ends, Node doesn't outlive it. Spots mode (step 4's walk test)
+    has no take: take_dir is None."""
     node = shutil.which("node")
     if not node:
         raise Stop("Node isn't on the PATH; the scan page needs it (the den simulation does too)")
-    proc = subprocess.Popen([node, str(PICK_PAGE), "--work", str(work), "--take", str(take_dir), "--mode", mode, *extra],
+    take = ["--take", str(take_dir)] if take_dir is not None else []
+    proc = subprocess.Popen([node, str(PICK_PAGE), "--work", str(work), *take, "--mode", mode, *extra],
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
     try:
         url = None
@@ -623,11 +625,7 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
     if again:
         raw, scaled = use_again(R, work, live, method)
     else:
-        try:
-            camera = R.take.Camera(camera_url, R.take.read_token(token_file))
-        except R.take.Refused as exc:
-            raise Stop("%s. The token file is %s; den-take's README, step 2, has the lines that save it"
-                       % (exc, token_file)) from None
+        camera = sc.open_camera(R.take, camera_url, token_file, sc.archive(root / "tools", "observe"))
         stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
         raw = work / "takes" / stamp
         say("Frames go to %s" % raw)

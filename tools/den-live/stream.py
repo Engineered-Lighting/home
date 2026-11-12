@@ -33,7 +33,10 @@ class PeopleStream:
 
         class Server(ThreadingHTTPServer):
             daemon_threads = True
-            allow_reuse_address = False   # on Windows it would let a second server share a port already in use
+            # Windows: SO_REUSEADDR would let a second server share a port in use, so it's off and the bind is exclusive.
+            # Linux (the LA service): a second listener is refused either way, and SO_REUSEADDR lets a restarted
+            # service rebind at once while its old clients' connections sit in TIME_WAIT.
+            allow_reuse_address = not hasattr(socket, "SO_EXCLUSIVEADDRUSE")
 
             def server_bind(self):
                 if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):   # Windows: nobody else may bind this port while it's ours

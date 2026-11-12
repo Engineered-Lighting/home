@@ -85,6 +85,8 @@ def serve_camera(state):
             self.wfile.write(body)
 
         def do_GET(self):
+            with open(state / 'paths.log', 'a', encoding='utf-8') as log:   # every path asked for, before anything else
+                log.write(self.path + '\n')
             if self.headers.get('Authorization') != 'Bearer ' + token:
                 return self.answer(401, b'{}')
             scene = json.loads((state / 'scene.json').read_text(encoding='utf-8'))
@@ -154,6 +156,18 @@ class FakeCamera:
             except PermissionError:
                 time.sleep(0.02)
         raise RuntimeError('could not switch the fake camera')
+
+    def paths(self):
+        """Every path the camera was asked for so far, in order."""
+        log = self.state / 'paths.log'
+        return log.read_text(encoding='utf-8').splitlines() if log.is_file() else []
+
+    def assert_allowed_paths(self):
+        """Plan step 4: den-live asks the camera for /frame.npz and /calibration only, never /frame.jpg or /health."""
+        import source
+        other = sorted(set(self.paths()) - set(source.ALLOWED_PATHS))
+        if other:
+            raise AssertionError('den-live asked the camera for %s' % ', '.join(other))
 
     def close(self):
         self.child.terminate()
@@ -462,8 +476,11 @@ class OnRenders(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.camera.close()
-        cls.vllm.close()
+        try:
+            cls.camera.assert_allowed_paths()   # the check's camera client: /frame.npz and /calibration only
+        finally:
+            cls.camera.close()
+            cls.vllm.close()
 
     def ask_with(self, by_pose, down=False, transport=None, keep_state=False):
         """A fresh ask folder holding the same owed bodies, the fake vLLM answering each pose's bodies as given."""

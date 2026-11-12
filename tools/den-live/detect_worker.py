@@ -2,10 +2,13 @@
 """Step 3's detector process: den-detect's Detector, kept alive, fed bundles over a pipe (plan L3). The detector's venv.
 
     <venv>\\Scripts\\python.exe -B tools\\den-live\\detect_worker.py --tools-root <observe tree> --state <folder>
+    <venv>/bin/python -B tools/den-live/detect_worker.py --tools-root <observe tree> --state <folder> --models <folder>
 
 Python sockets are refused here (den-detect's guard): frames come in on stdin, rows go out on stdout, and this process
 has no network. The models load once, as in den-detect's own runs: the Lab's UltralyticsWorker and RTMPoseWorker with
-their own checks, the weights held to requirements.lock's digests, the venv held to its versions.
+their own checks, the weights held to requirements.lock's digests, the venv held to its versions. The weights are the
+venv's models folder, or --models (the LA service's, where install.sh puts them). With stdin closed at once it loads,
+says ready and exits 0: that's install.sh's check of the venv and the weights.
 
 In: for each frame, a 4-byte big-endian length and a JSON header {id, rgb_seq, t_host, delay_s}, then a 4-byte length
 and the bundle's bytes. delay_s is how long after capture the loop handed the frame over, so available_ts counts
@@ -73,7 +76,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tools-root", required=True)
     parser.add_argument("--state", required=True)
+    parser.add_argument("--models", default=str(Path(sys.prefix) / "models"))
     args = parser.parse_args(argv)
+    models = Path(args.models).resolve()   # before contain(), which moves the working folder into --state
     own_stdout()
     detect.guard()
     try:
@@ -82,7 +87,7 @@ def main(argv=None):
         wrong = detect.unlocked(pinned["versions"], detect.installed())
         if wrong:
             raise detect.Refused("the detector's venv is not requirements.lock's (%d differences)" % len(wrong))
-        detector = detect.Detector(args.tools_root, Path(sys.prefix) / "models", pinned["weights"])
+        detector = detect.Detector(args.tools_root, models, pinned["weights"])
     except detect.Refused as exc:
         say({"refused": str(exc)[:200]})
         return 2

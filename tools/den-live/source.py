@@ -7,11 +7,45 @@ works on the newest frame and lag can't build up. It keeps the bundle's bytes, n
 
 Status, for the stream: ok; offline (nothing new for stale_s, or the camera doesn't answer); refused (401 or 403:
 the token). After an error it waits longer each time, up to max_wait_s, and tries again; it never stops on its own.
+
+The camera's paths (plan step 4): den-live asks the camera for /frame.npz and /calibration only, never /frame.jpg or
+anything else. The camera serves one JPEG at a time and refuses a second, and the Lab's previews and its Qwen ring need
+it; /frame.npz is a prebuilt latest bundle with request slots of its own. AllowedCamera holds den-take's client to
+those two paths, refusing any other before a request is made. Every den-live tool that reads the camera gets its client
+from camera_client(): the sofa check, step 2's take, the live loop and the service.
 """
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+
+ALLOWED_PATHS = ("/frame.npz", "/calibration")
+
+
+class PathRefused(Exception):
+    pass
+
+
+class AllowedCamera:
+    """den-take's Camera, held to ALLOWED_PATHS: any other path is refused here, before a connection is opened. It has
+    no health(): den-take's /health check is a path this client doesn't ask for."""
+
+    def __init__(self, camera):
+        self._camera = camera
+        self.host, self.port = camera.host, camera.port
+
+    def __repr__(self):
+        return "AllowedCamera(%s:%s)" % (self.host, self.port)
+
+    def get(self, path, timeout=5.0):
+        if type(path) is not str or path not in ALLOWED_PATHS:
+            raise PathRefused("den-live asks the camera for %s only" % " and ".join(ALLOWED_PATHS))
+        return self._camera.get(path, timeout=timeout)
+
+
+def camera_client(take, url, token):
+    """den-take's GET client for the camera at url, with the token, held to ALLOWED_PATHS."""
+    return AllowedCamera(take.Camera(url, token))
 
 
 @dataclass(frozen=True)
@@ -50,7 +84,8 @@ class Mailbox:
 class CameraSource(threading.Thread):
     def __init__(self, take, camera, mailbox, *, poll_s=0.2, stale_s=5.0, max_wait_s=5.0):
         super().__init__(daemon=True, name="den-live-source")
-        self.take, self.camera, self.mailbox = take, camera, mailbox
+        self.take, self.mailbox = take, mailbox
+        self.camera = camera if isinstance(camera, AllowedCamera) else AllowedCamera(camera)
         self.poll_s, self.stale_s, self.max_wait_s = poll_s, stale_s, max_wait_s
         self.halt = threading.Event()
         self.status, self.why = "starting", None

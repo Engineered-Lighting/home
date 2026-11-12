@@ -12,8 +12,12 @@ Numbers this phase sets, with where they come from:
   0.05, which a scan-picked registration isn't held to (plan pick 3).
 - The clock: capture time on this PC's monotonic clock = t_host + offset, the offset anchored to this PC's arrival
   times (the 5th percentile over the last 50 frames: the least delayed). The den Jetson's wall clock read 1970 on
-  2026-11-11, so captured_unix_ns can't be used (plan L1); and a monotonic clock here means a wall-clock step on this
-  PC can't stall or reverse the tracker. The bias is the transit, about 0.1-0.3 s, which "behind" leaves out.
+  2026-11-11, so the tracker never uses captured_unix_ns (plan L1); and a monotonic clock here means a wall-clock step
+  on this PC can't stall or reverse the tracker. The bias is the transit, about 0.1-0.3 s, which "behind" leaves out.
+- The transit, on the health line only (plan L1, step 4): the Jetson's clock is right again since 2026-11-11, so each
+  bundle's arrival time here less its captured_unix_ns is the camera-to-here transit. transit_s_median is its median
+  over the health window, from frames where it lies between 0 and 5 s only; a clock that's wrong again gives null, and
+  nothing else changes. The walk test adds it to "behind" for its capture-to-stream lag.
 - Too dark (plan L2): the frame's mean Y under 40 for 3 s, back over 60 for 3 s. Until step 6's infrared there's no
   picture to use then, so the stream says mode none, why too dark.
 - Every bundle must say depth_correction applied when the method file asks for it (as step 2's paste checks); one
@@ -50,10 +54,15 @@ EPOCH_BACK_S = 1.0   # the camera's own clock going back more than this within a
 HEALTH_S = 10.0      # frames a second and lag are over this window only: an old frame never speaks for now
 HEADING_FRESH_S = 3.0   # an arrow older than this is left off: den-track keeps its last heading indefinitely
 PERSON_MIN = 0.5     # den-detect's pose line, and plan L3's marker line
+TRANSIT_MAX_S = 5.0  # arrival less captured_unix_ns counts only between 0 and this (plan L1)
 
 
 class Stop(Exception):
     pass
+
+
+class Refused(Stop):
+    """A stop that a restart can't mend: the registration, or the camera against it. Register again with step 2."""
 
 
 # ---- the pinned tools ----------------------------------------------------------------------------------------
@@ -225,7 +234,7 @@ class Perceiver:
             self.camera = tools.roommodel.Camera(room_model, transform_id, max_error_bound_m=max_error_bound_m)
             self.camera.take_state(now(), scored=False)   # this session ends now: after the registration's own take
         except tools.roommodel.RegistrationRefused as exc:
-            raise Stop("the registration can't be used: %s" % exc) from None
+            raise Refused("the registration can't be used: %s" % exc) from None
         method = tools.observe_method.load(tools.observe_tree / "tools" / "den-observe" / "METHOD.md")
         self.settings = tools.observe.Settings(method)
         self.settings.max_age_s = FRESH_S
@@ -238,7 +247,7 @@ class Perceiver:
         self.counts = {"frames": 0, "refused_depth": 0, "unreadable": 0, "detector_errors": 0, "expired": 0, "out_of_order": 0,
                        "observations": 0, "weak_only_hidden": 0}
         self.last_t_host = self.last_capture = None
-        self.arrivals, self.lags, self.drops = deque(), deque(), deque()
+        self.arrivals, self.lags, self.drops, self.transits = deque(), deque(), deque(), deque()
         self.problem = None
         self._new_core()
 
@@ -261,10 +270,22 @@ class Perceiver:
             self.lags.popleft()
         while self.drops and now_mono - self.drops[0] > 60.0:
             self.drops.popleft()
+        while self.transits and now_mono - self.transits[0][0] > HEALTH_S:
+            self.transits.popleft()
         seconds = (self.arrivals[-1] - self.arrivals[0]) if len(self.arrivals) > 1 else 0
         return {"fps_in": round((len(self.arrivals) - 1) / seconds, 2) if seconds > 0 else None,
                 "dropped_per_min": len(self.drops),
-                "lag_s_median": round(statistics.median(lag for _, lag in self.lags), 3) if self.lags else None}
+                "lag_s_median": round(statistics.median(lag for _, lag in self.lags), 3) if self.lags else None,
+                "transit_s_median": round(statistics.median(s for _, s in self.transits), 3) if self.transits else None}
+
+    def _transit(self, meta, bundle):
+        """Arrival here less the bundle's captured_unix_ns, kept only between 0 and TRANSIT_MAX_S (the module note)."""
+        captured = (meta.get("raw") or {}).get("captured_unix_ns")
+        if type(captured) is not int:
+            return
+        transit = bundle.arrival_unix - captured / 1e9
+        if 0.0 <= transit <= TRANSIT_MAX_S:
+            self.transits.append((bundle.arrival_mono, transit))
 
     def event(self, ago_s, tracks, camera_state, now_mono):
         """ago_s: how long before now the frame was captured (None for an event with no frame)."""
@@ -319,6 +340,7 @@ class Perceiver:
             meta, depth = t.takes.read_frame(bundle.data)
         except t.takes.BundleError:
             return self._drop("unreadable", now_mono, "frames unreadable")
+        self._transit(meta, bundle)
         correction = (meta.get("raw") or {}).get("depth_correction")
         if self.require_source_correction and not (isinstance(correction, dict) and correction.get("applied") is True):
             self._drop("refused_depth", now_mono, "depth not corrected at the camera")
@@ -326,7 +348,7 @@ class Perceiver:
         try:
             self.camera.check_frame(meta.get("intrinsics"))
         except t.roommodel.RegistrationRefused as exc:
-            raise Stop("the camera no longer matches the registration (%s); register again with step 2" % exc) from None
+            raise Refused("the camera no longer matches the registration (%s); register again with step 2" % exc) from None
         reply = self.detector.detect(bundle, max(0.0, now_mono - capture_mono))
         if "error" in reply:
             return self._drop("detector_errors", now_mono, "detector errors")
@@ -377,7 +399,7 @@ class Loop(threading.Thread):
         self.source, self.mailbox, self.perceiver, self.publish = source, mailbox, perceiver, publish
         self.idle_s, self.clock = idle_s, clock
         self.halt = threading.Event()
-        self.stop_reason = None
+        self.stop_reason = self.stop_error = None
 
     def run(self):
         try:
@@ -392,6 +414,6 @@ class Loop(threading.Thread):
                     self.publish(event)
                     last = now_mono
         except Stop as exc:
-            self.stop_reason = str(exc)
+            self.stop_reason, self.stop_error = str(exc), exc
         except Exception as exc:  # a type name only: the loop's text could quote what it read
             self.stop_reason = "the loop stopped (%s)" % type(exc).__name__

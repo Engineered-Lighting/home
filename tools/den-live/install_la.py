@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Step 4 of the live den view: install den-live on LA. The owner's paste, on this PC.
+
+    python -B C:\\claude\\home\\.claude\\worktrees\\den-live\\tools\\den-live\\install_la.py
+
+1. It refuses until step 2 has registered the camera: the room model in <data root>\\private\\register\\ and the step 2
+   receipt that registered its camera.
+2. It builds the release (release.py): this branch at HEAD, the pinned trees, the two models and rtmlib's wheel,
+   scanned for private strings.
+3. It copies to LA, into /dev/shm/den-live-install/ (memory, never disk, the folder yours alone): the tarball,
+   install.sh, and the private inputs: the room model, the camera token, that receipt, and a settings file with the
+   camera's address and the den's site (both read at run time on this PC, never written into git).
+4. It runs install.sh there with sudo: ssh -t, so sudo can ask for your password.
+5. Whatever happened, it removes /dev/shm/den-live-install/ from LA, and its own copies here.
+
+Its lines and install.sh's are words only: never the token, a coordinate or the camera's address. The last lines are
+the undo, for this PowerShell. --host is the ssh host, hav-ubuntu as the den simulation's pastes use; --camera is the
+camera as LA reaches it, by default den-take's.
+"""
+import argparse
+import json
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import perceive  # noqa: E402
+import release  # noqa: E402
+import run_local as rl  # noqa: E402
+import run_service as rs  # noqa: E402  the settings file's schema and its camera-address check
+import sofa_check as sc  # noqa: E402
+
+say, Stop = sc.say, sc.Stop
+HOST = "hav-ubuntu"
+REMOTE = "/dev/shm/den-live-install"
+INSTALL_SH = Path("stack") / "services" / "den-live" / "install.sh"
+
+
+def registration(root, tools, camera_id=rl.CAMERA_ID):
+    """(room model path, the receipt that registered its camera, the transform id): refuses before step 2 has."""
+    work = Path(root) / "private" / "register"
+    model = work / "room-model.jsonl"
+    if not model.is_file():
+        raise Stop("step 2 hasn't registered the camera yet: paste register_now.py first")
+    try:
+        transform_id = tools.roommodel.current_transform_id(tools.roommodel.load(model), camera_id)
+    except tools.roommodel.RegistrationRefused as exc:
+        raise Stop("step 2's room model has no registration the service could use (%s): paste register_now.py again" % exc) from None
+    receipt = rl.registering_receipt(work, transform_id)
+    if receipt is None:
+        raise Stop("no step 2 receipt registered %s: paste register_now.py again" % transform_id)
+    return model, receipt, transform_id
+
+
+class SSH:
+    """ssh and scp as processes of their own, on this PC's console."""
+
+    def __init__(self, host):
+        self.host = host
+
+    def run(self, argv, interactive=False):
+        return subprocess.run(argv, stdin=None if interactive else subprocess.DEVNULL).returncode
+
+    def shell(self, command, interactive=False):
+        return self.run(["ssh", *(["-t"] if interactive else []), self.host, command], interactive)
+
+    def copy(self, paths, remote):
+        return self.run(["scp", "-q", *[str(p) for p in paths], "%s:%s/" % (self.host, remote)])
+
+
+def undo_lines(host):
+    return ['  ssh -t %s "sudo systemctl disable --now den-live"' % host]
+
+
+def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID):
+    tools_dir = root / "tools"
+    observe, track = sc.archive(tools_dir, "observe"), sc.archive(tools_dir, "track")
+    model, receipt, transform_id = registration(root, perceive.Tools(observe, track), camera_id)
+    take = rl.den_take(observe)
+    try:
+        token = take.read_token(token_file)
+    except take.Refused as exc:
+        raise Stop(sc.token_refusal(exc, token_file, observe)) from None
+    rs.camera_address(camera_url)
+    say("Step 2's registration %s, from %s." % (transform_id, receipt.name))
+    say("Building the release...")
+    out_dir = root / "private" / "release"
+    built = release.build(out_dir=out_dir, source=source, token=token, models_dir=models_dir, wheel=wheel)
+    release.report(built)
+    outbox = out_dir / "outbox"
+    shutil.rmtree(outbox, ignore_errors=True)
+    outbox.mkdir(parents=True)
+    copied = False
+    try:
+        shutil.copyfile(model, outbox / "room-model.jsonl")
+        shutil.copyfile(token_file, outbox / "camera-token.txt")
+        shutil.copyfile(receipt, outbox / "register-receipt.json")
+        (outbox / "settings.json").write_text(json.dumps({"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url,
+                                                          "site": rl.den_site()}) + "\n", encoding="utf-8", newline="\n")
+        (outbox / "install.sh").write_bytes(built["contents"][INSTALL_SH.as_posix()])   # the release's own, byte for byte
+        say("Copying the release and the private inputs to %s:%s ..." % (host, REMOTE))
+        if transport.shell("rm -rf %s && mkdir -m 700 %s" % (REMOTE, REMOTE)):
+            raise Stop("ssh %s didn't answer; is it reachable from this PC?" % host)
+        copied = True
+        files = [built["tarball"], *(outbox / name for name in ("install.sh", "room-model.jsonl", "camera-token.txt",
+                                                                "register-receipt.json", "settings.json"))]
+        if transport.copy(files, REMOTE):
+            raise Stop("scp to %s stopped part way" % host)
+        say("Installing on %s (sudo asks for your password there)..." % host)
+        code = transport.shell("sudo bash %s/install.sh %s %s" % (REMOTE, built["sha256"], host), interactive=True)
+        if code:
+            raise Stop("install.sh stopped (exit %d); its own lines above say why" % code)
+        say("Installed. Next: deploy Home (step 4's pull request), then the walk test.")
+        return 0
+    finally:
+        shutil.rmtree(outbox, ignore_errors=True)
+        if copied:
+            if transport.shell("rm -rf %s" % REMOTE):
+                say("Note: LA may still hold the copies in %s. To remove them, paste:" % REMOTE)
+                say('  ssh %s "rm -rf %s"' % (host, REMOTE))
+            else:
+                say("Removed the copies from %s on %s." % (REMOTE, host))
+
+
+def main(argv=None, *, root=None, transport=None, console=sc.has_console, **kw):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--host", default=HOST, help="the ssh host for LA (default %(default)s)")
+    parser.add_argument("--camera", help="the camera's URL as LA reaches it (default: den-take's)")
+    args = parser.parse_args(argv)
+    if not console():   # a background run is refused before anything: no build, no ssh
+        say("install: refused, no console. Paste the line into PowerShell yourself.")
+        return 2
+    root = Path(root) if root else sc.data_root()
+    try:
+        take = rl.den_take(sc.archive(root / "tools", "observe"))
+        code = run(root=root, host=args.host, camera_url=args.camera or take.DEFAULT_CAMERA,
+                   token_file=kw.pop("token_file", None) or take.DEFAULT_TOKEN_FILE, transport=transport or SSH(args.host), **kw)
+    except Stop as exc:
+        say("install: stopped: %s" % exc)
+        code = 2
+    except KeyboardInterrupt:
+        say("install: interrupted.")
+        code = 130
+    except Exception as exc:  # a type name only
+        say("install: stopped (%s). Paste the line again; if it repeats, tell an agent this line." % type(exc).__name__)
+        code = 2
+    say("Undo, to stop den-live on %s and keep it from starting:" % args.host)
+    for line in undo_lines(args.host):
+        say(line)
+    return code
+
+
+if __name__ == "__main__":
+    sys.exit(main())

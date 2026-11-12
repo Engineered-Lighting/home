@@ -380,7 +380,30 @@ class Perceiving(unittest.TestCase):
         self.run_take(p, frames)
         later = frames[-1].t_host + 0.35 + 30
         health = p.idle({'status': 'offline', 'why': 'no new frame for 30 s'}, later)['health']
-        self.assertEqual(health, {'fps_in': None, 'dropped_per_min': 0, 'lag_s_median': None}, 'nothing old speaks for now')
+        self.assertEqual(health, {'fps_in': None, 'dropped_per_min': 0, 'lag_s_median': None, 'transit_s_median': None},
+                         'nothing old speaks for now')
+
+    def test_the_transit_is_on_the_health_line_and_the_trackers_clock_is_unchanged(self):
+        """Plan L1, step 4: arrival less captured_unix_ns, its median, only between 0 and 5 s. The tracker's clock stays
+        arrival-anchored, so its lag is the same with the Jetson's clock right or wrong."""
+        import test_register_now as tr
+
+        def stamped(clock_error_s):
+            out = []
+            for b in bundles(READING)[:30]:   # arriving 0.12 s after capture, by the camera's clock plus its error
+                captured = int(round((1_800_000_000.0 + b.t_host + clock_error_s) * 1e9))
+                data = tr.with_metadata(b.data, lambda meta: meta.update(captured_unix_ns=captured))
+                out.append(source.Bundle(data, b.session, b.rgb_seq, b.t_host, b.arrival_unix, b.arrival_mono))
+            return out
+        p = self.perceiver(READING)
+        health = self.run_take(p, stamped(0.0))[-1]['health']
+        self.assertAlmostEqual(health['transit_s_median'], 0.12, places=3)
+        self.assertAlmostEqual(health['lag_s_median'], 0.23, places=2)
+        for wrong in (-56 * 365.25 * 86400, 0.5, -6.0):   # the 1970 clock; captured after it arrived; over 5 s in transit
+            p = self.perceiver(READING)
+            health = self.run_take(p, stamped(wrong))[-1]['health']
+            self.assertIsNone(health['transit_s_median'], wrong)
+            self.assertAlmostEqual(health['lag_s_median'], 0.23, places=2, msg='nothing else changes')
 
     def test_events_name_the_registration_and_the_scan(self):
         p = self.perceiver(READING)
@@ -458,6 +481,7 @@ class Live(unittest.TestCase):
         root = scratch('den-live-root-')
         camera = ts.FakeCamera(FIT / 'camera-calibration.json', READING)
         self.addCleanup(camera.close)
+        self.addCleanup(camera.assert_allowed_paths)   # runs first: the live loop asks for /frame.npz only
         token = root / 'token.txt'
         token.write_text(camera.token, encoding='ascii')
         page_port, stream_port, seen, started = free_port(), free_port(), {}, time.monotonic()

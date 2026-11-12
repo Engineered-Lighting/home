@@ -1,0 +1,81 @@
+# den-live (live den view, step 4) on the LA AI host: the den camera's frames to people markers, streamed to Home.
+# Always on, CPU only, loopback only. Installed by install.sh from a release tarball that tools/den-live/release.py
+# builds on the workstation; see tools/den-live/README.md, "Step 4".
+#
+# Its private inputs are root-only files on this host (0600, /etc/den-live/private/, copied by install_la.py), and
+# reach the service through LoadCredential, so the dynamic service user can read them and nothing else can:
+#   room-model.jsonl        step 2's registration of the den camera to the owner's scan
+#   camera-token.txt        the den camera's bearer token
+#   register-receipt.json   the step 2 receipt that registered it (the scan revision its picks were made on)
+# Its settings (/etc/den-live/config.json) and a drop-in (den-live.service.d/10-local.conf: the camera's one address
+# for IPAddressAllow, and a read-only bind of the gateway's content packs) are written by install.sh on this host.
+[Unit]
+Description=den-live: the live den view's people stream (loopback only)
+Documentation=file:///opt/den-live/current/tools/den-live/README.md
+After=network-online.target
+Wants=network-online.target
+# Always on: restart however often it stops, 10 s apart (Restart= below), except on a refusal.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+DynamicUser=yes
+StateDirectory=den-live
+StateDirectoryMode=0700
+WorkingDirectory=/opt/den-live/current
+LoadCredential=room-model.jsonl:/etc/den-live/private/room-model.jsonl
+LoadCredential=camera-token.txt:/etc/den-live/private/camera-token.txt
+LoadCredential=register-receipt.json:/etc/den-live/private/register-receipt.json
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# The detector's libraries start a thread per core unless told; CPUQuota below allows one and a half cores.
+Environment=OMP_NUM_THREADS=2
+Environment=MKL_NUM_THREADS=2
+ExecStart=/usr/bin/python3.12 -B /opt/den-live/current/tools/den-live/run_service.py --config /etc/den-live/config.json
+Restart=always
+RestartSec=10
+# Exit 3 is a refusal: an input missing or not matching, which a restart can't mend. The journal says which.
+RestartPreventExitStatus=3
+
+# Resource limits: the detector is YOLO26s and RTMPose-m on CPU, about one core while the den is occupied.
+MemoryMax=3G
+MemorySwapMax=0
+CPUQuota=150%
+TasksMax=256
+
+# Network: the people stream binds 127.0.0.1 only (stream.py), and the gateway on this host is its one door. The
+# service may reach this host's loopback and the camera's one address (the drop-in); the detector process also refuses
+# Python sockets itself.
+IPAddressDeny=any
+IPAddressAllow=localhost
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Hardening.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+KillMode=mixed
+TimeoutStopSec=20
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=den-live
+
+[Install]
+WantedBy=multi-user.target

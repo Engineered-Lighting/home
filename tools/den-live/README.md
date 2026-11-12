@@ -1,6 +1,6 @@
 # den-live
 
-Tools for the live den view: the den camera, live, to markers and a virtual reading spotlight in Home. Steps 1 to 3 are here so far: the sofa check, registering the camera to your scan, and your marker live on this PC.
+Tools for the live den view: the den camera, live, to markers and a virtual reading spotlight in Home. Steps 1 to 4 are here so far: the sofa check, registering the camera to your scan, your marker live on this PC, and the markers in your deployed Home from a service on LA.
 
 ## Step 1: the sofa check
 
@@ -13,7 +13,9 @@ The check needs these, from earlier work on this PC:
 
 ### Once: the camera token
 
-If `C:\den-takes\private\camera-token.txt` doesn't exist yet, follow `tools/den-take/README.md`, step 2. That's on `claude/rung-r` and in the pinned den-take tree under `%USERPROFILE%\den-live\tools\observe-*`. Its three lines save the token and print only its length, which should be 24 or more. Never open the file or paste the token anywhere.
+If `C:\den-takes\private\camera-token.txt` doesn't exist yet, paste any step's line below. It stops before it touches the camera, and prints the three lines that save the token, word for word from den-take's README, step 2. They're read from the pinned den-take tree under `%USERPROFILE%\den-live\tools\observe-*` each time, and aren't copied into this README: they name the den camera host's address and account, which this branch keeps out of git.
+
+Paste the three lines into PowerShell as printed. The last prints only the token's length, which should be 24 or more. Never open the file or paste the token anywhere.
 
 ### The check
 
@@ -154,7 +156,7 @@ It says which one is missing if it can't start.
 **Its numbers:**
 - **The floor:** the tracker's floor box is your scan's walkable floor, padded 1 m on every side. den-track's own box is a tape rectangle in no scan frame. In the den simulation, your real sofa sat outside it, and one reader split into three tracks.
 - **Freshness:** a frame older than 1.5 s by the time the detector finishes is dropped and counted.
-- **The clock:** frame times come from when frames arrive on this PC, because the den Jetson's clock reads 1970. They're kept on this PC's monotonic clock, so a time-sync step can't stall the tracker. "Behind" leaves out the camera-to-PC transit, about 0.1 s here.
+- **The clock:** frame times come from when frames arrive on this PC, as they did while the den Jetson's clock read 1970. They're kept on this PC's monotonic clock, so a time-sync step can't stall the tracker. "Behind" leaves out the camera-to-PC transit, about 0.1 s here. Since the Jetson's clock is right again, the stream's health line also has `transit_s_median`: arrival less the frame's `captured_unix_ns`, used only between 0 and 5 s. Step 4's walk test adds it to "behind".
 - **Weak boxes:** a person box under 0.5 still reaches the tracker, but it never shows as a marker on its own. A track shows once a pose, or a box at 0.5 or more, has backed it (plan L3).
 - **The arrow:** a heading older than 3 s is left off.
 - **New epochs:** a camera restart gives new marker ids (`e2-trk-1`), never an old marker.
@@ -181,3 +183,179 @@ python -B -X utf8 tools\den-live\test_live.py
 - The stream's tests check its events, heartbeat, Host check and client cap.
 - The end-to-end test runs `run_local.run` with the real detector process, the fake camera and the page on the authored room. It needs the venv, Node and the `den-live-home` worktree, and takes about 40 s.
 - Home's layer has its own tests on that branch: `node --test tools\test-apartment-people-layer.mjs`.
+
+## Step 4: markers in your deployed Home
+
+Your markers move off this PC: an always-on service on LA, `den-live`, runs step 3's loop without the page. Home's gateway passes its stream through, so your phone sees the den, look-only, from anywhere on your tailnet with no sign-in. Home's side, the look-only view and the gateway's den-live route, is on `claude/den-live-home`, through its own pull request and LA's usual Home deploy.
+
+In order:
+1. The first check, read only, with someone in the den.
+2. The install on LA.
+3. Home's pull request and LA's Home deploy, from `claude/den-live-home`'s notes.
+4. Four floor spots in your scan, once.
+5. The walk test, then the empty den and the second person.
+
+Every paste is one line in PowerShell on this PC. The ones that change LA print their undo line.
+
+### 1. The first check
+
+Before anything is installed, see what LA serves today and whether LA can pull the camera's frames fast enough. Do it with someone in the den, because the Lab's LA worker runs only then, and its load counts.
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\first_check.py
+```
+
+It runs read-only commands on LA over one `ssh hav-ubuntu` (`--host` for another), and pulls `/frame.npz` from LA for 60 s. The token travels inside ssh's input, never on a command line. Nothing is copied to LA, and no frame is kept. It prints:
+
+| Line | Means |
+|---|---|
+| `Home checkout:` | LA's Home checkout: branch, commit, date, clean or not, and whether the gateway, `home-web-gateway`, is active |
+| `Tailscale Serve:` | What port 443 forwards to, and whether `--proxy-protocol=1` is on. The look-only view needs Serve forwarding to 5182 with it on, which section 3 sets |
+| `Content packs:` | The den's scan revisions on LA, the active one, and whether step 2's is there |
+| `Frames from LA:` | Frames a second over the 60 s, median and 95th fetch time, median size, and any errors |
+| `LA's CPU:` | Cores, the 1-minute load, and whether the Lab's LA worker (`lab-la-detector-trial`) is active |
+| `For the install:` | Python 3.12 with venv, OpenCV's libGL and libglib, port 8111 free, and whether den-live is installed |
+| `Jetson relay (plan pick 2):` | "not needed", or "needed" when LA gets under 4 frames a second or a median fetch over 300 ms |
+
+Tell an agent those lines. They're words and numbers only: no address, hostname or token.
+
+### 2. The install
+
+This needs step 2's registration, the camera token, the detector's venv with its models, and this branch committed: the release names its commit, so it refuses while `tools/den-live` has changes that aren't committed. An agent commits them first.
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\install_la.py
+```
+
+1. It refuses until step 2 has registered the camera.
+2. It builds the release (`release.py`): this branch's `tools/den-live`, `tools/den-detect` and the unit at HEAD, the pinned trees the loop loads, the two models (YOLO26s `646f8bc3…`, RTMPose-m `5c0a4bf6…`), the pose model's manifest and rtmlib's wheel. Every text file going in is scanned for private strings: place and site names, tailnet names, private addresses, token-looking strings and the token itself. A hit stops it, naming the file and line, never the string.
+3. It copies the tarball, `install.sh`, and four private files to LA's memory, in `/dev/shm/den-live-install/`, which only you can read. The four are the room model, the camera token, step 2's receipt, and a settings file with the camera's address and the den's site.
+4. It runs `install.sh` there with sudo, so sudo asks for your password.
+5. Whatever happened, it removes that folder from LA, and its own copies here.
+
+`install.sh` does this on LA, and every step is safe to run again:
+- It checks the tarball against its sha256, and every file in it against the release's own list.
+- It unpacks to `/opt/den-live/releases/<id>/`.
+- It builds the detector's venv in `/opt/den-live/venvs/<id>/`, with exactly `requirements.lock`'s versions: CPU torch from PyTorch's CPU index, rtmlib from its wheel, the rest from PyPI. That's about 400 MB the first time, and a few minutes. Then it loads the models once through the detector's own checks.
+- It writes `/etc/den-live/config.json`: the camera, the gateway's content-pack folder, the venv, the models, port 8111.
+- It puts the three private inputs, root-only, in `/etc/den-live/private/`.
+- It installs `den-live.service` and starts it.
+- It waits until the stream answers on 127.0.0.1:8111, then prints the undo lines.
+
+Undo, to stop it and keep it from starting:
+
+```powershell
+ssh -t hav-ubuntu "sudo systemctl disable --now den-live"
+```
+
+`install.sh` also prints a second undo line, which removes every file it installed.
+
+**The service, on LA:**
+- `den-live.service` runs as a dynamic user. Its private inputs come in through `LoadCredential`.
+- It's held to `MemoryMax=3G` and `CPUQuota=150%`, and restarts 10 s after any stop.
+- It may reach only this host's loopback and the camera's one address.
+- The people stream binds 127.0.0.1:8111 only. The detector process still refuses Python sockets itself.
+- It refuses to start, with one sentence in its journal, when an input is missing or doesn't match. Then systemd doesn't restart it, because a restart can't mend that. That's a missing credential, a receipt that didn't register the room model's camera, another scan revision than step 2 picked on, or a camera that no longer fits the registration.
+- Every 60 s it writes one line of words and counts to its journal, the same line as step 3's: `ssh hav-ubuntu "journalctl -u den-live -n 5 -o cat"`.
+
+**What's kept on LA:** what step 3 keeps, in its state folder, `/var/lib/den-live/`: the tracker's method copy and the detector's log and caches. The log is rolled once past 10 MB. No frames and no tracks. The release, the venv and the models are under `/opt/den-live/`, and the settings and private inputs under `/etc/den-live/`.
+
+### 3. Home
+
+Home's half is on `claude/den-live-home`: the gateway's den-live route, the look-only rule and Home's markers. All of it stays off until three lines in the gateway's env file turn it on. In order:
+
+1. An agent opens the pull request once you've pushed the branch. Merge it when its checks are green:
+
+   ```powershell
+   git -C C:\claude\home push origin claude/den-live-home
+   ```
+
+2. The three env lines, added only if they aren't there:
+
+   ```powershell
+   ssh hav-ubuntu 'f=$HOME/.config/EngineeredLightingHome/web-gateway.env; for l in HOME_WEB_DEN_LIVE=1 HOME_WEB_LOOK_ONLY=1 HOME_WEB_SERVE_PORT=5182; do grep -qx $l $f || echo $l >> $f; done'
+   ```
+
+3. LA's usual Home deploy. It pulls `main`, checks, restarts the gateway, and rolls itself back on a failure. Its checkout is `~/code/home` unless the first check said otherwise:
+
+   ```powershell
+   ssh -t hav-ubuntu "bash ~/code/home/tools/deploy-home-web.sh"
+   ```
+
+   The gateway now also listens on 127.0.0.1:5182, the Serve listener. It takes only connections that start with Tailscale Serve's PROXY line.
+4. Point Serve at it, with the PROXY option:
+
+   ```powershell
+   ssh -t hav-ubuntu "sudo tailscale serve --bg --tls-terminated-tcp=443 --proxy-protocol=1 127.0.0.1:5182"
+   ```
+
+   Undo, back to how Serve was:
+
+   ```powershell
+   ssh -t hav-ubuntu "sudo tailscale serve --bg --tls-terminated-tcp=443 127.0.0.1:5181"
+   ```
+
+5. Open your Home on your phone, with no sign-in. It opens straight to the den, labelled "Den · live · look-only", with your markers and a "Sign in" link. Devices you're signed in on show the same markers in full Home's den view.
+
+To close the look-only view and keep the markers, remove its line and restart the gateway:
+
+```powershell
+ssh -t hav-ubuntu 'sed -i /^HOME_WEB_LOOK_ONLY=/d $HOME/.config/EngineeredLightingHome/web-gateway.env; sudo systemctl restart home-web-gateway'
+```
+
+Keep `HOME_WEB_SERVE_PORT` while Serve points at 5182. If Home stops loading everywhere right after step 4, Serve is forwarding there without `--proxy-protocol=1`; step 4's undo puts it back.
+
+### 4. Four floor spots, once
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\walk_test.py --spots
+```
+
+Your scan opens on a local page, step 2's scan picker without the camera's picture. Click 4 floor spots you can find both in the room and in the scan, such as a rug corner or a sofa foot, spread over the floor the camera sees. Note which is which, then Save. They go to `%USERPROFILE%\den-live\private\walk\spots.json` with the scan revision they were picked on. Paste the line again to change any of them.
+
+### 5. The walk test
+
+With the room lit and nobody else in view:
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\walk_test.py --home https://<your Home address>
+```
+
+It reads the people stream through your Home's tailnet address with no cookie, as your phone does. It says "Stand on spot 1." and so on. You have 6 s to get there, then stand still for 10 s. Then it prints:
+
+| Line | Means |
+|---|---|
+| `Distance from spot: 0.18, 0.22, 0.31, 0.12 m` | How far your marker's median position was from each spot. The goal is within 0.5 m |
+| `Lag, capture to stream: median …, 95th …` | From the camera's capture to the stream, the link between the homes included. The goal is about 1 s. In brackets: the camera-to-LA part, and LA's part |
+| `Note: spot 3 showed 2 markers …` | More than one marker, or none, during a spot |
+
+Then, when you like:
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\walk_test.py --home https://<your Home address> --empty
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\walk_test.py --home https://<your Home address> --second
+```
+
+- `--empty`: leave the den when it says so, for 10 minutes, until you hear "done". It prints `Empty den, 10 minutes: 0 markers` (goal 0), or how many showed and for how long.
+- `--second`: stay in, and have someone else come in. It says "two" out loud once it has shown two markers together for 2 s, then prints how soon and for how long.
+
+Tell an agent the printed lines. Your Home's address is never printed or kept.
+
+If it stops at once: "asked for sign-in" means your Home doesn't see this PC as a look-only tailnet device. That's section 3's env lines, or Serve not forwarding to 5182 with `--proxy-protocol=1`. "No den-live route" means Home isn't deployed yet. A 502 or 503 means den-live isn't running on LA.
+
+### Tests
+
+```powershell
+python -B -X utf8 tools\den-live\test_service.py
+```
+
+- No camera, LA, Home or ssh. Fakes on 127.0.0.1 stand in for the camera, the people stream and LA's half of the first check.
+- The camera's paths: any path but `/frame.npz` and `/calibration` is refused before a request is made. Every tool gets its camera client from one place. The fake camera logs every path, and each end-to-end test fails on any other.
+- The service runs end to end against the fake camera with the real detector. Its credentials are in a temp folder, and the stream serves the reader. Its refusals are each one sentence.
+- The release builds a tarball whose files, sums and sha256 match, the same bytes each time, and it refuses a planted private string.
+- `install.sh` passes `bash -n`, and shellcheck when it's installed. Its pinned hashes are the lock's, and it refuses before changing anything.
+- `install_la.py`'s copies, install and clean-up run through a fake transport, the clean-up on failure too.
+- The first check's lines come from canned command output, and its LA half runs here with no system tools.
+- The walk test's distances, lag, empty den and second person run against a fake stream.
+- The scan page's spots mode runs on the authored room.
+- The service's end-to-end test needs the venv and a prepared den-sim set. The release's needs the venv's models and rtmlib's wheel. The scan page's needs Node.

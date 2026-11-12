@@ -14,6 +14,8 @@ What runs, all on this PC, nothing installed anywhere:
 - stream.py: the people stream on 127.0.0.1:8111.
 - live_page.mjs: Home from the claude/den-live-home worktree, with its people layer, on 127.0.0.1:18190.
 
+The loop itself is serve(), which step 4's LA service (run_service.py) runs too, without the page.
+
 It refuses to start without step 2's registration, the camera token, the detector's venv, or Node. Every 10 s it
 prints one line of words and counts: the camera, frames a second, people, how far behind, drops. Never a coordinate.
 Nothing is kept: no frames, no tracks. Only the tracker's method copy goes in <data root>\\private\\live\\.
@@ -45,6 +47,12 @@ APP = ROOT.parent / "den-live-home"
 PAGE_PORT, STREAM_PORT = 18190, 8111
 STATUS_EVERY_S = 10.0
 CAMERA_ID = "den-oak"
+TREES = ("observe", "track", "register")   # the pinned trees the loop loads: den-observe and den-take, den-track, den-register
+
+
+class Refusal(Stop):
+    """A stop a restart can't mend: an input that's missing or doesn't match, or a registration the camera no longer
+    fits. The LA service exits 3 on one, and systemd doesn't restart it (RestartPreventExitStatus)."""
 
 
 # ---- your scan's floor --------------------------------------------------------------------------------------------
@@ -135,9 +143,16 @@ def status_line(perceiver, latest):
                (", " + problems) if problems else ""))
 
 
-def registered_revision(work, transform_id):
-    """The scan revision step 2's picks were made on, from the receipt of the paste that registered transform_id: None
-    when no receipt says (a registration from before receipts said so)."""
+def revision_of(receipt, transform_id):
+    """(whether this step 2 receipt registered transform_id, the scan revision its picks were made on or None)."""
+    fit = (receipt or {}).get("fit") or {}
+    if fit.get("result") == "registered" and fit.get("transform_id") == transform_id:
+        return True, receipt.get("scan_revision")
+    return False, None
+
+
+def registering_receipt(work, transform_id):
+    """The newest register-now-N.json receipt in work that registered transform_id, as a path, or None."""
     def number(path):
         digits = re.sub(r"\D", "", path.stem)
         return int(digits) if digits else 0
@@ -146,79 +161,117 @@ def registered_revision(work, transform_id):
             receipt = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        fit = receipt.get("fit") or {}
-        if fit.get("result") == "registered" and fit.get("transform_id") == transform_id:
-            return receipt.get("scan_revision")
+        if revision_of(receipt, transform_id)[0]:
+            return path
     return None
+
+
+def registered_revision(work, transform_id):
+    """The scan revision step 2's picks were made on, from the receipt of the paste that registered transform_id: None
+    when no receipt says (a registration from before receipts said so)."""
+    path = registering_receipt(work, transform_id)
+    return revision_of(json.loads(path.read_text(encoding="utf-8")), transform_id)[1] if path else None
+
+
+def den_take(observe_tree):
+    folder = str(Path(observe_tree) / "tools" / "den-take")
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    import take
+    return take
 
 
 def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id=CAMERA_ID, page_room="real",
         open_page=webbrowser.open, until=None, status_every_s=STATUS_EVERY_S, floor=None, require_correction=None,
         page_extra=(), page_port=PAGE_PORT, stream_port=STREAM_PORT):
-    tools = root / "tools"
-    trees = {key: sc.archive(tools, key) for key in ("observe", "track", "register")}
-    R = rn.den_register(trees["register"])
-    m, live = rn.load_method(R)
+    trees = {key: sc.archive(root / "tools", key) for key in TREES}
     if not Path(room_model).is_file():
         raise Stop("no registration yet: paste step 2's line (register_now.py) first")
     if not Path(venv).is_file():
         raise Stop("the detector's venv is not at %s" % venv)
     if not (Path(app) / "app" / "src" / "home-3d" / "apartment-people-layer.mjs").is_file():
         raise Stop("the Home checkout with the people layer isn't at %s" % app)
-    sys.path.insert(0, str(trees["observe"] / "tools" / "den-take"))
-    import take
-    try:
-        camera = take.Camera(camera_url, take.read_token(token_file))
-    except take.Refused as exc:
-        raise Stop("%s. The token file is %s; den-take's README, step 2, has the lines that save it" % (exc, token_file)) from None
-    revision = None
-    if floor is None:
-        bounds, revision = scan_floor(packs, den_site())
-        say("Floor: your scan's walkable floor (pack %s), padded %g m on every side." % (revision, perceive.FLOOR_PAD_M))
-    else:
-        bounds = floor
+    take = den_take(trees["observe"])
+    camera = sc.open_camera(take, camera_url, token_file, trees["observe"])
     state = (root / "private" / "live").resolve()
     if take.inside_checkout(state) or take.in_onedrive(state):
         raise Stop("the data root is inside a git checkout or OneDrive")
+
+    def picked_on(transform_id):
+        revision = registered_revision(Path(room_model).parent, transform_id)
+        if revision is None:
+            say("Note: step 2's receipt doesn't say which scan revision the registration was picked on.")
+        return revision
+
+    def open_live_page():
+        proc, url = page(app, page_room, page_extra, page_port=page_port, stream_port=stream_port)
+        say("Live: open %s and walk around. Ctrl+C stops it." % url)
+        open_page(url)
+        return lambda: stop_page(proc)
+
+    return serve(trees=trees, take=take, camera=camera, room_model=room_model, camera_id=camera_id,
+                 floor=floor, packs=packs, site=None if floor is not None else den_site(), picked_on=picked_on, state=state,
+                 detector_argv=[str(venv), "-B", str(HERE / "detect_worker.py"), "--tools-root", str(trees["observe"]),
+                                "--state", str(root / "state" / "detector")],
+                 stream_port=stream_port, busy="is another run_local.py still open?", until=until,
+                 status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page)
+
+
+def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
+          busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log"):
+    """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
+    only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
+    registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup."""
+    R = rn.den_register(trees["register"])
+    m, live = rn.load_method(R)
+    revision = None
+    if floor is None:
+        bounds, revision = scan_floor(packs, site)
+        say("Floor: your scan's walkable floor (pack %s), padded %g m on every side." % (revision, perceive.FLOOR_PAD_M))
+    else:
+        bounds = floor
+    state = Path(state)
     state.mkdir(parents=True, exist_ok=True)
     t = perceive.Tools(trees["observe"], trees["track"])
-    method_copy = perceive.track_method_copy(t, perceive.padded(bounds), state)
     # The registration first: one it can't use stops here, before the detector's half minute.
-    perceiver = perceive.Perceiver(t, room_model_path=room_model, camera_id=camera_id, max_error_bound_m=m["gate_m"],
-                                   track_method_path=method_copy, home="den", content_revision=revision,
-                                   require_source_correction=bool(live["require_source_correction"] if require_correction is None else require_correction))
+    try:
+        method_copy = perceive.track_method_copy(t, perceive.padded(bounds), state)
+        perceiver = perceive.Perceiver(t, room_model_path=room_model, camera_id=camera_id, max_error_bound_m=m["gate_m"],
+                                       track_method_path=method_copy, home="den", content_revision=revision,
+                                       require_source_correction=bool(live["require_source_correction"] if require_correction is None else require_correction))
+    except perceive.Stop as exc:
+        raise Refusal(str(exc)) from None
     if revision is not None:
-        picked_on = registered_revision(Path(room_model).parent, perceiver.camera.transform_id)
-        if picked_on is not None and picked_on != revision:
-            raise Stop("the camera was registered on scan revision %s, but the active scan is %s: register again with step 2"
-                       % (picked_on, revision))
-        if picked_on is None:
-            say("Note: step 2's receipt doesn't say which scan revision the registration was picked on.")
+        registered_on = picked_on(perceiver.camera.transform_id)
+        if registered_on is not None and registered_on != revision:
+            raise Refusal("the camera was registered on scan revision %s, but the active scan is %s: register again with step 2"
+                          % (registered_on, revision))
     say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
                                                           "required" if perceiver.require_source_correction else "not required"))
-    detector = out = src = loop = proc = None
+    detector = out = src = loop = cleanup = None
     try:
         say("Starting the detector (about half a minute)...")
-        detector = perceive.DetectorWorker([str(venv), "-B", str(HERE / "detect_worker.py"), "--tools-root", str(trees["observe"]),
-                                            "--state", str(root / "state" / "detector")], state / "detector.log")
+        try:
+            detector = perceive.DetectorWorker(detector_argv, state / detector_log)
+        except perceive.Stop as exc:
+            raise Stop(str(exc)) from None
         perceiver.detector = detector
         try:
             out = people_stream.PeopleStream(port=stream_port)
         except OSError:
-            raise Stop("port %d is busy: is another run_local.py still open?" % stream_port) from None
+            raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
         mailbox = source.Mailbox()
         src = source.CameraSource(take, camera, mailbox)
         loop = perceive.Loop(src, mailbox, perceiver, out.publish)
         out.start()
         src.start()
         loop.start()
-        proc, url = page(app, page_room, page_extra, page_port=page_port, stream_port=stream_port)
-        say("Live: open %s and walk around. Ctrl+C stops it." % url)
-        open_page(url)
+        if after_start is not None:
+            cleanup = after_start()
         next_line = time.monotonic() + status_every_s
         while not (until and until()):
             if loop.stop_reason:
-                raise Stop(loop.stop_reason)
+                raise (Refusal if isinstance(loop.stop_error, perceive.Refused) else Stop)(loop.stop_reason)
             if not loop.is_alive():
                 raise Stop("the loop stopped")
             if time.monotonic() >= next_line:
@@ -238,8 +291,8 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
             detector.close()
         if out is not None:
             out.close()
-        if proc is not None:
-            stop_page(proc)
+        if cleanup is not None:
+            cleanup()
 
 
 def main(argv=None, *, root=None, camera_url=None, token_file=None, venv=sc.VENV_PY, console=sc.has_console, **kw):

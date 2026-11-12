@@ -2,11 +2,14 @@
 // the camera's picture. Home's own display-mesh picker (createRegisteredDeskSurfacePicker, the one your sofa mark was
 // made with) gives each feature's point in the scan's own frame, and Save writes them into den-register's worksheet as
 // measured_with scan-pick. After a fit, --mode show draws the camera where the fit put it, and your six features as the
-// camera sees them, carried into the scan by the fit.
+// camera sees them, carried into the scan by the fit. Step 4's walk test uses --mode spots: no camera picture, just four
+// floor spots you can find both in the room and in the scan (a rug corner, a sofa foot), saved to <work>\spots.json.
 //
 //   node tools\den-live\scan_pick.mjs --work <folder> --take <scaled take> --mode pick|show [--room real|authored]
+//   node tools\den-live\scan_pick.mjs --work <walk folder> --mode spots [--room real|authored]
 //
-// register_now.py starts it; it prints `ready <url>` once it listens. Exit 0: saved (pick) or Done (show).
+// register_now.py and walk_test.py start it; it prints `ready <url>` once it listens. Exit 0: saved (pick, spots) or
+// Done (show).
 // The page is home_harness.mjs's: 127.0.0.1 only, its own Host only. Besides Home's own read-only routes it serves its
 // state and the camera's picture, and takes Save and Done, which need this page's own Origin and its token. It prints
 // no coordinate: the points go to the worksheet, which stays in the private folder.
@@ -21,11 +24,17 @@ const SCAN_PICK = 'scan-pick', SHA = /^[0-9a-f]{64}$/, LIMIT_M = 100;
 const MODE = option('mode', 'pick'), ROOM = option('room', 'real');
 const WORK = path.resolve(option('work', '')), TAKE = path.resolve(option('take', ''));
 const PORT = Number(option('port', '18186')), ORIGIN = `http://${HOST}:${PORT}`;
-if (!['pick', 'show'].includes(MODE)) fail('--mode is pick or show');
+if (!['pick', 'show', 'spots'].includes(MODE)) fail('--mode is pick, show or spots');
 if (!['real', 'authored'].includes(ROOM)) fail('--room is real or authored');
-const WORKSHEET = path.join(WORK, 'worksheet.json');
-if (!option('work') || !fs.existsSync(WORKSHEET)) fail('--work must be the registration folder, with its worksheet.json');
-if (!option('take') || !fs.existsSync(path.join(TAKE, 'take.json'))) fail('--take must be a take folder');
+const SPOTS = MODE === 'spots';
+const WORKSHEET = path.join(WORK, 'worksheet.json'), SPOTS_FILE = path.join(WORK, 'spots.json');
+const SPOT_IDS = ['s1', 's2', 's3', 's4'], SPOT_LABEL = 'a floor spot you can also find in the room: a rug corner, a sofa foot';
+if (SPOTS) {
+  if (!option('work') || !fs.existsSync(WORK)) fail('--work must be the walk test\'s folder');
+} else {
+  if (!option('work') || !fs.existsSync(WORKSHEET)) fail('--work must be the registration folder, with its worksheet.json');
+  if (!option('take') || !fs.existsSync(path.join(TAKE, 'take.json'))) fail('--take must be a take folder');
+}
 for (let dir = WORK; ; dir = path.dirname(dir)) {   // outside every git checkout, not just this one
   if (fs.existsSync(path.join(dir, '.git'))) fail('the registration folder must stay outside every git checkout');
   if (path.dirname(dir) === dir) break;
@@ -64,7 +73,43 @@ function showData(sheet) {
     features: fit.pairs.filter(pair => pair.camera_xyz_m).map(pair => ({ id: pair.id, role: pair.role, point_m: carry(pair.camera_xyz_m),
       scan_m: pair.room_xyz_m, apart_m: Math.hypot(...carry(pair.camera_xyz_m).map((v, i) => v - pair.room_xyz_m[i])) })) };
 }
+// The walk test's spots: kept from an earlier save only when they were picked on this scan revision.
+function keptSpots() {
+  try {
+    const doc = readJson(SPOTS_FILE);
+    return doc.content_revision === binding.content_revision && Array.isArray(doc.spots) ? doc.spots : [];
+  } catch { return []; }
+}
+function spotsState() {
+  const kept = Object.fromEntries(keptSpots().map(spot => [spot.id, spot]));
+  return { mode: MODE, room: ROOM, binding, clicks: {}, left: false, show: null,
+    points: SPOT_IDS.map(id => ({ id, role: 'spot', label: SPOT_LABEL, picked: !!kept[id],
+      point_m: kept[id] ? [...kept[id].xy_m, kept[id].z_m] : null })) };
+}
+function saveSpots(body) {
+  const picks = body?.picks;
+  if (!picks || typeof picks !== 'object' || Array.isArray(picks)) throw Error('picks_missing');
+  for (const id of Object.keys(picks)) if (!SPOT_IDS.includes(id)) throw Error(`not_a_spot:${String(id).slice(0, 32)}`);
+  const kept = Object.fromEntries(keptSpots().map(spot => [spot.id, spot]));
+  const spots = SPOT_IDS.map(id => {
+    const pick = picks[id];
+    if (pick === undefined) {
+      if (!kept[id]) throw Error(`not_picked:${id}`);
+      return kept[id];
+    }
+    const p = pick?.point_m, ref = pick?.surface_ref;
+    if (!Array.isArray(p) || p.length !== 3 || !p.every(v => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= LIMIT_M)) throw Error(`bad_point:${id}`);
+    if (!ref || typeof ref.asset_name !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(ref.asset_name) || !SHA.test(ref.asset_sha256 || '')) throw Error(`bad_surface:${id}`);
+    return { id, xy_m: [metres(p[0]), metres(p[1])], z_m: metres(p[2]), measured_with: SCAN_PICK,
+      surface_ref: { asset_name: ref.asset_name, asset_sha256: ref.asset_sha256 } };
+  });
+  writeJson(SPOTS_FILE, { schema: 'den-live-walk-spots-1', content_revision: binding.content_revision, saved_unix: Date.now() / 1000,
+    note: 'Floor spots in the scan\'s frame for the walk test, picked on Home\'s display mesh. Private: never in git.', spots });
+  return spots.length;
+}
+
 function state() {
+  if (SPOTS) return spotsState();
   const sheet = readJson(WORKSHEET);
   let clicks = {};
   try { clicks = readJson(clicksFile()).clicks || {}; } catch { /* nothing clicked yet */ }
@@ -118,11 +163,11 @@ async function routes(req, res, url) {
       finish(0, 'the page says done');
       return true;
     }
-    if (MODE !== 'pick') { refuse(res, 409); return true; }
+    if (MODE === 'show') { refuse(res, 409); return true; }
     let count;
-    try { count = save(await readBody(req)); } catch (error) { send(res, 422, { ok: false, error: error.message }); return true; }
+    try { count = (SPOTS ? saveSpots : save)(await readBody(req)); } catch (error) { send(res, 422, { ok: false, error: error.message }); return true; }
     finished = true; send(res, 200, { ok: true, saved: count });
-    finish(0, `saved ${count} scan picks to the worksheet`);
+    finish(0, SPOTS ? `saved ${count} floor spots for the walk test` : `saved ${count} scan picks to the worksheet`);
     return true;
   }
   if (req.method !== 'GET') return false;

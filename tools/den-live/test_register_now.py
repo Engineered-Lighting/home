@@ -536,7 +536,10 @@ class OnRenders(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        cls.camera.close()
+        try:
+            cls.camera.assert_allowed_paths()   # step 2's take: /frame.npz and /calibration only
+        finally:
+            cls.camera.close()
 
     def setUp(self):
         self.root = scratch('den-live-root-')

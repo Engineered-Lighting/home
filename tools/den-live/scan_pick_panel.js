@@ -1,12 +1,14 @@
 // The scan page's panel, beside Home's own 3D view (scan_pick.mjs serves both). Pick mode: one row per feature, the
 // camera's picture with your clicks numbered, and a click on the scan (without dragging) picks the highlighted row's
 // feature through Home's display-mesh picker. Show mode: the camera where the fit put it and your six features as the
-// camera sees them, as Home's own calibration markers. It talks to nothing but this harness.
+// camera sees them, as Home's own calibration markers. Spots mode (step 4's walk test): four floor spots, no camera
+// picture. It talks to nothing but this harness.
 (() => {
   'use strict';
   const TOKEN = window.__scanPick?.token;
   const engine = () => window.__APT_ENGINE;
   const fmtCm = metres => `${(metres * 100).toFixed(1)} cm`;
+  const SPOT_FLOOR_M = 0.3;   // spots mode: a pick higher than this above the scan's floor gets a warning
   const until = async (test, ms) => {
     for (const end = Date.now() + ms; Date.now() < end; await new Promise(done => setTimeout(done, 200))) if (test()) return true;
     return test();
@@ -67,7 +69,7 @@
     list.replaceChildren(...state.points.map(point => {
       const row = document.createElement('li');
       row.className = point.id === active ? 'active' : '';
-      const clickedOnCamera = state.clicks[point.id] ? '' : ' (not clicked on the camera)';
+      const clickedOnCamera = state.mode !== 'pick' || state.clicks[point.id] ? '' : ' (not clicked on the camera)';
       if (state.mode === 'show') {
         const feature = state.show.features.find(item => item.id === point.id);
         row.innerHTML = '<span class="id"></span><span class="label"></span><span class="state"></span>';
@@ -83,7 +85,7 @@
       return row;
     }));
     drawLeft();
-    if (state.mode === 'pick') button.disabled = !ready || !state.points.every(isPicked);
+    if (state.mode !== 'show') button.disabled = !ready || !state.points.every(isPicked);
     markers();
   }
   function markers() {
@@ -107,7 +109,7 @@
   window.addEventListener('click', event => {
     // The press must start on the scan; Home may release it over one of its own overlay elements, so the click's
     // target isn't checked again, only that it isn't this panel.
-    if (state?.mode !== 'pick' || !ready || !active || !down || panel.contains(event.target)) return;
+    if (!state || state.mode === 'show' || !ready || !active || !down || panel.contains(event.target)) return;
     const moved = Math.hypot(event.clientX - down.x, event.clientY - down.y);
     down = null;
     if (moved > 5) return;
@@ -119,8 +121,12 @@
       surface_ref: { asset_name: hit.surface_ref.asset_name, asset_sha256: hit.surface_ref.asset_sha256 } };
     const done = active;
     active = nextUnpicked(active);
-    say(active ? `${done} picked. Now ${active}: ${state.points.find(point => point.id === active).label}.`
-      : `${done} picked. All six are in: check the green dots, re-pick any row, then Save.`);
+    // The scan's floor is z = 0: a spot well above it is a pick on furniture, not the floor the walk test stands on.
+    const high = state.mode === 'spots' && hit.point[2] > SPOT_FLOOR_M
+      ? ` It's ${fmtCm(hit.point[2])} above the scan's floor: re-pick it if that isn't on the floor.` : '';
+    say((active ? `${done} picked.${high} Now ${active}: ${state.points.find(point => point.id === active).label}.`
+      : `${done} picked.${high} All ${state.points.length} are in: check the green dots, re-pick any row, then Save.`)
+      + (state.mode === 'spots' && !active ? ' Note which spot is which: the walk test says "stand on spot 1" and so on.' : ''));
     render();
   }, true);
 
@@ -132,9 +138,10 @@
   button.onclick = async () => {
     button.disabled = true;
     try {
-      const result = await post(state.mode === 'pick' ? '/__pick/save' : '/__pick/done', state.mode === 'pick' ? { picks } : {});
+      const result = await post(state.mode === 'show' ? '/__pick/done' : '/__pick/save', state.mode === 'show' ? {} : { picks });
       if (!result.ok) throw Error(result.error || 'refused');
-      say(state.mode === 'pick' ? 'Saved. Back in PowerShell, the fit runs now. You can close this tab.' : 'Done. You can close this tab.');
+      say({ pick: 'Saved. Back in PowerShell, the fit runs now. You can close this tab.',
+        spots: 'Saved. Back in PowerShell, paste the walk test now. You can close this tab.' }[state.mode] || 'Done. You can close this tab.');
     } catch (error) {
       say(`Not saved: ${error.message}`);
       button.disabled = false;
@@ -151,6 +158,11 @@
       intro.textContent = `Green dots: the camera (${state.show.transform_id}), and your six features as the camera sees them, carried into your scan by the fit. Each should sit on its feature. The distance beside each row is how far it lands from your scan pick.`;
       button.textContent = 'Done';
       button.disabled = false;
+    } else if (state.mode === 'spots') {
+      title.textContent = 'Step 4: four floor spots for the walk test';
+      intro.textContent = 'Click 4 floor spots you can find both in the room and in the scan: a rug corner, a sofa foot. Pick a row, orbit to that spot, and click it once without dragging. Spread them over the floor the camera sees.';
+      button.textContent = 'Save';
+      active = nextUnpicked(null);
     } else {
       title.textContent = 'Step 2: the same six features, in your scan';
       intro.textContent = 'Pick a row, orbit to that feature, and click it once without dragging. The camera\'s picture shows what you clicked there.';
@@ -164,10 +176,10 @@
     if (!view) { say('Home\'s 3D view didn\'t open. Reload the page.'); return; }
     if (toolbarButton('Mesh view').getAttribute('aria-pressed') !== 'true') toolbarButton('Mesh view').click();
     await until(() => engine()?.modes?.mode === 'mesh', 30000);
-    if (state.mode === 'pick') {
+    if (state.mode !== 'show') {
       try { await engine().prepareDeskTargetSurface(state.binding); } catch (error) { say(`The scan's mesh isn't pickable: ${error.message}`); return; }
       ready = true;
-      say(active ? `Click ${active} in the scan: ${state.points.find(point => point.id === active).label}.` : 'All six are kept from before. Re-pick any row, or Save.');
+      say(active ? `Click ${active} in the scan: ${state.points.find(point => point.id === active).label}.` : `All ${state.points.length} are kept from before. Re-pick any row, or Save.`);
     } else {
       say('Look for the dots, then press Done.');
     }

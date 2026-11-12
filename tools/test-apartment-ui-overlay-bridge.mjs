@@ -476,7 +476,7 @@ function engineFixture() {
     performance: { now: () => state.clock }, requestAnimationFrame: callback => state.scheduled.push(callback),
     cancelAnimationFrame: id => state.canceled.push(id), applyPerformanceBudget() {},
     performanceController: { setSamplingSourceActive() {}, recordFrame() {}, getDiagnostics: () => ({}) }, performanceSamplingSource: 'authored',
-    pointsMaterial: { uniforms: { uTime: {}, uFadeNear: {}, uFadeFar: {} }, dispose() {} }, etchedLook: null,
+    pointsMaterial: { uniforms: { uTime: {}, uFadeNear: {}, uFadeFar: {} }, dispose() {} }, xrayLook: null,
     rig: { update() {}, inCameraPose: () => false, currentRadius: () => 5 },
     cutawayInverse: new THREE.Matrix4(), cutawayCamera: new THREE.Vector3(), lastFitLocalBox: null,
     cutawayM: { deriveDollhouseCutaway: () => ({}) }, cutawayMaterialM: { updateCutawayUniforms() {} },

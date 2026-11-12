@@ -314,7 +314,7 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
     try {
       const context = await browser.newContext({ viewport, deviceScaleFactor: 1, serviceWorkers: 'block' });
       await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
-      // The etched Cloud look is WebGL-only; the WebGPU port mirrors the classic cloud, so compare against that.
+      // The x-ray Cloud look is WebGL-only; the WebGPU port mirrors the classic cloud, so compare against that.
       await context.addInitScript(() => { localStorage.setItem('apartment3d.site', 'echo'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); localStorage.setItem('apartment3d.pointLook', 'classic'); window.HG_DISABLE_SERVICE_WORKER = true; });
       await context.route('**/*', route => {
         const url = new URL(route.request().url());

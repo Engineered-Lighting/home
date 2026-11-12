@@ -786,20 +786,20 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         throw lastErr || new Error('no point asset reachable');
     }
 
-    /* The etched Cloud look (pointcloud.js): WebGL on desktop-class devices,
+    /* The x-ray Cloud look (pointcloud.js): WebGL on desktop-class devices,
      * unless this browser opted out. The classic cloud shows until the
      * worker's features arrive, and stays if they never do. Phones keep the
      * classic cloud until the look has been measured there. */
-    let etchedLook = null;
-    const etchedViewport = new THREE.Vector2();
-    function startEtchedLook(target) {
-        if (nodeRenderer || pointcloudM.etchedLookOptedOut()) return;
+    let xrayLook = null;
+    const xrayBuffer = new THREE.Vector2(), xrayTarget = new THREE.Vector3(), xrayForward = new THREE.Vector3();
+    function startXrayLook(target) {
+        if (nodeRenderer || pointcloudM.xrayLookOptedOut()) return;
         const tier = adaptiveM.selectClientPerformanceTarget({ navigatorRef, windowRef: window });
         if (tier === 'mobile60' || tier === 'mobile30') return;
-        pointcloudM.attachEtchedLook(target, pointsMaterial, { signal: lifetimeController.signal })
-            .then((look) => { if (disposed) look.detach(); else etchedLook = look; })
+        pointcloudM.attachXrayLook(target, pointsMaterial, { renderer, scene, camera, signal: lifetimeController.signal })
+            .then((look) => { if (disposed) look.detach(); else xrayLook = look; })
             .catch((error) => {
-                if (error?.name !== 'AbortError') console.warn('[home-3d] etched cloud unavailable; classic cloud kept', error);
+                if (error?.name !== 'AbortError') console.warn('[home-3d] x-ray cloud unavailable; classic cloud kept', error);
             });
     }
 
@@ -814,7 +814,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         apartmentRoot.add(points);
         fitNow();
         emit('loaded', { total: result.total });
-        startEtchedLook(points);
+        startXrayLook(points);
         return points;
     })();
 
@@ -914,14 +914,17 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             pointsMaterial.uniforms.uMaxPointPx.value = limits.maxPointPx;
             pointsMaterial.uniforms.uDepthFloor.value = limits.depthFloor;
         }
-        if (etchedLook) {
-            etchedLook.update({
-                viewportPx: renderer.getDrawingBufferSize(etchedViewport).y,
-                gain: pointcloudM.etchedGain({
-                    orbitRadius: orbitR,
-                    overviewRadius: rig.detentRadius(0),
-                    closestRadius: rig.detentRadius(rig.detentCount() - 1),
-                }),
+        if (xrayLook) {
+            // the orbit centre, in the apartment frame: the camera looks at it from orbitR away
+            camera.getWorldDirection(xrayForward);
+            camera.getWorldPosition(xrayTarget).addScaledVector(xrayForward, orbitR).applyMatrix4(cutawayInverse);
+            const viewportPx = renderer.getDrawingBufferSize(xrayBuffer).y;
+            const css = renderer.getSize(xrayBuffer);
+            xrayLook.update({
+                viewportPx, cssWidth: css.x, cssHeight: css.y,
+                cameraLocal: cutawayCamera.toArray(), targetLocal: xrayTarget.toArray(),
+                // the same moments Home's own cutaway stands down: a held camera pose, live view, calibration
+                cut: !inCamPose && !dollhouseContext.live && !dollhouseContext.calibrating,
             });
         }
         if (modes.setMeshNearCut) {
@@ -944,6 +947,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 catch (_) { retireUiLayer(layer); }
             }
         }
+        xrayLook?.prepass();
         renderer.render(scene, camera);
         lightingRenderEvidence.afterRender();
 
@@ -1155,6 +1159,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             // Render and copy in one task: the default framebuffer need not be
             // preserved between frames. This does not advance the camera clock.
             modes.tickSpark?.(camera, performance.now() / 1000);
+            xrayLook?.prepass();
             renderer.render(scene, camera);
             const source = renderer.domElement;
             const width = Math.max(1, Math.round(source.width * Math.min(1, Math.max(0.01, scale))));
@@ -1446,6 +1451,9 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             engine.setRunning(false);
             disposed = true;
             lightingRenderEvidence.dispose();
+            // its light target is not in the scene graph the sweep below disposes
+            try { xrayLook?.detach(); } catch (_) { /* the sweep still runs */ }
+            xrayLook = null;
             for (const layer of uiLayers) retireUiLayer(layer);
             equipmentCutaway.dispose();
             unsubscribePerformanceBudget();

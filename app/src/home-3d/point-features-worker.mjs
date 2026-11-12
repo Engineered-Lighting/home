@@ -9,7 +9,7 @@ self.onmessage = async (event) => {
         const t0 = performance.now();
         const out = computePointFeatures(positions, intensity, count);
         out.ms = Math.round(performance.now() - t0);
-        self.postMessage({ ok: true, ...out }, [out.normal.buffer, out.edge.buffer, out.tone.buffer, out.spacing.buffer]);
+        self.postMessage({ ok: true, ...out }, [out.normal.buffer, out.spacing.buffer, out.inside.buffer]);
     } catch (error) {
         self.postMessage({ ok: false, error: String(error?.message || error) });
     }

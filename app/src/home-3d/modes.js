@@ -351,7 +351,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             pts.visible = v;
             pts.traverse?.((object) => {
                 for (const material of Array.isArray(object.material) ? object.material : object.material ? [object.material] : []) {
-                    // The etched look's colour points never write depth; its depth pass follows the rule.
+                    // The x-ray look's copy points never write depth; x-ray has no depth by design.
                     material.depthWrite = material.userData?.noDepthWrite ? false : depthWrite;
                 }
             });

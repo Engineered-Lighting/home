@@ -495,7 +495,15 @@ class Live(unittest.TestCase):
                         if raw.startswith(b'event: people'):
                             seen['sse'] = True
                             break
-            return time.monotonic() - started > 40
+            elapsed = time.monotonic() - started
+            if elapsed > 60 or (elapsed > 40 and 'url' not in seen):
+                return True
+            if elapsed <= 40:
+                return False
+            # End on a frame with the reader tracked. The fake camera loops its take, and each wrap starts a new epoch
+            # with no confirmed track for about half a second; ending there made the last event empty now and then.
+            with urllib.request.urlopen(seen['url'] + 'api/den-live/v1/homes/den/state', timeout=5) as response:
+                return len(json.loads(response.read())['people']['tracks']) == 1
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             result = rl.run(root=root, camera_url=camera.url, token_file=token, venv=sc.VENV_PY, app=rl.APP, packs=None,

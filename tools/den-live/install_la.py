@@ -3,6 +3,8 @@
 
     python -B C:\\claude\\home\\.claude\\worktrees\\den-live\\tools\\den-live\\install_la.py
 
+0. It refuses unless this checkout is on claude/den-live with no uncommitted change to a tracked file, the only branch
+   LA installs from, and prints the branch and commit it found.
 1. It refuses until step 2 has registered the camera: the room model in <data root>\\private\\register\\ and the step 2
    receipt that registered its camera.
 2. It builds the release (release.py): this branch at HEAD, the pinned trees, the two models and rtmlib's wheel,
@@ -34,6 +36,7 @@ import run_service as rs  # noqa: E402  the settings file's schema and its camer
 import sofa_check as sc  # noqa: E402
 
 say, Stop = sc.say, sc.Stop
+INSTALL_BRANCH = "claude/den-live"   # the only branch LA installs from (the den end-to-end plan, section 7)
 HOST = "hav-ubuntu"
 REMOTE = "/dev/shm/den-live-install"
 INSTALL_SH = Path("stack") / "services" / "den-live" / "install.sh"
@@ -53,6 +56,24 @@ def registration(root, tools, camera_id=rl.CAMERA_ID):
     if receipt is None:
         raise Stop("no step 2 receipt registered %s: paste register_now.py again" % transform_id)
     return model, receipt, transform_id
+
+
+def branch_check(repo=None):
+    """(branch, short commit) of the checkout this paste runs from: refuses unless it's claude/den-live with no
+    uncommitted change to a tracked file. Untracked files don't count: the release is built from the commit."""
+    repo = repo or release.ROOT
+    try:
+        branch = release.git("rev-parse", "--abbrev-ref", "HEAD", repo=repo).strip()
+        commit = release.git("rev-parse", "--short", "HEAD", repo=repo).strip()
+        changed = [line for line in release.git("status", "--porcelain", "--untracked-files=no", repo=repo).splitlines() if line.strip()]
+    except Stop:
+        raise Stop("this folder isn't a git checkout; LA installs from %s only" % INSTALL_BRANCH) from None
+    if branch != INSTALL_BRANCH:
+        raise Stop("this checkout is on %s; LA installs from %s only" % (branch, INSTALL_BRANCH))
+    if changed:
+        raise Stop("%s has uncommitted changes to %d file%s; an agent commits them first"
+                   % (INSTALL_BRANCH, len(changed), "" if len(changed) == 1 else "s"))
+    return branch, commit
 
 
 class SSH:
@@ -125,7 +146,7 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
                 say("Removed the copies from %s on %s." % (REMOTE, host))
 
 
-def main(argv=None, *, root=None, transport=None, console=sc.has_console, **kw):
+def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_branch=branch_check, **kw):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--host", default=HOST, help="the ssh host for LA (default %(default)s)")
     parser.add_argument("--camera", help="the camera's URL as LA reaches it (default: den-take's)")
@@ -135,6 +156,8 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, **kw):
         return 2
     root = Path(root) if root else sc.data_root()
     try:
+        branch, commit = check_branch()   # before anything is built or copied
+        say("Installing from %s at %s." % (branch, commit))
         take = rl.den_take(sc.archive(root / "tools", "observe"))
         code = run(root=root, host=args.host, camera_url=args.camera or take.DEFAULT_CAMERA,
                    token_file=kw.pop("token_file", None) or take.DEFAULT_TOKEN_FILE, transport=transport or SSH(args.host), **kw)

@@ -235,7 +235,7 @@ This needs step 2's registration, the camera token, the detector's venv with its
 python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\install_la.py
 ```
 
-1. It refuses until step 2 has registered the camera.
+1. It refuses unless this checkout is on `claude/den-live` with nothing uncommitted, the only branch LA installs from, and prints the branch and commit it found. Then it refuses until step 2 has registered the camera.
 2. It builds the release (`release.py`): this branch's `tools/den-live`, `tools/den-detect` and the unit at HEAD, the pinned trees the loop loads, the two models (YOLO26s `646f8bc3…`, RTMPose-m `5c0a4bf6…`), the pose model's manifest and rtmlib's wheel. Every text file going in is scanned for private strings: place and site names, tailnet names, private addresses, token-looking strings and the token itself. A hit stops it, naming the file and line, never the string.
 3. It copies the tarball, `install.sh`, and four private files to LA's memory, in `/dev/shm/den-live-install/`, which only you can read. The four are the room model, the camera token, step 2's receipt, and a settings file with the camera's address and the den's site.
 4. It runs `install.sh` there with sudo, so sudo asks for your password.

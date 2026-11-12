@@ -692,11 +692,65 @@ class FakeLA:
         return 0
 
 
+ON_DEN_LIVE = lambda: ('claude/den-live', 'abc1234')   # the branch check, passed: these tests may run from any checkout
+
+
+class BranchCheck(unittest.TestCase):
+    """install_la installs from claude/den-live only, with no uncommitted change to a tracked file."""
+
+    def repo(self, branch='claude/den-live'):
+        repo = scratch('den-live-branch-')
+        git = lambda *a: subprocess.run(['git', '-C', str(repo), *a], check=True, capture_output=True)
+        git('init', '-q', '-b', branch)
+        git('config', 'user.email', 'test@example.invalid')
+        git('config', 'user.name', 'test')
+        (repo / 'a.txt').write_text('a\n', encoding='utf-8')
+        git('add', 'a.txt')
+        git('commit', '-q', '-m', 'a')
+        return repo
+
+    def test_a_clean_den_live_checkout_passes_and_says_where(self):
+        repo = self.repo()
+        (repo / 'untracked.txt').write_text('x\n', encoding='utf-8')   # not in the release: it's built from the commit
+        branch, commit = install_la.branch_check(repo)
+        self.assertEqual(branch, 'claude/den-live')
+        self.assertRegex(commit, r'^[0-9a-f]{7,}$')
+
+    def test_another_branch_is_refused_by_name(self):
+        with self.assertRaises(sc.Stop) as caught:
+            install_la.branch_check(self.repo('claude/den-live-body'))
+        self.assertIn('on claude/den-live-body; LA installs from claude/den-live only', str(caught.exception))
+
+    def test_an_uncommitted_change_is_refused(self):
+        repo = self.repo()
+        (repo / 'a.txt').write_text('changed\n', encoding='utf-8')
+        with self.assertRaises(sc.Stop) as caught:
+            install_la.branch_check(repo)
+        self.assertIn('uncommitted changes to 1 file', str(caught.exception))
+
+    def test_a_folder_that_isnt_a_checkout_is_refused(self):
+        with self.assertRaises(sc.Stop) as caught:
+            install_la.branch_check(scratch('den-live-not-git-'))
+        self.assertIn("isn't a git checkout", str(caught.exception))
+
+    def test_the_paste_stops_on_the_wrong_branch_before_anything(self):
+        root, transport = scratch('den-live-root-'), FakeLA()
+        def elsewhere():
+            raise sc.Stop('this checkout is on main; LA installs from claude/den-live only')
+        code, text = quiet(install_la.main, [], root=root, console=lambda: True, transport=transport, check_branch=elsewhere)
+        self.assertEqual(code, 2)
+        self.assertIn('install: stopped: this checkout is on main', text)
+        self.assertEqual(transport.calls, [], 'no ssh, no copy')
+        self.assertFalse((root / 'private' / 'release').exists(), 'nothing built')
+
+
 class InstallLA(unittest.TestCase):
     def test_it_refuses_until_step_2_has_registered(self):
         root = scratch('den-live-root-')
         transport = FakeLA()
-        code, text = quiet(install_la.main, [], root=root, console=lambda: True, transport=transport, token_file=root / 't.txt')
+        code, text = quiet(install_la.main, [], root=root, console=lambda: True, transport=transport, token_file=root / 't.txt',
+                           check_branch=ON_DEN_LIVE)
+        self.assertIn('Installing from claude/den-live at abc1234.', text)
         self.assertEqual(code, 2)
         self.assertIn("step 2 hasn't registered the camera yet", text)
         self.assertEqual(transport.calls, [], 'no ssh before step 2')
@@ -715,7 +769,7 @@ class InstallLA(unittest.TestCase):
             transport = FakeLA(install_code)
             code, text = quiet(install_la.main, ['--host', 'la-test', '--camera', 'http://198.51.100.9:8090'], root=root,
                                console=lambda: True, transport=transport, token_file=root / 'token.txt', source='worktree',
-                               camera_id='den-virtual')
+                               camera_id='den-virtual', check_branch=ON_DEN_LIVE)
             self.assertEqual(code, 2 if install_code else 0, text)
             sha = (root / 'private' / 'release' / (release.TARBALL + '.sha256')).read_text(encoding='ascii').split()[0]
             remote = install_la.REMOTE

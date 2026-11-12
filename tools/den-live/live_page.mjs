@@ -6,7 +6,7 @@
 // --app is the claude/den-live-home worktree: its app/src holds home-3d/apartment-people-layer.mjs, the module step 4
 // releases into your deployed Home. This page serves that Home unchanged, through home_harness.mjs (127.0.0.1 only, its
 // own Host only, GET only), and adds two things:
-// - /api/den-live/v1/homes/den/{stream,state}, passed to the loop's stream server on 127.0.0.1:<stream-port>. They're
+// - /api/den-live/v1/homes/den/{stream,state,body}, passed to the loop's stream server on 127.0.0.1:<stream-port>. They're
 //   the same paths step 4's gateway route serves, so the page's code doesn't change between the steps.
 // - its panel, /__live/panel.mjs, which mounts the layer on Home's engine and feeds it the stream.
 // It prints `ready <url>` once it listens, and nothing with a coordinate in it.
@@ -40,14 +40,14 @@ function pass(req, res, pathname) {
   upstream.end();
 }
 async function routes(req, res, url) {
-  if (req.method === 'GET' && (url.pathname === STREAM + 'stream' || url.pathname === STREAM + 'state')) {
+  if (req.method === 'GET' && ['stream', 'state', 'body'].some(name => url.pathname === STREAM + name)) {
     pass(req, res, url.pathname);
     return true;
   }
   return false;
 }
 
-const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__denLive={stream:${JSON.stringify(STREAM + 'stream')},site:${JSON.stringify(home.site)}};`
+const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__denLive={stream:${JSON.stringify(STREAM + 'stream')},body:${JSON.stringify(STREAM + 'body')},site:${JSON.stringify(home.site)}};`
   + `try{localStorage.setItem('apartment3d.site',${JSON.stringify(home.site)});localStorage.setItem('home.perf.backgroundWarmup','off');localStorage.setItem('apartment3d.prewarm','off');}catch(_){}</script>`;
 const made = createHarness({ home, packs: PACKS, port: PORT, pageInit: PAGE_INIT, panel: path.join(HERE, 'live_page_panel.mjs'),
   panelRoute: '/__live/panel.mjs', panelModule: true, authoredRoom: ROOM === 'authored', routes });

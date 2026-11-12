@@ -524,7 +524,12 @@ class Live(unittest.TestCase):
         # No coordinate is printed: every line is one of the shapes run_local prints, whose only numbers are counts, rates
         # and times. The control: a line holding a position would match none of them.
         shapes = (r'^Starting the detector', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
-                  r'^camera ok \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames')
+                  r'^camera ok \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames',
+                  r'^The live body is on \(body_worker\.py\)\. It learns the empty room', r'^The live body is off: [a-z \'(),:]+\. The markers go on\.$')
+        # The live body ran beside the markers: frames reached it, and it never stopped the loop.
+        self.assertIsNotNone(result['body'])
+        self.assertGreater(result['body']['sent'], 5)
+        self.assertIsNone(result['body']['stopped'])
         known = lambda line: any(re.search(shape, line) for shape in shapes)
         self.assertTrue(all(known(line) for line in text.splitlines() if line.strip()), text)
         self.assertFalse(known('camera ok | 4.0 frames a second | 1 people at [0.01, 0.04] | 0.25 s behind'), 'the control')

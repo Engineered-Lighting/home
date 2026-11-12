@@ -34,6 +34,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import body_link  # noqa: E402  the live body's process (body_worker.py), fed without waiting
 import perceive  # noqa: E402
 import register_now as rn  # noqa: E402  the method file's numbers: the gate, and whether the camera's correction is required
 import sofa_check as sc  # noqa: E402  the data root, the pinned archives, the venv, say
@@ -43,7 +44,9 @@ import stream as people_stream  # noqa: E402
 say, Stop = sc.say, sc.Stop
 ROOT = HERE.parents[1]
 LIVE_PAGE = HERE / "live_page.mjs"
-APP = ROOT.parent / "den-live-home"
+# Home with the live view's layers: this checkout when it holds the body layer too (claude/den-live-body), else the
+# claude/den-live-home worktree beside it.
+APP = ROOT if (ROOT / "app" / "src" / "home-3d" / "apartment-body-layer.mjs").is_file() else ROOT.parent / "den-live-home"
 PAGE_PORT, STREAM_PORT = 18190, 8111
 STATUS_EVERY_S = 10.0
 CAMERA_ID = "den-oak"
@@ -217,8 +220,28 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
                  status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page)
 
 
+def start_body(perceiver, out, venv_python, log_path, revision):
+    """The live body's process, in the detector's venv, set up with the registration's rectified-left intrinsics and
+    room_from_camera. Its frames go out on the stream's /body path, tagged with the registration and scan revision the
+    markers carry. One that doesn't start is said once; the markers go on without it."""
+    camera = perceiver.camera
+    rotation, translation = camera.room_from_left
+    setup = {"left_k": list(camera.rig.left_k[:4]), "room_from_left": [[list(r) for r in rotation], list(translation)], "home": perceiver.home}
+    scope = {"transform_id": camera.transform_id, "content_revision": revision}
+    link = body_link.BodyLink([str(venv_python), "-B", str(HERE / "body_worker.py")], log_path, setup=setup,
+                              on_frame=lambda frame: out.publish_body({**frame, **scope}))
+    if link.stopped:
+        say("The live body is off: %s. The markers go on." % link.stopped)
+        link.close()
+        return None
+    perceiver.body = link
+    say("The live body is on (body_worker.py). It learns the empty room once the den has been empty for a few seconds.")
+    return link
+
+
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
-          busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log"):
+          busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
+          body_log="body.log"):
     """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
     only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
     registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup."""
@@ -248,7 +271,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                           % (registered_on, revision))
     say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
                                                           "required" if perceiver.require_source_correction else "not required"))
-    detector = out = src = loop = cleanup = None
+    detector = out = src = loop = cleanup = link = None
     try:
         say("Starting the detector (about half a minute)...")
         try:
@@ -260,6 +283,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
             out = people_stream.PeopleStream(port=stream_port)
         except OSError:
             raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
+        if body:
+            link = start_body(perceiver, out, detector_argv[0], state / body_log, revision)
         mailbox = source.Mailbox()
         src = source.CameraSource(take, camera, mailbox)
         loop = perceive.Loop(src, mailbox, perceiver, out.publish)
@@ -279,7 +304,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                 next_line += status_every_s
             time.sleep(0.2)
         return {"counts": dict(perceiver.counts), "sessions": perceiver.sessions, "latest": out.latest, "drops": mailbox.dropped,
-                "received": mailbox.received, "status": status_line(perceiver, out.latest)}
+                "received": mailbox.received, "status": status_line(perceiver, out.latest),
+                "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped}}
     finally:
         for thread in (loop, src):
             if thread is not None:
@@ -289,6 +315,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                 thread.join(5)
         if detector is not None:
             detector.close()
+        if link is not None:
+            link.close()
         if out is not None:
             out.close()
         if cleanup is not None:

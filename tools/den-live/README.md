@@ -150,8 +150,15 @@ It says which one is missing if it can't start.
 - `source.py` fetches the camera's newest frame about 5 times a second.
 - `detect_worker.py`, in the detector's venv with no network, runs YOLO26s and RTMPose-m on each frame.
 - `perceive.py` runs den-observe and den-track, unedited, on step 2's registration. It checks every frame says the camera corrected its depth.
-- `stream.py` serves the people stream on 127.0.0.1:8111.
-- `live_page.mjs` serves Home from the `claude/den-live-home` worktree on 127.0.0.1:18190. It passes the stream through on the same paths step 4's gateway route will use.
+- `body_worker.py`, also in the detector's venv with no network, makes the tracked person's body from the frame's depth (`body.py`). `body_link.py` feeds it without the markers ever waiting.
+- `stream.py` serves the people stream on 127.0.0.1:8111, and the body frames on their own path, `/body`.
+- `live_page.mjs` serves Home on 127.0.0.1:18190: this checkout when it holds the body layer (`claude/den-live-body`), else the `claude/den-live-home` worktree. It passes the streams through on the same paths step 4's gateway route will use.
+
+**The live body.** Beside your marker, your body is drawn in the Recording look: warm gold points, with your name, what you're doing and what you hold. In your deployed Home only signed-in devices see it; look-only devices see the markers only.
+- The first time the den is empty for 8 s, it learns the empty room, in memory only, never saved. Until then there's no body. It learns again after two minutes of an empty den.
+- It keeps what reads at least 12 cm nearer than the empty room, or 4 cm inside a limb your pose places (a leg against the sofa), within 0.9 m of you.
+- It adds your back, limbs nothing measured covers (drawn fainter), and what you hold: something in your hands, still for 4 frames, drawn steady in blue.
+- It sends at most about 3 body frames a second, about 3,500 points each for a reader (roughly 75 KB); Home moves smoothly between them. A busy body skips frames. If its process stops or won't start, only the body goes, and the line `The live body is off: ...` says why. The markers go on.
 
 **Its numbers:**
 - **The floor:** the tracker's floor box is your scan's walkable floor, padded 1 m on every side. den-track's own box is a tape rectangle in no scan frame. In the den simulation, your real sofa sat outside it, and one reader split into three tracks.

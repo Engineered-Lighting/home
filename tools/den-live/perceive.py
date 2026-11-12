@@ -227,6 +227,7 @@ class Perceiver:
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
                  require_source_correction=True, content_revision=None, now=time.time):
         self.t, self.detector, self.home, self.now = tools, detector, home, now
+        self.body = None   # a body_link.BodyLink, when the live body runs: fed each lifted frame, never waited for
         self.require_source_correction = require_source_correction
         try:
             room_model = tools.roommodel.load(room_model_path)
@@ -369,7 +370,7 @@ class Perceiver:
                   and (o.get("kind") == "keypoints" or (o.get("kind") == "person_box" and (o.get("score") or 0) >= PERSON_MIN))}
         frames, _counts = t.records.frames_from_observations(observations, self.track_method.tracker)
         detections = frames[0]["detections"] if frames else []
-        tracks = []
+        tracks, supported = [], []
         for track, state in self.core.step(capture_mono, detections):
             if strong.intersection(track.obs_ids):
                 self.strong.add(track.id)
@@ -386,8 +387,47 @@ class Perceiver:
                            "sigma_m": round(math.sqrt(max(cov[0][0], cov[1][1], 0.0)), 3),
                            "heading_deg": record["heading"]["deg"] if fresh else None,
                            "age_s": round(max(0.0, capture_mono - track.last_seen), 3)})
+            supported.append(set(track.obs_ids))
         self.lags.append((now_mono, now_mono - capture_mono))
-        return self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
+        event = self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
+        if self.body is not None:
+            self.body.submit(bundle.data, now=now_mono, capture_ts=event["capture_ts"], seq=event["seq"],
+                             person=body_person(observations, tracks, supported))
+        return event
+
+
+COCO = ("nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder", "right_shoulder", "left_elbow",
+        "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle",
+        "right_ankle")   # den-observe's coco17 joints_room order
+
+
+def body_person(observations, tracks, supported):
+    """Who the live body is made for: the first confirmed track a pose supports in this frame, with that pose's room
+    joints (supported or uncertain; unsupported ones left out); else the first confirmed track, without joints; else
+    None (nobody tracked, so body_worker.py may learn the empty room)."""
+    poses = {o["obs_id"]: o for o in observations if o.get("kind") == "keypoints" and o.get("validity") == "valid"}
+    first = None
+    for track, obs_ids in zip(tracks, supported):
+        if track["state"] != "confirmed":
+            continue
+        person = {"track_id": track["track_id"], "xy_m": track["xy_m"], "joints": {}}
+        first = first or person
+        for obs_id in obs_ids:
+            pose = poses.get(obs_id)
+            if pose is None:
+                continue
+            for entry in pose.get("joints_room") or []:
+                j = entry.get("j")
+                if isinstance(j, int) and 0 <= j < len(COCO) and entry.get("xyz") and entry.get("status") in ("supported", "uncertain"):
+                    person["joints"][COCO[j]] = [entry["xyz"], entry["status"]]
+            return person
+    if first is not None:
+        return first
+    if tracks:
+        return {"track_id": tracks[0]["track_id"], "xy_m": tracks[0]["xy_m"], "joints": {}}
+    # Someone the tracker hasn't confirmed yet still isn't an empty room: no body, and no learning either.
+    seen = any(o.get("kind") in ("keypoints", "person_box") for o in observations)
+    return {"track_id": None, "xy_m": None, "joints": {}} if seen else None
 
 
 class Loop(threading.Thread):

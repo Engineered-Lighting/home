@@ -89,11 +89,38 @@ class BodyTest(unittest.TestCase):
     def person(self, **kw):
         return {"track_id": "e1-trk-1", "xy_m": [0.0, 2.5], "joints": joints(**kw)}
 
-    def test_no_body_until_the_empty_room_is_learned(self):
+    def test_before_the_empty_room_is_learned_the_pose_alone_draws_a_faint_figure(self):
         m = self.maker()
         frame, why = m.step(render(person=(0, 2.5, 0.15, 1.6)), person=self.person(), now=1.0)
+        self.assertIsNone(why)
+        self.assertEqual(frame["source"], "joints")
+        d = decode(frame)
+        self.assertEqual(set(d["kind"].tolist()), {3}, "every point a guess")
+        self.assertTrue(np.all(d["key"] >= 4 * B.N))
+        self.assertGreater(len(d["key"]), 300)
+        self.assertGreater(d["pos"][:, 2].max() - d["pos"][:, 2].min(), 1.3, "shins to head")
+        self.assertTrue(np.any(d["head"] == 255))
+        torso = d["pos"][(d["pos"][:, 2] > 0.95) & (d["pos"][:, 2] < 1.35)]
+        self.assertLess(np.median(np.hypot(torso[:, 0], torso[:, 1] - 2.5)), 0.2, "the torso stands where the pose is")
+
+    def test_without_the_torso_there_is_no_figure(self):
+        m = self.maker()
+        person = {"track_id": "e1-trk-1", "xy_m": [0, 2.5], "joints": {k: v for k, v in joints().items() if "hip" not in k}}
+        frame, why = m.step(render(person=(0, 2.5, 0.15, 1.6)), person=person, now=1.0)
         self.assertIsNone(frame)
         self.assertEqual(why, "learning the empty room")
+        frame, why = m.step(render(), person={"track_id": "e1-trk-1", "xy_m": [0, 2.5], "joints": {}}, now=1.2)
+        self.assertEqual((frame, why), (None, "learning the empty room"))
+
+    def test_thin_depth_falls_back_to_the_figure(self):
+        m, t = self.learned()
+        frame, why = m.step(render(), person=self.person(), now=t + 0.2)   # the depth shows nobody: the night's 6 % valid
+        self.assertIsNone(why)
+        self.assertEqual(frame["source"], "joints")
+        self.assertEqual(set(decode(frame)["kind"].tolist()), {3})
+        frame, _ = m.step(render(person=(0, 2.5, 0.15, 1.6)), person=self.person(), now=t + 0.4)
+        self.assertNotIn("source", frame, "measured depth is back: the figure from depth again")
+        self.assertIn(0, decode(frame)["kind"].tolist())
 
     def test_a_standing_person_is_a_valid_frame_on_their_cylinder(self):
         m, t = self.learned()

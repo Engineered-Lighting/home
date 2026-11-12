@@ -158,6 +158,7 @@ It says which one is missing if it can't start.
 - The first time the den is empty for 8 s, it learns the empty room, in memory only, never saved. Until then there's no body. It learns again after two minutes of an empty den.
 - It keeps what reads at least 12 cm nearer than the empty room, or 4 cm inside a limb your pose places (a leg against the sofa), within 0.9 m of you.
 - It adds your back, limbs nothing measured covers (drawn fainter), and what you hold: something in your hands, still for 4 frames, drawn steady in blue.
+- When the depth shows no body but your pose is there (thin depth at night, or before the empty room is learned), it draws you from the pose alone, every point faint.
 - It sends at most about 3 body frames a second, about 3,500 points each for a reader (roughly 75 KB); Home moves smoothly between them. It takes about 16 ms a frame here. A busy body skips frames. If it won't set up, only the body goes, and the line `The live body is off: ...` says why. The markers go on.
 
 **Its numbers:**

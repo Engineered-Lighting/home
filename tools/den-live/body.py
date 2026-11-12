@@ -19,6 +19,8 @@ Per frame, for the person den-live tracks:
    margin), the largest 4-connected region, at least OBJECT_MIN_M2, while the hands move slower than HAND_STILL_MPS,
    for OBJECT_FRAMES frames running. It gets no back fill.
 7. Limbs nothing measured covers: points on capsules between the pose's joints, marked guessed.
+8. No body in the depth, but the pose's torso is there (thin depth at night, or the empty room not learned yet): the
+   figure from the joints alone, every point a guess, so Home draws it faint. The frame says source "joints".
 Keys are depth-pixel keys (front i, back N+i, side 2N+2i+k, guessed 4N+k), so Home interpolates the same spot.
 """
 import base64
@@ -47,6 +49,10 @@ NEAR_LIMBS = (("left_hip", "left_knee", 0.11), ("left_knee", "left_ankle", 0.09)
 GUESS_LIMBS = (("left_shoulder", "left_elbow", 0.05), ("left_elbow", "left_wrist", 0.04), ("right_shoulder", "right_elbow", 0.05),
                ("right_elbow", "right_wrist", 0.04), ("left_hip", "left_knee", 0.075), ("left_knee", "left_ankle", 0.055),
                ("right_hip", "right_knee", 0.075), ("right_knee", "right_ankle", 0.055), ("left_hip", "right_hip", 0.08))
+# The figure from the pose alone, when depth gives no body (thin night depth, or before the empty room is learned): the
+# guessed limbs plus a torso, neck and head, all drawn as guesses. It needs the torso's four joints.
+FIGURE_NEEDS = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+FIGURE_EXTRA = (("pelvis", "chest", 0.13), ("chest", "neck_top", 0.06), ("head_low", "head_high", 0.085))
 OBJECT_NEEDS = ("left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist", "left_hip",
                 "right_hip", "left_ear", "right_ear")
 
@@ -131,9 +137,9 @@ class BodyMaker:
         if person.get("track_id") is None:
             self.object_frames = 0
             return None, "not tracked yet"
-        if self.background is None:
-            return None, "learning the empty room"
         joints = {name: np.asarray(xyz, float) for name, (xyz, _status) in (person.get("joints") or {}).items() if xyz is not None}
+        if self.background is None:
+            return self._figure(joints, person, now, capture_ts, seq, home, "learning the empty room")
         torso = [joints[k] for k in ("left_shoulder", "right_shoulder", "left_hip", "right_hip") if k in joints]
         centre = np.mean(torso, axis=0)[:2] if torso else np.asarray(person["xy_m"], float)
         # Only the window the person can be in: the gate's box (GATE_M around them, floor to 2.4 m) seen by the camera.
@@ -188,14 +194,14 @@ class BodyMaker:
         dens = cv2.boxFilter(cut.astype(np.float32), -1, (5, 5), normalize=False, borderType=cv2.BORDER_CONSTANT)
         mask = cut & (dens >= 15)
         if mask.sum() < MIN_BODY_PX:
-            return None, "no body"
+            return self._figure(joints, person, now, capture_ts, seq, home, "no body")
         room = np.zeros(z.shape + (3,), np.float32)
         room[mask] = self.to_room(self.cam_points(z, mask))
         gate = mask & (np.hypot(room[..., 0] - centre[0], room[..., 1] - centre[1]) <= GATE_M) & (room[..., 2] >= 0.02) & (room[..., 2] <= 2.4)
         count, labels, stats, _ = cv2.connectedComponentsWithStats(gate.astype(np.uint8), connectivity=8)
         sizes = stats[1:, cv2.CC_STAT_AREA] if count > 1 else np.zeros(0, int)
         if not len(sizes) or sizes.max() < MIN_REGION_PX:
-            return None, "no body"
+            return self._figure(joints, person, now, capture_ts, seq, home, "no body")
         keep = np.zeros(count, bool)
         keep[1:] = sizes >= max(MIN_REGION_PX, 0.2 * sizes.max())
         body = keep[labels]
@@ -244,7 +250,39 @@ class BodyMaker:
         if len(g_room):
             keys.append((4 * N + np.arange(len(g_room))).astype(np.uint32))
             pos.append(g_room); nrm.append(g_nrm); kinds.append(np.full(len(g_room), KIND_GUESSED, np.uint8)); mots.append(np.zeros(len(g_room)))
-        keys, pos, nrm, kinds, mots = (np.concatenate(x) for x in (keys, pos, nrm, kinds, mots))
+        self.stats.update({"front": int(len(f_key)), "back": int(len(b_key)), "guessed": int(len(g_room)), "near_limb": bool(segs),
+                           "window_px": int(z.size)})
+        return self._frame([np.concatenate(x) for x in (keys, pos, nrm, kinds, mots)], joints, person, now, capture_ts, seq, home), None
+
+    def _figure(self, joints, person, now, capture_ts, seq, home, why):
+        """(frame, None) with the figure from the joints alone when the torso is there, else (None, why)."""
+        np = self.np
+        self.object_frames = 0
+        if not all(k in joints for k in FIGURE_NEEDS):
+            return None, why
+        mid = lambda a, c: (joints[a] + joints[c]) / 2
+        J = dict(joints, pelvis=mid("left_hip", "right_hip"), chest=mid("left_shoulder", "right_shoulder"))
+        if "left_ear" in joints and "right_ear" in joints:
+            head = mid("left_ear", "right_ear")
+        elif "nose" in joints:
+            head = joints["nose"]
+        else:
+            head = J["chest"] + np.array([0, 0, 0.25])
+        J.update(neck_top=head - np.array([0, 0, 0.1]), head_low=head - np.array([0, 0, 0.05]), head_high=head + np.array([0, 0, 0.06]))
+        g_room, g_nrm = self._guesses(J, np.zeros((0, 3)), GUESS_LIMBS + FIGURE_EXTRA)
+        if not len(g_room):
+            return None, why
+        n = len(g_room)
+        self.stats.update({"front": 0, "back": 0, "guessed": n, "source": "joints"})
+        frame = self._frame([(4 * N + np.arange(n)).astype(np.uint32), g_room, g_nrm, np.full(n, KIND_GUESSED, np.uint8), np.zeros(n)],
+                            joints, person, now, capture_ts, seq, home)
+        frame["source"] = "joints"
+        return frame, None
+
+    def _frame(self, arrays, joints, person, now, capture_ts, seq, home):
+        """A den-live-body-1 frame from keys, room positions, normals, kinds and motions."""
+        np = self.np
+        keys, pos, nrm, kinds, mots = arrays
         inside = (pos[:, 2] >= 0.02) & (pos[:, 2] <= 2.4)
         keys, pos, nrm, kinds, mots = keys[inside], pos[inside], nrm[inside], kinds[inside], mots[inside]
         if len(keys) > MAX_POINTS:                       # front first, then back, then guesses: keys are in that order
@@ -256,8 +294,7 @@ class BodyMaker:
             head[np.linalg.norm(pos - hc, axis=1) < HEAD_RADIUS_M] = 255
         order = np.argsort(keys)
         keys, pos, nrm, kinds, mots, head = keys[order], pos[order], nrm[order], kinds[order], mots[order], head[order]
-        self.stats.update({"front": int(len(f_key)), "back": int(len(b_key)), "guessed": int(len(g_room)), "object": int((kinds == KIND_OBJECT).sum()),
-                           "near_limb": bool(segs), "window_px": int(z.size)})
+        self.stats["object"] = int((kinds == KIND_OBJECT).sum())
         frame = {"schema": SCHEMA, "home": home, "track_id": str(person["track_id"])[:64], "seq": seq,
                  "capture_ts": round(float(capture_ts if capture_ts is not None else now), 3),
                  "points": {"count": int(len(keys)),
@@ -273,7 +310,7 @@ class BodyMaker:
                                for name, (xyz, status) in (person.get("joints") or {}).items() if xyz is not None and name in COCO]
         if (kinds == KIND_OBJECT).any():
             frame["object"] = {"label": None}
-        return frame, None
+        return frame
 
     def _normals(self, z, fv, fu, step, f_cam):
         """Room-frame normals by central differences over 2x the thinning step (at least 2 px), facing the camera."""
@@ -364,17 +401,15 @@ class BodyMaker:
                 nrms.append(np.tile([xs, 0.0, 0.0], (len(sv), 1)))
         return np.concatenate(keys).astype(np.uint32), np.concatenate(pts), np.concatenate(nrms)
 
-    def _guesses(self, joints, measured):
+    def _guesses(self, joints, measured, limbs=GUESS_LIMBS):
         """Points on limb capsules nothing measured covers (3 cm cells), with outward normals, room frame."""
         np = self.np
         C = 0.03
-        if not len(measured):
-            return np.zeros((0, 3)), np.zeros((0, 3))
         offsets = np.array([(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)], np.int64)
         enc = lambda c: (c[..., 0] + 50000) * 10 ** 10 + (c[..., 1] + 50000) * 10 ** 5 + (c[..., 2] + 50000)
         occupied = np.unique(enc(np.floor(measured / C).astype(np.int64)))   # a capsule point is covered when a cell next to it is
         out_p, out_n = [], []
-        for a, c, r in GUESS_LIMBS:
+        for a, c, r in limbs:
             if a not in joints or c not in joints:
                 continue
             A, B = joints[a], joints[c]

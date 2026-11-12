@@ -78,8 +78,10 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-body-[\w-]+\.mjs|tools\/test-apartment-body-webgpu\.mjs)$/, ["test-apartment-webgpu-ports.mjs", "test-apartment-body-webgpu.mjs"]],
   // The live den view's people layer: markers from den-live's people stream.
   [/^(?:app\/src\/home-3d\/apartment-people-layer\.mjs|tools\/test-apartment-people-layer\.mjs)$/, ["test-apartment-people-layer.mjs"]],
-  // The live den view and look-only Home, through the real gateway (step 4).
-  [/^(?:app\/src\/(?:home-den-live-view\.mjs|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-site-registry\.js|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/(?:test-den-live-look-only-browser|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["test-den-live-look-only-browser.mjs"]],
+  // The lighting coordinator's section of the live den view: its words.
+  [/^(?:app\/src\/home-den-coordinator-panel\.mjs|tools\/test-den-coordinator-panel\.mjs)$/, ["test-den-coordinator-panel.mjs"]],
+  // The live den view and look-only Home, through the real gateway (step 4), with the coordinator's section.
+  [/^(?:app\/src\/(?:home-den-(?:live-view|coordinator-panel)\.mjs|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-site-registry\.js|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/(?:test-den-live-look-only-browser|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["test-den-live-look-only-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],

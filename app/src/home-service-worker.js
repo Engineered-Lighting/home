@@ -49,6 +49,7 @@ const FRESH_APARTMENT_MODULES = new Set([
   "/home-3d/apartment-echo-glyphs.mjs",
   // The live den view's markers: the generic rule above covers .js and .jsx only.
   "/home-den-live-view.mjs",
+  "/home-den-coordinator-panel.mjs",
   "/home-3d/apartment-people-layer.mjs",
   // The live body (signed-in Home): the Recording layer, its labels and their frame contract and rules.
   "/home-3d/apartment-body-frame.mjs",

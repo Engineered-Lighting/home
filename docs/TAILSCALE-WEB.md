@@ -211,7 +211,7 @@ tailscale serve --bg --tls-terminated-tcp=443 --proxy-protocol=1 127.0.0.1:5182
 - **What it may GET, and nothing else:**
   - the app's code;
   - the den's content pack, lighting layer and registration;
-  - den-live's state and stream;
+  - den-live's state and stream, and its lighting coordinator's state;
   - the lighting brain's den state and stream.
 - **One code file is redacted.** The site registry holds both homes' addresses
   and coordinates, and is served with them removed. Code folders the view never

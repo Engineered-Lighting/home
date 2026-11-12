@@ -9,6 +9,9 @@
 //   view leaves the den.
 // - The chip's banners: another scan revision draws no markers; camera offline; too dark; a stream with heartbeats
 //   only reads as stopped; markers return when events do.
+// - The lighting coordinator's section (home-den-coordinator-panel.mjs), from a fake coordinator: look-only shows its
+//   state with no button and sends no write; signed in, the switch, a setting, the desk test and Clear each reach the
+//   fake through the gateway as one POST with no credential; with no coordinator in den-live, the section hides.
 //   node --test tools/test-den-live-look-only-browser.mjs
 // DEN_LIVE_SCREENSHOTS=<folder> also saves each run's view there.
 import test, { after, before } from 'node:test';
@@ -35,6 +38,7 @@ const USER = 'owner', PASSWORD = 'correct-horse-battery-staple';
 const TAILNET_CLIENT = '100.101.102.103';
 const STREAM = `${DEN_LIVE_PREFIX}/v1/homes/den/stream`, STATE = `${DEN_LIVE_PREFIX}/v1/homes/den/state`;
 const BODY = `${DEN_LIVE_PREFIX}/v1/homes/den/body`;
+const COORDINATOR = `${DEN_LIVE_PREFIX}/v1/homes/den/coordinator`;
 const TARGETS = ['HOME_WEB_HA_TARGET', 'HOME_WEB_METRICS_TARGET', 'HOME_WEB_VLLM_TARGET', 'HOME_WEB_VISION_TARGET',
   'HOME_WEB_INTELLIGENCE_TARGET', 'HOME_WEB_SUPERVISOR_TARGET', 'HOME_WEB_S2S_TARGET', 'HOME_WEB_TRACKER_TARGET',
   'HOME_WEB_VIDEO_LABELER_TARGET', 'HOME_WEB_FRIGATE_TARGET', 'HOME_WEB_AGENT_BFF_TARGET'];
@@ -45,7 +49,32 @@ const freePort = () => new Promise(resolve => {
 
 let run, den, upstream, gateway, relay, origin, browser;
 // What the fake den-live sends: live | other-scan | camera-offline | too-dark | heartbeats-only.
-const fake = { scenario: 'live', seq: 0, streams: new Set(), opened: 0, bodies: new Set(), bodiesOpened: 0, seen: [] };
+const fake = { scenario: 'live', seq: 0, streams: new Set(), opened: 0, bodies: new Set(), bodiesOpened: 0, seen: [],
+  coordinatorRunning: true, coordinator: null, posts: [] };
+
+/* What den-live's coordinator_live.py serves at GET .../coordinator, as tools/den-core's Coordinator makes it. */
+function coordinatorState() {
+  return { on: false, stopped: false, desk_until: null, situation: { activity: 'task', key: 'task/evening', people: 1 },
+    decision: { decision_id: 'spot-1-1', version: 'decision/v3', actuation: 'shadow', situation: { activity: 'task', key: 'task/evening', people: 1 },
+      spots: { F3: { job: { kind: 'task', who: 'e1-trk-1' }, on: true, level: 0.64 }, F4: { job: null, on: false, level: 0 } },
+      notes: [{ who: 'e1-trk-1', fixture: 'F1', reason: 'in_front_of_reader' }], why: 'task/evening: F3 task for e1-trk-1, level 0.64' },
+    plan: { service: 'den_lighting.coordinator_plan', data: { plan_id: 'plan-2', generation: 2, situation: 'task/evening',
+      scenes: { 'light.reading_lamp': { on: true, brightness: 128, kelvin: 2700 } } } },
+    learned: { 'task/evening': { 'light.reading_lamp': { on: true, brightness: 128, kelvin: 2700, n: 1, pending: null } } },
+    settings: { move_style: 'lit', move_dim_level: 0.3, fade_in_s: 1, fade_out_s: 0.5, shift_m: 0.1, shift_hold_s: 1.5, phone_patience_s: 30,
+      pre_aim: true, accent_level: 0.4, follow_walkers: false },
+    home_assistant: { age_s: 0.4, fresh: true, problem: null }, counts: { decisions: 1 } };
+}
+/* The four writes, as coordinator_live.py answers them. */
+function coordinatorWrite(path, body) {
+  const state = fake.coordinator;
+  if (path === 'switch') state.on = body.on === true;
+  else if (path === 'settings') Object.assign(state.settings, body);
+  else if (path === 'learned/clear') state.learned = {};
+  else if (path === 'desk') state.desk_until = body.on ? Date.now() / 1000 + 3 * 3600 : null;
+  else return [404, { ok: false, error: 'not_served' }];
+  return [200, { ok: true }];
+}
 
 function peopleEvent() {
   const now = Date.now() / 1000, base = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform-1',
@@ -62,6 +91,26 @@ function peopleEvent() {
 function startUpstream() {
   const server = http.createServer((req, res) => {
     fake.seen.push(`${req.method} ${req.url}`);
+    if (req.url === COORDINATOR || req.url.startsWith(`${COORDINATOR}/`)) {
+      let text = '';
+      req.on('data', chunk => { text += chunk; });
+      req.on('end', () => {
+        let status = 404, answer = { ok: false, error: 'not_served' };
+        fake.coordinator ||= coordinatorState();
+        if (!fake.coordinatorRunning) { /* den-live with no coordinator block: no such route */ }
+        else if (req.method === 'GET' && req.url === COORDINATOR) { status = 200; answer = fake.coordinator; }
+        else if (req.method === 'POST') {
+          let body = null;
+          try { body = JSON.parse(text); } catch { /* not JSON */ }
+          const path = req.url.slice(COORDINATOR.length + 1);
+          fake.posts.push({ path, body, text, headers: req.headers });
+          [status, answer] = body && typeof body === 'object' ? coordinatorWrite(path, body) : [400, { ok: false, error: 'not_json' }];
+        }
+        res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify(answer));
+      });
+      return;
+    }
     if (req.method === 'GET' && req.url === STREAM) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
       res.write('retry: 1000\n\n');
@@ -183,6 +232,11 @@ async function openHome({ viewport = { width: 1366, height: 768 }, signedIn = fa
   return { context, page, seen };
 }
 const denLive = page => page.evaluate(() => window.HomeDenLiveView?.status() || null);
+const coordinatorPanel = page => page.evaluate(() => window.HomeDenLiveView?.status().coordinator || null);
+async function waitForCoordinator(page, kind, timeout = 15000) {
+  await page.waitForFunction(value => window.HomeDenLiveView?.status().coordinator?.kind === value, kind, { timeout });
+  return coordinatorPanel(page);
+}
 async function waitForMarkers(page, timeout = 90000) {
   await page.waitForFunction(() => (window.HomeDenLiveView?.status().layer?.tracks ?? 0) > 0, null, { timeout });
   return denLive(page);
@@ -289,8 +343,22 @@ test('look-only: the den view opens in Lighting with live markers, no write cont
     await waitForBanner(page, '');
     assert.equal(fake.streams.size, 1, 'still one stream');
 
+    // The lighting coordinator's section: its state, in words, with no button.
+    const panel = await waitForCoordinator(page, 'running');
+    assert.equal(panel.hidden, false); assert.equal(panel.buttons, false);
+    const section = page.locator('[data-den-coordinator]');
+    assert.equal(await section.locator('summary').innerText(), 'Lighting coordinator · Off · A close-up task, evening');
+    await section.locator('summary').click();
+    assert.match(await section.locator('[data-den-coordinator-why]').innerText(), /F3 lights the close-up task, at 64%[\s\S]*F1 not used: in front of you/);
+    assert.match(await section.locator('[data-den-coordinator-plan]').innerText(), /reading lamp: 50% · 2700 K/);
+    assert.match(await section.locator('[data-den-coordinator-learned]').innerText(), /A close-up task, evening · reading lamp: 50% · 2700 K \(1 change\)/);
+    assert.equal(await section.locator('button, input, select, form').count(), 0, 'look-only has no button, field or form');
+    await screenshot(page, 'look-only-coordinator');
+    await section.locator('summary').click();
+
     assertLookOnlyTraffic(seen, 'look-only');
     assert.ok(seen.requests.some(request => request.url === STREAM), 'the page read den-live through the gateway');
+    assert.ok(seen.requests.some(request => request.url === COORDINATOR), 'the page read the coordinator through the gateway');
   } finally {
     await context.close();
   }
@@ -325,9 +393,13 @@ test('look-only at phone size: the den view, markers and chip fit 390x844 beside
 
 test('signed in: full Home\'s den view shows the markers, and leaving the den closes the stream', { timeout: 170000 }, async () => {
   fake.scenario = 'live';
+  fake.coordinatorRunning = false;
   const { context, page, seen } = await openHome({ signedIn: true, url: '/?apartmentRedesign=1&worldZoom=off' });
   try {
     await waitForMarkers(page);
+    const absent = await waitForCoordinator(page, 'absent');
+    assert.equal(absent.hidden, true, 'with no coordinator in den-live, its section hides');
+    assert.equal(await page.locator('[data-den-coordinator]').isVisible(), false);
     const view = await page.evaluate(() => ({ lookOnly: window.HomeLookOnly, site: window.__APT_ENGINE?.siteId,
       chip: document.querySelector('[data-den-live-chip]')?.innerText, unified: !!document.querySelector('.apt-home-shell .apt-home-panel') }));
     assert.equal(view.lookOnly, undefined, 'a signed-in device is not look-only');
@@ -338,7 +410,9 @@ test('signed in: full Home\'s den view shows the markers, and leaving the den cl
     for (let i = 0; i < 40 && fake.bodies.size === 0; i++) await sleep(100);
     assert.equal(fake.bodies.size, 1, 'signed-in Home holds one body stream in the den view');
     await screenshot(page, 'signed-in');
-    assert.deepEqual(seen.responses.filter(response => response.url.startsWith(DEN_LIVE_PREFIX) && response.status !== 200), []);
+    // den-live with no coordinator answers its route 404, as this fake does here; everything else it serves is 200.
+    assert.deepEqual(seen.responses.filter(response => response.url.startsWith(DEN_LIVE_PREFIX) && response.url !== COORDINATOR && response.status !== 200), []);
+    assert.deepEqual([...new Set(seen.responses.filter(response => response.url === COORDINATOR).map(response => response.status))], [404]);
 
     // Another home: the den view is gone, and so are its stream and markers.
     await page.locator('.apt-home-switcher button[aria-pressed="false"]').first().click();
@@ -348,6 +422,67 @@ test('signed in: full Home\'s den view shows the markers, and leaving the den cl
     await sleep(500);
     assert.equal(fake.streams.size, 0, 'den-live holds no stream for a device elsewhere in Home');
     assert.equal(fake.bodies.size, 0, 'nor a body stream');
+  } finally {
+    await context.close();
+    fake.coordinatorRunning = true;
+  }
+});
+
+test('signed in: the coordinator\'s switch, a setting, the desk test and Clear each reach den-live as one POST, with no credential', { timeout: 170000 }, async () => {
+  fake.scenario = 'live';
+  fake.coordinatorRunning = true; fake.coordinator = coordinatorState(); fake.posts.length = 0;
+  const { context, page, seen } = await openHome({ signedIn: true, url: '/?apartmentRedesign=1&worldZoom=off' });
+  const posted = async (count, timeout = 8000) => {
+    for (let i = 0; i < timeout / 100 && fake.posts.length < count; i++) await sleep(100);
+    assert.equal(fake.posts.length, count, `${count} writes reached den-live: ${JSON.stringify(fake.posts.map(p => p.path))}`);
+    return fake.posts.at(-1);
+  };
+  try {
+    await waitForMarkers(page);
+    const panel = await waitForCoordinator(page, 'running');
+    assert.equal(panel.buttons, true);
+    const section = page.locator('[data-den-coordinator]'), summary = section.locator('summary');
+    await summary.click();
+    assert.equal(await summary.innerText(), 'Lighting coordinator · Off · A close-up task, evening');
+
+    // On.
+    await section.locator('[data-den-coordinator-switch]').click();
+    let post = await posted(1);
+    assert.equal(post.path, 'switch'); assert.deepEqual(post.body, { on: true });
+    assert.equal(post.headers['content-type'], 'application/json');
+    for (const name of ['authorization', 'cookie', 'x-home-den-live-csrf']) assert.equal(post.headers[name], undefined, `den-live gets no ${name}`);
+    await page.waitForFunction(() => document.querySelector('[data-den-coordinator] summary')?.textContent.startsWith('Lighting coordinator · On'));
+    assert.equal(await section.locator('[data-den-coordinator-switch]').innerText(), 'Turn off');
+
+    // A setting: only the one that changed is sent.
+    await section.locator('[data-setting="move_style"]').selectOption('dim');
+    await section.locator('[data-den-coordinator-save]').click();
+    post = await posted(2);
+    assert.equal(post.path, 'settings'); assert.deepEqual(post.body, { move_style: 'dim' });
+    assert.equal(fake.coordinator.settings.move_style, 'dim');
+
+    // The desk test.
+    await section.locator('[data-den-coordinator-desk]').click();
+    post = await posted(3);
+    assert.equal(post.path, 'desk'); assert.deepEqual(post.body, { on: true });
+    await page.waitForFunction(() => document.querySelector('[data-den-coordinator-desk]')?.textContent === 'Stop desk test');
+    assert.match(await section.locator('.home-den-live-coordinator-facts').innerText(), /Desk test on until/);
+
+    // Clear asks once more before it sends.
+    await section.locator('[data-den-coordinator-clear]').click();
+    assert.equal(await section.locator('[data-den-coordinator-clear]').innerText(), 'Clear: sure?');
+    await sleep(400);
+    assert.equal(fake.posts.length, 3, 'the first press on Clear sends nothing');
+    await section.locator('[data-den-coordinator-clear]').click();
+    post = await posted(4);
+    assert.equal(post.path, 'learned/clear');
+    await page.waitForFunction(() => document.querySelector('[data-den-coordinator-learned]')?.textContent === 'Nothing yet');
+    await screenshot(page, 'signed-in-coordinator');
+
+    const writes = seen.requests.filter(request => request.method !== 'GET' && request.url.startsWith(DEN_LIVE_PREFIX));
+    assert.deepEqual(writes.map(request => request.url), ['switch', 'settings', 'desk', 'learned/clear'].map(path => `${COORDINATOR}/${path}`));
+    assert.deepEqual(seen.responses.filter(response => response.url.startsWith(COORDINATOR) && response.status !== 200), []);
+    assert.equal(await page.locator('.home-den-live-coordinator-error').innerText(), '', 'no write failed');
   } finally {
     await context.close();
   }

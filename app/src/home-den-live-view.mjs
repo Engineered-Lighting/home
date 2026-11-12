@@ -13,7 +13,10 @@
  * The live body, for signed-in Home only (the gateway never serves its path to a look-only device): when the shell
  * names HomeDenLive.body, it mounts the Recording body layer and its labels (home-3d/apartment-body-*.mjs) beside the
  * markers, holds a second EventSource on that path while the den's view shows, and feeds the layer each `body` frame
- * whose content_revision is the engine's. Without frames the body simply isn't drawn; the markers don't change. */
+ * whose content_revision is the engine's. Without frames the body simply isn't drawn; the markers don't change.
+ * The lighting coordinator: when the shell names HomeDenLive.coordinator, the chip gets its section
+ * (home-den-coordinator-panel.mjs), which reads the coordinator's state while the den's view shows. Signed in, it has
+ * the switch, the desk test, Clear and the settings; look-only, the state alone. */
 const config = window.HomeDenLive;
 const STOPPED_MS = 3000, REOPEN_MS = 5000, TICK_MS = 500;
 
@@ -26,12 +29,16 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
             .then(([layerModule, labelModule]) => ({ attachLayer: layerModule.attachApartmentBodyLayer, attachLabels: labelModule.attachApartmentBodyLabels }))
             .catch(error => { console.warn('[den-live] body layer unavailable', error); return null; })
         : null;
-    start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit);
+    const panelKit = typeof config.coordinator === 'string'
+        ? await import(`./home-den-coordinator-panel.mjs${cb}`).catch(error => { console.warn('[den-live] coordinator panel unavailable', error); return null; })
+        : null;
+    start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit, panelKit);
 }
 
-function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
+function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null, panelKit = null) {
     const lookOnly = window.HomeLookOnly?.active === true;
     let engine = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
+    let panel = null;
     let bodyLayer = null, bodyLabels = null, bodySource = null, bodyFrames = 0, bodyAt = 0;
 
     /* The den's room view is on screen: the den's engine, its canvas shown at room scale, the page visible. */
@@ -92,6 +99,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
         layer?.dispose(); layer = null; engine = null;
         disposeBody();
         latest = null; lastAt = 0;
+        panel?.pause();
         chip?.remove();
     }
 
@@ -109,6 +117,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
         if (!source) open();
         place();
         render();
+        panel?.tick();
     }
 
     /* The chip sits in the room view's top left corner, under Home's own overlays. The older layouts keep a toolbar
@@ -122,6 +131,12 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
                 + '<span class="home-den-live-chip-name"></span></p><p class="home-den-live-chip-facts"></p>'
                 + '<p class="home-den-live-chip-banner" role="status" aria-live="polite"></p>';
             chip.querySelector('.home-den-live-chip-name').textContent = `Den · live${lookOnly ? ' · look-only' : ''}`;
+            if (panelKit && !panel) {
+                try {
+                    panel = panelKit.createCoordinatorPanel({ url: config.coordinator, lookOnly });
+                    chip.append(panel.element);
+                } catch (error) { console.warn('[den-live] coordinator panel not mounted', error); panel = null; }
+            }
         }
         const canvas = engine.renderer.domElement;
         const view = canvas.closest('[data-home-apartment-view="1"]') || canvas.parentElement;
@@ -174,7 +189,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
             siteId: engine?.siteId ?? null, events, banner: chip?.dataset.banner ?? null, chip: chip?.isConnected === true,
             layer: layer ? layer.status() : null,
             body: bodyKit ? { stream: bodySource ? ['connecting', 'open', 'closed'][bodySource.readyState] : 'none', mounted: !!bodyLayer,
-                frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null, layer: bodyLayer ? bodyLayer.status() : null } : null }),
+                frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null, layer: bodyLayer ? bodyLayer.status() : null } : null,
+            coordinator: panel ? panel.status() : null }),
         markers: () => layer ? layer.markers() : [],
     });
 }

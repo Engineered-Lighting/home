@@ -9,7 +9,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLiveHeaders, denLiveRouteKind } from "../web-gateway/den-live-route.mjs";
+import { DEN_LIVE_PREFIX, DEN_SITE, denLiveHeaders, denLiveRouteKind, denLiveWriteRefusal } from "../web-gateway/den-live-route.mjs";
 import { isTailnetAddress, lookOnlyKind, lookOnlyPackIndex } from "../web-gateway/look-only.mjs";
 import { REGISTRATION_ROUTE, initRegistration, readActiveBinding } from "../web-gateway/equipment-registration.mjs";
 import { SITES } from "../web-gateway/home-location.mjs";
@@ -77,6 +77,39 @@ function unitTests() {
     && denLiveRouteKind("GET", "/v1/homes/den/body/x") === null);
   assert("look-only reads the markers but never the body", lookOnlyKind("GET", "/api/den-live/v1/homes/den/stream") === "den-live"
     && lookOnlyKind("GET", "/api/den-live/v1/homes/den/body") === null);
+  // The lighting coordinator: its state for anyone who reads the markers, its four writes for a session only.
+  assert("den-live's coordinator state is its own kind, GET only", denLiveRouteKind("GET", "/v1/homes/den/coordinator") === "coordinator"
+    && denLiveRouteKind("HEAD", "/v1/homes/den/coordinator") === null && denLiveRouteKind("GET", "/v1/homes/den/coordinator?x") === null
+    && denLiveRouteKind("POST", "/v1/homes/den/coordinator") === null);
+  for (const write of ["switch", "settings", "learned/clear", "desk"]) {
+    assert(`the coordinator's ${write} is a POST write`, denLiveRouteKind("POST", `/v1/homes/den/coordinator/${write}`) === "coordinator-write"
+      && denLiveRouteKind("GET", `/v1/homes/den/coordinator/${write}`) === null && denLiveRouteKind("PUT", `/v1/homes/den/coordinator/${write}`) === null
+      && denLiveRouteKind("POST", `/v1/homes/den/coordinator/${write}?x=1`) === null);
+  }
+  for (const suffix of ["/v1/homes/den/coordinator/learned", "/v1/homes/den/coordinator/other", "/v1/homes/other/coordinator/switch",
+    "/v1/homes/den/coordinator/switch/", "/v1/homes/den/coordinator/%73witch", "/v1/homes/den/stream", "/v1/homes/den/state"]) {
+    assert(`no POST reaches den-live at ${suffix}`, denLiveRouteKind("POST", suffix) === null);
+  }
+  assert("look-only reads the coordinator's state, and writes none of it", lookOnlyKind("GET", `${DEN_LIVE_PREFIX}/v1/homes/den/coordinator`) === "den-live"
+    && lookOnlyKind("POST", `${DEN_LIVE_PREFIX}/v1/homes/den/coordinator/switch`) === null
+    && lookOnlyKind("GET", `${DEN_LIVE_PREFIX}/v1/homes/den/coordinator/switch`) === null);
+  const write = { "x-home-den-live-csrf": "1", "content-type": "application/json", "content-length": "11" };
+  const refusal = (method, suffix, headers) => denLiveWriteRefusal(method, suffix, headers)?.error ?? null;
+  assert("a coordinator write with the CSRF header, JSON and a length passes", refusal("POST", "/v1/homes/den/coordinator/switch", write) === null);
+  assert("a coordinator write needs the CSRF header", refusal("POST", "/v1/homes/den/coordinator/switch", { ...write, "x-home-den-live-csrf": undefined })
+    === "den_live_csrf_required" && refusal("POST", "/v1/homes/den/coordinator/switch", { ...write, "x-home-den-live-csrf": "0" }) === "den_live_csrf_required");
+  assert("a coordinator write is JSON", refusal("POST", "/v1/homes/den/coordinator/settings", { ...write, "content-type": "text/plain" }) === "json_required"
+    && refusal("POST", "/v1/homes/den/coordinator/settings", { ...write, "content-type": "application/json; charset=utf-8" }) === null);
+  assert("a coordinator write has a length, not chunks", refusal("POST", "/v1/homes/den/coordinator/desk", { ...write, "content-length": undefined,
+    "transfer-encoding": "chunked" }) === "length_required" && refusal("POST", "/v1/homes/den/coordinator/desk", { ...write, "content-length": "x" }) === "length_required");
+  assert("a coordinator write is at most 64 KB", refusal("POST", "/v1/homes/den/coordinator/settings", { ...write, "content-length": "65537" }) === "too_large"
+    && refusal("POST", "/v1/homes/den/coordinator/settings", { ...write, "content-length": "65536" }) === null);
+  assert("any other write is refused", refusal("POST", "/v1/homes/den/state", write) === "den_live_write_not_allowed"
+    && refusal("DELETE", "/v1/homes/den/coordinator/switch", write) === "den_live_write_not_allowed");
+  const writeHeaders = denLiveHeaders({ cookie: "home_web_auth=x", authorization: "Basic abc", "content-type": "application/json",
+    "content-length": "11", "x-home-den-live-csrf": "1", accept: "application/json" }, "http://127.0.0.1:8111/api/den-live", true);
+  assert("a coordinator write reaches den-live with its body's headers and no credential", JSON.stringify(Object.keys(writeHeaders).sort())
+    === JSON.stringify(["accept", "content-length", "content-type", "host"]), writeHeaders);
   const headers = denLiveHeaders({ cookie: "home_web_auth=x", authorization: "Bearer abc", accept: "text/event-stream",
     "last-event-id": "4", "x-forwarded-for": "1.2.3.4" }, "http://127.0.0.1:8111/api/den-live");
   assert("den-live gets no cookie, credential or forwarding header", JSON.stringify(Object.keys(headers).sort())
@@ -277,7 +310,40 @@ async function integrationTests() {
     assert("a signed-in device reads den-live's state, with no credential passed on", r.status === 200
       && !upstream.seen.at(-1)?.headers.authorization && !upstream.seen.at(-1)?.headers.cookie, upstream.seen.at(-1)?.headers);
     r = await exchange(servePort, { method: "POST", url: `${DEN_LIVE_PREFIX}/v1/homes/den/state`, headers: { Authorization: basic }, body: "{}" });
-    assert("nobody writes to den-live through the gateway", r.status === 403, r.status);
+    assert("nobody writes to den-live's state through the gateway", r.status === 403, r.status);
+
+    // The lighting coordinator through the gateway.
+    const COORDINATOR = `${DEN_LIVE_PREFIX}/v1/homes/den/coordinator`;
+    const csrf = { "X-Home-Den-Live-CSRF": "1", "Content-Type": "application/json", Accept: "application/json" };
+    upstream.seen.length = 0;
+    r = await exchange(servePort, { method: "POST", url: `${COORDINATOR}/switch`, headers: { ...csrf, Authorization: basic, Cookie: "home_web_auth=x" }, body: "{\"on\":true}" });
+    let reached2 = upstream.seen.at(-1);
+    assert("a signed-in device turns the coordinator on through the gateway", r.status === 200 && reached2?.method === "POST"
+      && reached2.url === `${COORDINATOR}/switch` && reached2.body === "{\"on\":true}" && reached2.headers["content-type"] === "application/json", reached2);
+    assert("den-live gets the write with no credential, cookie or CSRF header", reached2 && !reached2.headers.authorization && !reached2.headers.cookie
+      && !reached2.headers["x-home-den-live-csrf"] && reached2.headers.host === new URL(fake).host, reached2?.headers);
+    for (const [path, body] of [["settings", "{\"move_style\":\"dim\"}"], ["learned/clear", "{}"], ["desk", "{\"on\":true}"]]) {
+      upstream.seen.length = 0;
+      r = await exchange(servePort, { method: "POST", url: `${COORDINATOR}/${path}`, headers: { ...csrf, Authorization: basic }, body });
+      assert(`a signed-in device posts the coordinator's ${path}`, r.status === 200 && upstream.seen.at(-1)?.body === body, r.status);
+    }
+    upstream.seen.length = 0;
+    r = await exchange(servePort, { method: "POST", url: `${COORDINATOR}/switch`, headers: { "Content-Type": "application/json", Authorization: basic }, body: "{\"on\":false}" });
+    assert("a signed-in write with no CSRF header is refused before den-live", r.status === 403 && json(r)?.error === "den_live_csrf_required"
+      && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { method: "POST", url: `${COORDINATOR}/switch`, headers: { ...csrf, "Content-Type": "text/plain", Authorization: basic }, body: "{\"on\":false}" });
+    assert("a signed-in write that isn't JSON is refused before den-live", r.status === 415 && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { method: "POST", url: `${COORDINATOR}/other`, headers: { ...csrf, Authorization: basic }, body: "{}" });
+    assert("a signed-in write to another coordinator path is refused", r.status === 403 && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { method: "POST", url: `${COORDINATOR}/switch`, headers: csrf, body: "{\"on\":false}" });
+    assert("a look-only device can't flip the coordinator", r.status === 401 && upstream.seen.length === 0, r.status);
+    r = await exchange(port, { client: null, method: "POST", url: `${COORDINATOR}/switch`, headers: csrf, body: "{\"on\":false}" });
+    assert("no session, no write, on the ordinary port too", r.status === 401 && upstream.seen.length === 0, r.status);
+    r = await exchange(servePort, { url: COORDINATOR, headers: { Accept: "application/json" } });
+    assert("a look-only device reads the coordinator's state", r.status === 200 && upstream.seen.at(-1)?.url === COORDINATOR
+      && !upstream.seen.at(-1)?.headers.cookie, r.status);
+    r = await exchange(servePort, { url: COORDINATOR, headers: { Accept: "application/json", Authorization: basic } });
+    assert("a signed-in device reads the coordinator's state", r.status === 200, r.status);
   } finally {
     gateway.child.kill();
   }
@@ -295,6 +361,9 @@ async function integrationTests() {
     assert("with den-live off, the shell doesn't name it", r.status === 200 && !r.body.includes("window.HomeDenLive="));
     r = await exchange(offPort, { url: `${DEN_LIVE_PREFIX}/v1/homes/den/state`, headers: { Authorization: basic } });
     assert("with den-live off, its route is a disabled capability", r.status === 404 && json(r)?.error === "capability_disabled", r.status);
+    r = await exchange(offPort, { method: "POST", url: `${DEN_LIVE_PREFIX}/v1/homes/den/coordinator/switch`,
+      headers: { Authorization: basic, "X-Home-Den-Live-CSRF": "1", "Content-Type": "application/json" }, body: "{\"on\":true}" });
+    assert("with den-live off, a coordinator write is a disabled capability too", r.status === 404 && json(r)?.error === "capability_disabled", r.status);
   } finally {
     off.child.kill();
     upstream.server.close();

@@ -23,7 +23,7 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLiveEnabled, denLiveHeaders, denLiveRouteKind, denLiveRuntime } from "./den-live-route.mjs";
+import { DEN_LIVE_PREFIX, DEN_SITE, denLiveEnabled, denLiveHeaders, denLiveRouteKind, denLiveRuntime, denLiveWriteRefusal } from "./den-live-route.mjs";
 import { REDACTED, hasBody, lookOnlyClient, lookOnlyEnabled, lookOnlyKind, lookOnlyPackIndex, lookOnlyRuntime } from "./look-only.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -396,8 +396,9 @@ const routes = [
     ws: false,
   },
   {
-    // The live den view's people stream (den-live-route.mjs) on this host's loopback. Reads only, with no caller
-    // credential passed on. A session reads it after requireAuth; a look-only device through handleLookOnly.
+    // The live den view's people stream (den-live-route.mjs) on this host's loopback, with no caller credential passed
+    // on. A session reads it after requireAuth, and a look-only device through handleLookOnly. The lighting
+    // coordinator's four writes are a session's only, after denLiveWriteRefusal.
     prefix: DEN_LIVE_PREFIX,
     env: "HOME_WEB_DEN_LIVE_TARGET",
     target: envTarget("HOME_WEB_DEN_LIVE_TARGET", "http://127.0.0.1:8111/api/den-live"),
@@ -1108,7 +1109,7 @@ function proxyHeaders(reqHeaders, route, suffix, method) {
     }
     return headers;
   }
-  if (route.prefix === DEN_LIVE_PREFIX) return denLiveHeaders(reqHeaders, route.target);
+  if (route.prefix === DEN_LIVE_PREFIX) return denLiveHeaders(reqHeaders, route.target, denLiveRouteKind(method, suffix) === "coordinator-write");
   if (route.prefix === LIGHTING_BRAIN_PREFIX) {
     return lightingBrainRouteKind(method, suffix) === "producer"
       ? lightingBrainProducerHeaders(reqHeaders, route.target)
@@ -2083,10 +2084,15 @@ const server = http.createServer({
     return;
   }
   const disabledRoute = findDisabledRoute(parsed.pathname);
+  const denLiveRefusal = route?.prefix === DEN_LIVE_PREFIX && req.method !== "GET"
+    ? denLiveWriteRefusal(req.method, routeSuffix(route, req.url), req.headers) : null;
   if (route?.prefix === DEN_LIVE_PREFIX && req.method === "GET" && hasBody(req)) {
-    // den-live gets no body: its headers carry no framing for one.
+    // den-live gets no body on a read: its headers carry no framing for one.
     req.resume();
     sendJson(res, 400, { ok: false, error: "unexpected_body" });
+  } else if (denLiveRefusal) {
+    req.resume();
+    sendJson(res, denLiveRefusal.status, { ok: false, error: denLiveRefusal.error });
   } else if (disabledRoute) {
     sendCapabilityDisabled(res, `legacy_proxy:${disabledRoute.prefix.slice("/proxy/".length)}`);
   } else if (route) proxyHttp(req, res, route);

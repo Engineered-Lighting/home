@@ -69,7 +69,7 @@ const cacheQuery = query => !query || query.split("&").every(part => /^(?:cb|v|f
 // - The page shell and the app's code, styles, fonts and icons. No scan, data or other asset folder.
 // - The content packs' index, which the gateway filters to the den's packs, and the den's pack and lighting files.
 // - The den's registration, read only.
-// - den-live's state and stream (its markers), never its body path.
+// - den-live's state and stream (its markers), and the lighting coordinator's state, never its body path or a write.
 // - The lighting brain's den state and stream, which the den view's spot follows.
 // - /auth/status, which says "look-only".
 export function lookOnlyKind(method, rawUrl) {
@@ -91,8 +91,9 @@ export function lookOnlyKind(method, rawUrl) {
   if (pathname === REGISTRATION_ROUTE || pathname.startsWith(REGISTRATION_ROUTE + "/") && REVISION.test(pathname.slice(REGISTRATION_ROUTE.length))) {
     return method === "GET" ? "registration" : null;
   }
-  // The markers only: the live body stays with signed-in Home.
-  if (pathname.startsWith(DEN_LIVE_PREFIX + "/") && denLiveRouteKind(method, pathname.slice(DEN_LIVE_PREFIX.length)) === "read") return "den-live";
+  // The markers and the coordinator's state: the live body stays with signed-in Home.
+  if (pathname.startsWith(DEN_LIVE_PREFIX + "/")
+    && ["read", "coordinator"].includes(denLiveRouteKind(method, pathname.slice(DEN_LIVE_PREFIX.length)))) return "den-live";
   if (method === "GET" && BRAIN.test(pathname)) return "lighting-brain";
   return null;
 }

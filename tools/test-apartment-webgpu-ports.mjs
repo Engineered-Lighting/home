@@ -151,7 +151,10 @@ test('no other module in home-3d builds a GLSL material', () => {
     'lit-frame.mjs',
     // The WebGL occluder reuses the scan display's own onBeforeCompile (its cut); the WebGPU path's occluder is a
     // MeshBasicNodeMaterial with the shared TSL cut mask, built beside it.
-    'lit-view.mjs']);
+    'lit-view.mjs',
+    // The live body's Recording look: its ShaderMaterials are the WebGL path's; on the node renderer the layer hides
+    // them and draws the TSL twin in apartment-body-webgpu.mjs (tools/test-apartment-body-webgpu.mjs).
+    'apartment-body-layer.mjs']);
   for (const name of fs.readdirSync(path.join(SRC, 'home-3d'))) {
     if (!/\.(?:m?js)$/.test(name) || known.has(name)) continue;
     const text = fs.readFileSync(path.join(SRC, 'home-3d', name), 'utf8');

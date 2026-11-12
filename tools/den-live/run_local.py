@@ -307,6 +307,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
         if registered_on is not None and registered_on != revision:
             raise Refusal("the camera was registered on scan revision %s, but the active scan is %s: register again with step 2"
                           % (registered_on, revision))
+    perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits
     say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
                                                           "required" if perceiver.require_source_correction else "not required"))
     detector = out = src = loop = cleanup = link = None

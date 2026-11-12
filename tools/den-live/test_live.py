@@ -246,12 +246,31 @@ class Perceiving(unittest.TestCase):
         last = events[-1]['tracks'][0]
         self.assertLess(math.dist(last['xy_m'], truth(READING)), 0.3, last['xy_m'])
         self.assertEqual(last['state'], 'confirmed')
-        self.assertEqual(set(last), {'track_id', 'state', 'xy_m', 'sigma_m', 'heading_deg', 'age_s'}, 'no joints, no image, no name')
+        self.assertEqual(set(last), {'track_id', 'state', 'xy_m', 'sigma_m', 'heading_deg', 'age_s', 'near'}, 'no joints, no image, no name')
+        self.assertIsNone(last['near'], 'no labels, no phrase')
         self.assertEqual(events[-1]['schema'], 'den-live-people-1')
         self.assertTrue(all(t['state'] in ('confirmed', 'coasting') for e in events for t in e['tracks']), 'never a tentative one')
         # 0.35 s from capture to event, less the 0.12 s transit the arrival-anchored clock takes as its offset: the lag
         # it reports leaves out the camera-to-PC transit, which plan L1 puts at about 0.1-0.3 s.
         self.assertAlmostEqual(events[-1]['health']['lag_s_median'], 0.23, places=2)
+
+    def test_the_labels_give_each_marker_its_near_phrase(self):
+        """Step 2 of the labels plan: a sofa labelled where the reader sits puts "on the sofa" on their marker; labels
+        placed on another scan revision put nothing there."""
+        import room_labels
+        x, y = truth(READING)
+        sofa = {'id': 'l-sofa-1', 'name': 'sofa', 'kind': 'seat', 'box': {'centre_m': [x, y, 0.42], 'size_m': [2.0, 0.9, 0.85], 'yaw_deg': 0},
+                'on_wall': False, 'made_by': 'owner', 'status': 'confirmed', 'updated_at': None}
+        for revision, near in ((None, 'on the sofa'), ('another-scan', None)):
+            with self.subTest(content_revision=revision):
+                store = room_labels.Store(scratch('den-live-labels-'), say=lambda *_: None)
+                self.assertEqual(store.put({**room_labels.empty('this-scan'), 'labels': [sofa]})[0], 200)
+                p = self.perceiver(READING)
+                p.labels = store
+                if revision:
+                    p.scope['content_revision'] = revision
+                events = self.run_take(p, bundles(READING))
+                self.assertEqual(events[-1]['tracks'][0]['near'], near)
 
     def test_a_floor_box_holding_the_seat_keeps_one_reader_one_track(self):
         """The den simulation's finding on your real sofa, in the live loop: a reader sitting past den-track's floor

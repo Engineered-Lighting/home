@@ -26,6 +26,8 @@ document.body.appendChild(panel);
 const banner = panel.querySelector('.banner'), list = panel.querySelector('dl');
 
 let layer = null, engine = null, latest = null, lastAt = 0, bodyLayer = null, bodyLabels = null, bodyAt = 0, bodyKit = null;
+// The markers, read-only, as deployed Home's den view offers them: Home's labels overlay draws each one's near phrase.
+if (!window.HomeDenLiveView) window.HomeDenLiveView = Object.freeze({ markers: () => (layer ? layer.markers() : []) });
 bodyModules.then(kit => { bodyKit = kit; });
 function mount() {
   const current = window.__APT_ENGINE;

@@ -26,6 +26,9 @@ Numbers this phase sets, with where they come from:
 An event holds tracks' floor positions in your scan's frame, their spread, heading and age: no joints, no image, no
 name. Only confirmed and coasting tracks go out, and only once a pose or a person box at 0.5 or more has supported
 them (plan L3). Track ids carry the epoch (e1-trk-1), so a camera restart's new tracks never take an old marker over.
+Each track also carries near: what's near it from your confirmed labels (room_labels.near_phrase, for example "at the
+desk, beside the 3D printer"), or null with no labels, none near, or labels placed on another scan revision. Home
+shows it under the marker.
 """
 import importlib.util
 import json
@@ -39,6 +42,8 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
+
+import room_labels
 
 SCHEMA = "den-live-people-1"
 FRESH_S = 1.5
@@ -258,6 +263,7 @@ class Perceiver:
                  require_source_correction=True, content_revision=None, now=time.time):
         self.t, self.detector, self.home, self.now = tools, detector, home, now
         self.body = None   # a body_link.BodyLink, when the live body runs: asked for each fresh frame, never waited for
+        self.labels = None   # a room_labels.Store: each track's near phrase, from the confirmed labels on this scan
         self.require_source_correction = require_source_correction
         try:
             room_model = tools.roommodel.load(room_model_path)
@@ -325,7 +331,15 @@ class Perceiver:
         return {"schema": SCHEMA, "home": self.home, "seq": self.seq, **self.scope,
                 "capture_ts": None if ago_s is None else round(emitted - ago_s, 3), "emitted_ts": round(emitted, 3),
                 "mode": self.mode, "camera": {"status": camera_state.get("status", "ok"), "why": camera_state.get("why") or self.problem},
-                "health": self._health(now_mono), "tracks": tracks}
+                "health": self._health(now_mono), "tracks": self._near(tracks)}
+
+    def _near(self, tracks):
+        """Each track with its near phrase: null without labels, or with labels placed on another scan revision."""
+        doc = self.labels.get() if self.labels is not None else None
+        revision = self.scope["content_revision"]
+        usable = bool(doc and doc["labels"]) and (revision is None or doc["content_revision"] == revision)
+        labels = [label for label in doc["labels"] if label["status"] == "confirmed"] if usable else []
+        return [{**track, "near": room_labels.near_phrase(labels, track["xy_m"]) if labels else None} for track in tracks]
 
     def idle(self, camera_state, now_mono):
         """An event with no new frame shown: the camera is offline, slow, or its frames are being dropped (the why says

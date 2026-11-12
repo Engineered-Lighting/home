@@ -384,6 +384,10 @@ It starts only the labels store and Home on your scan, from the `claude/den-labe
 - **A file that won't read** is set aside as `room-labels.bad-<time>.json`, and den-live starts with none rather than refusing.
 - **The live loop serves them too.** `run_local.py` without `--labels-only` serves the same labels beside the markers. The LA service keeps its own copy in its state folder, `labels\`.
 
+### Step 2: what's near you, under your marker
+
+With the live loop running (step 3 above), each track in the people stream carries `near`: what's near it from your confirmed labels, for example "at the desk, beside the 3D printer". It comes from the same `near_phrase()` the Qwen line uses. Home shows it under your marker. It's null when there are no labels or none near, or when the labels were placed on another scan revision than the one den-live is registered on.
+
 ### Tests
 
 ```powershell

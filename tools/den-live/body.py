@@ -1,7 +1,8 @@
 """den-live's live body: one person's points in the room frame from the camera's depth, as den-live-body-1 frames.
 
-numpy and OpenCV (the detector's venv). body_worker.py runs it in its own process; nothing here reads a camera, writes
-a file or opens a socket. Home draws the frames (app/src/home-3d/apartment-body-frame.mjs and apartment-body-layer.mjs).
+numpy and OpenCV (the detector's venv). detect_worker.py runs it in the detector's own process, through BodyChannel
+below, on the bundle it just detected on; nothing here reads a camera, writes a file or opens a socket. Home draws the
+frames (app/src/home-3d/apartment-body-frame.mjs and apartment-body-layer.mjs).
 
 Per frame, for the person den-live tracks:
 1. The empty room. Learned in memory, never saved: the per-pixel median of LEARN_FRAMES frames once nobody has been
@@ -61,7 +62,8 @@ class BodyMaker:
     def __init__(self, np, cv2, *, left_k, room_from_left):
         self.np, self.cv2 = np, cv2
         fx, fy, cx, cy = (float(x) for x in left_k[:4])
-        self.fx = fx
+        self.fx, self.k = fx, (fx, fy, cx, cy)
+        self._v0 = self._u0 = 0
         v, u = np.mgrid[0:HEIGHT, 0:WIDTH]
         self.u, self.v = u.astype(np.int32), v.astype(np.int32)
         self.rx, self.ry = ((u - cx) / fx).astype(np.float32), ((v - cy) / fy).astype(np.float32)
@@ -131,8 +133,41 @@ class BodyMaker:
             return None, "not tracked yet"
         if self.background is None:
             return None, "learning the empty room"
-        b = self.background
         joints = {name: np.asarray(xyz, float) for name, (xyz, _status) in (person.get("joints") or {}).items() if xyz is not None}
+        torso = [joints[k] for k in ("left_shoulder", "right_shoulder", "left_hip", "right_hip") if k in joints]
+        centre = np.mean(torso, axis=0)[:2] if torso else np.asarray(person["xy_m"], float)
+        # Only the window the person can be in: the gate's box (GATE_M around them, floor to 2.4 m) seen by the camera.
+        v0, v1, u0, u1 = self._window(centre)
+        full = (self.rx, self.ry, self.u, self.v)
+        self.rx, self.ry, self.u, self.v = (a[v0:v1, u0:u1] for a in full)
+        self._v0, self._u0 = v0, u0
+        try:
+            return self._person(z[v0:v1, u0:u1], motion[v0:v1, u0:u1], self.background[v0:v1, u0:u1], joints, centre, person, now,
+                                capture_ts, seq, home)
+        finally:
+            self.rx, self.ry, self.u, self.v = full
+            self._v0 = self._u0 = 0
+
+    def _window(self, centre):
+        """(v0, v1, u0, u1): the image rows and columns the gate's box covers, with a margin; the whole frame when part of
+        the box is behind or beside the camera."""
+        np = self.np
+        corners = np.array([[centre[0] + dx, centre[1] + dy, zz] for dx in (-GATE_M, GATE_M) for dy in (-GATE_M, GATE_M) for zz in (0.0, 2.4)])
+        cam = self.to_left(corners)
+        if (cam[:, 2] < 0.3).any():
+            return 0, HEIGHT, 0, WIDTH
+        fx, fy, cx, cy = self.k
+        us, vs = cam[:, 0] / cam[:, 2] * fx + cx, cam[:, 1] / cam[:, 2] * fy + cy
+        m = 12
+        u0, u1 = int(max(0, np.floor(us.min()) - m)), int(min(WIDTH, np.ceil(us.max()) + m))
+        v0, v1 = int(max(0, np.floor(vs.min()) - m)), int(min(HEIGHT, np.ceil(vs.max()) + m))
+        if u1 - u0 < 16 or v1 - v0 < 16:
+            return 0, HEIGHT, 0, WIDTH
+        return v0, v1, u0, u1
+
+    def _person(self, z, motion, b, joints, centre, person, now, capture_ts, seq, home):
+        """Steps 2 to 7 on the person's window (z, motion and b cut to it; self.rx, ry, u, v are its views)."""
+        np, cv2 = self.np, self.cv2
         jl = {name: self.to_left(p) for name, p in joints.items()}
         valid = (z >= NEAR_MM) & (z <= FAR_MM)
 
@@ -154,10 +189,8 @@ class BodyMaker:
         mask = cut & (dens >= 15)
         if mask.sum() < MIN_BODY_PX:
             return None, "no body"
-        room = np.zeros((HEIGHT, WIDTH, 3), np.float32)
+        room = np.zeros(z.shape + (3,), np.float32)
         room[mask] = self.to_room(self.cam_points(z, mask))
-        torso = [joints[k] for k in ("left_shoulder", "right_shoulder", "left_hip", "right_hip") if k in joints]
-        centre = np.mean(torso, axis=0)[:2] if torso else np.asarray(person["xy_m"], float)
         gate = mask & (np.hypot(room[..., 0] - centre[0], room[..., 1] - centre[1]) <= GATE_M) & (room[..., 2] >= 0.02) & (room[..., 2] <= 2.4)
         count, labels, stats, _ = cv2.connectedComponentsWithStats(gate.astype(np.uint8), connectivity=8)
         sizes = stats[1:, cv2.CC_STAT_AREA] if count > 1 else np.zeros(0, int)
@@ -193,7 +226,7 @@ class BodyMaker:
         f_room = self.to_room(f_cam)
         f_nrm = self._normals(z, fv, fu, step[fv, fu], f_cam)
         f_kind = np.where(obj[fv, fu], KIND_OBJECT, KIND_MEASURED).astype(np.uint8)
-        f_key = (fv * WIDTH + fu).astype(np.uint32)
+        f_key = (self.v[fv, fu] * WIDTH + self.u[fv, fu]).astype(np.uint32)
         f_mot = np.clip(motion[fv, fu] / 70.0, 0, 1)
 
         # 5. the back
@@ -224,7 +257,7 @@ class BodyMaker:
         order = np.argsort(keys)
         keys, pos, nrm, kinds, mots, head = keys[order], pos[order], nrm[order], kinds[order], mots[order], head[order]
         self.stats.update({"front": int(len(f_key)), "back": int(len(b_key)), "guessed": int(len(g_room)), "object": int((kinds == KIND_OBJECT).sum()),
-                      "near_limb": bool(segs)})
+                           "near_limb": bool(segs), "window_px": int(z.size)})
         frame = {"schema": SCHEMA, "home": home, "track_id": str(person["track_id"])[:64], "seq": seq,
                  "capture_ts": round(float(capture_ts if capture_ts is not None else now), 3),
                  "points": {"count": int(len(keys)),
@@ -246,8 +279,9 @@ class BodyMaker:
         """Room-frame normals by central differences over 2x the thinning step (at least 2 px), facing the camera."""
         np = self.np
         o = np.maximum(2, 2 * step)
-        ul, ur = np.clip(fu - o, 0, WIDTH - 1), np.clip(fu + o, 0, WIDTH - 1)
-        vu, vd = np.clip(fv - o, 0, HEIGHT - 1), np.clip(fv + o, 0, HEIGHT - 1)
+        h, w = z.shape
+        ul, ur = np.clip(fu - o, 0, w - 1), np.clip(fu + o, 0, w - 1)
+        vu, vd = np.clip(fv - o, 0, h - 1), np.clip(fv + o, 0, h - 1)
         z0 = z[fv, fu]
         lim = np.maximum(60.0, 0.04 * z0) * o
         zl, zr, zu, zd = z[fv, ul], z[fv, ur], z[vu, fu], z[vd, fu]
@@ -263,51 +297,71 @@ class BodyMaker:
         return n @ self.R.T
 
     def _back(self, fill, z, b):
-        """Back-fill keys, camera points and camera normals, row by row."""
+        """Back-fill keys, camera points and camera normals: every row's runs of body pixels at once, as ellipses."""
         np = self.np
-        keys, pts, nrms = [], [], []
-        for v in np.flatnonzero(fill.any(axis=1)):
-            us = np.flatnonzero(fill[v])
-            zr = z[v, us]
-            breaks = np.flatnonzero((np.diff(us) > 1) | (np.abs(np.diff(zr)) >= 150)) + 1
-            for run in np.split(np.arange(len(us)), breaks):
-                if len(run) < 3:
-                    continue
-                uu, zf = us[run], zr[run]
-                zmed = float(np.median(zf))
-                step = max(1, int(round(SPACING_M * self.fx * 1000 / zmed)))
-                if v % step:
-                    continue
-                half, uc = len(run) / 2.0, (uu[0] + uu[-1]) / 2.0
-                a_m = half * zmed / (1000 * self.fx)
-                k = 0.6 if a_m >= 0.12 else 1.0 if a_m <= 0.06 else 1.0 - 0.4 * (a_m - 0.06) / 0.06
-                b_mm = k * a_m * 1000
-                x = (uu - uc) / half
-                s = np.sqrt(np.maximum(0, 1 - x * x))
-                zc = float(np.median(zf + b_mm * s))
-                zb = zc + b_mm * s
-                room = b[v, uu]
-                zb = np.where((room > 0) & (zb > room - 20), room - 20, zb)
-                stagger = ((v // step) & 1) * (step >> 1)
-                take = ((uu + stagger) % step == 0) & (zb >= zf + 15)
-                if take.any():
-                    tu, tz = uu[take], zb[take]
-                    keys.append(N + v * WIDTH + tu)
-                    pts.append(np.stack([self.rx[v, tu] * tz, self.ry[v, tu] * tz, tz], -1) / 1000)
-                    nx, nz = x[take] / a_m, s[take] / (k * a_m)
-                    nn = np.stack([nx, np.zeros_like(nx), nz], -1)
-                    nrms.append(nn / np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-9))
-                for end, xs in ((0, -1.0), (len(run) - 1, 1.0)):   # close the silhouette's sides
-                    ue, zfe = uu[end], zf[end]
-                    zbe = min(zc, b[v, ue] - 20) if b[v, ue] > 0 else zc
-                    if zbe > zfe + 20:
-                        for kk, f in enumerate((0.33, 0.66)):
-                            ze = zfe + (zbe - zfe) * f
-                            keys.append(np.array([2 * N + 2 * (v * WIDTH + ue) + kk]))
-                            pts.append(np.array([[self.rx[v, ue] * ze, self.ry[v, ue] * ze, ze]]) / 1000)
-                            nrms.append(np.array([[xs, 0.0, 0.0]]))
-        if not keys:
-            return np.zeros(0, np.uint32), np.zeros((0, 3)), np.zeros((0, 3))
+        none = (np.zeros(0, np.uint32), np.zeros((0, 3)), np.zeros((0, 3)))
+        V, U = np.nonzero(fill)                     # row-major: each row's pixels left to right
+        if not len(V):
+            return none
+        Z = z[V, U]
+        h = fill.shape[0]
+        counts = np.bincount(V, minlength=h)
+        starts = np.cumsum(counts) - counts
+        rows = np.flatnonzero(counts)
+        # Each row's thinning step from its middle depth; rows the thinning skips cost nothing more.
+        row_step = np.zeros(h, np.int64)
+        row_step[rows] = np.maximum(1, np.rint(SPACING_M * self.fx * 1000 / Z[starts[rows] + counts[rows] // 2])).astype(np.int64)
+        kept_row = np.zeros(h, bool)
+        kept_row[rows] = (rows + self._v0) % row_step[rows] == 0
+        pick = kept_row[V]
+        V, U, Z = V[pick], U[pick], Z[pick]
+        if not len(V):
+            return none
+        # Runs: a new one at each row, gap, or depth jump (an arm in front of the chest).
+        new = np.ones(len(V), bool)
+        new[1:] = (V[1:] != V[:-1]) | (U[1:] != U[:-1] + 1) | (np.abs(Z[1:] - Z[:-1]) >= 150)
+        run = np.cumsum(new) - 1
+        r0 = np.flatnonzero(new)
+        rlen = np.diff(np.append(r0, len(V)))
+        r1 = r0 + rlen - 1
+
+        def run_median(values):                     # each run's median, by sorting within runs
+            order = np.lexsort((values, run))
+            return values[order][r0 + rlen // 2]
+
+        ok = rlen >= 3
+        zmed = run_median(Z)
+        half = rlen / 2.0
+        uc = (U[r0] + U[r1]) / 2.0
+        a_m = half * zmed / (1000 * self.fx)
+        k = np.where(a_m >= 0.12, 0.6, np.where(a_m <= 0.06, 1.0, 1.0 - 0.4 * (a_m - 0.06) / 0.06))
+        b_mm = k * a_m * 1000
+        x = (U - uc[run]) / half[run]
+        sq = np.sqrt(np.maximum(0, 1 - x * x))
+        zc = run_median(Z + b_mm[run] * sq)
+        zb = zc[run] + b_mm[run] * sq
+        room = b[V, U]
+        zb = np.where((room > 0) & (zb > room - 20), room - 20, zb)
+        step = row_step[V]
+        gv = V + self._v0                           # the frame's own rows and columns: its thinning and its keys
+        stagger = ((gv // step) & 1) * (step >> 1)
+        take = ok[run] & ((U + self._u0 + stagger) % step == 0) & (zb >= Z + 15)
+        tv, tu, tz = V[take], U[take], zb[take]
+        keys = [N + (gv[take] * WIDTH + tu + self._u0)]
+        pts = [np.stack([self.rx[tv, tu] * tz, self.ry[tv, tu] * tz, tz], -1) / 1000]
+        nn = np.stack([x[take] / a_m[run[take]], np.zeros(len(tv)), sq[take] / (k * a_m)[run[take]]], -1)
+        nrms = [nn / np.maximum(np.linalg.norm(nn, axis=1, keepdims=True), 1e-9)]
+        for ends, xs in ((r0, -1.0), (r1, 1.0)):    # close the silhouette's sides: two points across each end
+            ev, eu, zfe = V[ends], U[ends], Z[ends]
+            room_e = b[ev, eu]
+            zbe = np.where(room_e > 0, np.minimum(zc, room_e - 20), zc)
+            side = ok & (zbe > zfe + 20)
+            for kk, f in enumerate((0.33, 0.66)):
+                ze = (zfe + (zbe - zfe) * f)[side]
+                sv, su = ev[side], eu[side]
+                keys.append(2 * N + 2 * ((sv + self._v0) * WIDTH + su + self._u0) + kk)
+                pts.append(np.stack([self.rx[sv, su] * ze, self.ry[sv, su] * ze, ze], -1) / 1000)
+                nrms.append(np.tile([xs, 0.0, 0.0], (len(sv), 1)))
         return np.concatenate(keys).astype(np.uint32), np.concatenate(pts), np.concatenate(nrms)
 
     def _guesses(self, joints, measured):
@@ -316,11 +370,9 @@ class BodyMaker:
         C = 0.03
         if not len(measured):
             return np.zeros((0, 3)), np.zeros((0, 3))
-        cells = np.floor(measured / C).astype(np.int64)
         offsets = np.array([(dx, dy, dz) for dx in (-1, 0, 1) for dy in (-1, 0, 1) for dz in (-1, 0, 1)], np.int64)
-        near = (cells[:, None, :] + offsets[None]).reshape(-1, 3)
-        enc = lambda c: (c[:, 0] + 50000) * 10 ** 10 + (c[:, 1] + 50000) * 10 ** 5 + (c[:, 2] + 50000)
-        covered = np.unique(enc(near))
+        enc = lambda c: (c[..., 0] + 50000) * 10 ** 10 + (c[..., 1] + 50000) * 10 ** 5 + (c[..., 2] + 50000)
+        occupied = np.unique(enc(np.floor(measured / C).astype(np.int64)))   # a capsule point is covered when a cell next to it is
         out_p, out_n = [], []
         for a, c, r in GUESS_LIMBS:
             if a not in joints or c not in joints:
@@ -339,7 +391,8 @@ class BodyMaker:
             th = np.tile(np.arange(per) * 2 * math.pi / per, rings + 1) + (np.repeat(np.arange(rings + 1), per) & 1) * math.pi / per
             n = np.cos(th)[:, None] * e1 + np.sin(th)[:, None] * e2
             p = A + f[:, None] * axis + n * r
-            free = ~np.isin(enc(np.floor(p / C).astype(np.int64)), covered) & (p[:, 2] >= 0.02)
+            around = enc(np.floor(p / C).astype(np.int64)[:, None, :] + offsets[None])
+            free = ~np.isin(around, occupied).any(axis=1) & (p[:, 2] >= 0.02)
             out_p.append(p[free]); out_n.append(n[free])
         if not out_p:
             return np.zeros((0, 3)), np.zeros((0, 3))
@@ -367,12 +420,13 @@ class BodyMaker:
         self.last_wrists, self.last_at = (wl, wr), now
         bv, bu = np.nonzero(body)
         pts = np.stack([self.rx[bv, bu] * z[bv, bu], self.ry[bv, bu] * z[bv, bu], z[bv, bu]], -1) / 1000
-        reach = np.minimum(np.linalg.norm(pts - wl, axis=1), np.linalg.norm(pts - wr, axis=1)) <= WRIST_REACH_M
-        explained = np.zeros(len(pts), bool)
-        for a, c, r in segs:
-            explained |= _seg_dist(np, pts, a, c) < r + OBJECT_MARGIN_M
+        reach = np.flatnonzero(np.minimum(np.linalg.norm(pts - wl, axis=1), np.linalg.norm(pts - wr, axis=1)) <= WRIST_REACH_M)
+        near = pts[reach]
+        explained = np.zeros(len(near), bool)
+        for a, c, r in segs:                        # only pixels within a wrist's reach are measured against the body
+            explained |= _seg_dist(np, near, a, c) < r + OBJECT_MARGIN_M
         cand = np.zeros(body.shape, np.uint8)
-        pick = reach & ~explained
+        pick = reach[~explained]
         cand[bv[pick], bu[pick]] = 1
         count, labels, stats, _ = cv2.connectedComponentsWithStats(cand, connectivity=4)
         if count <= 1:
@@ -391,6 +445,60 @@ class BodyMaker:
         grown[:, 1:] |= region[:, :-1]
         grown[:, :-1] |= region[:, 1:]
         return grown & body
+
+
+def depth_of(np, data):
+    """A camera bundle's depth_mm plane (400x640 uint16, rectified-left aligned), as den-take reads it."""
+    import io
+    import zipfile
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        if archive.getinfo("depth_mm.npy").file_size > 1 << 21:
+            raise ValueError("depth_mm is too large")
+        depth = np.load(io.BytesIO(archive.read("depth_mm.npy")), allow_pickle=False)
+    if depth.dtype != np.dtype("<u2") or depth.shape != (HEIGHT, WIDTH):
+        raise ValueError("depth_mm must be 400x640 uint16")
+    return depth
+
+
+class BodyChannel:
+    """The body step's side of detect_worker.py's protocol. The worker keeps the bundle it last detected on; the loop
+    then asks for that frame's body, with the person it tracked, without sending the bundle again.
+
+    {kind: "setup_body", setup: {left_k, room_from_left, home}} -> {body_ready: true}, or {body_refused: type name}
+    {kind: "body", id, now, capture_ts, seq, person}            -> {body_id, frame, why, compute_s, stats}, or
+                                                                    {body_id, error: type name}
+    """
+
+    def __init__(self):
+        self.maker, self.home = None, "den"
+
+    def handle(self, header, kept):
+        """kept: (frame id, bundle bytes) the worker detected last, or None."""
+        import time
+        if header.get("kind") == "setup_body":
+            try:
+                import cv2
+                import numpy as np
+                cv2.setNumThreads(1)   # the LA unit's CPUQuota is one and a half cores, mostly the detector's
+                setup = header["setup"]
+                self.maker = BodyMaker(np, cv2, left_k=setup["left_k"], room_from_left=setup["room_from_left"])
+                self.home = str(setup.get("home") or "den")
+                return {"body_ready": True}
+            except Exception as exc:  # a type name only
+                return {"body_refused": type(exc).__name__}
+        body_id = header.get("id")
+        try:
+            if self.maker is None:
+                return {"body_id": body_id, "error": "NotSetUp"}
+            if kept is None or kept[0] != body_id:
+                return {"body_id": body_id, "frame": None, "why": "frame not kept"}
+            start = time.perf_counter()
+            frame, why = self.maker.step(depth_of(self.maker.np, kept[1]), person=header.get("person"), now=float(header["now"]),
+                                         capture_ts=header.get("capture_ts"), seq=header.get("seq"), home=self.home)
+            return {"body_id": body_id, "frame": frame, "why": why, "compute_s": round(time.perf_counter() - start, 4),
+                    "stats": self.maker.stats}
+        except Exception as exc:  # one bad frame is a reply, not the end; a type name only, never its text
+            return {"body_id": body_id, "error": type(exc).__name__}
 
 
 def _seg_dist(np, pts, a, c):

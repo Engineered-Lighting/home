@@ -34,7 +34,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-import body_link  # noqa: E402  the live body's process (body_worker.py), fed without waiting
+import body_link  # noqa: E402  the live body, made in the detector's process and never waited for
 import perceive  # noqa: E402
 import register_now as rn  # noqa: E402  the method file's numbers: the gate, and whether the camera's correction is required
 import sofa_check as sc  # noqa: E402  the data root, the pinned archives, the venv, say
@@ -220,28 +220,26 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
                  status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page)
 
 
-def start_body(perceiver, out, venv_python, log_path, revision):
-    """The live body's process, in the detector's venv, set up with the registration's rectified-left intrinsics and
+def start_body(perceiver, out, detector, revision):
+    """The live body, set up in the detector's process with the registration's rectified-left intrinsics and
     room_from_camera. Its frames go out on the stream's /body path, tagged with the registration and scan revision the
-    markers carry. One that doesn't start is said once; the markers go on without it."""
+    markers carry. One that doesn't set up is said once; the markers go on without it."""
     camera = perceiver.camera
     rotation, translation = camera.room_from_left
     setup = {"left_k": list(camera.rig.left_k[:4]), "room_from_left": [[list(r) for r in rotation], list(translation)], "home": perceiver.home}
     scope = {"transform_id": camera.transform_id, "content_revision": revision}
-    link = body_link.BodyLink([str(venv_python), "-B", str(HERE / "body_worker.py")], log_path, setup=setup,
-                              on_frame=lambda frame: out.publish_body({**frame, **scope}))
+    link = body_link.BodyLink(detector, setup=setup, on_frame=lambda frame: out.publish_body({**frame, **scope}))
     if link.stopped:
         say("The live body is off: %s. The markers go on." % link.stopped)
         link.close()
         return None
     perceiver.body = link
-    say("The live body is on (body_worker.py). It learns the empty room once the den has been empty for a few seconds.")
+    say("The live body is on, in the detector's process. It learns the empty room once the den has been empty for a few seconds.")
     return link
 
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
-          busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          body_log="body.log"):
+          busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True):
     """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
     only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
     registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup."""
@@ -284,7 +282,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
         except OSError:
             raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
         if body:
-            link = start_body(perceiver, out, detector_argv[0], state / body_log, revision)
+            link = start_body(perceiver, out, detector, revision)
         mailbox = source.Mailbox()
         src = source.CameraSource(take, camera, mailbox)
         loop = perceive.Loop(src, mailbox, perceiver, out.publish)

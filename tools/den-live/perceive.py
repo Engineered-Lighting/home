@@ -150,12 +150,15 @@ class ClockOffset:
 
 class DetectorWorker:
     """detect_worker.py in the detector's venv: one frame in, one row out, in order. A reader thread holds its replies,
-    so a worker that hangs is a Stop after start_timeout_s or frame_timeout_s, never a loop that waits forever."""
+    so a worker that hangs is a Stop after start_timeout_s or frame_timeout_s, never a loop that waits forever.
+    The live body's replies (body_ready, body_refused, body_id: see body.BodyChannel) go to on_body instead, never into
+    the rows' queue, so they can arrive between frames without the loop waiting for them."""
 
     def __init__(self, argv, log_path, *, start_timeout_s=300, frame_timeout_s=10):
         self.log = open(log_path, "ab")
         self.proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log)
         self.frame_timeout_s, self.next_id = frame_timeout_s, 0
+        self.on_body = None
         self.replies = queue.Queue()
         threading.Thread(target=self._read, daemon=True, name="den-live-detector-reader").start()
         try:
@@ -170,11 +173,38 @@ class DetectorWorker:
     def _read(self):
         try:
             for raw in self.proc.stdout:
+                if raw.startswith(b'{"body_'):   # the body's replies, as json.dumps writes them: first key body_*
+                    try:
+                        reply = json.loads(raw.decode("utf-8"))
+                    except ValueError:
+                        reply = {"body_id": None, "error": "ProtocolError"}
+                    handler = self.on_body
+                    if handler is not None:
+                        try:
+                            handler(reply)
+                        except Exception:   # the body's failure is the body's; the rows go on
+                            pass
+                    continue
                 self.replies.put(raw)
         except (OSError, ValueError):
             pass
         finally:
             self.replies.put(None)
+            handler = self.on_body
+            if handler is not None:
+                try:
+                    handler(None)   # the process stopped
+                except Exception:
+                    pass
+
+    def send_alone(self, header):
+        """A header with no bundle after it (the live body's setup and requests). Raises Stop if the process is gone."""
+        data = json.dumps(header, separators=(",", ":")).encode("utf-8")
+        try:
+            self.proc.stdin.write(struct.pack(">I", len(data)) + data)
+            self.proc.stdin.flush()
+        except (OSError, ValueError):
+            raise Stop("the detector process stopped (its log: %s)" % self.log.name) from None
 
     def _line(self, timeout_s, what):
         try:
@@ -227,7 +257,7 @@ class Perceiver:
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
                  require_source_correction=True, content_revision=None, now=time.time):
         self.t, self.detector, self.home, self.now = tools, detector, home, now
-        self.body = None   # a body_link.BodyLink, when the live body runs: fed each lifted frame, never waited for
+        self.body = None   # a body_link.BodyLink, when the live body runs: asked for each fresh frame, never waited for
         self.require_source_correction = require_source_correction
         try:
             room_model = tools.roommodel.load(room_model_path)
@@ -390,8 +420,10 @@ class Perceiver:
             supported.append(set(track.obs_ids))
         self.lags.append((now_mono, now_mono - capture_mono))
         event = self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
-        if self.body is not None:
-            self.body.submit(bundle.data, now=now_mono, capture_ts=event["capture_ts"], seq=event["seq"],
+        # The live body, made in the detector's process from the bundle it kept: only while the detector keeps up (a
+        # frame older than FRESH_S is left out), and never waited for.
+        if self.body is not None and now_mono - capture_mono <= FRESH_S:
+            self.body.submit(self.detector.next_id, now=now_mono, capture_ts=event["capture_ts"], seq=event["seq"],
                              person=body_person(observations, tracks, supported))
         return event
 
@@ -404,7 +436,7 @@ COCO = ("nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder
 def body_person(observations, tracks, supported):
     """Who the live body is made for: the first confirmed track a pose supports in this frame, with that pose's room
     joints (supported or uncertain; unsupported ones left out); else the first confirmed track, without joints; else
-    None (nobody tracked, so body_worker.py may learn the empty room)."""
+    None (nobody tracked, so the body step may learn the empty room)."""
     poses = {o["obs_id"]: o for o in observations if o.get("kind") == "keypoints" and o.get("validity") == "valid"}
     first = None
     for track, obs_ids in zip(tracks, supported):

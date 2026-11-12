@@ -150,7 +150,7 @@ It says which one is missing if it can't start.
 - `source.py` fetches the camera's newest frame about 5 times a second.
 - `detect_worker.py`, in the detector's venv with no network, runs YOLO26s and RTMPose-m on each frame.
 - `perceive.py` runs den-observe and den-track, unedited, on step 2's registration. It checks every frame says the camera corrected its depth.
-- `body_worker.py`, also in the detector's venv with no network, makes the tracked person's body from the frame's depth (`body.py`). `body_link.py` feeds it without the markers ever waiting.
+- The live body (`body.py`) runs in the same detector process, on the frame it just detected, so the frame crosses once. `body_link.py` asks for it after tracking, never waits for it, and skips frames the detector is late on (over 1.5 s).
 - `stream.py` serves the people stream on 127.0.0.1:8111, and the body frames on their own path, `/body`.
 - `live_page.mjs` serves Home on 127.0.0.1:18190: this checkout when it holds the body layer (`claude/den-live-body`), else the `claude/den-live-home` worktree. It passes the streams through on the same paths step 4's gateway route will use.
 
@@ -158,7 +158,7 @@ It says which one is missing if it can't start.
 - The first time the den is empty for 8 s, it learns the empty room, in memory only, never saved. Until then there's no body. It learns again after two minutes of an empty den.
 - It keeps what reads at least 12 cm nearer than the empty room, or 4 cm inside a limb your pose places (a leg against the sofa), within 0.9 m of you.
 - It adds your back, limbs nothing measured covers (drawn fainter), and what you hold: something in your hands, still for 4 frames, drawn steady in blue.
-- It sends at most about 3 body frames a second, about 3,500 points each for a reader (roughly 75 KB); Home moves smoothly between them. A busy body skips frames. If its process stops or won't start, only the body goes, and the line `The live body is off: ...` says why. The markers go on.
+- It sends at most about 3 body frames a second, about 3,500 points each for a reader (roughly 75 KB); Home moves smoothly between them. It takes about 16 ms a frame here. A busy body skips frames. If it won't set up, only the body goes, and the line `The live body is off: ...` says why. The markers go on.
 
 **Its numbers:**
 - **The floor:** the tracker's floor box is your scan's walkable floor, padded 1 m on every side. den-track's own box is a tape rectangle in no scan frame. In the den simulation, your real sofa sat outside it, and one reader split into three tracks.

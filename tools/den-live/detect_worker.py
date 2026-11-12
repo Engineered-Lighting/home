@@ -16,6 +16,11 @@ arrival and waiting plus compute (plan L3), not compute only.
 Out: one JSON line per frame: {id, row, compute_s, luma} (row: den-detections-1, as den-detect writes it; luma: the
 mean of the frame's Y plane, 0 to 255, for the stream's too-dark rule) or {id, error} with a type name only. The first
 line is {ready, load_ms, warm_ms}, or {refused} and exit 2.
+
+The live body (body.py's BodyChannel) runs here too, so a frame crosses the pipe once and numpy loads once. A header
+with a kind of setup_body or body comes alone, with no bundle after it: setup_body sets the body up once; body asks for
+the body of the frame this process detected last (it keeps that bundle), with the person the loop tracked on it. Their
+replies carry body_ready, body_refused or body_id, never id, so the loop tells them apart from detection rows.
 """
 import argparse
 import json
@@ -40,8 +45,11 @@ def read_exact(stream, n):
     return data
 
 
+BODY_KINDS = ("setup_body", "body")   # headers that come without a bundle
+
+
 def read_frame(stream):
-    """(header, bundle bytes), or None when the loop closed the pipe."""
+    """(header, bundle bytes or None for a body header), or None when the loop closed the pipe."""
     out = []
     for _ in range(2):
         size = read_exact(stream, 4)
@@ -51,7 +59,11 @@ def read_frame(stream):
         if body is None:
             return None
         out.append(body)
-    return json.loads(out[0].decode("utf-8")), out[1]
+        if len(out) == 1:
+            header = json.loads(body.decode("utf-8"))
+            if header.get("kind") in BODY_KINDS:
+                return header, None
+    return header, out[1]
 
 
 PROTOCOL = None   # the pipe the loop reads; nothing else may write to it
@@ -94,11 +106,23 @@ def main(argv=None):
     np = detector.np
     say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms)})
     stream = sys.stdin.buffer
+    kept, bodies = None, None
     while True:
         got = read_frame(stream)
         if got is None:
             return 0
         header, data = got
+        if data is None:   # the live body: set up once, then the body of the frame kept below
+            if bodies is None:
+                try:
+                    import body
+                    bodies = body.BodyChannel()
+                except Exception as exc:  # a type name only
+                    say({"body_refused": type(exc).__name__})
+                    continue
+            say(bodies.handle(header, kept))
+            continue
+        kept = (header.get("id"), data)
         try:
             _meta, nv12 = detector.check.read_bundle(data, with_rgb=True)
             plane = np.frombuffer(nv12, np.uint8).reshape(detect.HEIGHT * 3 // 2, detect.WIDTH)

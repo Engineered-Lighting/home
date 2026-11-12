@@ -209,58 +209,45 @@ class BodyTest(unittest.TestCase):
         self.assertLess(per, 0.12, "%.0f ms a frame" % (per * 1000))
 
 
-class WorkerTest(unittest.TestCase):
-    """body_worker.py as the loop runs it: a separate process, frames over a pipe, one reply per frame."""
+class ChannelTest(unittest.TestCase):
+    """body.BodyChannel: the body's side of detect_worker.py's protocol, on the bundle the worker kept."""
 
-    def test_the_worker_learns_the_room_then_answers_with_frames(self):
+    @staticmethod
+    def bundle(depth):
         import io
-        import json
-        import struct
-        import subprocess
         import zipfile
-        here = Path(__file__).resolve().parent
-        proc = subprocess.Popen([sys.executable, "-B", str(here / "body_worker.py")], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL)
-        def send(obj, data=None):
-            raw = json.dumps(obj).encode("utf-8")
-            proc.stdin.write(struct.pack(">I", len(raw)) + raw)
-            if data is not None:
-                proc.stdin.write(struct.pack(">I", len(data)) + data)
-            proc.stdin.flush()
-            return json.loads(proc.stdout.readline())
-        def bundle(depth):
-            buf, npy = io.BytesIO(), io.BytesIO()
-            np.save(npy, depth)
-            with zipfile.ZipFile(buf, "w") as z:
-                z.writestr("depth_mm.npy", npy.getvalue())
-            return buf.getvalue()
-        try:
-            self.assertEqual(send({"setup": {"left_k": [FX, FY, CX, CY], "room_from_left": [R, T], "home": "den"}}), {"ready": True})
-            empty, t = bundle(render()), 0.0
-            for i in range(int(B.EMPTY_S / 0.2) + B.LEARN_FRAMES + 2):
-                t += 0.2
-                reply = send({"id": i, "now": t, "person": None}, empty)
-                self.assertEqual((reply["id"], reply["frame"]), (i, None))
-            person = {"track_id": "e1-trk-1", "xy_m": [0, 2.5], "joints": joints()}
-            reply = send({"id": 99, "now": t + 0.2, "capture_ts": 5.0, "seq": 3, "person": person}, bundle(render(person=(0, 2.5, 0.15, 1.6))))
-            self.assertEqual(reply["id"], 99)
-            self.assertIsNone(reply["why"])
-            self.assertEqual(reply["frame"]["schema"], "den-live-body-1")
-            self.assertGreater(reply["frame"]["points"]["count"], 1000)
-            bad = send({"id": 100, "now": t + 0.4, "person": person}, b"not a zip")
-            self.assertEqual(bad, {"id": 100, "error": "BadZipFile"}, "a bad frame is a reply, with a type name only")
-        finally:
-            proc.stdin.close()
-            self.assertEqual(proc.wait(10), 0)
-            proc.stdout.close()
+        buf, npy = io.BytesIO(), io.BytesIO()
+        np.save(npy, depth)
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("depth_mm.npy", npy.getvalue())
+        return buf.getvalue()
 
-    def test_the_worker_refuses_sockets(self):
-        import subprocess
-        here = Path(__file__).resolve().parent
-        code = "\n".join(["import sys; sys.path.insert(0, %r); import body_worker as w; w.guard(); import socket" % str(here),
-                          "try:", "    socket.getaddrinfo('localhost', 80)", "except PermissionError: print('refused')"])
-        out = subprocess.run([sys.executable, "-B", "-c", code], capture_output=True, text=True, timeout=30)
-        self.assertEqual(out.stdout.strip(), "refused")
+    def test_set_up_then_bodies_for_the_kept_frame(self):
+        ch = B.BodyChannel()
+        self.assertEqual(ch.handle({"kind": "body", "id": 1, "now": 0, "person": None}, None), {"body_id": 1, "error": "NotSetUp"})
+        self.assertEqual(ch.handle({"kind": "setup_body", "setup": {"left_k": [FX, FY, CX, CY], "room_from_left": [R, T], "home": "den"}}, None),
+                         {"body_ready": True})
+        empty, t = self.bundle(render()), 0.0
+        for i in range(int(B.EMPTY_S / 0.2) + B.LEARN_FRAMES + 2):
+            t += 0.2
+            reply = ch.handle({"kind": "body", "id": i, "now": t, "person": None}, (i, empty))
+            self.assertEqual((reply["body_id"], reply["frame"], reply["why"]), (i, None, "nobody tracked"))
+        person = {"track_id": "e1-trk-1", "xy_m": [0, 2.5], "joints": joints()}
+        scene = self.bundle(render(person=(0, 2.5, 0.15, 1.6)))
+        reply = ch.handle({"kind": "body", "id": 99, "now": t + 0.2, "capture_ts": 5.0, "seq": 3, "person": person}, (99, scene))
+        self.assertEqual(reply["body_id"], 99)
+        self.assertEqual(reply["frame"]["schema"], "den-live-body-1")
+        self.assertGreater(reply["frame"]["points"]["count"], 1000)
+        self.assertLess(reply["compute_s"], 0.12)
+        self.assertEqual(list(reply)[0], "body_id", "the reply's first key tells the loop's reader it is the body's")
+
+    def test_a_request_for_another_frame_or_a_bad_bundle_is_a_reply_not_a_stop(self):
+        ch = B.BodyChannel()
+        ch.handle({"kind": "setup_body", "setup": {"left_k": [FX, FY, CX, CY], "room_from_left": [R, T]}}, None)
+        self.assertEqual(ch.handle({"kind": "body", "id": 5, "now": 1, "person": None}, (4, b"")),
+                         {"body_id": 5, "frame": None, "why": "frame not kept"})
+        self.assertEqual(ch.handle({"kind": "body", "id": 6, "now": 1, "person": None}, (6, b"not a zip")), {"body_id": 6, "error": "BadZipFile"})
+        self.assertEqual(B.BodyChannel().handle({"kind": "setup_body", "setup": {}}, None), {"body_refused": "KeyError"})
 
 
 if __name__ == "__main__":

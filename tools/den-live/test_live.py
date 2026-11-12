@@ -525,7 +525,8 @@ class Live(unittest.TestCase):
         # and times. The control: a line holding a position would match none of them.
         shapes = (r'^Starting the detector', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
                   r'^camera ok \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames',
-                  r'^The live body is on \(body_worker\.py\)\. It learns the empty room', r'^The live body is off: [a-z \'(),:]+\. The markers go on\.$')
+                  r"^The live body is on, in the detector's process\. It learns the empty room",
+                  r"^The live body is off: [a-z '(),:0-9]+\. The markers go on\.$")
         # The live body ran beside the markers: frames reached it, and it never stopped the loop.
         self.assertIsNotNone(result['body'])
         self.assertGreater(result['body']['sent'], 5)

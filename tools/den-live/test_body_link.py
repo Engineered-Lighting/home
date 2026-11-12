@@ -1,21 +1,24 @@
-"""The live body's plumbing in den-live: the stream's /body path, who the body is made for, and the loop's link to
-body_worker.py. body.py's own tests are test_body.py (the detector's venv).
+"""The live body's plumbing in den-live: the stream's /body path, who the body is made for, and the loop's link to the
+body step in the detector's process. body.py's own tests are test_body.py (the detector's venv).
 
     python -B -X utf8 tools\\den-live\\test_body_link.py
 
-The link tests run body_worker.py in the detector's venv and are skipped without it.
+The link tests run a stand-in for detect_worker.py in the detector's venv: the real protocol and the real body step,
+with rows replayed instead of the models. They're skipped without the venv; the render test also needs a den-sim set.
 """
+import dataclasses
 import io
 import json
+import math
+import struct
 import sys
+import tempfile
 import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
 import zipfile
-import dataclasses
-import math
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -114,31 +117,87 @@ class BodyPerson(unittest.TestCase):
         self.assertEqual(perceive.body_person(seen, [], []), {'track_id': None, 'xy_m': None, 'joints': {}})
 
 
-def bundle(depth_rows=None):
-    import struct
+# A stand-in for detect_worker.py: its protocol, rows replayed from a detections.jsonl (or none), and the real body step.
+STUB = r'''
+import json, struct, sys
+sys.path.insert(0, %(here)r)
+import body
+rows = {}
+if len(sys.argv) > 1:
+    for line in open(sys.argv[1], encoding="utf-8"):
+        if line.strip():
+            row = json.loads(line)
+            rows[row["frame"]["rgb_seq"]] = row
+out = sys.stdout
+def say(value):
+    out.write(json.dumps(value, separators=(",", ":")) + "\n"); out.flush()
+def message():
+    size = sys.stdin.buffer.read(4)
+    if len(size) < 4:
+        return None
+    n = struct.unpack(">I", size)[0]
+    data = b""
+    while len(data) < n:
+        chunk = sys.stdin.buffer.read(n - len(data))
+        if not chunk:
+            return None
+        data += chunk
+    return data
+say({"ready": True, "load_ms": 0, "warm_ms": 0})
+kept, channel = None, body.BodyChannel()
+while True:
+    raw = message()
+    if raw is None:
+        sys.exit(0)
+    header = json.loads(raw)
+    if header.get("kind") in ("setup_body", "body"):
+        say(channel.handle(header, kept))
+        continue
+    data = message()
+    kept = (header["id"], data)
+    row = rows.get(header["rgb_seq"])
+    if row is None:
+        say({"id": header["id"], "error": "KeyError"})
+        continue
+    row = dict(row, available_ts=row["frame"]["capture_ts"] + header["delay_s"] + 0.07)
+    say({"id": header["id"], "row": row, "compute_s": 0.07, "luma": 120.0})
+'''
+
+
+def stub_argv(rows=None):
+    folder = Path(tempfile.mkdtemp(prefix='den-live-stub-'))
+    script = folder / 'stub_worker.py'
+    script.write_text(STUB % {'here': str(HERE)}, encoding='utf-8')
+    return [str(sc.VENV_PY), '-B', str(script)] + ([str(rows)] if rows else []), folder / 'stub.log'
+
+
+def bundle(value_mm=3000):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w') as z:   # a minimal depth_mm.npy: 400x640 uint16, all one value
         header = "{'descr': '<u2', 'fortran_order': False, 'shape': (400, 640), }"
         header += ' ' * (118 - len(header)) + '\n'
         z.writestr('depth_mm.npy', b'\x93NUMPY\x01\x00' + struct.pack('<H', len(header)) + header.encode('latin1')
-                   + (depth_rows or (3000).to_bytes(2, 'little') * (400 * 640)))
+                   + value_mm.to_bytes(2, 'little') * (400 * 640))
     return buf.getvalue()
+
+
+@dataclasses.dataclass
+class FakeBundle:
+    data: bytes
+    rgb_seq: int = 1
+    t_host: float = 0.0
+
+
+SETUP = {'left_k': [400.0, 400.0, 320.0, 200.0], 'room_from_left': [[[1, 0, 0], [0, 0, 1], [0, -1, 0]], [0, 0, 1.4]], 'home': 'den'}
 
 
 @unittest.skipUnless(sc.VENV_PY.is_file(), "needs the detector's venv")
 class Link(unittest.TestCase):
-    SETUP = {'left_k': [400.0, 400.0, 320.0, 200.0], 'room_from_left': [[[1, 0, 0], [0, 0, 1], [0, -1, 0]], [0, 0, 1.4]], 'home': 'den'}
-
-    def link(self, frames, argv=None, **kw):
-        log = Path(self.tmp) / 'body.log'
-        made = body_link.BodyLink(argv or [str(sc.VENV_PY), '-B', str(HERE / 'body_worker.py')], log, setup=self.SETUP,
-                                  on_frame=frames.append, **kw)
-        self.addCleanup(made.close)
-        return made
-
-    def setUp(self):
-        import tempfile
-        self.tmp = tempfile.mkdtemp(prefix='den-live-body-')
+    def detector(self, rows=None):
+        argv, log = stub_argv(rows)
+        worker = perceive.DetectorWorker(argv, log, start_timeout_s=60)
+        self.addCleanup(worker.close)
+        return worker
 
     def wait_idle(self, link, timeout=10):
         end = time.monotonic() + timeout
@@ -146,38 +205,50 @@ class Link(unittest.TestCase):
             time.sleep(0.01)
         self.assertFalse(link.busy)
 
-    def test_an_empty_den_is_learned_without_a_frame_and_a_busy_body_skips(self):
+    def test_the_body_runs_in_the_detectors_process_between_frames(self):
+        worker = self.detector()
         frames = []
-        link = self.link(frames)
+        link = body_link.BodyLink(worker, setup=SETUP, on_frame=frames.append)
         self.assertTrue(link.alive, link.stopped)
-        data, t = bundle(), 0.0
-        self.assertTrue(link.submit(data, now=t, capture_ts=1.0, seq=1, person=None))
-        self.assertFalse(link.submit(data, now=t, capture_ts=1.0, seq=2, person=None), 'never queued behind a busy body')
+        reply = worker.detect(FakeBundle(bundle()), 0.0)          # the row: KeyError here (no rows), and the bundle is kept
+        self.assertEqual(reply, {'id': 1, 'error': 'KeyError'})
+        self.assertTrue(link.submit(worker.next_id, now=0.0, capture_ts=1.0, seq=1, person=None))
+        self.assertFalse(link.submit(worker.next_id, now=0.0, capture_ts=1.0, seq=1, person=None), 'never two in flight')
         self.assertEqual(link.counts['skipped_busy'], 1)
         self.wait_idle(link)
         self.assertEqual(link.why, 'nobody tracked')
+        reply = worker.detect(FakeBundle(bundle(), rgb_seq=2), 0.0)   # rows still come back in turn after a body reply
+        self.assertEqual(reply['id'], 2)
         person = {'track_id': 'e1-trk-1', 'xy_m': [0, 2.5], 'joints': {}}
-        self.assertTrue(link.submit(data, now=t + 0.5, capture_ts=1.5, seq=3, person=person))
+        self.assertTrue(link.submit(worker.next_id, now=0.5, capture_ts=1.5, seq=3, person=person))
         self.wait_idle(link)
         self.assertEqual(link.why, 'learning the empty room')
-        self.assertFalse(link.submit(data, now=t + 0.6, capture_ts=1.6, seq=4, person=person), 'at most about 3 body frames a second')
+        self.assertFalse(link.submit(worker.next_id, now=0.6, capture_ts=1.6, seq=4, person=person), 'at most about 3 body frames a second')
         self.assertEqual(link.counts['skipped_rate'], 1)
+        self.assertTrue(link.submit(worker.next_id - 1, now=1.0, capture_ts=2.0, seq=5, person=person))
+        self.wait_idle(link)
+        self.assertEqual(link.why, 'frame not kept', 'only the frame just detected')
         self.assertEqual(frames, [])
 
-    def test_a_body_process_that_wont_start_turns_the_body_off_and_nothing_else(self):
-        frames = []
-        link = self.link(frames, argv=[sys.executable, '-c', 'import sys; sys.exit(3)'], start_timeout_s=10)
+    def test_a_body_that_wont_set_up_turns_only_the_body_off(self):
+        worker = self.detector()
+        link = body_link.BodyLink(worker, setup={'left_k': 'nonsense'}, on_frame=lambda f: None)
         self.assertFalse(link.alive)
-        self.assertIn("didn't start", link.stopped)
-        self.assertFalse(link.submit(bundle(), now=0, capture_ts=0, seq=1, person=None))
+        self.assertIn("didn't set up", link.stopped)
+        self.assertFalse(link.submit(worker.next_id, now=0, capture_ts=0, seq=1, person=None))
+        self.assertEqual(worker.detect(FakeBundle(bundle()), 0.0)['id'], 1, 'the detector goes on')
 
-    def test_a_bad_bundle_is_an_error_count_not_a_stop(self):
-        frames = []
-        link = self.link(frames)
-        link.submit(b'not a bundle', now=0, capture_ts=0, seq=1, person=None)
-        self.wait_idle(link)
-        self.assertEqual(link.counts['errors'], 1)
+    def test_a_detector_that_stops_turns_the_body_off(self):
+        worker = self.detector()
+        link = body_link.BodyLink(worker, setup=SETUP, on_frame=lambda f: None)
         self.assertTrue(link.alive)
+        worker.proc.kill()
+        worker.proc.wait(10)
+        end = time.monotonic() + 10
+        while link.alive and time.monotonic() < end:
+            time.sleep(0.01)
+        self.assertFalse(link.alive)
+        self.assertEqual(link.stopped, 'the detector process stopped')
 
 
 def _renders():
@@ -195,40 +266,45 @@ EMPTY_TAKE, READING_TAKE = '84c26951a000', '85b080a5815b'   # the den-sim set's 
 @unittest.skipUnless(TL and sc.VENV_PY.is_file() and (TL.SET / EMPTY_TAKE / 'detections.jsonl').is_file(),
                      "needs a prepared den-sim set and the detector's venv")
 class OnRenders(unittest.TestCase):
-    """The real perceiver (den-observe, den-track) and the real body process on the den simulation's renders, through
-    the registration fit on them: the empty den first, then someone reading on the couch."""
+    """The real perceiver (den-observe, den-track), the real detector link and the real body step on the den simulation's
+    renders, through the registration fit on them: the empty den first, then someone reading on the couch."""
 
-    def test_the_empty_den_is_learned_then_the_person_is_a_body_where_their_marker_is(self):
+    def test_the_empty_den_is_learned_then_the_reader_is_a_body_where_their_marker_is(self):
+        import array
         import base64
-        import tempfile
+        import statistics
         tools = perceive.Tools(sc.archive(TL.TOOLS, 'observe'), sc.archive(TL.TOOLS, 'track'))
         sys.path.insert(0, str(tools.observe_tree / 'tools' / 'den-take'))
         copy = perceive.track_method_copy(tools, [-3.0, -3.5, 3.0, 2.5], TL.scratch('den-live-method-'))
+        empty, reading = TL.SET / EMPTY_TAKE, TL.SET / READING_TAKE
+        # One file of rows for both takes, as one camera session: the reading take's RGB sequence numbers moved on by
+        # SHIFT, since the two renders count from the same start.
+        SHIFT = 100_000
+        lines = (empty / 'detections.jsonl').read_text(encoding='utf-8').splitlines()
+        for line in (reading / 'detections.jsonl').read_text(encoding='utf-8').splitlines():
+            if line.strip():
+                row = json.loads(line)
+                row['frame']['rgb_seq'] += SHIFT
+                lines.append(json.dumps(row))
+        rows = Path(tempfile.mkdtemp(prefix='den-live-rows-')) / 'detections.jsonl'
+        rows.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        first = TL.bundles(empty, session='s1')
+        second = [dataclasses.replace(b, rgb_seq=b.rgb_seq + SHIFT) for b in TL.bundles(reading, session='s1')]
+        argv, log = stub_argv(rows)
+        worker = perceive.DetectorWorker(argv, log, start_timeout_s=60)
+        self.addCleanup(worker.close)
         clock = {'now': 0.0}
-        empty, book = TL.SET / EMPTY_TAKE, TL.SET / READING_TAKE
-
-        class Both:   # each take's own recorded rows
-            def __init__(self):
-                self.a, self.b = TL.RecordedDetector(empty), TL.RecordedDetector(book)
-                self.which = self.a
-
-            def detect(self, bundle, delay_s):
-                return self.which.detect(bundle, delay_s)
-
-        detector = Both()
         p = perceive.Perceiver(tools, room_model_path=TL.FIT / 'room-model.jsonl', camera_id='den-virtual', max_error_bound_m=0.10,
-                               track_method_path=copy, detector=detector, home='den', require_source_correction=False,
+                               track_method_path=copy, detector=worker, home='den', require_source_correction=False,
                                now=lambda: 1_800_000_000.0 + clock['now'])
         camera = p.camera
         rotation, translation = camera.room_from_left
         frames = []
-        link = body_link.BodyLink([str(sc.VENV_PY), '-B', str(HERE / 'body_worker.py')], Path(tempfile.mkdtemp()) / 'body.log',
-                                  setup={'left_k': list(camera.rig.left_k[:4]), 'room_from_left': [[list(r) for r in rotation], list(translation)],
-                                         'home': 'den'}, on_frame=frames.append)
-        self.addCleanup(link.close)
+        link = body_link.BodyLink(worker, setup={'left_k': list(camera.rig.left_k[:4]), 'room_from_left': [[list(r) for r in rotation], list(translation)],
+                                                 'home': 'den'}, on_frame=frames.append)
         self.assertTrue(link.alive, link.stopped)
         p.body = link
-        events, offset = [], 0.0
+        events, times = [], []
 
         def run(take_frames, shift):
             for b in take_frames:
@@ -238,36 +314,35 @@ class OnRenders(unittest.TestCase):
                 if event is not None:
                     events.append(event)
                 end = time.monotonic() + 10
-                while link.busy and time.monotonic() < end:   # one frame at a time here, so none is skipped
+                while link.busy and time.monotonic() < end:   # here, one frame at a time, so the body never skips for being busy
                     time.sleep(0.005)
-        first = TL.bundles(empty, session='s1')
+                if link.compute_s is not None:
+                    times.append(link.compute_s)
         run(first, 0.0)
-        span = first[-1].t_host - first[0].t_host
-        self.assertGreater(span, 8.0, 'the empty take is long enough to learn the room')
+        self.assertGreater(first[-1].t_host - first[0].t_host, 8.0, 'the empty take is long enough to learn the room')
         self.assertEqual(link.why, 'nobody tracked')
-        detector.which = detector.b
-        second = TL.bundles(book, session='s1')
         run(second, first[-1].t_host - second[0].t_host + 0.2)
         self.assertGreater(len(frames), 5, (link.counts, link.why))
         last = frames[-1]
         self.assertEqual(last['schema'], 'den-live-body-1')
-        import array
-        import statistics
         mm = array.array('h', base64.b64decode(last['points']['position_mm']))
         if sys.byteorder != 'little':
             mm.byteswap()
         kind = base64.b64decode(last['points']['kind'])
         pts = [(mm[3 * i] / 1000, mm[3 * i + 1] / 1000, mm[3 * i + 2] / 1000) for i in range(len(kind))]
-        body = [p for p, k in zip(pts, kind) if k <= 1]
+        body = [q for q, k in zip(pts, kind) if k <= 1]
         marker = events[-1]['tracks'][0]['xy_m']
-        centre = (statistics.median(p[0] for p in body), statistics.median(p[1] for p in body))
+        centre = (statistics.median(q[0] for q in body), statistics.median(q[1] for q in body))
         self.assertLess(math.dist(centre, marker), 0.35, (centre, marker))
-        heights = [p[2] for p in body]
+        heights = [q[2] for q in body]
         self.assertGreater(max(heights) - min(heights), 0.5, 'a seated reader spans more than half a metre')
         self.assertGreater(max(heights), 0.9, 'up to their head')
         self.assertEqual(last['track_id'], events[-1]['tracks'][0]['track_id'])
-        print('\n  on renders: %d body frames; last %d points (%d front/back, %d guessed, %d held); joints %d'
-              % (len(frames), len(kind), len(body), kind.count(3), kind.count(5), len(last.get('joints') or [])))
+        size = len(json.dumps(last, separators=(',', ':')))
+        self.assertLess(size, 150_000, 'a frame stays small enough for a phone')
+        print('\n  on renders: %d body frames; last %d points (%d front/back, %d guessed, %d held), %d KB; joints %d; body step %.0f ms median, %.0f ms max'
+              % (len(frames), len(kind), len(body), kind.count(3), kind.count(5), size // 1024, len(last.get('joints') or []),
+                 1000 * statistics.median(times), 1000 * max(times)))
 
 
 if __name__ == '__main__':

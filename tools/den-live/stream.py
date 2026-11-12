@@ -4,7 +4,7 @@
                                               every heartbeat_s, so a silent pipeline reads as offline in under 3 s
     GET /api/den-live/v1/homes/<home>/state    {"people": the newest event, or null}
     GET /api/den-live/v1/homes/<home>/body     text/event-stream: `event: body` per body frame (den-live-body-1, from
-                                              body_worker.py), and the same heartbeat. A path of its own, so the
+                                              the detector process), and the same heartbeat. A path of its own, so the
                                               gateway can keep bodies to signed-in Home while the markers stay look-only
 
 It answers GET and HEAD only, for its own Host only (127.0.0.1:<port>), to at most max_clients streams at once. A slow

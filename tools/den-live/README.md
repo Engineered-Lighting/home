@@ -411,23 +411,73 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
   - The log line carries `association {safe, status, since_at}`: whether den-track held the asked track confident through the stills' window, and since before it.
   - The end-to-end plan's person state holds a reply that isn't safe.
 
-**Setting it up on LA.** The asks block in `/etc/den-live/config.json`:
+**Turning it on (inference plan, step 3).**
+
+1. **In the den home's Home Assistant, signed in as you:**
+   - make a user `den-live`, an admin (the coordinator chat's decision 08, since only an admin can follow den_lighting's events);
+   - as that user, make a long-lived access token. It's the same token the coordinator's link uses.
+2. **On this PC, in PowerShell: save the token and the address once,** beside the camera token. Copy the token from Home Assistant first, then paste:
+
+   ```powershell
+   Get-Clipboard | Set-Content -Encoding ascii -NoNewline C:\den-takes\private\den-live-ha-token.txt
+   ```
+
+   ```powershell
+   Set-Content -Encoding ascii -NoNewline C:\den-takes\private\den-live-ha-url.txt "http://<Home Assistant's IP address>:8123"
+   ```
+
+   - **The address:** Home Assistant's as LA reaches it, over the private link between the homes, the same way den-live already reaches the camera.
+     - It must be an IP address, since the unit allows the service that one address.
+     - Use `http://`. With `https://`, Home Assistant's certificate would have to name that IP address, or the check fails every read.
+   - Neither file goes anywhere but LA, and the install never prints them.
+3. **Install den-live as in step 4:** the same `install_la.py` paste. With both files there, it says "The Qwen ask: on". It then:
+   - copies the token as a credential;
+   - adds the asks block to `/etc/den-live/config.json`;
+   - adds the address and the credential to the unit's drop-in.
+
+   Without the files it says "off", and an install without them removes an old token from LA.
+   - The release is built from this branch's last commit, so a change only reaches LA once it's committed.
+4. **The check:** paste this on this PC, then sit, read, use your phone and leave, as it speaks the cues:
+
+   ```powershell
+   python -B C:\claude\home\.claude\worktrees\zealous-faraday-76b9d1\tools\den-live\ask_check.py --home https://<your Home address>
+   ```
+
+   It prints, for example:
+
+   ```
+   Ask check, 20:15
+   Read (2 min):   Frigate on before the cue, seated and asking +2.6 s, first answer +3.3 s, first close-up +3.3 s
+                   close-up on 38 of 40 answers (reading 38, unclear 2)
+   Phone (2 min):  close-up on 0 of 40 answers (phone_use 37, unclear 3)
+   Leave:          asks stopped 1.2 s after the cue
+   Answer time:    median 0.62 s, as den-live reports it
+   Stream:         480, 478 and 120 events in the three parts, 0 reconnects
+   ```
+
+   The numbers are made up, to show the shape. Tell an agent the lines: they're words and numbers only.
+
+**The settings it writes on LA.** The asks block in `/etc/den-live/config.json`:
 
 ```json
-"asks": {"ha_url": "https://<den home's Home Assistant>:<port>", "ha_entity": "binary_sensor.<Frigate's den occupancy>",
-         "vllm_url": "http://127.0.0.1:8000", "time_zone": "<IANA zone>", "backoff_status": "<the monitor's status.json>",
-         "asks_on": true, "labels_to_qwen": true, "min_interval_s": 2, "max_per_minute": 30}
+"asks": {"ha_url": "http://<den home's Home Assistant IP>:8123", "ha_entity": "binary_sensor.den_oak_person_occupancy",
+         "vllm_url": "http://127.0.0.1:8000", "asks_on": true, "labels_to_qwen": true, "min_interval_s": 2, "max_per_minute": 30}
 ```
 
+- **Switches survive a reinstall:** a reinstall keeps `asks_on`, `labels_to_qwen` and the pace as they were in the file it replaces, so an ask you switched off stays off.
+- **Two keys a hand edit can add:**
+  - `time_zone`, an IANA name: the context's time label uses LA's own zone without it;
+  - `backoff_status`: the back-off monitor's status file. Today the monitor keeps it in a folder den-live's service user can't read, so the install doesn't set it, and den-live's own limits are its guard.
 - **The credential:** the token is `ha-token.txt` among the service's credentials.
 - **Without the block, or with a bad one,** the ask is off and the journal says why in one sentence. That includes a token that's missing and an ask that fails as it starts. The markers go on either way.
 - **Changing a switch:** `asks_on`, `labels_to_qwen`, `min_interval_s` and `max_per_minute` are re-read whenever the file changes, so no restart is needed.
   - A block taken out, or a value that doesn't read, turns the asks off until it reads again. The health line says why.
   - The pace can't go past AGENTS.md's bound: `min_interval_s` 2 to 60, `max_per_minute` 1 to 30.
-- **The unit needs, at the install (inference plan step 3):**
+- **The unit's drop-in, written by the install:**
   - a `LoadCredential` for `ha-token.txt`;
-  - an `IPAddressAllow` for Home Assistant's address;
-  - a `backoff_status` path that `ProtectHome` doesn't hide.
+  - an `IPAddressAllow` for Home Assistant's address.
+
+  Both are only there while the asks block is. `install.sh` refuses settings that set the ask up without a token, and a token without such settings, so the unit can't be left waiting for a credential that isn't there.
 
 ### Tests
 

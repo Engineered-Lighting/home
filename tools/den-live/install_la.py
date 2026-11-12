@@ -36,6 +36,9 @@ import sofa_check as sc  # noqa: E402
 say, Stop = sc.say, sc.Stop
 HOST = "hav-ubuntu"
 REMOTE = "/dev/shm/den-live-install"
+# The Qwen ask's two private files, saved once beside the camera token: the den-live user's long-lived token (the same
+# admin user and token the coordinator's link uses) and the den home's Home Assistant address as LA reaches it.
+HA_TOKEN_FILE, HA_URL_FILE = "den-live-ha-token.txt", "den-live-ha-url.txt"
 INSTALL_SH = Path("stack") / "services" / "den-live" / "install.sh"
 
 
@@ -71,11 +74,31 @@ class SSH:
         return self.run(["scp", "-q", *[str(p) for p in paths], "%s:%s/" % (self.host, remote)])
 
 
+def ha_inputs(token_file, url_file):
+    """(token, url) for the Qwen ask, from the two private files you save once beside the camera token (README, "The
+    Qwen ask"), or (None, None) when neither is there. Never printed."""
+    have = [Path(token_file).is_file(), Path(url_file).is_file()]
+    if not any(have):
+        return None, None
+    if not all(have):
+        raise Stop("the Qwen ask needs both %s and %s; one is missing" % (Path(token_file).name, Path(url_file).name))
+    try:   # utf-8-sig: PowerShell 5.1's -Encoding utf8 writes a byte-order mark first
+        token = Path(token_file).read_text(encoding="utf-8-sig").strip()
+        url = Path(url_file).read_text(encoding="utf-8-sig").strip()
+    except (OSError, ValueError):
+        raise Stop("%s or %s doesn't read" % (Path(token_file).name, Path(url_file).name)) from None
+    if not token or not token.isascii() or any(c.isspace() for c in token):
+        raise Stop("%s should hold the token alone, on one line" % Path(token_file).name)
+    rs.ha_address(url)   # an IP address and a port, or it says so
+    return token, url
+
+
 def undo_lines(host):
     return ['  ssh -t %s "sudo systemctl disable --now den-live"' % host]
 
 
-def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID):
+def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID,
+        ha_token_file=None, ha_url_file=None):
     tools_dir = root / "tools"
     observe, track = sc.archive(tools_dir, "observe"), sc.archive(tools_dir, "track")
     model, receipt, transform_id = registration(root, perceive.Tools(observe, track), camera_id)
@@ -85,7 +108,11 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
     except take.Refused as exc:
         raise Stop(sc.token_refusal(exc, token_file, observe)) from None
     rs.camera_address(camera_url)
+    private = Path(token_file).parent
+    ha_token, ha_url = ha_inputs(ha_token_file or private / HA_TOKEN_FILE, ha_url_file or private / HA_URL_FILE)
     say("Step 2's registration %s, from %s." % (transform_id, receipt.name))
+    say("The Qwen ask: %s" % ("on, with Home Assistant's token and address." if ha_token else
+                              "off. To turn it on, save %s and %s first (README, \"The Qwen ask\")." % (HA_TOKEN_FILE, HA_URL_FILE)))
     say("Building the release...")
     out_dir = root / "private" / "release"
     built = release.build(out_dir=out_dir, source=source, token=token, models_dir=models_dir, wheel=wheel)
@@ -98,15 +125,19 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         shutil.copyfile(model, outbox / "room-model.jsonl")
         shutil.copyfile(token_file, outbox / "camera-token.txt")
         shutil.copyfile(receipt, outbox / "register-receipt.json")
-        (outbox / "settings.json").write_text(json.dumps({"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url,
-                                                          "site": rl.den_site()}) + "\n", encoding="utf-8", newline="\n")
+        settings = {"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url, "site": rl.den_site()}
+        if ha_token:
+            settings["asks"] = {"ha_url": ha_url, "ha_entity": rs.FRIGATE_ENTITY}
+            (outbox / rs.HA_TOKEN).write_text(ha_token + "\n", encoding="utf-8", newline="\n")
+        (outbox / "settings.json").write_text(json.dumps(settings) + "\n", encoding="utf-8", newline="\n")
         (outbox / "install.sh").write_bytes(built["contents"][INSTALL_SH.as_posix()])   # the release's own, byte for byte
         say("Copying the release and the private inputs to %s:%s ..." % (host, REMOTE))
         if transport.shell("rm -rf %s && mkdir -m 700 %s" % (REMOTE, REMOTE)):
             raise Stop("ssh %s didn't answer; is it reachable from this PC?" % host)
         copied = True
         files = [built["tarball"], *(outbox / name for name in ("install.sh", "room-model.jsonl", "camera-token.txt",
-                                                                "register-receipt.json", "settings.json"))]
+                                                                "register-receipt.json", "settings.json")),
+                 *([outbox / rs.HA_TOKEN] if ha_token else [])]
         if transport.copy(files, REMOTE):
             raise Stop("scp to %s stopped part way" % host)
         say("Installing on %s (sudo asks for your password there)..." % host)

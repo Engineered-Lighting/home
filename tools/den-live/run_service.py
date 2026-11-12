@@ -134,14 +134,55 @@ def asks_settings(config, folder):
     if block.get("ha_ca_file") is not None and not Path(block["ha_ca_file"]).is_file():
         return None, "its ha_ca_file isn't there"
     try:
-        token = (Path(folder) / HA_TOKEN).read_text(encoding="utf-8").strip()
+        token = (Path(folder) / HA_TOKEN).read_text(encoding="utf-8-sig").strip()
     except OSError:
         return None, "the service's Home Assistant token credential (%s) is missing" % HA_TOKEN
     except ValueError:
         return None, "the service's Home Assistant token credential doesn't read"
-    if not token or any(c.isspace() for c in token):
+    if not token or not token.isascii() or any(c.isspace() for c in token):
         return None, "the service's Home Assistant token credential doesn't read"
     return dict(block, token=token), None
+
+
+FRIGATE_ENTITY = "binary_sensor.den_oak_person_occupancy"   # Frigate's den occupancy in the den home's Home Assistant
+VLLM_URL = "http://127.0.0.1:8000"
+
+
+def ha_address(url):
+    """The Home Assistant URL's IP address: it must name one, since the unit allows the service that one address. A
+    scoped or IPv4-mapped IPv6 address is refused: systemd's IPAddressAllow wouldn't let it through."""
+    try:
+        parts = urlsplit(url if isinstance(url, str) else "")
+        if (parts.scheme not in ("http", "https") or not parts.port or parts.username or parts.password
+                or parts.path not in ("", "/") or parts.query or parts.fragment or "%" in (parts.hostname or "")):
+            raise ValueError
+        address = ipaddress.ip_address(parts.hostname)
+        if getattr(address, "ipv4_mapped", None) or getattr(address, "scope_id", None):
+            raise ValueError
+        return address
+    except (TypeError, ValueError):
+        raise Refusal("the den home's Home Assistant address must look like http://<IP address>:<port>") from None
+
+
+def asks_block(settings, current=None):
+    """(the config's asks block, Home Assistant's address) from install_la.py's settings, or (None, None) without one.
+    The switches (asks_on, labels_to_qwen and the pace) keep their values from the config being replaced (current),
+    when they read there, so a reinstall never turns back on an ask you switched off."""
+    given = settings.get("asks")
+    if given is None:
+        return None, None
+    if not isinstance(given, dict):
+        raise Refusal("settings.json's asks block isn't one")
+    address = ha_address(given.get("ha_url"))
+    entity = given.get("ha_entity", FRIGATE_ENTITY)
+    if not isinstance(entity, str) or not ENTITY.match(entity):
+        raise Refusal("settings.json's ha_entity isn't a binary_sensor's id")
+    switches = dict(ask.SETTINGS_KEYS)
+    kept = ask.Settings(block=(current or {}).get("asks")) if isinstance((current or {}).get("asks"), dict) else None
+    if kept is not None and kept.why is None:
+        switches.update({k: kept.values[k] for k in switches})
+    block = {"ha_url": given["ha_url"], "ha_entity": entity, "vllm_url": VLLM_URL, **switches}
+    return block, address
 
 
 def asks_starter(fixed, config_path, *, site, state, camera_id):
@@ -245,9 +286,15 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     if blocked is not None:
         raise Refusal("the den-live service's own user couldn't read %s through its read-only bind: give other users read "
                       "access to it (chmod o+rX %s); the installer leaves your files as they are" % (blocked, blocked))
+    try:
+        current = json.loads(Path(out).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        current = None
+    block, ha = asks_block(settings, current if isinstance(current, dict) else None)
     config = {"schema": CONFIG_SCHEMA, "camera_url": settings["camera_url"], "content_packs": str(packs), "site": site,
-              "venv_python": str(venv_python), "models": str(models), "stream_port": int(stream_port)}
-    for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"), (Path(dropin), dropin_text(address, packs))):
+              "venv_python": str(venv_python), "models": str(models), "stream_port": int(stream_port),
+              **({"asks": block} if block else {})}
+    for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"), (Path(dropin), dropin_text(address, packs, ha))):
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         part.write_text(text, encoding="utf-8", newline="\n")
@@ -256,11 +303,15 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     return config
 
 
-def dropin_text(address, packs):
+def dropin_text(address, packs, ha=None):
     """The unit's local settings: the one camera address it may reach, and the content packs, read only. With the packs
-    under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through."""
+    under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through.
+    With the Qwen ask set up (ha: Home Assistant's address), that address too, and the Home Assistant token credential,
+    which only then must exist."""
     lines = ["# Written by den-live's install.sh from this host's settings. Not in git.", "[Service]",
              "IPAddressAllow=%s" % address, "BindReadOnlyPaths=%s" % packs]
+    if ha is not None:
+        lines += ["IPAddressAllow=%s" % ha, "LoadCredential=%s:/etc/den-live/private/%s" % (HA_TOKEN, HA_TOKEN)]
     if packs.parts[1:2] in (("home",), ("root",)):
         lines.append("ProtectHome=tmpfs")
     return "\n".join(lines) + "\n"

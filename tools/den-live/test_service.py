@@ -342,6 +342,63 @@ class ServiceRefusals(unittest.TestCase):
             self.assertEqual('ProtectHome=tmpfs' in dropin, protect)
         self.assertIn('ProtectHome=tmpfs', rs.dropin_text(rs.camera_address('http://192.0.2.7:8090'), Path('/home/u/code/home/app/data/home-content')))
 
+    def test_the_qwen_asks_settings_and_drop_in(self):
+        base = scratch('den-live-install-')
+        packs = make_packs([[0, 0], [1, 0], [1, 1]])
+        settings = base / 'settings.json'
+        common = {'schema': rs.SETTINGS_SCHEMA, 'camera_url': 'http://192.0.2.5:8090', 'site': rl.den_site(), 'content_packs': str(packs)}
+        settings.write_text(json.dumps(dict(common, asks={'ha_url': 'https://192.0.2.20:8123', 'ha_entity': rs.FRIGATE_ENTITY})), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertEqual(config['asks']['ha_url'], 'https://192.0.2.20:8123')
+        self.assertEqual(config['asks']['vllm_url'], 'http://127.0.0.1:8000')
+        self.assertTrue(config['asks']['asks_on'])
+        dropin = (base / 'd.conf').read_text(encoding='utf-8')
+        self.assertIn('IPAddressAllow=192.0.2.20', dropin)
+        self.assertIn('LoadCredential=ha-token.txt:/etc/den-live/private/ha-token.txt', dropin)
+        # What install_la writes is what run_service reads back: with the token beside it, the ask is set up.
+        creds = scratch('den-live-creds-')
+        (creds / rs.HA_TOKEN).write_text('t0ken\n', encoding='utf-8')
+        fixed, why = rs.asks_settings(config, creds)
+        self.assertIsNone(why)
+        # Without an asks block: no asks in the settings, and no credential or address in the drop-in.
+        settings.write_text(json.dumps(common), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertNotIn('asks', config)
+        self.assertNotIn('ha-token', (base / 'd.conf').read_text(encoding='utf-8'))
+        # A reinstall keeps the switches as they were: an ask switched off by hand stays off.
+        settings.write_text(json.dumps(dict(common, asks={'ha_url': 'http://192.0.2.20:8123'})), encoding='utf-8')
+        (base / 'c.json').write_text(json.dumps({'asks': {'asks_on': False, 'min_interval_s': 5, 'ha_url': 'x'}}), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertFalse(config['asks']['asks_on'])
+        self.assertEqual(config['asks']['min_interval_s'], 5)
+        self.assertEqual(config['asks']['ha_url'], 'http://192.0.2.20:8123')
+        for bad in ('https://ha.local:8123', 'https://192.0.2.20', 'https://u:p@192.0.2.20:8123', 'ftp://192.0.2.20:21',
+                    'http://[fe80::1%25eth0]:8123', 'http://[::ffff:192.0.2.20]:8123'):
+            settings.write_text(json.dumps(dict(common, asks={'ha_url': bad})), encoding='utf-8')
+            with self.assertRaises(rs.Refusal) as refused:
+                rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+            self.assertNotIn(bad, str(refused.exception))
+
+    def test_install_la_reads_the_asks_two_private_files(self):
+        folder = scratch('den-live-private-')
+        token, url = folder / install_la.HA_TOKEN_FILE, folder / install_la.HA_URL_FILE
+        self.assertEqual(install_la.ha_inputs(token, url), (None, None))
+        token.write_text('abc123\n', encoding='utf-8')
+        with self.assertRaises(install_la.Stop):
+            install_la.ha_inputs(token, url)            # one without the other
+        url.write_text('https://192.0.2.20:8123\n', encoding='utf-8')
+        self.assertEqual(install_la.ha_inputs(token, url), ('abc123', 'https://192.0.2.20:8123'))
+        token.write_bytes('﻿abc123'.encode('utf-8'))   # PowerShell 5.1's -Encoding utf8 writes a byte-order mark
+        self.assertEqual(install_la.ha_inputs(token, url)[0], 'abc123')
+        for bad_token, bad_url in (('two words', 'https://192.0.2.20:8123'), ('abc123', 'https://ha.local:8123'),
+                                   ('abcé123', 'https://192.0.2.20:8123')):
+            token.write_text(bad_token, encoding='utf-8')
+            url.write_text(bad_url, encoding='utf-8')
+            with self.assertRaises(install_la.Stop) as stopped:
+                install_la.ha_inputs(token, url)
+            self.assertNotIn(bad_url, str(stopped.exception))
+            self.assertNotIn(bad_token, str(stopped.exception))
+
     def test_packs_the_services_own_user_couldnt_read_refuse_and_name_the_folder(self):
         packs = make_packs([[0, 0], [1, 0], [1, 1]])
         site_dir = packs / rl.den_site()

@@ -1,0 +1,18 @@
+[Unit]
+Description=Home Assistant reachability probe (external — survives HAOS being down)
+After=network-online.target
+Wants=network-online.target
+OnFailure=ntfy-alert@%n.service
+
+# Credential-free: the probe never sends a token and never hits a view that
+# HA's http.ban counts as a failed login. Addresses live in the host-local
+# EnvironmentFile; see ha-reachable.env.example.
+[Service]
+Type=oneshot
+User=root
+EnvironmentFile=/etc/default/ha-reachable
+ExecStart=/usr/local/sbin/ha-reachable
+ExecStartPost=/usr/local/sbin/ntfy-alert-reset %n
+TimeoutStartSec=1min
+NoNewPrivileges=true
+PrivateTmp=true

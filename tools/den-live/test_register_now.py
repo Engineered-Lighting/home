@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 import zipfile
@@ -200,6 +201,32 @@ class MedianCopy(unittest.TestCase):
         self.assertEqual(copied['take'], 'raw-x0.97-m')
         self.assertEqual(rn.scaled_name(self.source, 0.97).name, 'raw-x0.97-m')
         self.assertEqual(rn.scaled_name(self.source, 1.0).name, 'raw-x1-m')
+
+    def test_a_copy_stopped_part_way_never_blocks_the_next(self):
+        """Ctrl+C on the second frame leaves only <name>.tmp, never a copy that looks finished; a copy cut short by an
+        older paste (a folder with no take.json) is cleared too. The next copy writes whole and reads as a take."""
+        plane, _, n = rn.median_plane(R, self.source, LIVE['median_min_valid'])
+        method = {'file': 'X.md', 'sha256': 'f' * 64}
+        target = scratch('den-live-copy-') / 'raw-x1-m'
+        real, calls = rn.rewrite_depth, []
+
+        def stopped(*args):
+            calls.append(1)
+            if len(calls) == 2:
+                raise KeyboardInterrupt
+            return real(*args)
+        with unittest.mock.patch.object(rn, 'rewrite_depth', stopped):
+            with self.assertRaises(KeyboardInterrupt):
+                rn.median_copy(R, self.source, target, plane, 1.0, method, n)
+        self.assertFalse(target.exists(), 'nothing that looks like a copy')
+        self.assertTrue(target.with_name('raw-x1-m.tmp').is_dir())
+        self.assertEqual(rn.median_copy(R, self.source, target, plane, 1.0, method, n), 5)
+        self.assertFalse(target.with_name('raw-x1-m.tmp').exists())
+        self.assertEqual(R.scene.read_take(target)[0]['take'], 'raw-x1-m')
+        shutil.rmtree(target)
+        (target / 'frames').mkdir(parents=True)   # an older paste's copy, cut short before its take.json
+        self.assertEqual(rn.median_copy(R, self.source, target, plane, 1.0, method, n), 5)
+        self.assertEqual(len(R.scene.read_take(target)[1]), 5)
 
     def test_scale_bundle_changes_only_the_depth_values(self):
         data = (self.source / marks_rows(1)[0]['file']).read_bytes()

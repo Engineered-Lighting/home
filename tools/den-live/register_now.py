@@ -444,10 +444,15 @@ def scale_bundle(R, data, scale):
 
 def median_copy(R, source, target, plane, scale, method, frames_used):
     """Write <take>-x<scale>-m at target: every bundle with the median plane times scale as its depth. take.json says
-    where it came from and what changed."""
+    where it came from and what changed. It's written in <name>.tmp and renamed whole at the end, so a paste stopped
+    part way (Ctrl+C, a frame that changed) leaves no copy that looks finished; the next paste clears what it left."""
     rows = list(csv.DictReader(io.StringIO((source / "frames.csv").read_text(encoding="utf-8"), newline="")))
     fields = list(rows[0].keys()) if rows else list(R.take.CSV_FIELDS)
     body = scaled_plane(plane, scale).reshape(-1)
+    final, target = target, target.with_name(target.name + ".tmp")
+    shutil.rmtree(target, ignore_errors=True)
+    if final.exists() and not (final / "take.json").is_file():
+        shutil.rmtree(final)   # a copy from before the .tmp folder, cut short: never read
     target.mkdir(parents=True)
     (target / "frames").mkdir()
     for row in rows:
@@ -463,15 +468,16 @@ def median_copy(R, source, target, plane, scale, method, frames_used):
     writer.writerows(rows)
     (target / "frames.csv").write_text(text.getvalue(), encoding="utf-8", newline="")
     doc = json.loads((source / "take.json").read_text(encoding="utf-8"))
-    doc["take"] = target.name
+    doc["take"] = final.name
     doc["derived"] = {"from_take": source.name, "from_frames_csv_sha256": sha256_bytes((source / "frames.csv").read_bytes()),
                       "depth_scale": scale, "median_of_frames": frames_used,
                       "changed": "depth_mm.npy in every bundle: the take's per-pixel median of valid depth (valid in at "
                                  "least half the frames, else 0), x depth_scale, rounded",
                       "method_file": method["file"], "method_sha256": method["sha256"]}
     doc["sha256"] = {"frames.csv": sha256_bytes((target / "frames.csv").read_bytes())}
-    write_json(target / "take.json", doc)
     shutil.copyfile(source / "camera-calibration.json", target / "camera-calibration.json")
+    write_json(target / "take.json", doc)
+    target.rename(final)
     return len(rows)
 
 

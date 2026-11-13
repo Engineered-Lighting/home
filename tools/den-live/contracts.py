@@ -1,6 +1,20 @@
-"""In-process evidence shared by perception, the ask, and the coordinator."""
+"""In-process evidence shared by perception, the ask, and the coordinator, and contract 1's registration receipt."""
+import re
 from dataclasses import dataclass
 from typing import Mapping
+
+# Contract 1, the room model: step 2's receipt, which register_now.py writes and every den-live start requires.
+REGISTER_SCHEMA = "den-live-register-now-2"
+DEPTH_SCALE_RANGE = (0.90, 1.10)   # den-live's own depth scale; 1.0 is none
+_TAKE_SCALE = re.compile(r"-x([0-9]+(?:\.[0-9]+)?)(?:-m)?$")
+
+
+def take_scale(name):
+    """The depth scale register_now.py's copy of a take was made at, from the copy's name (<take>-x0.971-m), or 1.0 for
+    a take that isn't such a copy (a rendered take, say), whose depth nothing scaled."""
+    match = _TAKE_SCALE.search(str(name or ""))
+    return float(match.group(1)) if match else 1.0
+
 
 PERCEPTION_S = 1.5
 FIGURE_S = 1.0

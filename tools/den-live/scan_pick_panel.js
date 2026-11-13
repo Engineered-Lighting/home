@@ -1,6 +1,6 @@
 // The scan page's panel, beside Home's own 3D view (scan_pick.mjs serves both). Pick mode: one row per feature, the
 // camera's picture with your clicks numbered, and a click on the scan (without dragging) picks the highlighted row's
-// feature through Home's display-mesh picker. Show mode: the camera where the fit put it and your six features as the
+// feature through Home's display-mesh picker. Show mode: the camera where the fit put it and your features as the
 // camera sees them, as Home's own calibration markers. Spots mode (step 4's walk test): four floor spots, no camera
 // picture. It talks to nothing but this harness.
 (() => {
@@ -155,7 +155,7 @@
     try { state = await (await fetch('/__pick/state')).json(); } catch (error) { say(`The harness didn't answer: ${error.message}`); return; }
     if (state.mode === 'show') {
       title.textContent = 'Step 2: where the fit puts the camera';
-      intro.textContent = `Green dots: the camera (${state.show.transform_id}), and your six features as the camera sees them, carried into your scan by the fit. Each should sit on its feature. The distance beside each row is how far it lands from your scan pick.`;
+      intro.textContent = `Green dots: the camera (${state.show.transform_id}), and your ${state.show.features.length} features as the camera sees them, carried into your scan by the fit. Each should sit on its feature. The distance beside each row is how far it lands from your scan pick.`;
       button.textContent = 'Done';
       button.disabled = false;
     } else if (state.mode === 'spots') {
@@ -164,7 +164,7 @@
       button.textContent = 'Save';
       active = nextUnpicked(null);
     } else {
-      title.textContent = 'Step 2: the same six features, in your scan';
+      title.textContent = `Step 2: the same ${state.points.length} features, in your scan`;
       intro.textContent = 'Pick a row, orbit to that feature, and click it once without dragging. The camera\'s picture shows what you clicked there.';
       button.textContent = 'Save';
       active = nextUnpicked(null);

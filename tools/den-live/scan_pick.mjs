@@ -1,7 +1,7 @@
-// Step 2's scan page: the real Home on loopback, on your scan, where you click the same six features you clicked on
+// Step 2's scan page: the real Home on loopback, on your scan, where you click the same features (nine) you clicked on
 // the camera's picture. Home's own display-mesh picker (createRegisteredDeskSurfacePicker, the one your sofa mark was
 // made with) gives each feature's point in the scan's own frame, and Save writes them into den-register's worksheet as
-// measured_with scan-pick. After a fit, --mode show draws the camera where the fit put it, and your six features as the
+// measured_with scan-pick. After a fit, --mode show draws the camera where the fit put it, and your features as the
 // camera sees them, carried into the scan by the fit. Step 4's walk test uses --mode spots: no camera picture, just four
 // floor spots you can find both in the room and in the scan (a rug corner, a sofa foot), saved to <work>\spots.json.
 //

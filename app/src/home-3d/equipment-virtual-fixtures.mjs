@@ -660,7 +660,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
                     const state = nextStates.get(item.id);
                     if (coordinator) nextStates.set(item.id, nextState(state, { spotlight: { on: false, brightness: 0 } }));
                     const view = buildFixture(item, nextStates.get(item.id), depth, reducedMotion);
-                    view.root.userData.coordinator_spot = coordinator;
+                    if (coordinator) view.root.userData.coordinator_spot = true;
                     view.update(nextStates.get(item.id), nextTargets.get(item.id)); view.setSelected(item.id === selectedId); nextViews.set(item.id, view);
                 } }
                 catch (error) { for (const view of nextViews.values()) disposeChildren(view.root); throw error; }

@@ -5290,8 +5290,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
 
   // The leased desk preview owns its fixture's aim; remembered manual state
   // never overwrites that aim while the preview is active.
-  const reapplyVirtualFixtureMemory = (overlay, ownedId) => {
-    for (const [id, state] of virtualFixtureStatesRef.current.states) if (id !== ownedId) overlay.setVirtualFixtureState?.(id, state);
+  const reapplyVirtualFixtureMemory = (overlay, ownedId, coordinator) => {
+    for (const [id, state] of virtualFixtureStatesRef.current.states) {
+      if (coordinator) overlay.setVirtualFixtureState?.(id, { radials: state.radials, downward: state.downward });
+      else if (id !== ownedId) overlay.setVirtualFixtureState?.(id, state);
+    }
+    if (coordinator) return;
     for (const [id, target] of virtualFixtureStatesRef.current.targets) if (id !== ownedId) overlay.aimVirtualFixtureAtTarget?.(id, target);
   };
   // This ordinary-view preview reads the admitted survey without supplying
@@ -5318,10 +5322,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         setFixtureInteractionMode("spot");
       }
       const preview = denDeskAimPreviewRef.current?.readback?.();
-      if (coordinator) {
-        for (const [id, state] of virtualFixtureStatesRef.current.states)
-          overlay.setVirtualFixtureState?.(id, { radials: state.radials, downward: state.downward });
-      } else reapplyVirtualFixtureMemory(overlay, preview?.active ? preview.fixtureId : null);
+      reapplyVirtualFixtureMemory(overlay, preview?.active ? preview.fixtureId : null, coordinator);
     }
     overlay.setVirtualFixturesVisible(virtualSpotlightsVisible && !editing && !calibCam
       && !liveOn && spatialScale === "apartment");

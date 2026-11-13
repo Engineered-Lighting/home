@@ -1,13 +1,29 @@
 """Evidence regressions on real observe/tracker pins and generated RGB/depth."""
+import base64
+import hashlib
+import io
+import json
 import queue
 import sys
 import threading
 import time
 import unittest
+import zipfile
+from unittest.mock import patch
 
+import ask
+import coordinator_live
 import fixture_rgb
+import occupancy
 import perceive
+import preview
+import run_local
+import sofa_check
 import source
+import stills
+from contracts import INFERENCE_S, InferenceReply
+from test_ask import completion, facts
+from test_preview import BINDING
 
 
 class EvidenceTests(unittest.TestCase):
@@ -77,6 +93,137 @@ class EvidenceTests(unittest.TestCase):
         bundle, _ = self.scene.sample(103.4, 17, arrival=105.4)
         self.assertIsNone(self.p.prepare(bundle, 105.4))
         self.assertEqual(self.p.counts["expired"], 1)
+
+    def test_frigate_and_seated_gate_deliver_bound_qwen_reply_to_coordinator(self):
+        import numpy as np
+        from PIL import Image
+
+        scene = self.scene
+        self.p.scope["content_revision"] = BINDING["scan_revision"]
+        binding = dict(BINDING, transform_id=self.p.camera.transform_id)
+        core, _ = coordinator_live.load_core(sofa_check.archive(scene.path, "coordinator"))
+        now = 100.0
+        trace, posts, handed_off = [], [], []
+        state = scene.path / "bound-inference"
+        fixtures = {"F3": {"aim_origin_m": [-1.25, 4.2, 2.5], "horizontal_world_reference": [0, -1, 0]}}
+        coordinator = preview.Preview(core, binding=binding, fixtures=fixtures, state=state,
+                                      clock=lambda: now, threaded=False, append=trace.append)
+        coordinator.configure({"fade_in_s": 0, "pre_aim": False})
+
+        frigate = "off"
+        reader = occupancy.Occupancy(lambda: frigate, clock=lambda: now)
+        ring = stills.Ring()
+
+        class Detector:
+            def send_alone(self, header):
+                # Decode the generated gray NV12 plane without loading model weights.
+                def decode(nv12, width, height):
+                    return np.repeat(nv12[:height, :width, None], 3, axis=2)
+
+                self.on_stills(stills.handle(header, ring, np, Image, decode, scene.tools.takes.check.read_bundle))
+
+        def post(request):
+            posts.append(request)
+            reading = facts()
+            if len(posts) > 1:
+                reading["change_vs_prior"] = "no_change"
+            return completion(json.dumps(reading))
+
+        asker = ask.Asker(detector=Detector(), occupancy=reader, post=post, state=state,
+                          site_id="fixture", camera_id="den-oak", clock=lambda: now,
+                          wall=lambda: scene.now + now, start=False)
+        self.addCleanup(asker.close)
+        observe = run_local.evidence_observer(asker, coordinator)
+        offer = coordinator.offer_inference
+
+        def receive(reply):
+            # Production must deliver the eligible snapshot before its reply.
+            self.assertEqual(coordinator.track_seq, asker.snapshot.seq)
+            self.assertEqual(coordinator.eligible_track, reply.track_id)
+            self.assertEqual(coordinator.eligibility, reply.eligibility_revision)
+            handed_off.append(reply)
+            offer(reply)
+
+        frames = {}
+
+        def feed(seq, *, drain=True, **sample):
+            nonlocal now
+            at = 100 + seq / 5
+            now = at + 0.04
+            reader.poll_once()
+            bundle, result = scene.sample(at, seq, **sample)
+            # Use the same bundle for tracking and JPEG lookup. Its gray level
+            # identifies the RGB plane in the decoded request.
+            data = io.BytesIO()
+            nv12 = bytes([seq]) * (640 * 360) + bytes([128]) * (640 * 180)
+            with zipfile.ZipFile(io.BytesIO(bundle.data)) as original, \
+                    zipfile.ZipFile(data, "w", zipfile.ZIP_DEFLATED) as copied:
+                for name in original.namelist():
+                    copied.writestr(name, scene.synth.npy("|u1", (540, 640), nv12)
+                                    if name == "rgb_nv12.npy" else original.read(name))
+            bundle = source.Bundle(data.getvalue(), bundle.session, bundle.rgb_seq, bundle.t_host,
+                                   bundle.arrival_unix, bundle.arrival_mono)
+            prepared = self.p.prepare(bundle, at)
+            event = self.p.finish(prepared, result, {"status": "ok"}, now)
+            if self.p.snapshot.frame is not None:
+                key = self.p.snapshot.frame.key
+                ring.keep(key, bundle.data)
+                frames[key] = self.p.snapshot.frame
+            observe(event, self.p.snapshot)
+            if drain:
+                while not asker.jobs.empty():
+                    job, args, kwargs = asker.jobs.get_nowait()
+                    job(*args, **kwargs)
+
+        with patch.object(coordinator, "offer_inference", side_effect=receive):
+            for seq in range(25):
+                feed(seq)
+            track, = self.p.snapshot.tracks
+            self.assertEqual(track.association_status, "confident")
+            self.assertFalse(posts, "Frigate off must block a supported reader")
+            self.assertFalse(handed_off)
+
+            frigate = "on"
+            for seq in range(25, 80):
+                feed(seq)
+                if seq < 32:
+                    self.assertFalse(posts, "Frigate on still needs the seated window")
+            self.assertTrue(handed_off)
+            self.assertTrue(coordinator.episode.need.engaged)
+            self.assertTrue(coordinator.latest["fixtures"]["F3"]["on"],
+                            (coordinator.latest_decision, coordinator.track))
+            self.assertTrue(any(row["action"] == "aim_move" and row["outcome"] == "encoded_only"
+                                for row in trace))
+            self.assertEqual(coordinator.episode.requests[-1], handed_off[-1].request_id)
+
+            for raw, reply in zip(posts, handed_off, strict=True):
+                self.assertIsInstance(reply, InferenceReply)
+                self.assertEqual(reply.request_body_sha256, hashlib.sha256(raw).hexdigest())
+                request = json.loads(raw)
+                self.assertEqual(request["model"], "qwen3-vl-30b")
+                self.assertEqual(reply.model["served_alias"], request["model"])
+                self.assertEqual(reply.track_id, track.track_id)
+                self.assertEqual(reply.gate["seated_track_id"], track.track_id)
+                self.assertEqual(reply.gate["frigate_effective"], "on")
+                self.assertEqual(reply.association_revision, track.association_revision)
+                self.assertEqual(reply.observation["facts"]["activity_hypothesis"], "reading")
+                self.assertEqual(reply.valid_until_mono, reply.frames[-1].capture_mono + INFERENCE_S)
+                self.assertEqual((reply.service_run_id, reply.camera_epoch), self.p.snapshot.frame.key[:2])
+                self.assertEqual(tuple(frames[ref.key] for ref in reply.frames), reply.frames)
+                images = [p["image_url"]["url"] for p in request["messages"][1]["content"] if p["type"] == "image_url"]
+                self.assertIn(len(images), (2, 3))
+                for image, ref in zip(images, reply.frames, strict=True):
+                    with Image.open(io.BytesIO(base64.b64decode(image.split(",", 1)[1]))) as jpeg:
+                        self.assertEqual(jpeg.getpixel((0, 0)), (ref.rgb.seq,) * 3)
+
+            # Keep tracking the same person while the next model request stalls.
+            last = handed_off[-1]
+            for seq in range(80, 135):
+                feed(seq, drain=False)
+            self.assertGreater(now, last.valid_until_mono)
+            self.assertEqual(self.p.snapshot.tracks[0].track_id, track.track_id)
+            self.assertFalse(coordinator.episode.need.engaged)
+            self.assertFalse(coordinator.latest["fixtures"]["F3"]["on"])
 
     def test_loop_invalidates_while_child_stops_reading_pipe(self):
         program = "import time; print('{\"ready\":true}', flush=True); time.sleep(60)"

@@ -13,8 +13,9 @@ const { createBodyAnnotationState, createFacingFilter, captionLines, cardRows, d
 const DT = 0.1, DEG = Math.PI / 180;
 // A seated person facing +x (pelvis at 0.5 m) unless told otherwise.
 function joints({ az = 0, pelvis = 0.5, at = [0, 0] } = {}) {
-    const head = [at[0], at[1], pelvis + 0.65], ear = 0.07;
-    return { left_hip: [at[0], at[1] + 0.1, pelvis], right_hip: [at[0], at[1] - 0.1, pelvis],
+    const head = [at[0], at[1], pelvis + 0.65], ear = 0.07, lx = -Math.sin(az), ly = Math.cos(az);   // the person's left
+    return { left_hip: [at[0] + lx * 0.1, at[1] + ly * 0.1, pelvis], right_hip: [at[0] - lx * 0.1, at[1] - ly * 0.1, pelvis],
+        left_shoulder: [at[0] + lx * 0.18, at[1] + ly * 0.18, pelvis + 0.45], right_shoulder: [at[0] - lx * 0.18, at[1] - ly * 0.18, pelvis + 0.45],
         left_ear: [head[0] - Math.sin(az) * ear, head[1] + Math.cos(az) * ear, head[2]], right_ear: [head[0] + Math.sin(az) * ear, head[1] - Math.cos(az) * ear, head[2]],
         nose: [head[0] + Math.cos(az) * 0.1, head[1] + Math.sin(az) * 0.1, head[2] - 0.02] };
 }
@@ -98,7 +99,20 @@ test('facing: a real 150 degree turn lands within a second', () => {
     assert.ok(landed != null && landed < 1, `landed after ${landed} s`);
 });
 
-test('facing from the pose: nose against the ear midpoint, with the sight-line origin smoothed', () => {
+test('facing comes from the skeleton: the shoulder and hip lines, not the noisy nose and ears', () => {
+    const J = joints({ az: 30 * DEG });
+    const f = M.facingOf(J);
+    assert.ok(Math.abs(Math.atan2(f[1], f[0]) - 30 * DEG) < 1e-9);
+    const noisyHead = { ...J, nose: [J.nose[0], J.nose[1] - 0.06, J.nose[2]] };   // a nose lift 6 cm off: about 35 degrees on nose-ears
+    assert.ok(Math.abs(Math.atan2(M.facingOf(noisyHead)[1], M.facingOf(noisyHead)[0]) - 30 * DEG) < 1e-9, 'noise in the head does not move it');
+    const swapped = { ...J, left_shoulder: J.right_shoulder, right_shoulder: J.left_shoulder, left_hip: J.right_hip, right_hip: J.left_hip };
+    assert.ok(Math.abs(Math.atan2(M.facingOf(swapped)[1], M.facingOf(swapped)[0]) - 30 * DEG) < 1e-9, 'a left/right swap is settled by the nose');
+    const headOnly = { nose: J.nose, left_ear: J.left_ear, right_ear: J.right_ear };
+    assert.ok(Math.abs(Math.atan2(M.facingOf(headOnly)[1], M.facingOf(headOnly)[0]) - 30 * DEG) < 2 * DEG, 'without shoulders, the head');
+    assert.equal(M.facingOf({}), null);
+});
+
+test('facing from the pose: the skeleton direction, with the sight-line origin smoothed', () => {
     const s = createBodyAnnotationState();
     const r = run(s, 3, () => ({ joints: joints({ az: 90 * DEG }) }), 0);
     assert.ok(Math.abs(r.out.facingAz - 90 * DEG) < 2 * DEG);

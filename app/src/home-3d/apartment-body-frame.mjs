@@ -14,6 +14,7 @@
  *   head         uint8   1-255 inside the head region, drawn thinner (optional, default 0) */
 
 export const BODY_SCHEMA = 'den-live-body-1';
+export const FACE_FREE_BODY_SCHEMA = 'den-live-body-2';
 export const MAX_POINTS = 16384;
 export const KIND = Object.freeze({ measured: 0, backFill: 1, guessed: 3, remembered: 4, heldObject: 5 });
 const KINDS = new Set(Object.values(KIND));
@@ -23,6 +24,9 @@ const JOINT_NAMES = new Set(COCO);
 const JOINT_STATUS = new Set(['measured', 'placed', 'uncertain']);
 const FIELDS = { key: 4, position_mm: 6, normal: 3, kind: 1, alpha: 1, motion: 1, head: 1 };
 const REQUIRED = ['key', 'position_mm', 'kind'];
+const BODY_V2_FIELDS = new Set(['schema', 'home', 'track_id', 'seq', 'capture_ts', 'content_revision', 'transform_id', 'source', 'points', 'joints', 'object']);
+const BODY_V2_POINT_FIELDS = new Set(['count', 'key', 'position_mm', 'normal', 'kind', 'alpha', 'motion']);
+const BODY_V2_JOINTS = new Set(COCO.slice(5));
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const finite3 = value => Array.isArray(value) && value.length === 3 && value.every(v => finite(v) && Math.abs(v) <= 100);
@@ -39,10 +43,16 @@ function bytes(text) {
 }
 
 /* The frame's own checks, shape only: a frame that fails is ignored whole, never drawn in part. */
-export function validBodyFrame(frame) {
-    if (!frame || frame.schema !== BODY_SCHEMA || !validId(frame.track_id) || !finite(frame.capture_ts)) return false;
+export function validBodyFrame(frame, { schema = BODY_SCHEMA } = {}) {
+    if (!frame || frame.schema !== schema || !validId(frame.track_id) || !finite(frame.capture_ts)) return false;
     const p = frame.points;
     if (!p || !Number.isSafeInteger(p.count) || p.count < 0 || p.count > MAX_POINTS) return false;
+    if (schema === FACE_FREE_BODY_SCHEMA && (frame.source !== 'joints' || !validId(frame.home)
+        || !Object.keys(frame).every(key => BODY_V2_FIELDS.has(key))
+        || !Object.keys(p).every(key => BODY_V2_POINT_FIELDS.has(key))
+        || frame.joints != null && (!Array.isArray(frame.joints) || !frame.joints.every(j => j && BODY_V2_JOINTS.has(j.name)
+            && Object.keys(j).every(key => key === 'name' || key === 'xyz_m' || key === 'status')))
+        || frame.object != null && !Object.keys(frame.object).every(key => key === 'label' || key === 'confidence'))) return false;
     for (const name of Object.keys(FIELDS)) {
         if (p[name] == null) { if (REQUIRED.includes(name)) return false; continue; }
         if (typeof p[name] !== 'string' || p[name].length !== 4 * Math.ceil(p.count * FIELDS[name] / 3)) return false;
@@ -57,8 +67,8 @@ export function validBodyFrame(frame) {
 
 /* A valid frame's arrays, or null when its bytes don't hold what its shape says (bad base64, keys out of order,
  * an unknown kind). Positions come back in metres. */
-export function decodeBodyFrame(frame) {
-    if (!validBodyFrame(frame)) return null;
+export function decodeBodyFrame(frame, options) {
+    if (!validBodyFrame(frame, options)) return null;
     const n = frame.points.count, p = frame.points, raw = {};
     for (const name of Object.keys(FIELDS)) {
         if (p[name] == null) continue;
@@ -78,12 +88,14 @@ export function decodeBodyFrame(frame) {
             if (l > 0) { nrm[i * 3] = x / l; nrm[i * 3 + 1] = y / l; nrm[i * 3 + 2] = z / l; }
         }
         kind[i] = raw.kind.getUint8(i);
-        if (!KINDS.has(kind[i])) return null;
+        if (!KINDS.has(kind[i]) || frame.schema === FACE_FREE_BODY_SCHEMA && kind[i] !== KIND.guessed) return null;
         alpha[i] = raw.alpha ? raw.alpha.getUint8(i) / 255 : 1;
         motion[i] = raw.motion ? raw.motion.getUint8(i) / 255 : 0;
         head[i] = raw.head ? raw.head.getUint8(i) / 255 : 0;
         if (kind[i] === KIND.heldObject) objects++;
-        else if (kind[i] === KIND.measured || kind[i] === KIND.backFill) { sx += pos[i * 3]; sy += pos[i * 3 + 1]; sz += pos[i * 3 + 2]; sn++; }
+        else if (kind[i] === KIND.measured || kind[i] === KIND.backFill || frame.schema === FACE_FREE_BODY_SCHEMA) {
+            sx += pos[i * 3]; sy += pos[i * 3 + 1]; sz += pos[i * 3 + 2]; sn++;
+        }
     }
     const joints = {}, jointStatus = {};
     for (const j of frame.joints || []) { joints[j.name] = [...j.xyz_m]; jointStatus[j.name] = j.status ?? 'measured'; }
@@ -147,7 +159,7 @@ export function zoomRatio(distance, closest = 4.8, overview = 23) {
 
 /* A frame from plain arrays, for producers written in JavaScript and for tests. points: [{key, xyz_m, kind, normal?,
  * alpha?, motion?, head?}] in any order. */
-export function encodeBodyFrame({ trackId, captureTs, seq = null, points = [], joints = null, object = null, home = 'den' }) {
+export function encodeBodyFrame({ trackId, captureTs, seq = null, points = [], joints = null, object = null, home = 'den', schema = BODY_SCHEMA }) {
     const sorted = [...points].sort((a, b) => a.key - b.key), n = sorted.length;
     const field = (size, write) => {
         const b = new Uint8Array(n * size), v = new DataView(b.buffer);
@@ -158,16 +170,18 @@ export function encodeBodyFrame({ trackId, captureTs, seq = null, points = [], j
     };
     const clamp16 = x => Math.max(-32768, Math.min(32767, Math.round(x * 1000)));
     const u8 = (x, d) => Math.max(0, Math.min(255, Math.round((x ?? d) * 255)));
-    const frame = { schema: BODY_SCHEMA, home, track_id: trackId, seq, capture_ts: captureTs, points: {
+    const faceFree = schema === FACE_FREE_BODY_SCHEMA;
+    const frame = { schema, home, track_id: trackId, seq, capture_ts: captureTs, points: {
         count: n,
         key: field(4, (v, i, pt) => v.setUint32(i * 4, pt.key, true)),
         position_mm: field(6, (v, i, pt) => pt.xyz_m.forEach((x, k) => v.setInt16(i * 6 + k * 2, clamp16(x), true))),
         normal: field(3, (v, i, pt) => (pt.normal || [0, 0, 0]).forEach((x, k) => v.setInt8(i * 3 + k, Math.max(-127, Math.min(127, Math.round(x * 127)))))),
-        kind: field(1, (v, i, pt) => v.setUint8(i, pt.kind ?? KIND.measured)),
+        kind: field(1, (v, i, pt) => v.setUint8(i, pt.kind ?? (faceFree ? KIND.guessed : KIND.measured))),
         alpha: field(1, (v, i, pt) => v.setUint8(i, u8(pt.alpha, 1))),
         motion: field(1, (v, i, pt) => v.setUint8(i, u8(pt.motion, 0))),
-        head: field(1, (v, i, pt) => v.setUint8(i, u8(pt.head, 0))),
     } };
+    if (faceFree) frame.source = 'joints';
+    else frame.points.head = field(1, (v, i, pt) => v.setUint8(i, u8(pt.head, 0)));
     if (joints) frame.joints = Object.entries(joints).map(([name, value]) => Array.isArray(value)
         ? { name, xyz_m: value, status: 'measured' } : { name, xyz_m: value.xyz_m, status: value.status ?? 'measured' });
     if (object) frame.object = object;

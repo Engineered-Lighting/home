@@ -4,6 +4,8 @@
       "image": "${HOME_AGENT_SHARED_BFF_IMAGE:?set verified immutable BFF image}",
       "environment": {
         "HOME_AGENT_SHARED_LINK_CONFIG_FILE": "/link/config/link.json",
+        "HOME_AGENT_SERVE_LIGHTING_RELAY_CREDENTIAL_FILE": "${HOME_AGENT_SERVE_LIGHTING_BFF_RELAY_FILE:-}",
+        "HOME_AGENT_SERVE_LIGHTING_CORE_CREDENTIAL_FILE": "${HOME_AGENT_SERVE_LIGHTING_BFF_CORE_FILE:-}",
         "NODE_EXTRA_CA_CERTS": "/link/config/internal-ca.crt"
       },
       "volumes": [

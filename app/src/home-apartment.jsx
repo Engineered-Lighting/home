@@ -5306,7 +5306,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       && identity.registrationVersion === binding.registration_version
       && identity.frameDigest === binding.frame_digest;
     const document = open && phase === "ready" && matchesScene ? virtualFixtureDocument : null;
-    overlay.setVirtualFixtures(document);
+    const coordinator = window.HomeDenLive?.virtual === true && identity?.siteId === window.HomeDenLive.site;
+    overlay.setVirtualFixtures(document, { coordinator });
     if (document) {
       if (virtualFixtureStatesRef.current.key !== virtualFixtureBindingKey) {
         virtualFixtureStatesRef.current = { key: virtualFixtureBindingKey, states: new Map(), targets: new Map() };
@@ -5317,7 +5318,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         setFixtureInteractionMode("spot");
       }
       const preview = denDeskAimPreviewRef.current?.readback?.();
-      reapplyVirtualFixtureMemory(overlay, preview?.active ? preview.fixtureId : null);
+      if (coordinator) {
+        for (const [id, state] of virtualFixtureStatesRef.current.states)
+          overlay.setVirtualFixtureState?.(id, { radials: state.radials, downward: state.downward });
+      } else reapplyVirtualFixtureMemory(overlay, preview?.active ? preview.fixtureId : null);
     }
     overlay.setVirtualFixturesVisible(virtualSpotlightsVisible && !editing && !calibCam
       && !liveOn && spatialScale === "apartment");
@@ -5331,7 +5335,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // is never involved. Timing diagnostics are explicit and stay off normally.
   useEffect(() => {
     const engine = engineRef.current, Follower = window.HomeLightingBrainFollower, Client = window.HomeLightingBrainClient;
-    if (!open || phase !== "ready" || !virtualFixtureBindingKey || rehearsalIsolated || !Follower || !Client
+    if (window.HomeDenLive?.virtual === true && engine?.siteId === window.HomeDenLive.site
+        || !open || phase !== "ready" || !virtualFixtureBindingKey || rehearsalIsolated || !Follower || !Client
         || !engine?.overlay?.setVirtualFixtureState || typeof window.fetch !== "function") {
       setLightingBrain(null); return undefined;
     }

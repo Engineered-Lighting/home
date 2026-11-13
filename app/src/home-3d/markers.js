@@ -1179,6 +1179,8 @@ export function createOverlay(apartmentRoot) {
         virtualFixturesGroup: virtualFixtures.root,
         setVirtualFixtures: virtualFixtures.setDocument,
         setVirtualFixtureState: virtualFixtures.setFixtureState,
+        coordinatorSpotScope: virtualFixtures.coordinatorSpotScope,
+        applyCoordinatorSpots: virtualFixtures.applyCoordinatorSpots,
         setVirtualFixturesVisible: virtualFixtures.setVisible,
         virtualFixturesReadback: virtualFixtures.readback,
         virtualFixturePickObjects: virtualFixtures.pickObjects,

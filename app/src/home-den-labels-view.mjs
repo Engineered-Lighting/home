@@ -33,7 +33,7 @@ function start(attachLayer) {
     };
     const ui = {};
     const tagEls = new Map(), handleEls = new Map(), nearEls = new Map();
-    let raf = 0;
+    let raf = 0, scan = null, request = null;
 
     /* ---------------- engine and mount ---------------- */
     function denEngine() {
@@ -48,64 +48,90 @@ function start(attachLayer) {
     function sync() {
         const current = denEngine();
         if (!current) { if (S.engine) unmount(); return; }
-        if (current !== S.engine) { unmount(); mount(current); }
+        if (current !== S.engine || current.contentRevision !== scan) { unmount(); mount(current); }
         const view = current.renderer.domElement.closest('[data-home-apartment-view="1"]') || current.renderer.domElement.parentElement;
         if (S.root && S.root.parentElement !== view) { view.appendChild(S.root); S.view = view; }
     }
     function mount(engine) {
         S.engine = engine;
+        scan = engine.contentRevision;
         S.layer = attachLayer(engine);
         S.host = engine.renderer.domElement.parentElement;
         S.root = buildDom();
         window.addEventListener('pointerdown', onDown, true);
         window.addEventListener('pointerup', onUp, true);
         window.addEventListener('click', onClick, true);
-        if (S.load !== 'ok') load(); else render();
+        load();
         raf = requestAnimationFrame(frame);
     }
     function unmount() {
+        request?.abort(); request = null;
         cancelAnimationFrame(raf);
+        if (S.drag) {
+            S.drag.el.removeEventListener('pointermove', moveDrag);
+            S.drag.el.removeEventListener('pointerup', endDrag);
+            S.drag.el.removeEventListener('pointercancel', endDrag);
+            const label = byId(S.drag.id);
+            if (label) label.updated_at = new Date().toISOString();
+            writeDraft();
+        }
         window.removeEventListener('pointerdown', onDown, true);
         window.removeEventListener('pointerup', onUp, true);
         window.removeEventListener('click', onClick, true);
         S.layer?.dispose(); S.root?.remove();
         tagEls.clear(); handleEls.clear(); nearEls.clear();
         S.engine = S.layer = S.root = S.host = S.view = null;
-        S.open = false; S.pending = null; S.drag = null;
+        S.open = false; S.pending = null; S.drag = null; S.sel = null; S.undo = [];
+        S.saved = null; S.labels = []; S.dirty = 0; S.conflict = null; S.base = null;
+        S.save = { state: 'idle', text: '' }; S.load = 'idle'; scan = null;
     }
 
     /* ---------------- the document ---------------- */
     async function load() {
+        if (request) return;
+        const current = request = new AbortController();
         S.load = 'loading'; render();
         try {
-            const response = await fetch(config.labels, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } });
+            const response = await fetch(config.labels, { cache: 'no-store', credentials: 'same-origin', signal: current.signal,
+                headers: { Accept: 'application/json' } });
             if (!response.ok) throw Error(response.status === 503 ? 'den-live has no labels store' : `HTTP ${response.status}`);
             const doc = await response.json();
+            if (current !== request) return;
             const problem = L.docProblem(doc);
             if (problem) throw Error(`labels refused (${problem})`);
             S.saved = doc; S.load = 'ok'; S.loadError = '';
             const draft = readDraft();
-            if (draft && draft.dirty > 0) { S.labels = draft.labels; S.dirty = draft.dirty; }
-            else { S.labels = clone(doc.labels); S.dirty = 0; }
+            S.base = draft?.base ?? doc.revision;
+            if (draft) {
+                S.labels = draft.labels; S.dirty = draft.dirty;
+                if (draft.base !== doc.revision) S.conflict = doc;
+            } else { S.labels = clone(doc.labels); S.dirty = 0; }
             if (signedIn && !S.labels.length && !S.skipped.size) { S.checklist = true; S.armed = nextChecklistItem(); }
         } catch (error) {
+            if (current !== request) return;
             S.load = 'offline'; S.loadError = String(error.message || error);
             const draft = readDraft();
-            if (draft && !S.labels.length) { S.labels = draft.labels; S.dirty = draft.dirty; }
+            if (draft && !S.labels.length) { S.labels = draft.labels; S.dirty = draft.dirty; S.base = draft.base; }
+        } finally {
+            if (current === request) { request = null; render(); }
         }
-        render();
     }
     const clone = value => JSON.parse(JSON.stringify(value));
+    const draftKey = () => `${DRAFT_KEY}.${config.site}.${scan}`;
     function readDraft() {
         try {
-            const value = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
-            return value && value.site === config.site && Array.isArray(value.labels) && Number.isInteger(value.dirty) ? value : null;
+            if (typeof scan !== 'string') return null;
+            const value = JSON.parse(localStorage.getItem(draftKey()) || 'null');
+            return value?.content_revision === scan && Number.isSafeInteger(value.base) && value.base >= 0
+                && Number.isInteger(value.dirty) && value.dirty > 0
+                && !L.docProblem({ ...L.emptyDoc(scan), revision: value.base, labels: value.labels }) ? value : null;
         } catch (_) { return null; }
     }
     function writeDraft() {
         try {
-            if (S.dirty > 0) localStorage.setItem(DRAFT_KEY, JSON.stringify({ site: config.site, base: S.saved?.revision ?? 0, labels: S.labels, dirty: S.dirty }));
-            else localStorage.removeItem(DRAFT_KEY);
+            if (typeof scan !== 'string') return;
+            if (S.dirty > 0) localStorage.setItem(draftKey(), JSON.stringify({ content_revision: scan, base: S.base ?? 0, labels: S.labels, dirty: S.dirty }));
+            else localStorage.removeItem(draftKey());
         } catch (_) { /* a private window keeps no draft; Save still works */ }
     }
     function commit(change, { quiet = false } = {}) {
@@ -123,24 +149,28 @@ function start(attachLayer) {
         writeDraft(); render();
     }
     const byId = id => S.labels.find(l => l.id === id) || null;
-    const checkThese = () => !!S.saved && S.dirty === 0 && !L.sameScan(S.saved, S.engine?.contentRevision ?? null);
+    const checkThese = () => !!S.saved && !L.sameScan(S.saved, S.engine?.contentRevision ?? null);
 
     async function save({ force = false } = {}) {
-        if (!S.engine || S.save.state === 'saving') return;
+        if (!S.engine || request || S.conflict) return;
         if (!S.dirty && !checkThese() && !force) return;
-        const base = S.saved?.revision ?? 0;
+        if (checkThese() && !force) { S.save = { state: 'error', text: 'Check the labels against this scan first.' }; render(); return; }
+        const base = S.base ?? 0;
         const doc = { ...L.emptyDoc(S.engine.contentRevision ?? null), revision: base, saved_at: S.saved?.saved_at ?? null, labels: S.labels };
         const problem = L.docProblem(doc);
         if (problem) { S.save = { state: 'error', text: `Not saved: ${problem.replace(/_/g, ' ')}.` }; render(); return; }
         S.save = { state: 'saving', text: 'Saving…' }; render();
+        const current = request = new AbortController();
         let response = null, body = null;
         try {
-            response = await fetch(config.labels, { method: 'PUT', cache: 'no-store', credentials: 'same-origin',
+            response = await fetch(config.labels, { method: 'PUT', cache: 'no-store', credentials: 'same-origin', signal: current.signal,
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'x-home-den-labels': '1' }, body: JSON.stringify(doc) });
             body = await response.json().catch(() => null);
         } catch (_) { response = null; }
+        if (current !== request) return;
+        request = null;
         if (response?.status === 200 && body && !L.docProblem(body)) {
-            S.saved = body; S.labels = clone(body.labels); S.dirty = 0; S.undo = [];
+            S.saved = body; S.base = body.revision; S.labels = clone(body.labels); S.dirty = 0; S.undo = [];
             S.save = { state: 'saved', text: `Saved · revision ${body.revision}` };
             S.load = 'ok'; writeDraft();
         } else if (response?.status === 409 && body && !L.docProblem(body)) {
@@ -148,7 +178,7 @@ function start(attachLayer) {
         } else if (response?.status === 400) {
             S.save = { state: 'error', text: `Not saved: ${String(body?.error || 'refused').replace(/_/g, ' ')}.` };
         } else if (response?.status === 401 || response?.status === 403) {
-            S.save = { state: 'error', text: 'Not saved: sign in to Home again, then Save. Your changes are kept in this browser.' };
+            S.save = { state: 'error', text: 'Home could not save these labels. Your changes are kept in this browser.' };
         } else {
             S.save = { state: 'error', text: "den-live isn't running, so labels can't be saved now. Your changes are kept in this browser." };
         }
@@ -301,8 +331,8 @@ function start(attachLayer) {
         else if (act === 'suggest') choose(Number(target.dataset.i));
         else if (act === 'kinds') { const k = ui.pop.querySelector('.home-den-labels-kinds'); k.hidden = !k.hidden; }
         else if (act === 'kind') { S.pending.kind = target.dataset.kind; drawPop(); ui.pop.querySelector('input')?.focus(); }
-        else if (act === 'keep-mine') { const theirs = S.conflict; S.conflict = null; S.saved = theirs; render(); save({ force: true }); }
-        else if (act === 'load-theirs') { const theirs = S.conflict; S.conflict = null; S.saved = theirs; S.labels = clone(theirs.labels); S.dirty = 0; S.undo = []; S.sel = null; writeDraft(); render(); }
+        else if (act === 'keep-mine') { const theirs = S.conflict; S.conflict = null; S.saved = theirs; S.base = theirs.revision; render(); save({ force: true }); }
+        else if (act === 'load-theirs') { const theirs = S.conflict; S.conflict = null; S.saved = theirs; S.base = theirs.revision; S.labels = clone(theirs.labels); S.dirty = 0; S.undo = []; S.sel = null; writeDraft(); render(); }
     }
     function onRootChange(ev) {
         const field = ev.target.dataset.field, l = byId(S.sel);
@@ -642,6 +672,7 @@ function start(attachLayer) {
 
     setInterval(sync, TICK_MS);
     document.addEventListener('visibilitychange', sync);
+    window.addEventListener('pagehide', unmount);
     sync();
 
     /* Read-only, for Home's browser tests. */

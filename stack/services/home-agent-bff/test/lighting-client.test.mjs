@@ -5,9 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { once } from "node:events";
+import { setTimeout as wait } from "node:timers/promises";
 import { SessionStore, createBff, COOKIE_NAME } from "../src/bff.mjs";
 import { SharedSessionRevocationClient } from "../src/shared-session-revocation-client.mjs";
-import { LightingClient } from "../src/lighting-client.mjs";
+import { LightingClient, ServeLightingClient } from "../src/lighting-client.mjs";
 
 const review = (input, extra = {}) => ({version:1,status:"review",review:{version:1,operation_id:input.operation_id,
   expires_at:new Date(Date.now()+60000).toISOString(),reviewed_digest:"d".repeat(64),
@@ -139,4 +140,43 @@ test("browser lighting routes enforce origin and CSRF before contacting Core",as
     const session=await (await fetch(`http://127.0.0.1:${server.address().port}/api/agent/auth/session`,{headers})).json();
     assert.equal(session.lighting_enabled,true);
   } finally { await new Promise(resolve=>server.close(resolve)); }
+});
+
+
+test("Serve lighting isolates credentials and survives the ordinary BFF idle timeout", { timeout: 20_000 }, async t => {
+  const calls = [];
+  const relayCredential = "b".repeat(64);
+  const coreCredential = "c".repeat(64);
+  const client = new ServeLightingClient({ origin: "https://core.test", credential: coreCredential,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      const input = JSON.parse(init.body);
+      await wait(10_100);
+      return new Response(JSON.stringify({ version: 1, result: summary(input) }),
+        { headers: { "content-type": "application/json" } });
+    } });
+  const server = createBff({ ready: false }, { serveLighting: client, serveLightingRelayCredential: relayCredential });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const base = "http://127.0.0.1:" + server.address().port;
+  const input = proposal();
+  const send = (route, headers, body = input) => fetch(base + route, {
+    method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body),
+  });
+  const route = "/internal/home/serve-lighting/action";
+  const auth = { authorization: "Bearer " + relayCredential };
+  assert.equal((await send(route, {})).status, 401);
+  assert.equal((await send(route, { authorization: "Bearer " + coreCredential })).status, 401);
+  assert.equal((await send(route, { ...auth, origin: "https://home.test" })).status, 401);
+  assert.equal((await send(route, { ...auth, cookie: "a=b" })).status, 401);
+  assert.equal((await send(route + "?alternate=1", auth)).status, 404);
+  assert.equal((await send(route, auth, { ...input, subject: "owner" })).status, 422);
+  assert.equal(calls.length, 0);
+  const response = await send(route, auth);
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).result.status, "done");
+  assert.equal(calls[0].url, "https://core.test/internal/lighting/serve/v1/action");
+  assert.deepEqual(calls[0].init.headers, { authorization: "Bearer " + coreCredential, "content-type": "application/json" });
+  assert.deepEqual(JSON.parse(calls[0].init.body), input);
 });

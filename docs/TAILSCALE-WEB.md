@@ -184,7 +184,11 @@ connections without it, so the option can be turned on or off at any time:
 tailscale serve --bg --tls-terminated-tcp=443 --proxy-protocol=1 127.0.0.1:5181
 ```
 
-### The look-only den view
+### Full Home through Serve
+
+Set an exact `HOME_WEB_SERVE_ORIGIN` alongside the dedicated loopback `HOME_WEB_SERVE_PORT` and use TLS-terminated TCP with `--proxy-protocol=1`. The normal Home shell uses tailnet access for HTTP and WebSockets. See the [Full Home and Den run sheet](FULL-HOME-SERVE-RUN-SHEET.md) for the optional Den producer and cross-home card configuration, acceptance and rollback.
+
+### Legacy look-only rollback
 
 Any device on the tailnet can open Home without signing in and see the den's
 live view: the scan, its fixtures, and a marker per person from den-live
@@ -211,7 +215,7 @@ tailscale serve --bg --tls-terminated-tcp=443 --proxy-protocol=1 127.0.0.1:5182
 - **What it may GET, and nothing else:**
   - the app's code;
   - the den's content pack, lighting layer and registration;
-  - den-live's state and stream;
+  - den-live's state and stream, and its lighting coordinator's state;
   - the lighting brain's den state and stream.
 - **One code file is redacted.** The site registry holds both homes' addresses
   and coordinates, and is served with them removed. Code folders the view never

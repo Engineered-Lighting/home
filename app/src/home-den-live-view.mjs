@@ -6,14 +6,10 @@
  * - mounts the people layer (home-3d/apartment-people-layer.mjs) on that engine, and again on a new engine;
  * - holds one EventSource on HomeDenLive.stream, and feeds the layer each `people` event whose content_revision is
  *   the engine's: the stream's positions are in the scan the camera is registered to, and drawn on no other.
- * Otherwise it closes the stream and disposes the layer, so a device elsewhere in Home holds no stream (den-live
- * serves at most 16). It reaches nothing but HomeDenLive.stream, on this page's own origin, and writes nothing.
+ * Otherwise it closes the streams and disposes the layers. The coordinator's spots ride the people stream.
  * A heartbeat is an SSE comment, which EventSource never shows; den-live sends an event at least once a second while
  * its loop runs (an idle one says why), so 3 s with no event reads as "stream stopped".
- * The live body, for signed-in Home only (the gateway never serves its path to a look-only device): when the shell
- * names HomeDenLive.body, it mounts the Recording body layer and its labels (home-3d/apartment-body-*.mjs) beside the
- * markers, holds a second EventSource on that path while the den's view shows, and feeds the layer each `body` frame
- * whose content_revision is the engine's. Without frames the body simply isn't drawn; the markers don't change. */
+ * The body has an independent connection, and the coordinator panel uses the current spot playback for its readout. */
 const config = window.HomeDenLive;
 const STOPPED_MS = 3000, REOPEN_MS = 5000, TICK_MS = 500;
 let qwenLine = () => '';   // home-den-live-qwen.mjs: what den-live's Qwen ask last said, a line in the chip
@@ -23,19 +19,29 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     const { attachApartmentPeopleLayer, validPeopleEvent } = await import(`./home-3d/apartment-people-layer.mjs${cb}`);
     qwenLine = await import(`./home-den-live-qwen.mjs${cb}`).then(module => module.qwenLine)
         .catch(error => { console.warn('[den-live] Qwen line unavailable', error); return () => ''; });
-    const signedIn = window.HomeLookOnly?.active !== true;
-    const bodyKit = signedIn && typeof config.body === 'string'
+    const bodyV2 = config.bodySchema === 'den-live-body-2';
+    const legacyBody = !window.HomeServe?.active && config.bodySchema == null;
+    const bodyKit = !window.HomeLookOnly?.active && (bodyV2 || legacyBody) && typeof config.body === 'string'
         ? await Promise.all([import(`./home-3d/apartment-body-layer.mjs${cb}`), import(`./home-3d/apartment-body-labels.mjs${cb}`)])
             .then(([layerModule, labelModule]) => ({ attachLayer: layerModule.attachApartmentBodyLayer, attachLabels: labelModule.attachApartmentBodyLabels }))
             .catch(error => { console.warn('[den-live] body layer unavailable', error); return null; })
         : null;
-    start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit);
+    const panelKit = typeof config.coordinator === 'string'
+        ? await import(`./home-den-coordinator-panel.mjs${cb}`).catch(error => { console.warn('[den-live] coordinator panel unavailable', error); return null; })
+        : null;
+    const spotKit = config.virtual === true
+        ? await import(`./home-den-spot-playback.mjs${cb}`).catch(error => { console.warn('[den-live] virtual spots unavailable', error); return null; })
+        : null;
+    start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit, panelKit, spotKit);
 }
 
-function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
+function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit, panelKit, spotKit) {
     const lookOnly = window.HomeLookOnly?.active === true;
-    let engine = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
-    let bodyLayer = null, bodyLabels = null, bodySource = null, bodyFrames = 0, bodyAt = 0;
+    let engine = null, scope = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
+    let panel = null;
+    let bodyLayer = null, bodyLabels = null, bodySource = null, bodyFrames = 0, bodyAt = 0, bodyClosedAt = 0;
+    const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site, onChange: () => panel?.refresh() });
+    const scene = current => `${current.contentRevision ?? ''}:${current.sceneIdentity?.registrationVersion ?? ''}:${current.sceneIdentity?.frameDigest ?? ''}`;
 
     /* The den's room view is on screen: the den's engine, its canvas shown at room scale, the page visible. */
     function denEngine() {
@@ -55,25 +61,46 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
         try { event = JSON.parse(message.data); } catch (_) { return; }
         if (!validPeopleEvent(event) || (event.home != null && event.home !== config.home)) return;
         latest = event; lastAt = performance.now(); events += 1;
-        if (layer && sameScan(event)) layer.update(event);
+        if (sameScan(event)) layer?.update(event);
+        else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine); }
         render();
     }
     function onBody(message) {
         let frame;
-        try { frame = JSON.parse(message.data); } catch (_) { return; }
-        if (!bodyLayer || (frame.home != null && frame.home !== config.home) || !sameScan(frame)) return;
+        try { frame = JSON.parse(message.data); } catch (_) { disposeBody(); return; }
+        if (!frame || (frame.home != null && frame.home !== config.home) || !sameScan(frame)
+            || config.bodySchema && frame.schema !== config.bodySchema) { disposeBody(); return; }
+        if (!bodyLayer) mountBody(engine);
+        if (!bodyLayer) return;
         if (bodyLayer.update(frame)) { bodyFrames += 1; bodyAt = performance.now(); }
+        else if (config.bodySchema && bodyLayer.status().frames === 0) disposeBody();
     }
+    const isCurrent = () => engine && engine === denEngine() && scope === scene(engine);
     function open() {
-        source = new EventSource(config.stream);
+        const next = source = new EventSource(config.stream);
         openedAt = performance.now(); closedAt = 0;
-        source.addEventListener('people', onPeople);
-        // EventSource retries a dropped stream itself; a refused one (an HTTP error) it closes for good.
-        source.addEventListener('error', () => { if (source?.readyState === EventSource.CLOSED && !closedAt) closedAt = performance.now(); });
-        if (bodyKit && !bodySource) {
-            bodySource = new EventSource(config.body);
-            bodySource.addEventListener('body', onBody);
-        }
+        next.addEventListener('people', message => { if (source === next && isCurrent()) onPeople(message); });
+        if (spots) next.addEventListener('spot_snapshot', message => {
+            if (source !== next || !isCurrent()) return;
+            try { spots.receive(JSON.parse(message.data)); }
+            catch (_) { spots.sourceLost(); }
+        });
+        next.addEventListener('error', () => {
+            if (source !== next) return;
+            spots?.disconnect();
+            panel?.pollNow();
+            if (next.readyState === EventSource.CLOSED) closedAt = performance.now();
+        });
+    }
+    function openBody() {
+        const next = bodySource = new EventSource(config.body);
+        bodyClosedAt = 0;
+        next.addEventListener('body', message => { if (bodySource === next && isCurrent()) onBody(message); });
+        next.addEventListener('error', () => {
+            if (bodySource !== next) return;
+            disposeBody();
+            if (next.readyState === EventSource.CLOSED) bodyClosedAt = performance.now();
+        });
     }
     function disposeBody() {
         bodyLabels?.dispose(); bodyLayer?.dispose();
@@ -85,7 +112,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
         const host = current.renderer?.domElement?.parentElement;
         if (!host) return;
         try {
-            bodyLayer = bodyKit.attachLayer(current);
+            bodyLayer = bodyKit.attachLayer(current, { schema: config.bodySchema });
+            if (spots) bodyLayer.setPool(false);
             bodyLabels = bodyKit.attachLabels({ engine: current, host, layer: bodyLayer });
         } catch (error) { console.warn('[den-live] body layer not mounted', error); disposeBody(); }
     }
@@ -93,25 +121,34 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
         source?.close(); source = null;
         bodySource?.close(); bodySource = null;
         layer?.dispose(); layer = null; engine = null;
+        spots?.disconnect();
+        spots?.attach(null);
         disposeBody();
         latest = null; lastAt = 0;
+        panel?.pause();
         chip?.remove();
     }
 
     function sync() {
         const current = denEngine();
         if (!current) { if (source || layer) close(); return; }
-        if (current !== engine) {
-            layer?.dispose();
+        if (current !== engine || scope !== scene(current)) {
+            close();
             engine = current;
+            scope = scene(current);
+            spots?.attach(current.overlay);
             layer = attachApartmentPeopleLayer(current);
-            if (latest && sameScan(latest)) layer.update(latest);
             mountBody(current);
         }
-        if (source && closedAt && performance.now() - closedAt > REOPEN_MS) { source.close(); source = null; bodySource?.close(); bodySource = null; }
+        const now = performance.now();
+        if (source && closedAt && now - closedAt > REOPEN_MS) { source.close(); source = null; }
+        if (bodySource && bodyClosedAt && now - bodyClosedAt > REOPEN_MS) { bodySource.close(); bodySource = null; }
         if (!source) open();
+        if (bodyKit && !bodySource) openBody();
+        spots?.check();
         place();
         render();
+        panel?.tick();
     }
 
     /* The chip sits in the room view's top left corner, under Home's own overlays. The older layouts keep a toolbar
@@ -126,6 +163,12 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
                 + '<p class="home-den-live-chip-qwen"></p>'
                 + '<p class="home-den-live-chip-banner" role="status" aria-live="polite"></p>';
             chip.querySelector('.home-den-live-chip-name').textContent = `Den · live${lookOnly ? ' · look-only' : ''}`;
+            if (panelKit && !panel) {
+                try {
+                    panel = panelKit.createCoordinatorPanel({ url: config.coordinator, lookOnly, spots });
+                    chip.append(panel.element);
+                } catch (error) { console.warn('[den-live] coordinator panel not mounted', error); panel = null; }
+            }
         }
         const canvas = engine.renderer.domElement;
         const view = canvas.closest('[data-home-apartment-view="1"]') || canvas.parentElement;
@@ -171,6 +214,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
 
     setInterval(sync, TICK_MS);
     document.addEventListener('visibilitychange', sync);
+    window.addEventListener('pagehide', close);
     sync();
 
     /* Read-only, for Home's browser tests. */
@@ -179,7 +223,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, bodyKit = null) {
             siteId: engine?.siteId ?? null, events, banner: chip?.dataset.banner ?? null, chip: chip?.isConnected === true,
             layer: layer ? layer.status() : null,
             body: bodyKit ? { stream: bodySource ? ['connecting', 'open', 'closed'][bodySource.readyState] : 'none', mounted: !!bodyLayer,
-                frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null, layer: bodyLayer ? bodyLayer.status() : null } : null }),
+                frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null, layer: bodyLayer ? bodyLayer.status() : null } : null,
+            coordinator: panel ? panel.status() : null, spot: spots?.current() ?? null }),
         markers: () => layer ? layer.markers() : [],
     });
 }

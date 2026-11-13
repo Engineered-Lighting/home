@@ -1055,6 +1055,32 @@ button.hg-no-press:active {
 .home-den-live-chip-qwen { color: var(--hg-fg-1, #d4d4d4); overflow-wrap: anywhere; }
 .home-den-live-chip-facts:empty, .home-den-live-chip-qwen:empty, .home-den-live-chip-banner:empty { display: none; }
 .home-den-live-chip-banner { margin-top: 4px!important; color: var(--hg-warn, #ffb224); overflow-wrap: anywhere; }
+/* The lighting coordinator's section (home-den-coordinator-panel.mjs): the one part of the chip that takes the pointer. */
+.home-den-live-coordinator { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hg-border, rgba(255,255,255,.1)); pointer-events: auto; }
+.home-den-live-coordinator[hidden] { display: none; }
+.home-den-live-coordinator-summary { cursor: pointer; color: var(--hg-fg-1, #ededed); font-weight: 520; overflow-wrap: anywhere; }
+.home-den-live-coordinator-summary:focus-visible { outline: 2px solid var(--hg-fg-3, #8f8f8f); outline-offset: 2px; border-radius: 4px; }
+.home-den-live-coordinator[data-on="1"] > .home-den-live-coordinator-summary { color: var(--hg-fg-0, #fff); }
+.home-den-live-coordinator-body { max-height: min(56vh, 440px); overflow: auto; overscroll-behavior: contain; padding: 4px 2px 2px; }
+.home-den-live-coordinator-controls { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 6px; }
+.home-den-live-coordinator-button { min-height: 30px; padding: 4px 10px; border: 1px solid var(--hg-border, rgba(255,255,255,.14)); border-radius: 8px;
+  background: rgba(255,255,255,.06); color: var(--hg-fg-0, #fff); font: inherit; cursor: pointer; }
+.home-den-live-coordinator-button:hover:not(:disabled), .home-den-live-coordinator-button:focus-visible { border-color: var(--hg-fg-3, #8f8f8f); }
+.home-den-live-coordinator-button:disabled { opacity: .55; cursor: default; }
+.home-den-live-coordinator-button[aria-pressed="true"] { background: rgba(145,230,189,.16); border-color: rgba(145,230,189,.5); }
+.home-den-live-coordinator-button[data-armed="1"] { border-color: var(--hg-warn, #ffb224); color: var(--hg-warn, #ffb224); }
+.home-den-live-coordinator-inline { min-height: 24px; margin-left: 8px; padding: 1px 8px; font-size: 11.5px; }
+.home-den-live-coordinator-head { display: flex; align-items: center; margin-top: 6px!important; color: var(--hg-fg-0, #fff); font-weight: 560; }
+.home-den-live-coordinator-list { margin: 2px 0 0; padding-left: 16px; color: var(--hg-fg-2, #a1a1a1); overflow-wrap: anywhere; }
+.home-den-live-coordinator-facts, .home-den-live-coordinator-error { color: var(--hg-warn, #ffb224); overflow-wrap: anywhere; }
+.home-den-live-coordinator-facts:empty, .home-den-live-coordinator-error:empty { display: none; }
+.home-den-live-coordinator-settings { display: grid; gap: 5px; margin-top: 3px; }
+.home-den-live-coordinator-setting { display: grid; grid-template-columns: 1fr 84px; align-items: center; gap: 8px; color: var(--hg-fg-2, #a1a1a1); }
+.home-den-live-coordinator-setting.is-flag { grid-template-columns: 1fr auto; }
+.home-den-live-coordinator-setting input, .home-den-live-coordinator-setting select { min-width: 0; min-height: 26px; padding: 2px 6px;
+  border: 1px solid var(--hg-border, rgba(255,255,255,.14)); border-radius: 6px; background: rgba(0,0,0,.35); color: var(--hg-fg-0, #fff); font: inherit; }
+.home-den-live-coordinator-setting input[type="checkbox"] { min-height: 0; width: 16px; height: 16px; }
+.home-den-live-coordinator-settings > .home-den-live-coordinator-button { justify-self: start; }
 .apt-home-shell[data-look-only] .apt-home-stage { top: 52px!important; right: 0!important; bottom: 0!important; }
 .apt-home-shell .apt-home-look-only { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hg-fg-1); font-size: 13px; font-weight: 500; }
 .apt-home-shell .apt-home-look-only-status { margin: 0; padding: 72px 16px 0; color: var(--hg-fg-2); text-align: center; }

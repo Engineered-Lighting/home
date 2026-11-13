@@ -1,0 +1,72 @@
+# den-detect's venv, as measured on this PC on 2026-11-09: %USERPROFILE%\ml\den-detector, Python 3.12.10, CPU only.
+# Every distribution in it at its exact version, then the weights in its models\ folder by sha256. detect.py
+# refuses to run when the venv holds a distribution these lines don't name, misses one, or holds another
+# version, and it holds the weights to these digests at load.
+#
+# Rebuild it with the plan's hop 6 install lines, in PowerShell 5.1: about 340 MB from PyTorch's download host,
+# PyPI and GitHub, and 1 to 1.5 GB on disk. The rtmlib wheel and the pose model come from the pose preparation
+# folder. The rtmlib wheel's sha256 is ba932b25f7d264d7ec4837545c5e7c392001f48b53e22e514cb1497882389eaa.
+#
+#   py -3.12 -m venv $env:USERPROFILE\ml\den-detector
+#   $py = "$env:USERPROFILE\ml\den-detector\Scripts\python.exe"
+#   & $py -m pip install https://download-r2.pytorch.org/whl/cpu/torch-2.10.0%2Bcpu-cp312-cp312-win_amd64.whl#sha256=21cb5436978ef47c823b7a813ff0f8c2892e266cfe0f1d944879b5fba81bf4e1 https://download-r2.pytorch.org/whl/cpu/torchvision-0.25.0%2Bcpu-cp312-cp312-win_amd64.whl#sha256=2d444009c0956669ada149f61ed78f257c1cc96d259efa6acf3929ca96ceb3f0
+#   & $py -m pip install ultralytics==8.4.0 onnxruntime==1.23.2 numpy==1.26.4 opencv-python==4.11.0.86 tqdm
+#   & $py -m pip install --no-deps C:\claude\home\.tmp\pose-preparation\rtmlib-0.0.16-py3-none-any.whl
+#   New-Item -ItemType Directory -Force $env:USERPROFILE\ml\den-detector\models
+#   Copy-Item C:\claude\home\.tmp\pose-preparation\rtmpose-m-body7.onnx $env:USERPROFILE\ml\den-detector\models\
+#   Copy-Item C:\claude\home\.tmp\pose-preparation\artifact.json $env:USERPROFILE\ml\den-detector\models\
+#   curl.exe -L -o $env:USERPROFILE\ml\den-detector\models\yolo26s.pt https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s.pt
+#
+# If pip picked newer versions of the rest, pin them to the lines below one by one: torch and torchvision
+# come only from the wheel URLs above, and rtmlib only from its wheel. Ultralytics is AGPL-3.0, fine on a
+# single-user machine. The weights stay out of git.
+certifi==2026.10.23
+charset-normalizer==3.5.2
+colorama==0.4.6
+coloredlogs==15.0.1
+contourpy==1.3.3
+cycler==0.12.1
+filelock==4.2.9
+flatbuffers==25.12.19
+fonttools==4.68.0
+fsspec==2026.9.0
+humanfriendly==10.0
+idna==3.20
+Jinja2==3.1.6
+kiwisolver==1.5.1
+MarkupSafe==3.0.4
+matplotlib==3.11.2
+mpmath==1.3.0
+networkx==3.7
+numpy==1.26.4
+onnxruntime==1.23.2
+opencv-python==4.11.0.86
+packaging==26.3
+pillow==13.0.0
+pip==25.0.1
+polars==2.1.0
+polars-runtime-32==2.1.0
+protobuf==7.36.2
+psutil==7.2.2
+pyparsing==3.3.3
+pyreadline3==3.5.6
+python-dateutil==4.0.0
+PyYAML==6.0.3
+requests==2.34.2
+rtmlib==0.0.16
+scipy==1.17.1
+setuptools==84.2.1
+sympy==1.14.0
+torch==2.10.0+cpu
+torchvision==0.25.0+cpu
+tqdm==4.70.1
+typing_extensions==4.16.0
+tzdata==2026.6
+ultralytics==8.4.0
+ultralytics-thop==2.2.5
+urllib3==2.8.0
+#
+# The weights, in the venv's models\ folder:
+# sha256 yolo26s.pt 646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b
+# sha256 rtmpose-m-body7.onnx 5c0a4bf67953e6d2ac43ce15e77dc9d5d354ae18430a47d2c5963a7bc5683e3c
+# sha256 artifact.json 1bd8ad0a3828efc9d5b86b603ceee0639d3e7d674db98dfc3d85baa291740585

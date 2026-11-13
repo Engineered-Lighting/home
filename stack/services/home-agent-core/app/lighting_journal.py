@@ -15,19 +15,21 @@ when new ones are retained; consent records are kept.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 import sqlite3
 import time
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import Field
 
 from .crypto import FieldCipher, SealedValue
 from .lighting_authority import (LightingAuthority, LightingConsentCommitment, LightingConsentConfirmation,
                                  LightingConsentReview)
-from .lighting_contract import Contract, from_wire
-from .lighting_review import LightingActionCommitment, LightingActionConfirmation, LightingActionReview
+from .errors import ConflictError
+from .lighting_contract import Clarification, Contract, LightOperation, from_wire
+from .lighting_review import LightingActionCommitment, LightingActionConfirmation, LightingActionReview, SiteRevision
 
 PURPOSE = "lighting-journal-v1"
 Result = Literal["pending", "succeeded", "failed", "not_sent", "indeterminate", "dispatching", "unknown"]
@@ -57,6 +59,38 @@ class RetainedLightingAction(Contract):
     review: LightingActionReview = Field(repr=False)
     state: Literal["review", "dispatching", "finished"] = "review"
     results: tuple[Result, ...] = ()
+
+
+class ServeLightingPlan(Contract):
+    operation_id: UUID
+    operations: tuple[LightOperation, ...]
+    revisions: tuple[SiteRevision, ...]
+    expires_at: datetime
+
+    def revision(self, site):
+        return next(item.revision for item in self.revisions if item.site_id == site)
+
+
+class RetainedServeLightingAction(Contract):
+    operation_id: UUID
+    edge_request_id: UUID
+    request_digest: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
+    state: Literal["resolving", "clarify", "unavailable", "dispatching", "finished"] = "resolving"
+    review: ServeLightingPlan | None = None
+    clarification: Clarification | None = None
+    results: tuple[Result, ...] = ()
+
+
+def _with_result(value, index, result):
+    if not 0 <= index < len(value.results):
+        raise ValueError("undispatched lighting operation")
+    current = value.results[index]
+    if current in FINAL:
+        return value
+    if result not in TRANSITIONS[current]:
+        raise ValueError("lighting result transition refused")
+    results = value.results[:index] + (result,) + value.results[index + 1:]
+    return from_wire(type(value), json.loads(value.model_copy(update={"results": results}).model_dump_json()))
 
 
 class LightingJournal:
@@ -209,17 +243,11 @@ class LightingJournal:
     def record_result(self, operation_id, index, result, *, subject, session_commitment):
         def work():
             value = self.read_action(operation_id, subject=subject, session_commitment=session_commitment)
-            if value.state == "review" or not 0 <= index < len(value.results):
+            if value.state == "review":
                 raise ValueError("undispatched lighting operation")
-            current = value.results[index]
-            if current in FINAL:
-                return value  # a final result never changes
-            if result not in TRANSITIONS[current]:
-                raise ValueError("lighting result transition refused")
-            results = value.results[:index] + (result,) + value.results[index + 1:]
-            updated = from_wire(RetainedLightingAction, json.loads(
-                value.model_copy(update={"results": results}).model_dump_json()))
-            self._write(f"action:{operation_id}", updated.model_dump_json().encode())
+            updated = _with_result(value, index, result)
+            if updated is not value:
+                self._write(f"action:{operation_id}", updated.model_dump_json().encode())
             return updated
         return self._transaction(work)
 
@@ -230,6 +258,63 @@ class LightingJournal:
                 raise ValueError("undispatched lighting action cannot finish")
             updated = value.model_copy(update={"state": "finished"})
             self._write(f"action:{operation_id}", updated.model_dump_json().encode())
+            return updated
+        return self._transaction(work)
+
+    def read_serve_action(self, operation_id):
+        raw = self._read(f"serve-action:{operation_id}")
+        if raw is None:
+            raise MissingLightingRecord("lighting operation unavailable")
+        return from_wire(RetainedServeLightingAction, json.loads(raw))
+
+    def reserve_serve_action(self, operation_id, request_digest):
+        """Bind the ID before doing IO, even for requests that need clarification."""
+        def work():
+            try:
+                value = self.read_serve_action(operation_id)
+            except MissingLightingRecord:
+                self._db.execute("DELETE FROM records WHERE id LIKE 'serve-action:%' AND created_at < ?",
+                                 (int(time.time() * 1000) - RETENTION_MS,))
+                value = RetainedServeLightingAction(operation_id=operation_id, edge_request_id=uuid4(),
+                                                    request_digest=request_digest)
+                self._write(f"serve-action:{operation_id}", value.model_dump_json().encode(), insert=True)
+                return value, True
+            if value.request_digest != request_digest:
+                raise ConflictError("lighting operation ID already belongs to another request")
+            return value, False
+        return self._transaction(work)
+
+    def resolve_serve_action(self, operation_id, *, plan=None, clarification=None):
+        def work():
+            value = self.read_serve_action(operation_id)
+            if value.state != "resolving":
+                raise ValueError("lighting operation is already resolved")
+            changes = {"state": "unavailable"}
+            if plan is not None:
+                changes = {"state": "dispatching", "review": plan, "results": ("pending",) * len(plan.operations)}
+            elif clarification is not None:
+                changes = {"state": "clarify", "clarification": clarification}
+            updated = value.model_copy(update=changes)
+            self._write(f"serve-action:{operation_id}", updated.model_dump_json().encode())
+            return updated
+        return self._transaction(work)
+
+    def record_serve_result(self, operation_id, index, result):
+        def work():
+            value = self.read_serve_action(operation_id)
+            updated = _with_result(value, index, result)
+            if updated is not value:
+                self._write(f"serve-action:{operation_id}", updated.model_dump_json().encode())
+            return updated
+        return self._transaction(work)
+
+    def finish_serve_action(self, operation_id):
+        def work():
+            value = self.read_serve_action(operation_id)
+            if value.state != "dispatching":
+                raise ValueError("undispatched lighting operation cannot finish")
+            updated = value.model_copy(update={"state": "finished"})
+            self._write(f"serve-action:{operation_id}", updated.model_dump_json().encode())
             return updated
         return self._transaction(work)
 

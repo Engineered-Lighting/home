@@ -97,7 +97,7 @@ function release(root) {
 }
 
 export function attachApartmentBodyLayer(engine, { now = () => performance.now() / 1000, animate = true, reducedMotion = false,
-    zoomT = null, look = RECORDING } = {}) {
+    zoomT = null, look = RECORDING, schema } = {}) {
     const parent = engine?.apartmentRoot;
     if (!parent || typeof parent.add !== 'function') throw Error('apartment_body_root_missing');
     const reduced = () => (typeof reducedMotion === 'function' ? reducedMotion() : reducedMotion) === true;
@@ -175,7 +175,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
      * track replaces the old one at once (one person per layer). */
     function update(frame) {
         if (disposed) return false;
-        const F = decodeBodyFrame(frame);
+        const F = decodeBodyFrame(frame, { schema });
         if (!F) return false;
         const at = now();
         if (trackId !== F.trackId) frames = [];

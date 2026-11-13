@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const F = await import(pathToFileURL(path.join(ROOT, 'app/src/home-3d/apartment-body-frame.mjs')).href);
-const { BODY_SCHEMA, KIND, validBodyFrame, decodeBodyFrame, encodeBodyFrame, mergeFrames, mergeJoints, drawBuffers, zoomRatio, MAX_POINTS } = F;
+const { BODY_SCHEMA, FACE_FREE_BODY_SCHEMA, KIND, validBodyFrame, decodeBodyFrame, encodeBodyFrame, mergeFrames, mergeJoints, drawBuffers, zoomRatio, MAX_POINTS } = F;
 
 const pts = (list) => list.map(([key, x, y, z, kind = KIND.measured]) => ({ key, xyz_m: [x, y, z], kind, normal: [0, 0, 1] }));
 const frame = (list, extra = {}) => encodeBodyFrame({ trackId: 'trk-1', captureTs: 10, seq: 1, points: pts(list), ...extra });
@@ -47,6 +47,23 @@ test('anything off-contract is refused whole', () => {
         { ...good, object: { confidence: 2 } },
     ];
     for (const f of bad) { assert.equal(validBodyFrame(f), false, JSON.stringify(Object.keys(f))); assert.equal(decodeBodyFrame(f), null); }
+});
+
+test('the opt-in v2 body decoder accepts generated limbs without a head channel or facial joints', () => {
+    const options = { schema: FACE_FREE_BODY_SCHEMA };
+    const v2 = encodeBodyFrame({ ...options, trackId: 'trk-1', captureTs: 10, points: [{ key: 1, xyz_m: [0, 0, 1] }],
+        joints: { left_shoulder: [0, 0, 1] } });
+    assert.equal(v2.points.head, undefined);
+    assert.equal(decodeBodyFrame(v2), null, 'v1 callers do not silently switch wire schemas');
+    assert.deepEqual(decodeBodyFrame(v2, options)?.centroid, [0, 0, 1]);
+    assert.equal(decodeBodyFrame(frame([[1, 0, 0, 1]]), options), null);
+    for (const bad of [
+        { ...v2, source: 'depth' },
+        { ...v2, rgb: 'bytes' },
+        { ...v2, points: { ...v2.points, head: btoa('\0') } },
+        { ...v2, points: { ...v2.points, kind: btoa('\0') } },
+        { ...v2, joints: [{ name: 'nose', xyz_m: [0, 0, 1] }] },
+    ]) assert.equal(decodeBodyFrame(bad, options), null);
 });
 
 test('bytes that disagree with the shape are refused: keys out of order, an unknown kind, bad base64', () => {

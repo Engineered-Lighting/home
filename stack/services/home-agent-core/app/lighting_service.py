@@ -22,13 +22,14 @@ from uuid import UUID
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from .errors import DomainError, ForbiddenError
+from .crypto import sha256_json
+from .errors import DomainError, ForbiddenError, NotFoundError
 from .lighting_authority import (ROLE, LightingConsentConfirmation, LightingGrantStorage)
 from .lighting_contract import Clarification, LightingProposalRequest
 from .lighting_edge_client import EdgeLightingClient, LightingRefused, OutcomeUnknown
-from .lighting_journal import DEFINITE, LightingJournal, MissingLightingRecord
+from .lighting_journal import DEFINITE, LightingJournal, MissingLightingRecord, ServeLightingPlan
 from .lighting_resolution import resolve
-from .lighting_review import LightingActionCommitment, LightingActionConfirmation
+from .lighting_review import REVIEW_SECONDS, LightingActionCommitment, LightingActionConfirmation, SiteRevision
 
 # Asked again at outcome lookup. The home's own 'indeterminate' is final there.
 UNSETTLED = frozenset({"pending", "dispatching", "unknown"})
@@ -96,6 +97,7 @@ class LightingService:
         self.database, self.storage, self.commitment, self.journal = database, storage, commitment, journal
         self.clients, self.admission, self.grant_lifetime, self.now = clients, admission, grant_lifetime, now
         self._dispatching = set()
+        self._serve_running = set()
 
     @staticmethod
     def _scope(session):
@@ -233,14 +235,26 @@ class LightingService:
         review = claimed.review
         self._dispatching.add(review.operation_id)
         try:
-            sites = dict.fromkeys(operation.site_id for operation in review.operations)
-            await asyncio.gather(*(self._dispatch_site(scope, claimed, site) for site in sites))
+            async def still_allowed():
+                return self._unchanged(await self._authority(scope), claimed)
+
+            def record(index, result):
+                return self.journal.record_result(review.operation_id, index, result, **scope)
+
+            await self._dispatch(review, review.operation_id, still_allowed, record)
             return _summary(self.journal.finish_action(review.operation_id, **scope))
         finally:
             self._dispatching.discard(review.operation_id)
 
-    async def _dispatch_site(self, scope, claimed, site):
-        review, client = claimed.review, self.clients[site]
+    async def _dispatch(self, review, edge_request_id, still_allowed, record):
+        # Wait for sibling homes to settle even if one raises or the request is
+        # cancelled. An outcome lookup must not withdraw a still-pending write.
+        async with asyncio.TaskGroup() as tasks:
+            for site in dict.fromkeys(operation.site_id for operation in review.operations):
+                tasks.create_task(self._dispatch_site(review, edge_request_id, site, still_allowed, record))
+
+    async def _dispatch_site(self, review, edge_request_id, site, still_allowed, record):
+        client = self.clients[site]
         expires_ms = int(review.expires_at.timestamp() * 1000)
         for index, operation in enumerate(review.operations):
             if operation.site_id != site:
@@ -250,19 +264,18 @@ class LightingService:
             if self.now() + OPERATION_BUDGET > review.expires_at:
                 return
             try:
-                current = await self._authority(scope)
+                if not await still_allowed():
+                    return
             except Exception:
                 return
-            if not self._unchanged(current, claimed):
-                return
             try:
-                result = await client.execute(operation, request_id=review.operation_id, index=index,
+                result = await client.execute(operation, request_id=edge_request_id, index=index,
                                               revision=review.revision(site), expires_at_ms=expires_ms)
             except LightingRefused:
                 result = "not_sent"
             except OutcomeUnknown:
                 result = "unknown"
-            self.journal.record_result(review.operation_id, index, result, **scope)
+            record(index, result)
             if result == "unknown":
                 return  # an unresponsive home is not asked again in this dispatch
 
@@ -273,12 +286,18 @@ class LightingService:
         if retained.state == "review" or operation_id in self._dispatching:
             # Never settle operations this process may still be sending.
             return _summary(retained)
+        def record(index, result):
+            return self.journal.record_result(operation_id, index, result, **scope)
+
+        return _summary(await self._settle(retained, operation_id, record))
+
+    async def _settle(self, retained, edge_request_id, record):
         review = retained.review
         for index, (operation, result) in enumerate(zip(review.operations, retained.results)):
             if result not in UNSETTLED:
                 continue
             try:
-                found = await self.clients[operation.site_id].outcome(request_id=review.operation_id, index=index)
+                found = await self.clients[operation.site_id].outcome(request_id=edge_request_id, index=index)
             except OutcomeUnknown:
                 continue
             if found == "absent":
@@ -287,5 +306,84 @@ class LightingService:
                 if result not in ("pending", "unknown"):
                     continue
                 found = "not_sent"
-            retained = self.journal.record_result(review.operation_id, index, found, **scope)
-        return _summary(retained)
+            retained = record(index, found)
+        return retained
+
+
+    # Serve actions are admitted by the separate private route. They have no
+    # Agent identity and never read or write Agent grants or journal entries.
+    async def serve_action(self, request):
+        if type(request) is not LightingProposalRequest:
+            raise TypeError("typed lighting request required")
+        await self.admission()
+        operation_id = request.operation_id
+        retained, claimed = self.journal.reserve_serve_action(
+            operation_id, sha256_json(request.model_dump(mode="json")))
+        if not claimed:
+            return await self._serve_result(retained)
+
+        self._serve_running.add(operation_id)
+        try:
+            try:
+                if any(site not in self.clients for site in request.sites):
+                    raise LightingUnavailable("home lighting is not configured")
+                async with asyncio.TaskGroup() as tasks:
+                    reads = {site: tasks.create_task(self.clients[site].inventory()) for site in request.sites}
+                inventories = {site: read.result() for site, read in reads.items()}
+            except Exception as exc:
+                self.journal.resolve_serve_action(operation_id)
+                raise LightingUnavailable("home lighting inventory unavailable") from exc
+            resolved = resolve(request, inventories)
+            if type(resolved) is Clarification:
+                retained = self.journal.resolve_serve_action(operation_id, clarification=resolved)
+                return self._serve_view(retained)
+            plan = ServeLightingPlan(operation_id=operation_id, operations=resolved,
+                revisions=tuple(SiteRevision(site_id=site, revision=inventories[site].revision)
+                                for site in dict.fromkeys(op.site_id for op in resolved)),
+                expires_at=self.now() + timedelta(seconds=REVIEW_SECONDS))
+            retained = self.journal.resolve_serve_action(operation_id, plan=plan)
+
+            async def still_allowed():
+                await self.admission()
+                return True
+
+            def record(index, result):
+                return self.journal.record_serve_result(operation_id, index, result)
+
+            await self._dispatch(plan, retained.edge_request_id, still_allowed, record)
+            return _summary(self.journal.finish_serve_action(operation_id))
+        finally:
+            self._serve_running.discard(operation_id)
+
+    @staticmethod
+    def _serve_view(retained):
+        if retained.state == "clarify":
+            return {"version": 1, "status": "clarify",
+                    "clarification": retained.clarification.model_dump(mode="json")}
+        if retained.review is not None:
+            return _summary(retained)
+        return {"version": 1, "operation_id": str(retained.operation_id), "status": "pending"}
+
+    async def _serve_result(self, retained):
+        if retained.operation_id in self._serve_running:
+            return self._serve_view(retained)
+        if retained.state == "resolving":
+            # The previous process stopped before any dispatch was claimed.
+            retained = self.journal.resolve_serve_action(retained.operation_id)
+        if retained.state == "unavailable":
+            raise LightingUnavailable("home lighting unavailable")
+        if retained.review is None:
+            return self._serve_view(retained)
+
+        def record(index, result):
+            return self.journal.record_serve_result(retained.operation_id, index, result)
+
+        return _summary(await self._settle(retained, retained.edge_request_id, record))
+
+    async def serve_outcome(self, operation_id):
+        await self.admission()
+        try:
+            retained = self.journal.read_serve_action(operation_id)
+        except MissingLightingRecord as exc:
+            raise NotFoundError("lighting operation unavailable") from exc
+        return await self._serve_result(retained)

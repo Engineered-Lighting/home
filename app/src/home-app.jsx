@@ -784,7 +784,7 @@ function HomeHeader({
     connection === "online" && !isDegraded  ? "online"     :
     isDegraded                              ? "degraded"   :
     connection === "connecting"             ? "connecting" :
-    connection === "auth_invalid"           ? "bad token"  : "offline";
+    connection === "auth_invalid"           ? (window.HomeServe?.active ? "unavailable" : "bad token") : "offline";
   const showWarn = isDegraded;
   const warnText = sidecarDown && bridgeDown ? "voice + chat offline"
                  : sidecarDown ? "chat-tee offline"
@@ -2502,7 +2502,7 @@ function MetricsStrip({
     const bridgeSeesHa = bridgeHealth?.ha_connected;
     if (haUp && bridgeSeesHa) items.push({ label: "haos", state: "connected", tone: "ok" });
     else if (haUp || bridgeSeesHa) items.push({ label: "haos", state: "degraded", tone: "warn" });
-    else if (connection === "auth_invalid") items.push({ label: "haos", state: "bad token", tone: "crit" });
+    else if (connection === "auth_invalid") items.push({ label: "haos", state: window.HomeServe?.active ? "unavailable" : "bad token", tone: "crit" });
     else items.push({ label: "haos", state: "offline", tone: "crit" });
     // Bridge — value carries uptime when warm, plain state otherwise
     const upStr = fmtUptime(bridgeHealth?.uptime_s);
@@ -4021,6 +4021,7 @@ const BOOT_ART = [
  * surface — extracted verbatim from HomeApp's render gate so the gate,
  * routeOnboarding, and the boot focus effect can never disagree. */
 function isFirstRunVisible(connection, events) {
+  if (typeof window !== "undefined" && window.HomeServe?.active) return false;
   return connection !== "online" && connection !== "reconnecting";
 }
 
@@ -4948,6 +4949,7 @@ const HOME_SERVICE_BY_RUNTIME_KEY = {
 
 function webDefaultBase(key) {
   const service = HOME_SERVICE_BY_RUNTIME_KEY[key];
+  if (typeof window !== "undefined" && window.HomeServe?.active) return window[key] || "";
   if (typeof window !== "undefined" && window.HomeServices && service) {
     const configured = window.HomeServices.get(service);
     if (configured) return String(configured).replace(/\/+$/, "");
@@ -5206,6 +5208,11 @@ function isLightOrLampState(state, apartmentSwitchIds) {
 // which it swaps for the real token on /proxy/ha. Home then connects without
 // asking. The marker is never persisted and never sent anywhere but the proxy.
 function withGatewayHaToken(prefs) {
+  if (typeof window !== "undefined" && window.HomeServe?.active) {
+    return { ...prefs, endpoint: window.HG_DEFAULT_HA_BASE,
+      token: window.__HOME_WEB_HA_TOKEN_PROXY === true ? window.__HOME_WEB_HA_TOKEN : "",
+      metricsBase: window.HG_DEFAULT_METRICS_BASE, s2sBase: window.HG_DEFAULT_S2S_BASE, s2sToken: "" };
+  }
   if (typeof window === "undefined" || window.__HOME_WEB_HA_TOKEN_PROXY !== true ||
       typeof window.__HOME_WEB_HA_TOKEN !== "string" || !window.__HOME_WEB_HA_TOKEN ||
       prefs.token || prefs.endpoint !== window.HG_DEFAULT_HA_BASE) return prefs;
@@ -6435,7 +6442,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       lastPersistRef.current = Date.now();
       saveEvents(
         coalesceAssistantTurnEvents(
-          events.filter((e) => !e.onboarding && !e.privateCameraContext).map(sanitizeChatEventForStorage),
+          events.filter((e) => !e.onboarding && !e.privateCameraContext && !e.ephemeralLighting).map(sanitizeChatEventForStorage),
         ),
       );
     }, wait);
@@ -6494,6 +6501,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
       return next.length > 600 ? next.slice(-600) : next;
     });
   }, []);
+
+  useEffect(() => {
+    if (window.HomeServe?.active) window.HomeLightingControl?.restorePending?.(addEvent);
+  }, [addEvent]);
 
   const ensureFeature = useCallback(async (feature, label = feature, reason = "open") => {
     const loader = window.HomeFeatureLoader;
@@ -6764,7 +6775,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         saveOnboarding({ seenHelpHint: true });
       }
       // hasChatted → returning user, straight to chat, no message.
-    } else if (!isFirstRunVisible(connection, events)) {
+    } else if (!window.HomeServe?.active && !isFirstRunVisible(connection, events)) {
       // Chat feed is the visible surface (returning user). FirstRun's helper
       // text already carries this copy for the form case.
       addEvent({ kind: "system", tone: "info", onboarding: "disconnected-hint",
@@ -6801,7 +6812,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         }
       }
       else if (state === "offline")        setConnection((c) => c === "disconnected" ? c : "offline");
-      if (message) addEvent({ kind: "system", text: message, tone: "warn" });
+      if (message && !window.HomeServe?.active) addEvent({ kind: "system", text: message, tone: "warn" });
     });
     return () => { off(); client.disconnect(); haClientRef.current = null; };
   }, [addEvent]);
@@ -6885,7 +6896,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         try { window.HomeSecurity?.saveHaLogin?.(window.localStorage, "", "", false); } catch (_) {}
       }
       await client.connect(haUrl, accessToken);
-      if (window.HG_WEB_MODE && client.url === haUrl && client.token === accessToken) {
+      if (window.HG_WEB_MODE && !window.HomeServe?.active && client.url === haUrl && client.token === accessToken) {
         try {
           const remember = options.rememberHa ?? window.HomeSecurity?.remembersHaLogin?.(window.localStorage) ?? true;
           const saved = window.HomeSecurity?.saveHaLogin?.(window.localStorage, haUrl, accessToken, remember);
@@ -6893,7 +6904,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         } catch (_) { addEvent({kind:"system",text:"Connected, but browser storage is unavailable; HA login will be needed after refresh.",tone:"warn"}); }
       }
     } catch (e) {
-      addEvent({ kind: "system", text: `unreachable · ${e?.message || haUrl}`, tone: "error" });
+      addEvent({ kind: "system", text: window.HomeServe?.active ? "Home Assistant is unavailable." : `unreachable · ${e?.message || haUrl}`, tone: "error" });
       return;
     }
     // Always re-probe for the sidecar on connect — if a persisted
@@ -7001,7 +7012,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   }, [addEvent]);
 
   const syncServiceStateFromResolver = useCallback(() => {
-    if (!window.HomeServices) return;
+    if (window.HomeServe?.active || !window.HomeServices) return;
     const ha = window.HomeServices.get("ha");
     const metrics = window.HomeServices.get("metrics");
     const s2s = window.HomeServices.get("s2s");
@@ -7012,7 +7023,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   }, []);
 
   const applyServiceProfile = useCallback((profileId) => {
-    if (!window.HomeServices) return;
+    if (window.HomeServe?.active || !window.HomeServices) return;
     const profile = window.HomeServices.setProfile(profileId);
     const nextEndpoint = window.HomeServices.get("ha");
     const nextMetrics = window.HomeServices.get("metrics");
@@ -8025,6 +8036,11 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     // not " find office" → empty cmd.
     const [cmd, ...rest] = raw.trim().slice(1).trim().split(/\s+/);
     const arg = rest.join(" ");
+    if (window.HomeServe?.active && (["connect", "endpoint", "forget-ha", "token", "metrics", "profile", "service", "stack-token"].includes(cmd)
+        || (cmd === "s2s" && arg && !arg.startsWith("voice ")))) {
+      addEvent({ kind: "system", text: "Connections for this Home are managed on the server.", tone: "info" });
+      return true;
+    }
     switch (cmd) {
       case "connect":
       case "endpoint":
@@ -12451,6 +12467,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
           paddingBottom: mobile ? 18 : 0,
           boxSizing: "border-box",
         }}>
+        {window.HomeServe?.active && !["online", "connecting", "reconnecting", "picking-model"].includes(connection) &&
+          <p role="status" data-home-managed-ha="unavailable" style={{ margin: "12px 20px", color: "var(--hg-fg-2)" }}>
+            Home Assistant is unavailable.
+          </p>}
         {isFirstRunVisible(connection, events) ? (
           <FirstRun
             connection={connection}
@@ -12609,5 +12629,5 @@ function HomeLookOnlyApp() {
   </div>;
 }
 
-function HomeApp(props) { return window.HomeLookOnly?.active ? <HomeLookOnlyApp /> : <HomeNormalApp {...props} />; }
+function HomeApp(props) { return !window.HomeServe?.active && window.HomeLookOnly?.active ? <HomeLookOnlyApp /> : <HomeNormalApp {...props} />; }
 Object.assign(window, { HomeApp, HomeHeader, MetricsStrip, InputRow, MicButton, VoiceBanner, EventRenderer, fmtTime });

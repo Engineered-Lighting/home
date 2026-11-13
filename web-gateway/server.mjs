@@ -23,17 +23,17 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveEnabled, denLiveHeaders, denLiveRouteKind,
-  denLiveRuntime } from "./den-live-route.mjs";
+import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveEnabled, denLiveHeaders,
+  denLiveRouteKind, denLiveRuntime, denLiveUpstreamSuffix, denLiveWriteRefusal } from "./den-live-route.mjs";
+import { createServeLightingRelay, readServeCredential, SERVE_LIGHTING_PREFIX, serveHomeAdmission, serveHomeOrigin } from "./serve-home.mjs";
 import { REDACTED, hasBody, lookOnlyClient, lookOnlyEnabled, lookOnlyKind, lookOnlyPackIndex, lookOnlyRuntime } from "./look-only.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// The live den view (den-live) and its look-only tailnet view. Both are off unless their env line turns them on.
-// Look-only also needs the Serve listener: HOME_WEB_SERVE_PORT, the loopback port Tailscale Serve forwards to with
-// --proxy-protocol=1 (docs/TAILSCALE-WEB.md). Without it there's no look-only.
 const DEN_LIVE_ENABLED = denLiveEnabled(process.env);
+const DEN_BODY_V2 = DEN_LIVE_ENABLED && envEnabled("HOME_WEB_DEN_BODY_V2");
+const DEN_VIRTUAL = DEN_LIVE_ENABLED && envEnabled("HOME_WEB_DEN_VIRTUAL");
 const SERVE_PORT = /^\d{1,5}$/.test(String(process.env.HOME_WEB_SERVE_PORT || "")) ? Number(process.env.HOME_WEB_SERVE_PORT) : 0;
-const LOOK_ONLY_ENABLED = lookOnlyEnabled(process.env) && SERVE_PORT > 0 && SERVE_PORT < 65536;
+const SERVE_ORIGIN_CONFIG = String(process.env.HOME_WEB_SERVE_ORIGIN || "").trim();
 // At most this many den-live streams per look-only device, and in all: den-live serves 16, and signed-in Home needs some.
 const LOOK_ONLY_STREAMS_PER_DEVICE = 2;
 const LOOK_ONLY_STREAMS = 8;
@@ -78,6 +78,23 @@ const nativeAgentOriginBoundary = parsedNativeAgentOriginBoundary.valid &&
       error: parsedNativeAgentOriginBoundary.error || "multiple_origins",
     };
 const PRIMARY_AGENT_ORIGIN = agentOriginBoundary.valid ? agentOriginBoundary.origins[0] : "";
+const requestedServeOrigin = serveHomeOrigin(SERVE_ORIGIN_CONFIG);
+const validServePort = SERVE_PORT > 0 && SERVE_PORT < 65536 && SERVE_PORT !== PORT;
+const LOOK_ONLY_ENABLED = !SERVE_ORIGIN_CONFIG && lookOnlyEnabled(process.env) && validServePort;
+const SERVE_ORIGIN = validServePort && requestedServeOrigin &&
+  !agentOriginBoundary.byHost.has(requestedServeOrigin.host) &&
+  !nativeAgentOriginBoundary.byHost.has(requestedServeOrigin.host)
+  ? requestedServeOrigin : null;
+const serveAuthorityTag = crypto.randomBytes(32).toString("hex");
+const serveBridgeCredential = readServeCredential(process.env.HOME_WEB_SERVE_BRIDGE_CREDENTIAL_FILE, /^[a-f0-9]{32,256}$/i);
+const serveLightingRelay = createServeLightingRelay({
+  bffTarget: envTarget("HOME_WEB_AGENT_BFF_TARGET", "http://127.0.0.1:8097/api/agent"),
+  credentialFile: process.env.HOME_WEB_SERVE_LIGHTING_RELAY_CREDENTIAL_FILE,
+  sendJson,
+});
+if (SERVE_ORIGIN_CONFIG && !SERVE_ORIGIN) {
+  console.warn("[serve-home] full Home disabled: configure a dedicated port and a separate exact HTTPS origin");
+}
 if (!agentOriginBoundary.valid) {
   console.warn("[agent-origin] HOME_WEB_AGENT_ORIGINS is missing or invalid; browser Agent routes are disabled");
 }
@@ -397,8 +414,8 @@ const routes = [
     ws: false,
   },
   {
-    // The live den view's people stream (den-live-route.mjs) on this host's loopback. Reads only, with no caller
-    // credential passed on. A session reads it after requireAuth; a look-only device through handleLookOnly.
+    // Den people, labels and coordinator on loopback. Body v2 and virtual
+    // controls use distinct upstream paths without passing caller credentials.
     prefix: DEN_LIVE_PREFIX,
     env: "HOME_WEB_DEN_LIVE_TARGET",
     target: envTarget("HOME_WEB_DEN_LIVE_TARGET", "http://127.0.0.1:8111/api/den-live"),
@@ -679,7 +696,13 @@ function hasValidAuth(req) {
   return { ok, setCookie: ok };
 }
 
+const SERVE_ADMITTED = Symbol("serveAdmitted");
+function browserAdmitted(req) {
+  return req[SERVE_ADMITTED] === true || hasValidAuth(req).ok;
+}
+
 function requireAuth(req, res) {
+  if (req[SERVE_ADMITTED] === true) return true;
   const auth = hasValidAuth(req);
   if (auth.ok) {
     if (auth.setCookie && res) setAuthCookie(res);
@@ -984,6 +1007,17 @@ function sendAuthPage(req, res, { mode = "login", status = 200 } = {}) {
 }
 
 async function handleAuthRoute(req, res, parsed) {
+  if (req[SERVE_ADMITTED]) {
+    if (parsed.pathname === "/auth/status" && req.method === "GET") {
+      return sendJson(res, 200, { ok: true, authEnabled: false, authenticated: true, authorityTag: serveAuthorityTag,
+        username: null, lookOnly: false, access: "serve" });
+    }
+    if ((parsed.pathname === "/auth" || parsed.pathname === "/auth/") && ["GET", "HEAD"].includes(req.method)) {
+      res.writeHead(303, { Location: "/", "Cache-Control": "no-store" });
+      return res.end();
+    }
+    return sendJson(res, 404, { ok: false, error: "not_found" });
+  }
   if (parsed.pathname === "/auth" || parsed.pathname === "/auth/") {
     sendAuthPage(req, res, { mode: hasValidAuth(req).ok ? "account" : "login" });
     return;
@@ -1248,7 +1282,14 @@ function sendIndex(req, res, filePath, { lookOnly = false } = {}) {
     const haProxyRuntime = haTokenProxy.enabled
       ? `window.__HOME_WEB_HA_TOKEN_PROXY=true;window.__HOME_WEB_HA_TOKEN=${jsString(HA_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}${DEN_LIVE_ENABLED ? denLiveRuntime() + denLabelsRuntime() : ""}${lookOnly ? lookOnlyRuntime() : ""}</script>`;
+    const serve = req[SERVE_ADMITTED] === true;
+    const den = DEN_LIVE_ENABLED
+      ? denLiveRuntime({ bodyV2: !lookOnly && DEN_BODY_V2, virtual: DEN_VIRTUAL, coordinator: !serve || DEN_VIRTUAL }) + denLabelsRuntime()
+      : "";
+    const serveRuntime = serve
+      ? `window.HomeServe=Object.freeze({active:true,bridgeManaged:${!!serveBridgeCredential && envEnabled("HOME_WEB_ENABLE_LEGACY_BRIDGE_PROXY")}});`
+      : "";
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}${den}${serveRuntime}${lookOnly ? lookOnlyRuntime() : ""}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -1256,6 +1297,7 @@ function sendIndex(req, res, filePath, { lookOnly = false } = {}) {
       "Content-Length": Buffer.byteLength(body),
       "Cache-Control": "no-store",
       "ETag": etag,
+      ...(serve ? { "Content-Security-Policy": "frame-ancestors 'none'" } : {}),
     });
     if (req.method === "HEAD") res.end();
     else res.end(body);
@@ -1456,7 +1498,7 @@ function serveStatic(req, res, { lookOnly = false } = {}) {
     return;
   }
   if (pathname === "/index.html") {
-    if (!legacyHaProxyEnabled) {
+    if (!legacyHaProxyEnabled && !req[SERVE_ADMITTED]) {
       sendLegacyHomeQuarantine(req, res);
       return;
     }
@@ -1629,7 +1671,17 @@ function proxyHttp(req, res, route) {
     return;
   }
 
-  const targetUrl = buildTargetUrl(route, suffix);
+  const upstreamSuffix = route.prefix === DEN_LIVE_PREFIX
+    ? denLiveUpstreamSuffix(suffix, denLiveRouteKind(req.method, suffix), {
+      bodyV2: DEN_BODY_V2, virtual: DEN_VIRTUAL, serve: req[SERVE_ADMITTED] === true,
+    })
+    : suffix;
+  if (upstreamSuffix === null) {
+    req.resume();
+    sendCapabilityDisabled(res, "den_live_route");
+    return;
+  }
+  const targetUrl = buildTargetUrl(route, upstreamSuffix);
   const nativeAgentRequest = route.prefix === "/api/agent" && isNativeAgentRoute(req.method, suffix);
   if (nativeAgentRequest) {
     void proxyNativeHttp(req, res, route, suffix, targetUrl);
@@ -1646,6 +1698,24 @@ function proxyHttp(req, res, route) {
     if (responseTimer) clearTimeout(responseTimer);
     let headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
+    if (route.prefix === DEN_LIVE_PREFIX && upstreamSuffix.endsWith("/body-v2") &&
+      (upstreamRes.statusCode !== 200 || !/^text\/event-stream(?:;|$)/i.test(headers["content-type"] || ""))) {
+      upstreamRes.resume();
+      sendJson(res, 503, { ok: false, error: "den_body_unavailable" });
+      return;
+    }
+    if (req[SERVE_ADMITTED]) {
+      delete headers["set-cookie"];
+      delete headers["www-authenticate"];
+      delete headers["access-control-allow-origin"];
+      delete headers["access-control-allow-credentials"];
+      if (upstreamRes.statusCode >= 300 && upstreamRes.statusCode < 400 && headers.location &&
+        !/^\/(?![\/\\])/.test(headers.location)) {
+        upstreamRes.resume();
+        sendJson(res, 502, { ok: false, error: "upstream_redirect_denied" });
+        return;
+      }
+    }
     if (route.transformResponseHeaders) {
       headers = route.transformResponseHeaders(headers, suffix, upstreamRes) || headers;
     }
@@ -1785,6 +1855,10 @@ function proxyUpgrade(req, socket, head, route) {
     return;
   }
   const targetUrl = buildTargetUrl(route, suffix);
+  if (req[SERVE_ADMITTED] && route.prefix === "/proxy/bridge" && suffix.split("?", 1)[0] === "/s2s") {
+    targetUrl.searchParams.delete("token");
+    if (serveBridgeCredential) targetUrl.searchParams.set("token", serveBridgeCredential);
+  }
   if (targetUrl.protocol === "https:") {
     socket.write("HTTP/1.1 501 Not Implemented\r\n\r\nTLS websocket upstreams are not supported by this gateway");
     socket.destroy();
@@ -1852,13 +1926,13 @@ function checkConfig() {
     routes: routeSummary(),
   };
   console.log(JSON.stringify(summary, null, 2));
-  return agentOriginBoundary.valid;
+  return agentOriginBoundary.valid && (!SERVE_ORIGIN_CONFIG || !!SERVE_ORIGIN);
 }
 
-const contentPackHandler = createContentPackHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: req => hasValidAuth(req).ok });
-const lightingLayerHandler = createLightingLayerHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: req => hasValidAuth(req).ok });
+const contentPackHandler = createContentPackHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: browserAdmitted });
+const lightingLayerHandler = createLightingLayerHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: browserAdmitted });
 const equipmentRegistrationHandler = createEquipmentRegistrationGateway({
-  env: { ...process.env, HOME_CONTENT_PACKS_DIR: CONTENT_PACKS_DIR }, authenticate: req => hasValidAuth(req).ok, readOnly: true,
+  env: { ...process.env, HOME_CONTENT_PACKS_DIR: CONTENT_PACKS_DIR }, authenticate: browserAdmitted, readOnly: true,
 });
 
 // Explicit, server-only Victoria read configuration. Never inherit the stack
@@ -1895,7 +1969,7 @@ try { denLabCa = readLabConfigFile(process.env.HOME_WEB_DEN_LAB_CA_FILE, 65536);
 const perceptionLabReadHandler = createPerceptionLabReadHandler({
   origin: process.env.HOME_WEB_DEN_LAB_ORIGIN, ca: denLabCa,
   credential: () => readLabConfigFile(process.env.HOME_WEB_DEN_LAB_READ_TOKEN_FILE, 1024, true).toString("utf8").trim(),
-  authenticate: req => hasValidAuth(req).ok, timeoutMs: 5000, maxConcurrent: 4,
+  authenticate: browserAdmitted, timeoutMs: 5000, maxConcurrent: 4,
 });
 function labReadOriginAllowed(req) {
   if (["same-site", "cross-site"].includes(req.headers["sec-fetch-site"])) return false;
@@ -1982,6 +2056,13 @@ const server = http.createServer({
   maxHeaderSize: 16 * 1024,
   requireHostHeader: true,
 }, async (req, res) => {
+  const serve = SERVE_ORIGIN_CONFIG ? serveHomeAdmission(req, SERVE_ORIGIN) : null;
+  if (serve === false) {
+    req.resume();
+    sendJson(res, 403, { ok: false, error: "serve_request_denied" });
+    return;
+  }
+  req[SERVE_ADMITTED] = serve === true;
   const parsed = new URL(req.url, "http://home.local");
   const agentContext = classifyAgentOrigin(req.headers, agentOriginBoundary);
   const nativeAgentContext = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
@@ -2056,6 +2137,11 @@ const server = http.createServer({
     return;
   }
 
+  if (parsed.pathname === SERVE_LIGHTING_PREFIX || parsed.pathname.startsWith(SERVE_LIGHTING_PREFIX + "/")) {
+    await serveLightingRelay(req, res, serve === true);
+    return;
+  }
+
   if (parsed.pathname === DEN_OPS_PREFIX || parsed.pathname.startsWith(DEN_OPS_PREFIX + "/")) {
     await handleDenOps(req, res, {
       pathname: parsed.pathname,
@@ -2084,18 +2170,24 @@ const server = http.createServer({
     return;
   }
   const disabledRoute = findDisabledRoute(parsed.pathname);
-  if (route?.prefix === DEN_LIVE_PREFIX && req.method === "GET" && hasBody(req)) {
-    // den-live gets no body: its headers carry no framing for one.
-    req.resume();
-    sendJson(res, 400, { ok: false, error: "unexpected_body" });
-  } else if (disabledRoute) {
-    sendCapabilityDisabled(res, `legacy_proxy:${disabledRoute.prefix.slice("/proxy/".length)}`);
-  } else if (route?.prefix === DEN_LIVE_PREFIX && req.method === "PUT") {
-    // The den's labels save (den-live-route.mjs): signed in (requireAuth above), its own header, a framed JSON body.
-    const problem = denLabelsSaveProblem(req.headers);
-    if (problem) { req.resume(); sendJson(res, problem[0], { ok: false, error: problem[1] }); }
-    else proxyHttp(req, res, route);
-  } else if (route) proxyHttp(req, res, route);
+  if (disabledRoute) {
+    sendCapabilityDisabled(res, disabledRoute.prefix === DEN_LIVE_PREFIX ? "den_live" : `legacy_proxy:${disabledRoute.prefix.slice("/proxy/".length)}`);
+    return;
+  }
+  if (route?.prefix === DEN_LIVE_PREFIX) {
+    const suffix = req.url.slice(DEN_LIVE_PREFIX.length);
+    const kind = req.url.startsWith(DEN_LIVE_PREFIX + "/") ? denLiveRouteKind(req.method, suffix) : null;
+    const problem = !kind ? [403, "den_live_path_not_allowed"]
+      : req.method === "GET" && hasBody(req) ? [400, "unexpected_body"]
+      : kind === "labels" ? denLabelsSaveProblem(req.headers) : null;
+    const refusal = kind === "coordinator-write" ? denLiveWriteRefusal(req.method, suffix, req.headers) : null;
+    if (problem || refusal) {
+      req.resume();
+      sendJson(res, problem?.[0] ?? refusal.status, { ok: false, error: problem?.[1] ?? refusal.error });
+      return;
+    }
+  }
+  if (route) proxyHttp(req, res, route);
   else serveStatic(req, res);
 });
 
@@ -2107,6 +2199,12 @@ server.on("upgrade", (req, socket, head) => {
   // HTTP relinquishes upgraded sockets. A client reset must retire this
   // connection, rather than emit an unhandled error and terminate Home.
   socket.on("error", () => socket.destroy());
+  const serve = SERVE_ORIGIN_CONFIG ? serveHomeAdmission(req, SERVE_ORIGIN, { upgrade: true }) : null;
+  if (serve === false) {
+    socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+    return;
+  }
+  req[SERVE_ADMITTED] = serve === true;
   const browserAgentUpgrade = classifyAgentOrigin(req.headers, agentOriginBoundary);
   const nativeAgentUpgrade = classifyAgentOrigin(req.headers, nativeAgentOriginBoundary);
   if (browserAgentUpgrade.agentHost || nativeAgentUpgrade.agentHost) {
@@ -2114,7 +2212,7 @@ server.on("upgrade", (req, socket, head) => {
     socket.destroy();
     return;
   }
-  if (!hasValidAuth(req).ok) {
+  if (!browserAdmitted(req)) {
     socket.write(`HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nauthentication required`);
     socket.destroy();
     return;
@@ -2132,11 +2230,11 @@ server.on("upgrade", (req, socket, head) => {
   proxyUpgrade(req, socket, head, route);
 });
 
-// The Serve listener (HOME_WEB_SERVE_PORT): loopback connections that start with a PROXY line only. Tailscale Serve
-// forwards here with --proxy-protocol=1; the look-only view is served on this listener alone.
-if (SERVE_PORT) {
-  proxyProtocolListener(server, { required: true }).listen(SERVE_PORT, HOST, () => {
-    console.log(`Serve listener (PROXY line required) on ${HOST}:${SERVE_PORT}${LOOK_ONLY_ENABLED ? "; look-only on" : ""}`);
+// Tailscale Serve terminates TLS and prepends a PROXY v1 line on this dedicated loopback port.
+if (validServePort) {
+  proxyProtocolListener(server, { required: true }).listen(SERVE_PORT, "127.0.0.1", () => {
+    const mode = SERVE_ORIGIN ? "; full Home" : LOOK_ONLY_ENABLED ? "; look-only on" : "";
+    console.log(`Serve listener (PROXY line required) on 127.0.0.1:${SERVE_PORT}${mode}`);
   });
 } else if (lookOnlyEnabled(process.env)) {
   console.warn("Look-only stays off: it needs HOME_WEB_SERVE_PORT, the port Tailscale Serve forwards to with --proxy-protocol=1.");

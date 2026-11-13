@@ -1248,19 +1248,40 @@ def render_tapes(plane, k, pose):
     return float(pose[2, 3]), abs(wall - pose[axis, 3] * sign)
 
 
-def scaled_take(factor):
-    """The marks take's usable frames with their depth times factor, as a take the fake camera serves."""
-    folder = TMP / ('marks-x%g' % factor)
+def changed_take(name, change):
+    """The marks take's usable frames, each bundle through change, as a take the fake camera serves."""
+    folder = TMP / name
     if not (folder / 'check-1.json').is_file():
         check = json.loads((MARKS / 'check-1.json').read_text(encoding='utf-8'))
         spans = [(s['first_n'], s['last_n']) for s in check['usable']['segments']]
         rows = [r for r in marks_rows() if any(a <= int(r['n']) <= b for a, b in spans)]
-        datas = [rn.scale_bundle(R, (MARKS / r['file']).read_bytes(), factor) for r in rows]
+        datas = [change((MARKS / r['file']).read_bytes()) for r in rows]
         rows = [dict(r, n=str(i)) for i, r in enumerate(rows, 1)]   # a take numbers its frames from 1
         write_take(folder, rows, datas)
         check['usable']['segments'] = [{**check['usable']['segments'][0], 'first_n': 1, 'last_n': len(rows)}]
         (folder / 'check-1.json').write_text(json.dumps(check), encoding='utf-8')
     return folder
+
+
+def scaled_take(factor):
+    """The marks take's usable frames with their depth times factor."""
+    return changed_take('marks-x%g' % factor, lambda data: rn.scale_bundle(R, data, factor))
+
+
+def bent_take(floor_f, rest_w, pose):
+    """The marks take's usable frames with the floor's depth times (1 + floor_f) and every other pixel's times
+    (1 + rest_w): the floor and the walls apart by (floor_f - rest_w) x 100 points, as the depth check measures a bend.
+    The floor is each pixel the set's own registration puts within 5 cm of z = 0."""
+    def bend(data):
+        k = R.scene.read_bundle(data)['intrinsics']
+
+        def depth(old):
+            z = old.reshape(rn.HEIGHT, rn.WIDTH).astype(np.float64)
+            floor = np.abs(rn.lift(z / 1000, k, pose)[..., 2]) <= 0.05
+            new = np.rint(z * np.where(floor, 1 + floor_f, 1 + rest_w))
+            return np.where(z > 0, np.clip(new, 1, 65535), 0).reshape(-1)
+        return rn.rewrite_depth(R, data, depth)
+    return changed_take('marks-bent%+g%+g' % (floor_f, rest_w), bend)
 
 
 @unittest.skipUnless(NODE and (FIT / 'room-model.jsonl').is_file() and (MARKS / 'check-1.json').is_file(),
@@ -1536,6 +1557,46 @@ class OnRenders(unittest.TestCase):
         self.assertGreater(receipt['sofa_check_errors_m']['c2'], 0.10)
         self.assertLess(receipt['sofa_check_errors_m']['c2'], 0.15)
         self.assertNotIn('held_out', receipt, 'no held-out take after a failed sofa check')
+
+    # ---- the owner's thresholds, kept (2026-11-13): a bend up to 5 points, no scale within 1.5%, and the held-out take
+    # at 75% with 1 m bins up to 10 cm. The held-out take is judged at den-register's fitted pose, fitted to clicks on
+    # the same bent depth, so a bend the depth check allows passes it.
+
+    def bent_paste(self, mean, bend=0.044):
+        """The floor's depth bend/2 long of mean and the rest bend/2 short, as the depth check measures them (the
+        render's own floor and wall, against its tapes, are where it starts), through the whole paste: the depth check,
+        den-register's fit and held_out() on a held-out take of the same bent depth."""
+        start = rn.scale_check(rn.camera_points(self.plane, self.k), {'lens_height_m': self.height, 'facing_wall_m': self.wall}, LIVE)
+        floor_f = (1 + mean + bend / 2) / (1 + start['floor_pct'] / 100) - 1
+        rest_w = (1 + mean - bend / 2) / (1 + start['wall_pct'] / 100) - 1
+        self.camera.show(bent_take(floor_f, rest_w, self.pose))
+        code, text = self.paste(clicker=self.clicker(), picker=self.picker(), shower=lambda w, t: None)
+        receipt = self.receipt()
+        check, held = receipt['scale_check'], receipt.get('held_out') or {}
+        found = ('floor %.2f%%, rest %.2f%%: depth check %s, bend %.2f points, mean %.2f%%; fit %s; held-out floor %s, '
+                 'upper %s within noise, worst bin %s m'
+                 % (floor_f * 100, rest_w * 100, check['result'], check['bend_pts'], check['mean_pct'],
+                    (receipt.get('fit') or {}).get('result'), (held.get('floor') or {}).get('within_noise'),
+                    (held.get('upper') or {}).get('within_noise'), held.get('worst_bin_m')))
+        self.assertEqual((check['result'], code), ('none', 0), found + '\n' + self.summary(text))
+        self.assertAlmostEqual(check['bend_pts'], bend * 100, delta=0.15, msg=found)
+        self.assertAlmostEqual(check['mean_pct'], mean * 100, delta=0.08, msg=found)
+        self.assertLess(check['bend_pts'], LIVE['scale_bend_max_pts'], found)
+        self.assertEqual(receipt['fit']['result'], 'registered', found)
+        self.assertTrue(held['ok'], found)
+        self.assertGreaterEqual(min(held['floor']['within_noise'], held['upper']['within_noise']), LIVE['held_within_min'], found)
+        self.assertLessEqual(held['worst_bin_m'], LIVE['held_bin_max_m'], found)
+        self.assertTrue(receipt['qualified'], found)
+        self.assert_block(text, qualified=True)
+
+    def test_a_bend_of_4_4_points_at_mean_0_passes_at_the_fitted_pose(self):
+        self.bent_paste(0.0)
+
+    def test_a_bend_of_4_4_points_at_mean_plus_1_4_percent_passes_at_the_fitted_pose(self):
+        self.bent_paste(0.014)
+
+    def test_a_bend_of_4_4_points_at_mean_minus_1_4_percent_passes_at_the_fitted_pose(self):
+        self.bent_paste(-0.014)
 
     # ---- the rest of the paste
 

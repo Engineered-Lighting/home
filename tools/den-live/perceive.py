@@ -355,6 +355,8 @@ class Perceiver:
     step in the wall clock (time sync) can't send it backwards or stall it. Events carry wall-clock times: emitted_ts is
     now, capture_ts is now less how long ago the frame was captured."""
 
+    depth_scale, depth_table = 1.0, None   # step 2's depth scale and its table; __init__ sets them from the registration
+
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
                  require_source_correction=True, content_revision=None, now=time.time, depth_scale=1.0):
         self.t, self.detector, self.home, self.now = tools, detector, home, now
@@ -555,7 +557,9 @@ class Perceiver:
             person["head_evidence"] = value.head_evidence
         rotation, translation = self.camera.room_from_left
         setup = {"binding": binding, "left_k": list(self.camera.rig.left_k[:4]),
-                 "room_from_left": [[list(r) for r in rotation], list(translation)], "depth_scale": self.depth_scale}
+                 "room_from_left": [[list(r) for r in rotation], list(translation)]}
+        if self.depth_scale != 1.0:   # body.py takes none as 1.0, so at 1.0 the setup is as it always was
+            setup["depth_scale"] = self.depth_scale
         self.body.prepare(scope, binding, person["track_id"] if person else None)
         return dict(frame_key=value.frame_key, scope=scope, setup=setup, capture_mono=value.capture_earliest_mono,
                     observation=value.observation, person=person)

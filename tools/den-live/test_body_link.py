@@ -163,6 +163,8 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(request["setup"], SETUP)
         self.assertEqual(request["frame_key"], "exact")
         self.assertEqual(request["person"]["head_evidence"], evidence)
+        perceiver.depth_scale = 0.971   # step 2's depth scale reaches the figure's depth through the setup
+        self.assertEqual(perceiver._body_request(data)["setup"], {**SETUP, "depth_scale": 0.971})
 
     def pipeline_process(self, mode, provider):
         calls = []

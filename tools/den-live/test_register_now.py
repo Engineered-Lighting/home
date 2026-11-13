@@ -627,46 +627,110 @@ def box_depth(pose, table=None):
     return np.where(np.isfinite(best), best, 0.0)
 
 
+def turned(pose, axis, deg, about='room'):
+    """pose turned by deg about the room's vertical (about='room', axis 'z': a yaw), or about the camera's own x (a pitch)
+    or z (a roll), the camera staying where it is."""
+    a = math.radians(deg)
+    c, s = math.cos(a), math.sin(a)
+    turn = np.array({'x': [[1, 0, 0], [0, c, -s], [0, s, c]], 'z': [[c, -s, 0], [s, c, 0], [0, 0, 1]]}[axis])
+    out = pose.copy()
+    out[:3, :3] = turn @ pose[:3, :3] if about == 'room' else pose[:3, :3] @ turn
+    return out
+
+
+def moved(pose, by):
+    out = pose.copy()
+    out[:3, 3] += by
+    return out
+
+
 class HeldOut(unittest.TestCase):
+    """The held-out take judged in the room: the take's depth lifted through the registration, the floor's pixels
+    against z = 0, the upper walls' against the scan's surface. On a synthetic box room, ray-cast for the camera's view
+    and sampled every 2 cm for the scan."""
     pose = look_pose([2.0, 0.3, 1.4], yaw_deg=5)
 
-    def check(self, measured_pose, scan_pose=None, table=None, measured=None):
-        expected, stable = rn.expected_depth(box_points(table=table), scan_pose if scan_pose is not None else measured_pose, K, LIVE)
-        return rn.held_out_numbers(expected, stable, box_depth(measured_pose, table) if measured is None else measured, LIVE)
+    def check(self, registration, table=None, measured=None):
+        """The camera is at self.pose; the registration says registration."""
+        depth = box_depth(self.pose, table) if measured is None else measured
+        return rn.held_out_check(box_points(table=table), registration, K, depth, LIVE)
+
+    def assert_passes(self, found):
+        self.assertTrue(found['ok'], found)
+        self.assertGreaterEqual(min(found['floor']['within_noise'], found['upper']['within_noise']), LIVE['held_within_min'])
 
     def test_the_true_pose_passes(self):
         found = self.check(self.pose)
-        self.assertTrue(found['ok'], found)
-        self.assertGreater(found['within_noise'], 0.95)
-        self.assertLess(abs(found['worst_bin_m']), 0.03)
-        self.assertGreater(found['pixels'], 20000)
-        self.assertEqual(rn.held_line(found), 'Held-out take: %.0f%% of floor and upper-wall pixels within noise; worst '
-                                              'range bin %+.1f cm.' % (found['within_noise'] * 100, found['worst_bin_m'] * 100))
+        self.assert_passes(found)
+        self.assertGreater(found['within_noise'], 0.97)
+        self.assertLess(found['worst_bin_m'], 0.01)
+        self.assertGreater(min(found['floor']['pixels'], found['upper']['pixels']), LIVE['held_min_pixels'])
+        self.assertEqual(rn.held_line(found), 'Held-out take: %.0f%% of floor and %.0f%% of upper-wall pixels within noise; '
+                                              'worst range bin %.1f cm.' % (found['floor']['within_noise'] * 100,
+                                                                            found['upper']['within_noise'] * 100,
+                                                                            found['worst_bin_m'] * 100))
 
-    def test_a_shifted_pose_is_not_qualified(self):
-        shifted = self.pose.copy()
-        shifted[:3, 3] += [0.0, 0.15, 0.10]   # the registration 15 cm forward and 10 cm up of where the camera is
-        found = self.check(self.pose, scan_pose=shifted)
+    def test_a_registration_30_cm_to_the_side_fails(self):
+        """Depth along each pixel's ray was blind to this: the floor and the facing wall slide along themselves. The
+        side walls don't, and the upper surfaces are judged on their own."""
+        found = self.check(moved(self.pose, [0.30, 0.0, 0.0]))
+        self.assertFalse(found['ok'])
+        self.assertGreater(found['floor']['within_noise'], 0.9, 'the floor alone would pass')
+        self.assertLess(found['upper']['within_noise'], LIVE['held_within_min'])
+        self.assertIn('upper-wall pixels', found['why'])
+
+    def test_a_registration_turned_5_degrees_fails(self):
+        found = self.check(turned(self.pose, 'z', 5))   # about 26 cm at 3 m
+        self.assertFalse(found['ok'])
+        self.assertGreater(found['floor']['within_noise'], 0.9, 'a turn about the vertical leaves the floor where it is')
+        self.assertLess(found['upper']['within_noise'], LIVE['held_within_min'])
+
+    def test_a_pose_error_of_a_few_centimetres_passes(self):
+        """Pitch 0.75 degrees (about 4 cm at 3 m), or the registration 3 cm off: inside what the beam needs."""
+        for registration in (turned(self.pose, 'x', 0.75, about='camera'), moved(self.pose, [0.03, 0.0, 0.0]),
+                             moved(self.pose, [0.0, 0.03, 0.0]), moved(self.pose, [0.0, 0.0, 0.03])):
+            found = self.check(registration)
+            self.assert_passes(found)
+            self.assertLessEqual(found['worst_bin_m'], 0.06)
+
+    def test_a_registration_15_cm_forward_and_10_cm_up_fails(self):
+        found = self.check(moved(self.pose, [0.0, 0.15, 0.10]))
         self.assertFalse(found['ok'])
         self.assertIsNotNone(found['why'])
-        self.assertGreater(abs(found['worst_bin_m']), 0.10)
+        self.assertLess(found['floor']['within_noise'], LIVE['held_within_min'], 'the floor 10 cm off z = 0')
+        self.assertGreater(found['upper']['worst_bin_m'], LIVE['held_bin_max_m'], 'the facing wall 15 cm off')
 
     def test_furniture_hides_the_floor_behind_it(self):
         """A table in the room and in the scan: the floor behind it isn't compared with the table's depth."""
         table = (1.2, 2.8, 2.0, 2.8, 0.75)
         found = self.check(self.pose, table=table)
-        self.assertTrue(found['ok'], found)
-        self.assertGreater(found['within_noise'], 0.95)
+        self.assert_passes(found)
+        self.assertGreater(found['within_noise'], 0.97)
 
-    def test_a_scale_off_by_five_percent_shows_in_the_far_bins(self):
+    def test_a_scale_off_by_five_percent_fails(self):
         found = self.check(self.pose, measured=box_depth(self.pose) * 1.05)
         self.assertFalse(found['ok'])
         self.assertGreater(found['worst_bin_m'], 0.10)
 
-    def test_too_few_stable_pixels_cant_pass(self):
+    def test_too_few_pixels_of_either_surface_cant_pass(self):
         found = self.check(self.pose, measured=np.zeros((rn.HEIGHT, rn.WIDTH)))
         self.assertEqual((found['ok'], found['within_noise']), (False, None))
-        self.assertIn('floor and upper-wall pixels to compare', found['why'])
+        self.assertIn('floor pixels to compare', found['why'])
+        no_upper = box_depth(self.pose)
+        no_upper[:150] = 0   # the top of the picture, where the upper walls are, has no depth
+        found = self.check(self.pose, measured=no_upper)
+        self.assertFalse(found['ok'])
+        self.assertIn('upper-wall pixels to compare', found['why'])
+        self.assertEqual(rn.held_line(found), 'Held-out take: %s.' % found['why'])
+
+    def test_a_point_off_the_surface_is_its_distance_and_one_past_the_edge_too(self):
+        wall = np.array([[x, 5.0, z] for x in np.arange(0, 2, 0.02) for z in np.arange(1.8, 2.6, 0.02)])
+        planes = rn.surface_planes(wall)
+        residual = rn.surface_residual(np.array([[1.0, 5.0, 2.2], [1.0, 4.93, 2.2], [1.0, 5.0, 2.2 + 0.0],
+                                                 [2.12, 5.0, 2.2], [1.0, 4.5, 2.2]]), planes)
+        np.testing.assert_allclose(residual[:3], [0.0, 0.07, 0.0], atol=0.005)
+        self.assertGreater(residual[3], 0.05, 'beyond the wall\'s edge, along its plane')
+        self.assertEqual(residual[4], rn.RESIDUAL_CAP_M, 'no surface within reach')
 
 
 def ply_bytes(points):
@@ -722,7 +786,8 @@ class Summary(unittest.TestCase):
             'fit': {'result': 'registered', 'transform_id': 'den-oak@2026-11-13.1',
                     'numbers': {'n_fit': 6, 'n_check': 3, 'residual_min_m': 0.004, 'residual_max_m': 0.031,
                                 'loo_max_m': 0.052, 'checks_m': {'c1': 0.021, 'c2': 0.034, 'c3': 0.018}, 'error_bound_m': 0.052}},
-            'held_out': {'within_noise': 0.912, 'worst_bin_m': -0.043}, 'qualified': True}
+            'held_out': {'within_noise': 0.884, 'worst_bin_m': 0.043, 'floor': {'within_noise': 0.931},
+                         'upper': {'within_noise': 0.884}}, 'qualified': True}
         receipt.update(changes)
         return receipt
 
@@ -736,7 +801,7 @@ class Summary(unittest.TestCase):
             'Distance check: 9 agree; median pair difference 1.2 cm.',
             'Fit: 6 fit + 3 check. Residuals 0.4-3.1 cm. Leave-one-out worst 5.2 cm. Sofa checks 2.1, 3.4, 1.8 cm.',
             'REGISTERED den-oak@2026-11-13.1: gate 15 cm, error bound 5.2 cm.',
-            'Held-out take: 91% of floor and upper-wall pixels within noise; worst range bin -4.3 cm.',
+            'Held-out take: 93% of floor and 88% of upper-wall pixels within noise; worst range bin 4.3 cm.',
             'QUALIFIED: yes'])
 
     def test_no_scale_and_a_reason_not_to_qualify(self):
@@ -1215,7 +1280,7 @@ class OnRenders(unittest.TestCase):
                   r'^Fit: 6 fit \+ 3 check\. Residuals \d+\.\d-\d+\.\d cm\. Leave-one-out worst \d+\.\d cm\. Sofa checks '
                   r'\d+\.\d, \d+\.\d, \d+\.\d cm\.$',
                   r'^REGISTERED den-oak@\d{4}-\d{2}-\d{2}\.\d+: gate 15 cm, error bound \d+\.\d cm\.$',
-                  r'^Held-out take: \d+% of floor and upper-wall pixels within noise; worst range bin [+-]\d+\.\d cm\.$',
+                  r'^Held-out take: \d+% of floor and \d+% of upper-wall pixels within noise; worst range bin \d+\.\d cm\.$',
                   r'^QUALIFIED: yes$' if qualified else r'^QUALIFIED: no, because .+\.$']
         self.assertEqual(len(block), len(shapes), block)
         for line, shape in zip(block, shapes):

@@ -100,9 +100,10 @@ the camera or its mount, and take two fresh tapes, as on 2026-11-11.
    named, worst first, and the paste stops. Between 6 and 15 cm it's only noted in one line, and the paste goes on.
 8. **The fit.** den-register fits with a 0.15 m gate, then each sofa check must be within 10 cm. It prints
    `REGISTERED den-oak@<date>.<n>` or `REFUSED` with each reason.
-9. **The held-out take, 20 s.** "Leave the view again." Your scan's floor and upper walls, seen from the new
-   registration, are compared with this take's depth: at least 75% must be within noise, and no 1 m range bin's median
-   may be off by more than 10 cm.
+9. **The held-out take, 20 s.** "Leave the view again." This take's depth is carried into the room through the new
+   registration and compared there with your scan: the floor against the floor, the upper walls against the scan's
+   walls and ceiling, each on its own. Each needs at least 75% within noise, and no 1 m range bin's median may be off
+   by more than 10 cm.
 10. **On a pass,** your scan opens again with the camera where the fit put it, and your nine features as the camera
     sees them. Each dot should sit on its feature. Press Done.
 

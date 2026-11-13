@@ -973,11 +973,17 @@ def scan_points(packs, site, revision):
         return None, "the scan's points.ply doesn't read"
 
 
-def expected_depth(points, room_from_camera, k, live):
-    """The scan seen from the camera: (z per pixel, metres, NaN where nothing; whether that nearest point is on a
-    stable surface). Every point is z-buffered, so furniture hides the floor behind it as it does for the camera; each
-    point covers its 3 x 3 pixels, and a pixel well behind its 5 x 5 neighbourhood's nearest is a gap in the points,
-    not a surface, so it's dropped."""
+FLOOR, UPPER = 1, 2                     # what the scan shows at a pixel: its floor, or a surface above held_wall_min_z_m
+SURFACE_VOXEL_M, SURFACE_REACH = 0.05, 3   # the scan's local planes: 5 cm voxels, searched 3 voxels each way
+SURFACE_BELOW_M = 0.25                  # local planes from this far below held_wall_min_z_m: an upper point just under it
+RESIDUAL_CAP_M = 0.20                   # no local plane within reach: counted as this far off, past every limit
+
+
+def scan_view(points, room_from_camera, k, live):
+    """Which surface of the scan each pixel sees from the registration: FLOOR (within held_floor_band_m of z = 0),
+    UPPER (at or above held_wall_min_z_m) or 0. Every point is z-buffered, so furniture hides the floor behind it as it
+    does for the camera; each point covers its 3 x 3 pixels, and a pixel well behind its 5 x 5 neighbourhood's nearest
+    is a gap in the points, not a surface, so it's 0. Only the labels are used: the pose is judged in the room."""
     import numpy as np
     from numpy.lib.stride_tricks import sliding_window_view
     M = np.asarray(room_from_camera, dtype=np.float64)
@@ -986,60 +992,150 @@ def expected_depth(points, room_from_camera, k, live):
     z = cam[:, 2]
     ahead = z > 0.2
     cam, room_z, z = cam[ahead], points[ahead, 2], z[ahead]
-    stable = (np.abs(room_z) <= live["held_floor_band_m"]) | (room_z >= live["held_wall_min_z_m"])
+    kind = np.where(np.abs(room_z) <= live["held_floor_band_m"], FLOOR,
+                    np.where(room_z >= live["held_wall_min_z_m"], UPPER, 0)).astype(np.int8)
     u = np.rint(k["fx"] * cam[:, 0] / z + k["cx"]).astype(np.int64)
     v = np.rint(k["fy"] * cam[:, 1] / z + k["cy"]).astype(np.int64)
-    pixel, depth, kind = [], [], []
+    pixel, depth, kinds = [], [], []
     for du in (-1, 0, 1):
         for dv in (-1, 0, 1):
             uu, vv = u + du, v + dv
             inside = (uu >= 0) & (uu < WIDTH) & (vv >= 0) & (vv < HEIGHT)
             pixel.append(vv[inside] * WIDTH + uu[inside])
             depth.append(z[inside])
-            kind.append(stable[inside])
-    pixel, depth, kind = np.concatenate(pixel), np.concatenate(depth), np.concatenate(kind)
+            kinds.append(kind[inside])
+    pixel, depth, kinds = np.concatenate(pixel), np.concatenate(depth), np.concatenate(kinds)
     zbuf = np.full(WIDTH * HEIGHT, np.inf)
-    on_stable = np.zeros(WIDTH * HEIGHT, bool)
+    label = np.zeros(WIDTH * HEIGHT, np.int8)
     if len(pixel):
         order = np.lexsort((depth, pixel))
-        pixel, depth, kind = pixel[order], depth[order], kind[order]
+        pixel, depth, kinds = pixel[order], depth[order], kinds[order]
         first = np.r_[True, pixel[1:] != pixel[:-1]]
-        zbuf[pixel[first]], on_stable[pixel[first]] = depth[first], kind[first]
-    zbuf, on_stable = zbuf.reshape(HEIGHT, WIDTH), on_stable.reshape(HEIGHT, WIDTH)
+        zbuf[pixel[first]], label[pixel[first]] = depth[first], kinds[first]
+    zbuf, label = zbuf.reshape(HEIGHT, WIDTH), label.reshape(HEIGHT, WIDTH)
     nearest = sliding_window_view(np.pad(zbuf, 2, constant_values=np.inf), (5, 5)).min(axis=(2, 3))
-    gap = zbuf > nearest + np.maximum(0.05, 0.03 * nearest)
-    zbuf[~np.isfinite(zbuf) | gap] = np.nan
-    return zbuf, on_stable
+    label[~np.isfinite(zbuf) | (zbuf > nearest + np.maximum(0.05, 0.03 * nearest))] = 0
+    return label
 
 
-def held_out_numbers(expected, on_stable, measured, live):
-    """measured: the held-out take's median depth times depth_scale, metres, 0 where none. The share of stable-surface
-    pixels within noise, and the median signed error (measured - scan) per range bin of held_bin_m."""
+def lift(measured, k, room_from_camera):
+    """Every pixel of the held-out take's depth (metres) as a room point through the registration: HEIGHT x WIDTH x 3."""
     import numpy as np
-    mask = np.isfinite(expected) & on_stable & (measured > 0)
-    z, error = expected[mask], measured[mask] - expected[mask]
+    M = np.asarray(room_from_camera, dtype=np.float64)
+    v, u = np.mgrid[0:HEIGHT, 0:WIDTH]
+    cam = np.stack(((u - k["cx"]) * measured / k["fx"], (v - k["cy"]) * measured / k["fy"], measured), -1)
+    return cam @ M[:3, :3].T + M[:3, 3]
+
+
+def _cell_keys(cells):
+    """One int64 per voxel: 21 bits an axis, offset so 5 cm voxels reach 50 km either way."""
+    shifted = cells + (1 << 20)
+    return (shifted[:, 0] << 42) | (shifted[:, 1] << 21) | shifted[:, 2]
+
+
+def surface_planes(points, voxel=SURFACE_VOXEL_M):
+    """The scan's surface as local planes: for each voxel with at least 3 points, its key, centroid and normal (the
+    least-spread direction of its points), sorted by key."""
+    import numpy as np
+    keys = _cell_keys(np.floor(points / voxel).astype(np.int64))
+    unique, inverse, counts = np.unique(keys, return_inverse=True, return_counts=True)
+    inverse = inverse.reshape(-1)
+    centroid = np.stack([np.bincount(inverse, weights=points[:, i], minlength=len(unique)) for i in range(3)], 1)
+    centroid /= counts[:, None]
+    offset = points - centroid[inverse]
+    covariance = np.empty((len(unique), 3, 3))
+    for i in range(3):
+        for j in range(i, 3):
+            covariance[:, i, j] = covariance[:, j, i] = np.bincount(inverse, weights=offset[:, i] * offset[:, j],
+                                                                    minlength=len(unique)) / counts
+    keep = counts >= 3
+    normal = np.linalg.eigh(covariance[keep])[1][:, :, 0]
+    return unique[keep], centroid[keep], normal
+
+
+def surface_residual(queries, planes, voxel=SURFACE_VOXEL_M, reach=SURFACE_REACH, cap=RESIDUAL_CAP_M):
+    """Each room point's distance to the scan's surface: to the local plane of a voxel within reach, plus how far past
+    that voxel's patch it lies along the plane, the smallest over the voxels searched; cap where none is near."""
+    import numpy as np
+    keys, centroid, normal = planes
+    best = np.full(len(queries), np.inf)
+    if not len(keys) or not len(queries):
+        return np.minimum(best, cap)
+    cells = np.floor(queries / voxel).astype(np.int64)
+    patch = voxel * math.sqrt(3) / 2
+    for dx in range(-reach, reach + 1):
+        for dy in range(-reach, reach + 1):
+            for dz in range(-reach, reach + 1):
+                wanted = _cell_keys(cells + (dx, dy, dz))
+                at = np.minimum(np.searchsorted(keys, wanted), len(keys) - 1)
+                hit = keys[at] == wanted
+                if not hit.any():
+                    continue
+                index = at[hit]
+                offset = queries[hit] - centroid[index]
+                across = np.abs((offset * normal[index]).sum(1))
+                along = np.sqrt(np.maximum((offset * offset).sum(1) - across ** 2, 0))
+                best[hit] = np.minimum(best[hit], np.hypot(across, np.maximum(along - patch, 0)))
+    return np.minimum(best, cap)
+
+
+def judge(name, z, residual, live):
+    """One surface's numbers: the share within noise, max(held_noise_min_m, 2 sigma(z)) with z the pixel's range, and
+    the median |residual| per range bin of held_bin_m."""
+    import numpy as np
+    found = {"pixels": int(len(z)), "within_noise": None, "worst_bin_m": None, "bins": []}
     if len(z) < live["held_min_pixels"]:
-        return {"pixels": int(len(z)), "within_noise": None, "worst_bin_m": None, "bins": [], "ok": False,
-                "why": "only %d floor and upper-wall pixels to compare, under %d" % (len(z), live["held_min_pixels"])}
+        return {**found, "why": "only %d %s pixels to compare, under %d" % (len(z), name, live["held_min_pixels"])}
     sigma = live["noise_a_m"] + live["noise_b_per_m"] * z ** 2
-    within = float((np.abs(error) <= np.maximum(live["held_noise_min_m"], 2 * sigma)).mean())
-    bins, worst = [], 0.0
+    found["within_noise"] = round(float((residual <= np.maximum(live["held_noise_min_m"], 2 * sigma)).mean()), 4)
+    worst = 0.0
     index = np.floor(z / live["held_bin_m"]).astype(int)
     for b in np.unique(index):
-        chosen = error[index == b]
+        chosen = residual[index == b]
         if len(chosen) < live["held_bin_min_pixels"]:
             continue
         median = float(np.median(chosen))
-        bins.append({"from_m": round(float(b * live["held_bin_m"]), 2), "pixels": int(len(chosen)),
-                     "median_m": round(median, 4)})
-        worst = median if abs(median) > abs(worst) else worst
-    why = None
-    if within < live["held_within_min"]:
-        why = "%.0f%% within noise, under %.0f%%" % (within * 100, live["held_within_min"] * 100)
-    elif abs(worst) > live["held_bin_max_m"]:
-        why = "a range bin's median error is %s cm, over %.0f cm" % (cm(worst), live["held_bin_max_m"] * 100)
-    return {"pixels": int(len(z)), "within_noise": round(within, 4), "worst_bin_m": round(worst, 4), "bins": bins,
+        found["bins"].append({"from_m": round(float(b * live["held_bin_m"]), 2), "pixels": int(len(chosen)),
+                              "median_m": round(median, 4)})
+        worst = max(worst, median)
+    found["worst_bin_m"] = round(worst, 4)
+    if found["within_noise"] < live["held_within_min"]:
+        found["why"] = "%.0f%% of its %s pixels within noise, under %.0f%%" % (
+            found["within_noise"] * 100, name, live["held_within_min"] * 100)
+    elif worst > live["held_bin_max_m"]:
+        found["why"] = "a range bin of its %s pixels %s cm off, over %.0f cm" % (name, cm(worst), live["held_bin_max_m"] * 100)
+    else:
+        found["why"] = None
+    return found
+
+
+def held_out_numbers(label, measured, room, planes, live):
+    """The held-out take judged in the room. label: scan_view's. measured: the take's median depth times depth_scale,
+    metres, 0 where none. room: those pixels lifted through the registration. A floor pixel's residual is its room
+    height; an upper one's is its distance to the scan's surface (surface_residual). The floor and the upper surfaces are
+    judged apart, so neither can outvote the other: each needs held_within_min within noise, and no range bin of either
+    may be more than held_bin_max_m off. A sideways shift or a turn moves the upper walls off the scan, a tilt or a
+    height error lifts the floor off z = 0; depth along each pixel's ray, as before, was blind to the first two."""
+    import numpy as np
+    floor = (label == FLOOR) & (measured > 0)
+    upper = (label == UPPER) & (measured > 0)
+    surfaces = {"floor": judge("floor", measured[floor], np.abs(room[floor][:, 2]), live),
+                "upper": judge("upper-wall", measured[upper], surface_residual(room[upper], planes), live)}
+    why = next((found["why"] for found in surfaces.values() if found["why"]), None)
+    shares = [found["within_noise"] for found in surfaces.values()]
+    worst = [found["worst_bin_m"] for found in surfaces.values() if found["worst_bin_m"] is not None]
+    return {"floor": surfaces["floor"], "upper": surfaces["upper"], "pixels": int(floor.sum() + upper.sum()),
+            "within_noise": None if None in shares else min(shares), "worst_bin_m": max(worst) if worst else None,
             "ok": why is None, "why": why}
+
+
+def held_out_check(points, room_from_camera, k, measured, live):
+    """The scan against a take's depth (metres, times depth_scale) at a registration: held_out_numbers on scan_view's
+    labels and the lifted pixels."""
+    label = scan_view(points, room_from_camera, k, live)
+    room = lift(measured, k, room_from_camera)
+    planes = surface_planes(points[points[:, 2] >= live["held_wall_min_z_m"] - SURFACE_BELOW_M])
+    return held_out_numbers(label, measured, room, planes, live)
 
 
 def held_out(R, work, take_dir, transform_id, scale, points, live):
@@ -1047,16 +1143,15 @@ def held_out(R, work, take_dir, transform_id, scale, points, live):
     plane, k, _ = median_plane(R, take_dir, live["median_min_valid"])
     models = R.records.read_jsonl(work / R.register.ROOM_MODEL, "room_model_unreadable")
     pose = R.records.resolve(models, transform_id)["entry"]["pose"]["room_from_camera"]
-    expected, on_stable = expected_depth(points, pose, k, live)
-    measured = scaled_plane(plane, scale).astype("float64") / 1000
-    return held_out_numbers(expected, on_stable, measured, live)
+    return held_out_check(points, pose, k, scaled_plane(plane, scale).astype("float64") / 1000, live)
 
 
 def held_line(found):
-    if found.get("within_noise") is None:
-        return "Held-out take: %s." % found["why"]
-    return ("Held-out take: %.0f%% of floor and upper-wall pixels within noise; worst range bin %+.1f cm."
-            % (found["within_noise"] * 100, found["worst_bin_m"] * 100))
+    floor, upper = found.get("floor") or {}, found.get("upper") or {}
+    if floor.get("within_noise") is None or upper.get("within_noise") is None:
+        return "Held-out take: %s." % (found.get("why") or "judged by an earlier paste")
+    return ("Held-out take: %.0f%% of floor and %.0f%% of upper-wall pixels within noise; worst range bin %s cm."
+            % (floor["within_noise"] * 100, upper["within_noise"] * 100, cm(found["worst_bin_m"])))
 
 
 # ---- the summary block ----------------------------------------------------------------------------------------------

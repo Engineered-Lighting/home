@@ -11,8 +11,9 @@ type: changed
 - Nine features (six to fit, three checks beside the sofa) are clicked on the take's median depth, behind an edge
   guard and a 36-pair distance check. den-register fits unedited at a 0.15 m gate, then each sofa check must be within
   10 cm.
-- A held-out empty-room take compares the scan's floor and upper walls, seen from the new registration, with fresh
-  depth: at least 75% within noise, and no 1 m range bin with a median error over 10 cm.
+- A held-out empty-room take is carried into the room through the new registration and compared there with the
+  scan's floor and upper walls, each judged on its own: at least 75% within noise, and no 1 m range bin with a median
+  residual over 10 cm.
 - The receipt becomes `den-live-register-now-2`, adding `depth_scale`, `scale_check`, `sofa_check_errors_m`,
   `held_out` and `qualified`, and the paste ends with a words-only summary block.
 

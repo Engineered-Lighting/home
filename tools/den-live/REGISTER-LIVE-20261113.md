@@ -79,17 +79,24 @@ scale, a similarity fit (Umeyama), is printed as a diagnostic only, with a note 
 
 ## The held-out take
 
-After a pass, a second 20 s take of the empty den. The scan's `points.ply`, from the active content pack (the scan
-revision the picks were made on, held to its manifest digest), is projected with the new registration into the left
-camera. Every point is z-buffered, covering its 3 x 3 pixels; a pixel well behind its 5 x 5 neighbourhood's nearest
-point is a gap in the points, not a surface, and is dropped. Only pixels whose nearest point is on a stable surface
-count: the floor, within `held_floor_band_m` of z = 0, and everything above `held_wall_min_z_m`. They're compared with
-the take's median depth times `depth_scale`, signed, measured less scan.
-- Within noise: |error| at most max(`held_noise_min_m`, 2 sigma(z)), with sigma(z) = `noise_a_m` + `noise_b_per_m` z^2,
-  the placement tool's stereo noise model.
-- Range bins of `held_bin_m`, by the scan's depth; a bin with under `held_bin_min_pixels` isn't judged.
-- **A pass:** at least `held_within_min` (75%) within noise, and no bin's |median| error over `held_bin_max_m` (10 cm,
-  the owner's 2026-11-13 number; the plan had 5 cm). Under `held_min_pixels` stable pixels, it can't pass.
+After a pass, a second 20 s take of the empty den, judged in the room.
+- **Which pixels.** The scan's `points.ply`, from the active content pack (the scan revision the picks were made on,
+  held to its manifest digest), is projected with the new registration into the left camera. Every point is
+  z-buffered, covering its 3 x 3 pixels; a pixel well behind its 5 x 5 neighbourhood's nearest point is a gap in the
+  points, not a surface. A pixel counts as floor when its nearest scan point is within `held_floor_band_m` of z = 0,
+  and as upper wall when it's at or above `held_wall_min_z_m` (the ceiling included). Furniture hides what's behind it.
+- **Their residuals, in the room.** The take's median depth times `depth_scale` is lifted through the new registration
+  into the room. A floor pixel's residual is its height off z = 0. An upper-wall pixel's is its distance to the scan's
+  surface there: the scan's points above `held_wall_min_z_m` less 25 cm, in 5 cm voxels, each a local plane; the
+  distance to the nearest such plane within 15 cm, plus how far past its patch the point lies, and 20 cm where there's
+  none. Depth along each pixel's ray, the first version's measure, was blind to a sideways shift or a turn (the floor
+  and the facing wall slide along themselves) and oversensitive to a small tilt at the floor's grazing angle.
+- **Within noise:** a residual at most max(`held_noise_min_m`, 2 sigma(z)), with z the pixel's range and sigma(z) =
+  `noise_a_m` + `noise_b_per_m` z^2, the placement tool's stereo noise model.
+- **Range bins** of `held_bin_m` by the pixel's range; a bin with under `held_bin_min_pixels` isn't judged.
+- **A pass:** the floor and the upper walls are judged apart, so neither can outvote the other. Each needs at least
+  `held_within_min` (75%) within noise and `held_min_pixels` pixels, and no range bin of either may have a median
+  residual over `held_bin_max_m` (10 cm in the room, the owner's 2026-11-13 number; the plan had 5 cm).
 
 The receipt says `qualified: true` only when den-register registered, each sofa check is within 10 cm and the held-out
 take passes. den-live's installer, its service and its local run each require it.
@@ -139,13 +146,13 @@ distance_max_m = 0.06             # distance check: a feature's median pair diff
 sofa_check_max_m = 0.10           # each sofa check, c1-c3, after den-register's gate passes
 held_floor_band_m = 0.05          # held-out: scan points within this of z = 0 are floor
 held_wall_min_z_m = 1.8           # and scan points above this are upper wall (or ceiling)
-held_noise_min_m = 0.03           # within noise: |error| <= max(this, 2 sigma(z))
+held_noise_min_m = 0.03           # within noise: a residual <= max(this, 2 sigma(z)), z the pixel's range
 noise_a_m = 0.008                 # sigma(z) = a + b z^2, the placement tool's stereo noise model
 noise_b_per_m = 0.0035
-held_within_min = 0.75            # a pass: at least this share within noise
-held_bin_m = 1.0                  # range bins this wide, by the scan's depth
-held_bin_max_m = 0.10             # and no bin's |median| error over this
+held_within_min = 0.75            # a pass: at least this share within noise, of the floor and of the upper walls each
+held_bin_m = 1.0                  # range bins this wide, by the pixel's range
+held_bin_max_m = 0.10             # and no bin's median residual, in the room, over this
 held_bin_min_pixels = 200         # a bin with fewer pixels isn't judged
-held_min_pixels = 2000            # fewer stable pixels than this: the take can't qualify
+held_min_pixels = 2000            # fewer floor, or upper-wall, pixels than this: the take can't qualify
 own_scale_band = 0.05             # the features' own scale, printed with a note outside 1 +/- this
 ```

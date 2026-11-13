@@ -10,6 +10,7 @@ scan page's needs Node. Each skips without them. Private strings the tests plant
 id is read as run_local reads it, an address and a token are random. Everything written is under TEMP.
 """
 import atexit
+import base64
 import contextlib
 import dataclasses
 import hashlib
@@ -341,6 +342,63 @@ class ServiceRefusals(unittest.TestCase):
             self.assertEqual('ProtectHome=tmpfs' in dropin, protect)
         self.assertIn('ProtectHome=tmpfs', rs.dropin_text(rs.camera_address('http://192.0.2.7:8090'), Path('/home/u/code/home/app/data/home-content')))
 
+    def test_the_qwen_asks_settings_and_drop_in(self):
+        base = scratch('den-live-install-')
+        packs = make_packs([[0, 0], [1, 0], [1, 1]])
+        settings = base / 'settings.json'
+        common = {'schema': rs.SETTINGS_SCHEMA, 'camera_url': 'http://192.0.2.5:8090', 'site': rl.den_site(), 'content_packs': str(packs)}
+        settings.write_text(json.dumps(dict(common, asks={'ha_url': 'https://192.0.2.20:8123', 'ha_entity': rs.FRIGATE_ENTITY})), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertEqual(config['asks']['ha_url'], 'https://192.0.2.20:8123')
+        self.assertEqual(config['asks']['vllm_url'], 'http://127.0.0.1:8000')
+        self.assertTrue(config['asks']['asks_on'])
+        dropin = (base / 'd.conf').read_text(encoding='utf-8')
+        self.assertIn('IPAddressAllow=192.0.2.20', dropin)
+        self.assertIn('LoadCredential=ha-token.txt:/etc/den-live/private/ha-token.txt', dropin)
+        # What install_la writes is what run_service reads back: with the token beside it, the ask is set up.
+        creds = scratch('den-live-creds-')
+        (creds / rs.HA_TOKEN).write_text('t0ken\n', encoding='utf-8')
+        fixed, why = rs.asks_settings(config, creds)
+        self.assertIsNone(why)
+        # Without an asks block: no asks in the settings, and no credential or address in the drop-in.
+        settings.write_text(json.dumps(common), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertNotIn('asks', config)
+        self.assertNotIn('ha-token', (base / 'd.conf').read_text(encoding='utf-8'))
+        # A reinstall keeps the switches as they were: an ask switched off by hand stays off.
+        settings.write_text(json.dumps(dict(common, asks={'ha_url': 'http://192.0.2.20:8123'})), encoding='utf-8')
+        (base / 'c.json').write_text(json.dumps({'asks': {'asks_on': False, 'min_interval_s': 5, 'ha_url': 'x'}}), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertFalse(config['asks']['asks_on'])
+        self.assertEqual(config['asks']['min_interval_s'], 5)
+        self.assertEqual(config['asks']['ha_url'], 'http://192.0.2.20:8123')
+        for bad in ('https://ha.local:8123', 'https://192.0.2.20', 'https://u:p@192.0.2.20:8123', 'ftp://192.0.2.20:21',
+                    'http://[fe80::1%25eth0]:8123', 'http://[::ffff:192.0.2.20]:8123'):
+            settings.write_text(json.dumps(dict(common, asks={'ha_url': bad})), encoding='utf-8')
+            with self.assertRaises(rs.Refusal) as refused:
+                rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+            self.assertNotIn(bad, str(refused.exception))
+
+    def test_install_la_reads_the_asks_two_private_files(self):
+        folder = scratch('den-live-private-')
+        token, url = folder / install_la.HA_TOKEN_FILE, folder / install_la.HA_URL_FILE
+        self.assertEqual(install_la.ha_inputs(token, url), (None, None))
+        token.write_text('abc123\n', encoding='utf-8')
+        with self.assertRaises(install_la.Stop):
+            install_la.ha_inputs(token, url)            # one without the other
+        url.write_text('https://192.0.2.20:8123\n', encoding='utf-8')
+        self.assertEqual(install_la.ha_inputs(token, url), ('abc123', 'https://192.0.2.20:8123'))
+        token.write_bytes('﻿abc123'.encode('utf-8'))   # PowerShell 5.1's -Encoding utf8 writes a byte-order mark
+        self.assertEqual(install_la.ha_inputs(token, url)[0], 'abc123')
+        for bad_token, bad_url in (('two words', 'https://192.0.2.20:8123'), ('abc123', 'https://ha.local:8123'),
+                                   ('abcé123', 'https://192.0.2.20:8123')):
+            token.write_text(bad_token, encoding='utf-8')
+            url.write_text(bad_url, encoding='utf-8')
+            with self.assertRaises(install_la.Stop) as stopped:
+                install_la.ha_inputs(token, url)
+            self.assertNotIn(bad_url, str(stopped.exception))
+            self.assertNotIn(bad_token, str(stopped.exception))
+
     def test_packs_the_services_own_user_couldnt_read_refuse_and_name_the_folder(self):
         packs = make_packs([[0, 0], [1, 0], [1, 1]])
         site_dir = packs / rl.den_site()
@@ -424,8 +482,89 @@ class ServiceLive(unittest.TestCase):
         shapes = (r'^Floor: ', r'^Registration den-virtual@\S+; the camera', r'^Starting the detector',
                   r"^The live body is on, in the detector's process\. It learns the empty room",
                   r"^The live body is off: [a-z '(),:0-9]+\. The markers go on\.$",
+                  r"^The Qwen ask is off: [A-Za-z '(),:0-9_./<>-]+\.$",
                   r'^camera [a-z]+(: [a-z ]+)? \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames')
         self.assertTrue(all(any(re.search(s, line) for s in shapes) for line in text.splitlines() if line.strip()), text)
+
+
+class Stand(BaseHTTPRequestHandler):
+    """A stand-in for the den home's Home Assistant (GET a state) and LA's vLLM (POST a chat completion), on loopback."""
+    seen = None
+
+    def log_message(self, *args):
+        pass
+
+    def reply(self, value):
+        data = json.dumps(value).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        self.seen['ha'].append((self.path, self.headers.get('Authorization')))
+        self.reply({'entity_id': self.path.rsplit('/', 1)[-1], 'state': 'on'})
+
+    def do_POST(self):
+        self.seen['bodies'].append(self.rfile.read(int(self.headers['Content-Length'])))
+        facts = {'people_visible': 'one', 'subject_posture': 'sitting', 'held_object': 'book', 'book_state': 'open',
+                 'gaze_target': 'book', 'typing_visible': 'no', 'screen_facing_subject': 'not_visible',
+                 'activity_hypothesis': 'reading', 'visible_basis': ['book_in_hands'], 'change_vs_prior': 'no_prior'}
+        self.reply({'model': 'qwen3-vl-30b', 'usage': {'prompt_tokens': 900, 'completion_tokens': 50},
+                    'choices': [{'message': {'role': 'assistant', 'content': json.dumps(facts)}, 'finish_reason': 'stop'}]})
+
+
+@unittest.skipUnless(HAVE_SET and sc.VENV_PY.is_file() and HAVE_BINARIES, 'needs the detector venv and a prepared den-sim set')
+class ServiceAsks(unittest.TestCase):
+    def test_the_service_asks_qwen_about_the_seated_reader(self):
+        seen = {'ha': [], 'bodies': []}
+        handler = type('Seen', (Stand,), {'seen': seen})
+        stand = ThreadingHTTPServer(('127.0.0.1', 0), handler)
+        threading.Thread(target=stand.serve_forever, daemon=True).start()
+        self.addCleanup(stand.shutdown)
+        url = 'http://127.0.0.1:%d' % stand.server_address[1]
+        camera = ts.FakeCamera(FIT / 'camera-calibration.json', READING)
+        self.addCleanup(camera.close)
+        self.addCleanup(camera.assert_allowed_paths)
+        service = Service(camera.url, camera.token)
+        config = json.loads(service.config.read_text(encoding='utf-8'))
+        config['asks'] = {'ha_url': url, 'ha_entity': 'binary_sensor.den_person_occupancy', 'vllm_url': url}
+        service.config.write_text(json.dumps(config), encoding='utf-8')
+        (service.cred / rs.HA_TOKEN).write_text('tok3n', encoding='utf-8')
+        found, started = {}, time.monotonic()
+
+        def until():
+            if time.monotonic() - started > 30 and time.monotonic() - found.get('asked', 0) > 1:
+                found['asked'] = time.monotonic()
+                try:
+                    with urllib.request.urlopen('http://127.0.0.1:%d/api/den-live/v1/homes/den/state' % service.port, timeout=5) as reply:
+                        people = json.loads(reply.read())['people']
+                except OSError:
+                    people = None
+                if people and any(t.get('activity') for t in people.get('tracks') or []):
+                    found['state'] = people
+            return 'state' in found or time.monotonic() - started > 150
+        code, text = quiet(rs.main, ['--config', str(service.config)], env=service.env, until=until, status_every_s=5,
+                           trees=service.trees(), camera_id='den-virtual', require_correction=False)
+        self.assertEqual(code, 0, text)
+        self.assertIn('The Qwen ask is on', text)
+        people = found.get('state')
+        self.assertIsNotNone(people, text)
+        self.assertEqual(people['health']['qwen']['state'], 'asking')
+        self.assertEqual(people['tracks'][0]['activity']['word'], 'reading')
+        self.assertTrue(seen['ha'] and all(auth == 'Bearer tok3n' for _, auth in seen['ha']))
+        body = json.loads(seen['bodies'][-1])   # the first ask can come before 3 s of frames, with 2 stills
+        images = [p['image_url']['url'] for p in body['messages'][1]['content'] if p['type'] == 'image_url']
+        self.assertIn(len(images), (2, 3))
+        for image in images:
+            jpeg = base64.b64decode(image.split(',', 1)[1])
+            self.assertTrue(jpeg.startswith(b'\xff\xd8') and len(jpeg) > 5000, 'a real still from the detector process')
+        lines = [json.loads(line) for path in (service.state / 'days').rglob('asks.jsonl')
+                 for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(lines and lines[0]['outcome'] == 'completed', lines)
+        self.assertFalse(any(p.suffix in ('.npz', '.jpg') for p in service.state.rglob('*')), 'no frame or still kept')
+        self.assertNotIn('tok3n', text)
 
 
 class Unit(unittest.TestCase):
@@ -692,15 +831,106 @@ class FakeLA:
         return 0
 
 
+ON_DEN_LIVE = lambda: ('claude/den-live', 'abc1234')   # the branch check, passed: these tests may run from any checkout
+
+
+class BranchCheck(unittest.TestCase):
+    """install_la installs from claude/den-live only, with no uncommitted change to a tracked file."""
+
+    def repo(self, branch='claude/den-live'):
+        repo = scratch('den-live-branch-')
+        git = lambda *a: subprocess.run(['git', '-C', str(repo), *a], check=True, capture_output=True)
+        git('init', '-q', '-b', branch)
+        git('config', 'user.email', 'test@example.invalid')
+        git('config', 'user.name', 'test')
+        (repo / 'a.txt').write_text('a\n', encoding='utf-8')
+        git('add', 'a.txt')
+        git('commit', '-q', '-m', 'a')
+        return repo
+
+    def test_a_clean_den_live_checkout_passes_and_says_where(self):
+        repo = self.repo()
+        (repo / 'untracked.txt').write_text('x\n', encoding='utf-8')   # not in the release: it's built from the commit
+        branch, commit = install_la.branch_check(repo)
+        self.assertEqual(branch, 'claude/den-live')
+        self.assertRegex(commit, r'^[0-9a-f]{7,}$')
+
+    def test_another_branch_is_refused_by_name(self):
+        with self.assertRaises(sc.Stop) as caught:
+            install_la.branch_check(self.repo('claude/den-live-body'))
+        self.assertIn('on claude/den-live-body; LA installs from claude/den-live only', str(caught.exception))
+
+    def test_an_uncommitted_change_is_refused(self):
+        repo = self.repo()
+        (repo / 'a.txt').write_text('changed\n', encoding='utf-8')
+        with self.assertRaises(sc.Stop) as caught:
+            install_la.branch_check(repo)
+        self.assertIn('uncommitted changes to 1 file', str(caught.exception))
+
+    def test_a_folder_that_isnt_a_checkout_is_refused(self):
+        with self.assertRaises(sc.Stop) as caught:
+            install_la.branch_check(scratch('den-live-not-git-'))
+        self.assertIn("isn't a git checkout", str(caught.exception))
+
+    def test_the_paste_stops_on_the_wrong_branch_before_anything(self):
+        root, transport = scratch('den-live-root-'), FakeLA()
+        def elsewhere():
+            raise sc.Stop('this checkout is on main; LA installs from claude/den-live only')
+        code, text = quiet(install_la.main, [], root=root, console=lambda: True, transport=transport, check_branch=elsewhere)
+        self.assertEqual(code, 2)
+        self.assertIn('install: stopped: this checkout is on main', text)
+        self.assertEqual(transport.calls, [], 'no ssh, no copy')
+        self.assertFalse((root / 'private' / 'release').exists(), 'nothing built')
+
+
 class InstallLA(unittest.TestCase):
     def test_it_refuses_until_step_2_has_registered(self):
         root = scratch('den-live-root-')
         transport = FakeLA()
-        code, text = quiet(install_la.main, [], root=root, console=lambda: True, transport=transport, token_file=root / 't.txt')
+        code, text = quiet(install_la.main, [], root=root, console=lambda: True, transport=transport, token_file=root / 't.txt',
+                           check_branch=ON_DEN_LIVE)
+        self.assertIn('Installing from claude/den-live at abc1234.', text)
         self.assertEqual(code, 2)
         self.assertIn("step 2 hasn't registered the camera yet", text)
         self.assertEqual(transport.calls, [], 'no ssh before step 2')
         self.assertIn('ssh -t hav-ubuntu "sudo systemctl disable --now den-live"', text)
+
+    def test_your_labels_go_to_la_once(self):
+        """The labels plan's step 3: install_la brings this PC's labels when they read, the drop-in loads them as a
+        credential, and the service copies them into its own state only while it has none, so Home's saves on LA win."""
+        import room_labels
+        root = scratch('den-live-root-')
+        self.assertIsNone(install_la.labels_seed(root), 'no labels on this PC: nothing to bring')
+        sofa = {'id': 'l-sofa-1', 'name': 'sofa', 'kind': 'seat', 'box': {'centre_m': [1.0, 2.0, 0.42], 'size_m': [2.0, 0.9, 0.85], 'yaw_deg': 0},
+                'on_wall': False, 'made_by': 'owner', 'status': 'confirmed', 'updated_at': None}
+        store = room_labels.Store(root / 'private' / 'labels', say=lambda *_: None)
+        self.assertEqual(store.put({**room_labels.empty('rev-a'), 'labels': [sofa]})[0], 200)
+        path, count = install_la.labels_seed(root)
+        self.assertEqual((path.name, count), (rs.LABELS_SEED, 1))
+        bad = scratch('den-live-root-')
+        (bad / 'private' / 'labels').mkdir(parents=True)
+        (bad / 'private' / 'labels' / rs.LABELS_SEED).write_text('{not json', encoding='utf-8')
+        seed, text = quiet(install_la.labels_seed, bad)
+        self.assertIsNone(seed)
+        self.assertIn("don't read", text)
+
+        camera, packs = rs.camera_address('http://192.0.2.7:8090'), Path('/srv/home-content')
+        self.assertIn('LoadCredential=room-labels.json:/etc/den-live/private/room-labels.json', rs.dropin_text(camera, packs, labels_seed=True))
+        self.assertNotIn(rs.LABELS_SEED, rs.dropin_text(camera, packs))
+
+        credentials = scratch('den-live-credentials-')
+        shutil.copyfile(path, credentials / rs.LABELS_SEED)
+        state = scratch('den-live-state-') / 'labels'
+        state.mkdir()
+        env = {'CREDENTIALS_DIRECTORY': str(credentials)}
+        took, text = quiet(rs.seed_labels, env, state)
+        self.assertTrue(took)
+        self.assertIn("Your PC's 1 labels", text)
+        self.assertEqual([l['name'] for l in room_labels.Store(state).get()['labels']], ['sofa'])
+        (credentials / rs.LABELS_SEED).write_text(json.dumps(room_labels.empty('rev-a')), encoding='utf-8')
+        self.assertFalse(quiet(rs.seed_labels, env, state)[0], 'LA has labels: a later seed never replaces them')
+        self.assertEqual(len(room_labels.Store(state).get()['labels']), 1)
+        self.assertFalse(rs.seed_labels({}, scratch('den-live-state-')), 'no credentials folder: nothing')
 
     @unittest.skipUnless(HAVE_SET and HAVE_BINARIES, 'needs a prepared den-sim set, the models and the wheel')
     def test_the_paste_copies_installs_and_cleans_up_even_on_failure(self):
@@ -715,7 +945,7 @@ class InstallLA(unittest.TestCase):
             transport = FakeLA(install_code)
             code, text = quiet(install_la.main, ['--host', 'la-test', '--camera', 'http://198.51.100.9:8090'], root=root,
                                console=lambda: True, transport=transport, token_file=root / 'token.txt', source='worktree',
-                               camera_id='den-virtual')
+                               camera_id='den-virtual', check_branch=ON_DEN_LIVE)
             self.assertEqual(code, 2 if install_code else 0, text)
             sha = (root / 'private' / 'release' / (release.TARBALL + '.sha256')).read_text(encoding='ascii').split()[0]
             remote = install_la.REMOTE

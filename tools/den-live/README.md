@@ -235,7 +235,7 @@ This needs step 2's registration, the camera token, the detector's venv with its
 python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\install_la.py
 ```
 
-1. It refuses until step 2 has registered the camera.
+1. It refuses unless this checkout is on `claude/den-live` with nothing uncommitted, the only branch LA installs from, and prints the branch and commit it found. Then it refuses until step 2 has registered the camera.
 2. It builds the release (`release.py`): this branch's `tools/den-live`, `tools/den-detect` and the unit at HEAD, the pinned trees the loop loads, the two models (YOLO26s `646f8bc3…`, RTMPose-m `5c0a4bf6…`), the pose model's manifest and rtmlib's wheel. Every text file going in is scanned for private strings: place and site names, tailnet names, private addresses, token-looking strings and the token itself. A hit stops it, naming the file and line, never the string.
 3. It copies the tarball, `install.sh`, and four private files to LA's memory, in `/dev/shm/den-live-install/`, which only you can read. The four are the room model, the camera token, step 2's receipt, and a settings file with the camera's address and the den's site.
 4. It runs `install.sh` there with sudo, so sudo asks for your password.
@@ -383,10 +383,15 @@ It starts only the labels store and Home on your scan, from the `claude/den-labe
 - **Where they're kept:** your private den-live folder, `labels\room-labels.json`. `room-labels-history.jsonl` beside it holds the last 100 saves.
 - **A file that won't read** is set aside as `room-labels.bad-<time>.json`, and den-live starts with none rather than refusing.
 - **The live loop serves them too.** `run_local.py` without `--labels-only` serves the same labels beside the markers. The LA service keeps its own copy in its state folder, `labels\`.
+- **To LA, once.** `install_la.py` brings these labels when they read. On LA they're a root-only credential, and the service copies them into its own `labels\` only while it has none. After that you label in deployed Home, and a later install never overwrites LA's labels.
 
 ### Step 2: what's near you, under your marker
 
 With the live loop running (step 3 above), each track in the people stream carries `near`: what's near it from your confirmed labels, for example "at the desk, beside the 3D printer". It comes from the same `near_phrase()` the Qwen line uses. Home shows it under your marker. It's null when there are no labels or none near, or when the labels were placed on another scan revision than the one den-live is registered on.
+
+### The line for the Qwen ask
+
+When the Qwen ask runs (below), `serve()` gives it `room_labels.near_line(store, scan revision)` as its `near_line` hook. Each ask about one seated person reads the labels as they are then: a save in Home reaches the next ask. It sends `line_for()`'s line as `near_person` while `labels_to_qwen` is on, and logs the labels' revision with it.
 
 ### Tests
 
@@ -397,5 +402,132 @@ python -B -m unittest test_room_labels
 (from `tools\den-live`). They cover:
 - the record's checks, which use the same refusal words as Home's `home-den-labels-core.mjs`;
 - the store's compare-and-swap, its atomic write, its history and the set-aside file;
-- the line from where a person is;
+- the line from where a person is, and the ask's hook;
 - the two routes, on a real loopback server.
+
+## The Qwen ask (inference plan, Part 1)
+
+den-live asks Qwen what someone in the den is doing, but only once Frigate has noticed someone. With nobody there, Qwen is never asked.
+
+**When it asks.** All of these must hold:
+- Frigate's den occupancy sensor reads on in the den home's Home Assistant (`occupancy.py`).
+  - It's read twice a second and held for 2 minutes after the sensor last read on, den_lighting's own vacancy, because Frigate can lose a reader sitting still. Standing up still stops the asks at once, through the seated check.
+  - If it reads unknown, or nothing reads for 10 s, nothing is asked.
+  - The reader never follows a redirect, so the token goes to Home Assistant only.
+- A confirmed track is seated (`seated.py`: the coordinator's `body.seated()`, copied unchanged until den-live carries its code).
+  - Becoming seated needs 2 s of hips 0.30 to 0.75 m above the floor (or the face below 1.30 m with no pair of hips) and a torso moving under 0.15 m/s.
+  - Staying seated needs only low hips, so shifting along the sofa doesn't drop you.
+- The settings say `asks_on`, and the back-off monitor is below its step 2.
+  - At step 1, it asks at most every 4 s.
+  - If `backoff_status` is set but the monitor's file is missing, unreadable or over 10 minutes old, it counts as step 1.
+- The gate is checked again just before each question is posted.
+
+**The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
+
+**What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
+- Three stills from the last 3 s, made into JPEGs in the detector's process (`stills.py`).
+- Today's Lab question, with three changes:
+  - "hobby" and "craft" are added;
+  - the old camera placement is removed;
+  - `near_person`, the labeling plan's line, is sent while `labels_to_qwen` is on and exactly one person is tracked.
+
+  `test_ask.py` holds the rest to the Lab's pinned `qwen_scene.py`.
+
+**What it keeps.** One line per ask in `days/<UTC date>/asks.jsonl` in the service's state folder, kept 14 days. It holds:
+- words and numbers only: no image and no reply text;
+- each still's capture and arrival times;
+- when the ask was decided, sent and answered;
+- the model, its token counts and the parsed answer;
+- the labels fields.
+
+**What it gives.**
+- **The stream:** `health.qwen {state, why, last_reply_at, reply_s_median, asks_per_min, backoff_level}` on every event.
+  - Each track it asked about gets `activity {word, close_up, at}` for 30 s, but only when den-track was sure, through the stills' window, whose answer it was.
+  - The state reads `unavailable` after 3 failed questions in a row, or 3 sets of pictures that didn't come.
+- **In-process:** each answer goes to `Asker.on_reply` hooks as `{"fact": <la-fact-log-1 line>, "ask": <the log line>}`.
+  - The log line carries `association {safe, status, since_at}`: whether den-track held the asked track confident through the stills' window, and since before it.
+  - The end-to-end plan's person state holds a reply that isn't safe.
+
+**Turning it on (inference plan, step 3).**
+
+1. **In the den home's Home Assistant, signed in as you:**
+   - make a user `den-live`, an admin (the coordinator chat's decision 08, since only an admin can follow den_lighting's events);
+   - as that user, make a long-lived access token. It's the same token the coordinator's link uses.
+2. **On this PC, in PowerShell: save the token and the address once,** beside the camera token. Copy the token from Home Assistant first, then paste:
+
+   ```powershell
+   Get-Clipboard | Set-Content -Encoding ascii -NoNewline C:\den-takes\private\den-live-ha-token.txt
+   ```
+
+   ```powershell
+   Set-Content -Encoding ascii -NoNewline C:\den-takes\private\den-live-ha-url.txt "http://<Home Assistant's IP address>:8123"
+   ```
+
+   - **The address:** Home Assistant's as LA reaches it, over the private link between the homes, the same way den-live already reaches the camera.
+     - It must be an IP address, since the unit allows the service that one address.
+     - Use `http://`. With `https://`, Home Assistant's certificate would have to name that IP address, or the check fails every read.
+   - Neither file goes anywhere but LA, and the install never prints them.
+3. **Install den-live as in step 4:** the same `install_la.py` paste. With both files there, it says "The Qwen ask: on". It then:
+   - copies the token as a credential;
+   - adds the asks block to `/etc/den-live/config.json`;
+   - adds the address and the credential to the unit's drop-in.
+
+   Without the files it says "off", and an install without them removes an old token from LA.
+   - The release is built from this branch's last commit, so a change only reaches LA once it's committed.
+4. **The check:** paste this on this PC, then sit, read, use your phone and leave, as it speaks the cues:
+
+   ```powershell
+   python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\ask_check.py --home https://<your Home address>
+   ```
+
+   It prints, for example:
+
+   ```
+   Ask check, 20:15
+   Read (2 min):   Frigate on before the cue, seated and asking +2.6 s, first answer +3.3 s, first close-up +3.3 s
+                   close-up on 38 of 40 answers (reading 38, unclear 2)
+   Phone (2 min):  close-up on 0 of 40 answers (phone_use 37, unclear 3)
+   Leave:          asks stopped 1.2 s after the cue
+   Answer time:    median 0.62 s, as den-live reports it
+   Stream:         480, 478 and 120 events in the three parts, 0 reconnects
+   ```
+
+   The numbers are made up, to show the shape. Tell an agent the lines: they're words and numbers only.
+
+**The settings it writes on LA.** The asks block in `/etc/den-live/config.json`:
+
+```json
+"asks": {"ha_url": "http://<den home's Home Assistant IP>:8123", "ha_entity": "binary_sensor.den_oak_person_occupancy",
+         "vllm_url": "http://127.0.0.1:8000", "asks_on": true, "labels_to_qwen": true, "min_interval_s": 2, "max_per_minute": 30}
+```
+
+- **Switches survive a reinstall:** a reinstall keeps `asks_on`, `labels_to_qwen` and the pace as they were in the file it replaces, so an ask you switched off stays off.
+- **Two keys a hand edit can add:**
+  - `time_zone`, an IANA name: the context's time label uses LA's own zone without it;
+  - `backoff_status`: the back-off monitor's status file. Today the monitor keeps it in a folder den-live's service user can't read, so the install doesn't set it, and den-live's own limits are its guard.
+- **The credential:** the token is `ha-token.txt` among the service's credentials.
+- **Without the block, or with a bad one,** the ask is off and the journal says why in one sentence. That includes a token that's missing and an ask that fails as it starts. The markers go on either way.
+- **Changing a switch:** `asks_on`, `labels_to_qwen`, `min_interval_s` and `max_per_minute` are re-read whenever the file changes, so no restart is needed.
+  - A block taken out, or a value that doesn't read, turns the asks off until it reads again. The health line says why.
+  - The pace can't go past AGENTS.md's bound: `min_interval_s` 2 to 60, `max_per_minute` 1 to 30.
+- **The unit's drop-in, written by the install:**
+  - a `LoadCredential` for `ha-token.txt`;
+  - an `IPAddressAllow` for Home Assistant's address.
+
+  Both are only there while the asks block is. `install.sh` refuses settings that set the ask up without a token, and a token without such settings, so the unit can't be left waiting for a credential that isn't there.
+
+### Tests
+
+```powershell
+python -B -m unittest discover -s tools\den-live -p "test_ask.py"
+```
+
+- Stand-ins for Qwen, Home Assistant and the detector. No camera, no host and no picture of anyone.
+- **The question:** only the planned changes from the Lab's pinned question, a stable body, strict replies, and the Lab log's exact keys.
+- **The gate:**
+  - no ask while Frigate says nobody or unknown, or while standing;
+  - about every 2 s while seated;
+  - the 30 s back-off, and "Qwen isn't answering" after 3 failures;
+  - the switch, and both of the monitor's steps.
+- **The label line:** sent for one person only, with its switch on, and a bad line doesn't stop the ask.
+- **The detector's channel:** stills replies never reach the rows' queue.

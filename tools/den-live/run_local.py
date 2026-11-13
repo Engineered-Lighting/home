@@ -148,11 +148,14 @@ def status_line(perceiver, latest):
     problems = ", ".join("%d %s" % (c[key], words) for key, words in (
         ("refused_depth", "refused for depth"), ("detector_errors", "detector errors"), ("unreadable", "unreadable"),
         ("out_of_order", "out of order"), ("expired", "too late")) if c[key])
-    return ("camera %s%s | %s frames a second | %d people | %s behind | %d dropped a minute | %d frames%s"
+    qwen = health.get("qwen")
+    asks = "" if not qwen else " | Qwen %s%s, %d asks a minute" % (qwen["state"], (": " + qwen["why"]) if qwen.get("why") else "",
+                                                                 qwen.get("asks_per_min") or 0)
+    return ("camera %s%s | %s frames a second | %d people | %s behind | %d dropped a minute | %d frames%s%s"
             % (camera.get("status", "starting"), (": " + camera["why"]) if camera.get("why") else "",
                "-" if health.get("fps_in") is None else "%.1f" % health["fps_in"], len(event.get("tracks") or []),
                "-" if lag is None else "%.2f s" % lag, health.get("dropped_per_min") or 0, c["frames"],
-               (", " + problems) if problems else ""))
+               (", " + problems) if problems else "", asks))
 
 
 def revision_of(receipt, transform_id):
@@ -278,11 +281,13 @@ def start_body(perceiver, out, detector, revision):
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          labels=None):
+          labels=None, asks=None):
     """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
     only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
     registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup. labels is
-    the den's labels Store, served on the stream's labels path."""
+    the den's labels Store, served on the stream's labels path and giving each marker its near phrase.
+    asks(detector) -> (ask.Asker, its cleanup), when given, is the Qwen ask (the LA service's, when its settings say so);
+    with labels, the ask's near_line hook gets their line for the asked person (room_labels.near_line)."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None
@@ -310,7 +315,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
     perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits
     say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
                                                           "required" if perceiver.require_source_correction else "not required"))
-    detector = out = src = loop = cleanup = link = None
+    detector = out = src = loop = cleanup = link = asker = None
     try:
         say("Starting the detector (about half a minute)...")
         try:
@@ -324,9 +329,18 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
             raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
         if body:
             link = start_body(perceiver, out, detector, revision)
+        if asks is not None:
+            try:
+                asker = asks(detector)   # (asker, stop), or None when the ask can't start
+            except Exception as exc:  # the ask's failure never stops the markers; a type name only
+                say("The Qwen ask is off: it didn't start (%s). The markers go on." % type(exc).__name__)
+                asker = None
+            if asker and labels is not None:
+                # The labels' line for the asked person, before the loop feeds the ask (the inference plan's hook).
+                asker[0].near_line = room_labels.near_line(labels, revision)
         mailbox = source.Mailbox()
         src = source.CameraSource(take, camera, mailbox)
-        loop = perceive.Loop(src, mailbox, perceiver, out.publish)
+        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=asker[0].observe if asker else None)
         out.start()
         src.start()
         loop.start()
@@ -344,7 +358,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
             time.sleep(0.2)
         return {"counts": dict(perceiver.counts), "sessions": perceiver.sessions, "latest": out.latest, "drops": mailbox.dropped,
                 "received": mailbox.received, "status": status_line(perceiver, out.latest),
-                "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped}}
+                "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped},
+                "asks": None if asker is None else dict(asker[0].counts)}
     finally:
         for thread in (loop, src):
             if thread is not None:
@@ -352,6 +367,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
         for thread in (loop, src):
             if thread is not None and thread.is_alive():
                 thread.join(5)
+        if asker is not None:
+            asker[1]()
         if detector is not None:
             detector.close()
         if link is not None:

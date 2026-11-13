@@ -168,6 +168,18 @@ class Line(unittest.TestCase):
         self.assertIsNone(rl.line_for(None, {"xy_m": [1, 1]}))
         self.assertIsNone(rl.line_for({**den, "schema": "x"}, {"xy_m": [0.95, 2.05]}))
 
+    def test_the_asks_hook_reads_the_store_at_each_ask(self):
+        folder = Path(tempfile.mkdtemp(prefix="den-labels-hook-"))
+        try:
+            store = rl.Store(folder, say=lambda *_: None)
+            hook = rl.near_line(store, "rev-a")
+            self.assertEqual(hook({"xy_m": [0.95, 2.05]}), (None, 0), "no labels yet")
+            self.assertEqual(store.put(doc(DEN))[0], 200)
+            self.assertEqual(hook({"xy_m": [0.95, 2.05]}), ("Seated at the desk, beside the desk chair and the 3D printer.", 1))
+            self.assertEqual(rl.near_line(store, "rev-b")({"xy_m": [0.95, 2.05]}), (None, 1), "labels on another scan")
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+
     def test_footprint_and_front(self):
         desk = DEN[0]
         fx, fy = rl.front_unit(desk)

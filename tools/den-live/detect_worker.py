@@ -21,6 +21,10 @@ The live body (body.py's BodyChannel) runs here too, so a frame crosses the pipe
 with a kind of setup_body or body comes alone, with no bundle after it: setup_body sets the body up once; body asks for
 the body of the frame this process detected last (it keeps that bundle), with the person the loop tracked on it. Their
 replies carry body_ready, body_refused or body_id, never id, so the loop tells them apart from detection rows.
+
+The Qwen ask's stills come from here too (stills.py): this process keeps the last few seconds of frames by their
+detection id, and a header of kind stills, with no bundle after it, asks for some of them as JPEGs. The reply carries
+stills_id, never id.
 """
 import argparse
 import json
@@ -33,6 +37,8 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "den-detect"))
 import detect  # noqa: E402  den-detect: its Detector, guard, lock and containment
+sys.path.insert(0, str(HERE))
+import stills  # noqa: E402  the Qwen ask's JPEGs, from the frames this process keeps
 
 
 def read_exact(stream, n):
@@ -45,7 +51,7 @@ def read_exact(stream, n):
     return data
 
 
-BODY_KINDS = ("setup_body", "body")   # headers that come without a bundle
+BODY_KINDS = ("setup_body", "body", "stills")   # headers that come without a bundle
 
 
 def read_frame(stream):
@@ -106,12 +112,21 @@ def main(argv=None):
     np = detector.np
     say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms)})
     stream = sys.stdin.buffer
-    kept, bodies = None, None
+    kept, bodies, ring, image_module = None, None, stills.Ring(), None
     while True:
         got = read_frame(stream)
         if got is None:
             return 0
         header, data = got
+        if data is None and header.get("kind") == "stills":   # the Qwen ask's stills, from the frames kept in the ring
+            if image_module is None:
+                try:
+                    from PIL import Image as image_module
+                except Exception as exc:  # a type name only
+                    say({"stills_id": header.get("id"), "error": type(exc).__name__})
+                    continue
+            say(stills.handle(header, ring, np, image_module, detector.decode, detector.check.read_bundle))
+            continue
         if data is None:   # the live body: set up once, then the body of the frame kept below
             if bodies is None:
                 try:
@@ -123,6 +138,7 @@ def main(argv=None):
             say(bodies.handle(header, kept))
             continue
         kept = (header.get("id"), data)
+        ring.keep(header.get("id"), data)
         try:
             _meta, nv12 = detector.check.read_bundle(data, with_rgb=True)
             plane = np.frombuffer(nv12, np.uint8).reshape(detect.HEIGHT * 3 // 2, detect.WIDTH)

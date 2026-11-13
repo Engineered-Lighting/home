@@ -7,8 +7,11 @@
 #   room-model.jsonl        step 2's registration of the den camera to the owner's scan
 #   camera-token.txt        the den camera's bearer token
 #   register-receipt.json   the step 2 receipt that registered it (the scan revision its picks were made on)
+#   ha-token.txt            with the Qwen ask set up only: the den home's Home Assistant token (its LoadCredential is
+#                           in the drop-in, so the unit starts without it when the ask isn't set up)
 # Its settings (/etc/den-live/config.json) and a drop-in (den-live.service.d/10-local.conf: the camera's one address
-# for IPAddressAllow, and a read-only bind of the gateway's content packs) are written by install.sh on this host.
+# for IPAddressAllow, and a read-only bind of the gateway's content packs; with the Qwen ask, Home Assistant's one
+# address and its token's LoadCredential too) are written by install.sh on this host.
 [Unit]
 Description=den-live: the live den view's people stream (loopback only)
 Documentation=file:///opt/den-live/current/tools/den-live/README.md

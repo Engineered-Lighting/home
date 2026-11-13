@@ -18,6 +18,10 @@ Its inputs, all from systemd:
 - --config, the settings file install.sh writes (/etc/den-live/config.json): camera_url, content_packs (the gateway's
   content-pack folder), site (the den's site, as the gateway names it), venv_python, models and stream_port.
 
+The Qwen ask (ask.py, inference plan step 2) runs here when the settings file has an asks block and the credentials hold
+ha-token.txt: only while Frigate's den occupancy reads on and den-live sees someone seated. Without them, or with a block
+that's wrong, the ask is off and one journal line says why; the markers go on (README, "The Qwen ask").
+
 It refuses to start with one sentence and exit 3 when an input is missing or doesn't match, and systemd doesn't
 restart it (RestartPreventExitStatus=3): a missing credential, a receipt that didn't register the room model's camera,
 a scan revision other than the one step 2 picked on, or a registration the camera no longer fits. Any other stop exits
@@ -42,6 +46,8 @@ from urllib.parse import urlsplit
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import ask  # noqa: E402  the Qwen ask (inference plan, step 2)
+import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
 import run_local as rl  # noqa: E402  the loop (serve), the scan's floor, the receipt's revision
 import sofa_check as sc  # noqa: E402  say, Stop, the pinned trees' markers
@@ -90,6 +96,120 @@ def read_config(path):
     if type(port) is not int or not 1024 <= port <= 65535:
         raise Refusal("its settings file's stream_port isn't a port number")
     return config
+
+
+HA_TOKEN = "ha-token.txt"       # the den home's Home Assistant: the den-live user's long-lived token (a credential)
+LABELS_SEED = "room-labels.json"   # your PC's labels, brought by install_la.py (a credential): taken once, when LA has none
+ENTITY = re.compile(r"^binary_sensor\.[a-z0-9_]{1,80}$")
+ZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
+
+
+def asks_settings(config, folder):
+    """(the asks block's fixed settings and the token, None) when the settings file sets the Qwen ask up, else (None, why).
+    The block: ha_url (the den home's Home Assistant), ha_entity (Frigate's den occupancy sensor), vllm_url (LA's own
+    vLLM, on loopback only), and optionally time_zone, backoff_status, ha_ca_file and the switches ask.Settings re-reads.
+    A block that's wrong turns the asks off with one sentence; the markers never stop for it."""
+    block = config.get("asks")
+    if block is None:
+        return None, "the settings file doesn't set the Qwen ask up"
+    if not isinstance(block, dict):
+        return None, "the settings file's asks block isn't one"
+    try:
+        url, vllm = urlsplit(str(block.get("ha_url") or "")), urlsplit(str(block.get("vllm_url") or ""))
+        ha_port, vllm_port = url.port, vllm.port   # urlsplit raises here on a port that isn't one
+    except ValueError:
+        return None, "its ha_url or vllm_url has a port that isn't one"
+    if (url.scheme not in ("http", "https") or not url.hostname or not ha_port or url.username or url.password
+            or url.path not in ("", "/") or url.query or url.fragment):
+        return None, "its ha_url must look like https://<address>:<port>"
+    if not isinstance(block.get("ha_entity"), str) or not ENTITY.match(block["ha_entity"]):
+        return None, "its ha_entity must be a binary_sensor's id"
+    if (vllm.scheme != "http" or vllm.hostname not in ("127.0.0.1", "localhost") or not vllm_port or vllm.username
+            or vllm.path not in ("", "/")):
+        return None, "its vllm_url must be LA's own vLLM, http://127.0.0.1:<port>"
+    if block.get("time_zone") is not None and not (isinstance(block["time_zone"], str) and ZONE.match(block["time_zone"])):
+        return None, "its time_zone isn't a time zone's name"
+    for key in ("backoff_status", "ha_ca_file"):
+        if block.get(key) is not None and not (isinstance(block[key], str) and Path(block[key]).is_absolute()):
+            return None, "its %s isn't an absolute path" % key
+    if block.get("ha_ca_file") is not None and not Path(block["ha_ca_file"]).is_file():
+        return None, "its ha_ca_file isn't there"
+    try:
+        token = (Path(folder) / HA_TOKEN).read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        return None, "the service's Home Assistant token credential (%s) is missing" % HA_TOKEN
+    except ValueError:
+        return None, "the service's Home Assistant token credential doesn't read"
+    if not token or not token.isascii() or any(c.isspace() for c in token):
+        return None, "the service's Home Assistant token credential doesn't read"
+    return dict(block, token=token), None
+
+
+FRIGATE_ENTITY = "binary_sensor.den_oak_person_occupancy"   # Frigate's den occupancy in the den home's Home Assistant
+VLLM_URL = "http://127.0.0.1:8000"
+
+
+def ha_address(url):
+    """The Home Assistant URL's IP address: it must name one, since the unit allows the service that one address. A
+    scoped or IPv4-mapped IPv6 address is refused: systemd's IPAddressAllow wouldn't let it through."""
+    try:
+        parts = urlsplit(url if isinstance(url, str) else "")
+        if (parts.scheme not in ("http", "https") or not parts.port or parts.username or parts.password
+                or parts.path not in ("", "/") or parts.query or parts.fragment or "%" in (parts.hostname or "")):
+            raise ValueError
+        address = ipaddress.ip_address(parts.hostname)
+        if getattr(address, "ipv4_mapped", None) or getattr(address, "scope_id", None):
+            raise ValueError
+        return address
+    except (TypeError, ValueError):
+        raise Refusal("the den home's Home Assistant address must look like http://<IP address>:<port>") from None
+
+
+def asks_block(settings, current=None):
+    """(the config's asks block, Home Assistant's address) from install_la.py's settings, or (None, None) without one.
+    The switches (asks_on, labels_to_qwen and the pace) keep their values from the config being replaced (current),
+    when they read there, so a reinstall never turns back on an ask you switched off."""
+    given = settings.get("asks")
+    if given is None:
+        return None, None
+    if not isinstance(given, dict):
+        raise Refusal("settings.json's asks block isn't one")
+    address = ha_address(given.get("ha_url"))
+    entity = given.get("ha_entity", FRIGATE_ENTITY)
+    if not isinstance(entity, str) or not ENTITY.match(entity):
+        raise Refusal("settings.json's ha_entity isn't a binary_sensor's id")
+    switches = dict(ask.SETTINGS_KEYS)
+    kept = ask.Settings(block=(current or {}).get("asks")) if isinstance((current or {}).get("asks"), dict) else None
+    if kept is not None and kept.why is None:
+        switches.update({k: kept.values[k] for k in switches})
+    block = {"ha_url": given["ha_url"], "ha_entity": entity, "vllm_url": VLLM_URL, **switches}
+    return block, address
+
+
+def asks_starter(fixed, config_path, *, site, state, camera_id):
+    """serve()'s asks: Frigate's occupancy read, then the Qwen ask, on the loop's detector."""
+    def start(detector):
+        """(asker, stop), or None when it can't start: the ask's failure never stops the markers."""
+        reader = None
+        try:
+            reader = occupancy.Occupancy(occupancy.fetcher(fixed["ha_url"], fixed["token"], fixed["ha_entity"],
+                                                           cafile=fixed.get("ha_ca_file")))
+            asker = ask.Asker(detector=detector, occupancy=reader, post=ask.poster(fixed["vllm_url"]), state=state,
+                              site_id=site, camera_id=camera_id, settings=ask.Settings(config_path),
+                              backoff=ask.Backoff(fixed.get("backoff_status")), zone=fixed.get("time_zone"))
+            reader.start()
+        except Exception as exc:  # a type name only: its text could hold the URL
+            if reader is not None:
+                reader.halt.set()
+            say("The Qwen ask is off: it didn't start (%s). The markers go on." % type(exc).__name__)
+            return None
+
+        def stop():
+            asker.close()
+            reader.halt.set()
+        say("The Qwen ask is on: only while Frigate sees someone in the den and den-live sees them seated.")
+        return asker, stop
+    return start
 
 
 def gateway_packs(pid, proc=Path("/proc")):
@@ -167,9 +287,16 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     if blocked is not None:
         raise Refusal("the den-live service's own user couldn't read %s through its read-only bind: give other users read "
                       "access to it (chmod o+rX %s); the installer leaves your files as they are" % (blocked, blocked))
+    try:
+        current = json.loads(Path(out).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        current = None
+    block, ha = asks_block(settings, current if isinstance(current, dict) else None)
     config = {"schema": CONFIG_SCHEMA, "camera_url": settings["camera_url"], "content_packs": str(packs), "site": site,
-              "venv_python": str(venv_python), "models": str(models), "stream_port": int(stream_port)}
-    for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"), (Path(dropin), dropin_text(address, packs))):
+              "venv_python": str(venv_python), "models": str(models), "stream_port": int(stream_port),
+              **({"asks": block} if block else {})}
+    seed = settings.get("labels_seed") is True
+    for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"), (Path(dropin), dropin_text(address, packs, ha, seed))):
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         part.write_text(text, encoding="utf-8", newline="\n")
@@ -178,11 +305,17 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     return config
 
 
-def dropin_text(address, packs):
+def dropin_text(address, packs, ha=None, labels_seed=False):
     """The unit's local settings: the one camera address it may reach, and the content packs, read only. With the packs
-    under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through."""
+    under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through.
+    With the Qwen ask set up (ha: Home Assistant's address), that address too, and the Home Assistant token credential,
+    which only then must exist. With labels brought from your PC (labels_seed), their credential, which then must exist."""
     lines = ["# Written by den-live's install.sh from this host's settings. Not in git.", "[Service]",
              "IPAddressAllow=%s" % address, "BindReadOnlyPaths=%s" % packs]
+    if ha is not None:
+        lines += ["IPAddressAllow=%s" % ha, "LoadCredential=%s:/etc/den-live/private/%s" % (HA_TOKEN, HA_TOKEN)]
+    if labels_seed:
+        lines.append("LoadCredential=%s:/etc/den-live/private/%s" % (LABELS_SEED, LABELS_SEED))
     if packs.parts[1:2] in (("home",), ("root",)):
         lines.append("ProtectHome=tmpfs")
     return "\n".join(lines) + "\n"
@@ -215,6 +348,28 @@ def credentials(env):
         if not path.is_file():
             raise Refusal("the service's %s credential (%s) is missing: paste install_la.py again" % (key.replace("_", " "), path.name))
     return paths, Path(state)
+
+
+def seed_labels(env, folder):
+    """Your PC's labels, brought by install_la.py as the room-labels.json credential: copied into the service's own
+    labels folder once, only while it holds none, so you label once on your PC and Home saves to LA from then on. A
+    seed that doesn't read is left alone and said once; den-live starts with no labels. True when it copied."""
+    credentials_dir = env.get("CREDENTIALS_DIRECTORY")
+    seed, target = (Path(credentials_dir) / LABELS_SEED if credentials_dir else None), Path(folder) / rl.room_labels.FILE
+    if seed is None or not seed.is_file() or target.exists():
+        return False
+    try:
+        doc, reason = rl.room_labels.validate(json.loads(seed.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        doc, reason = None, "unreadable"
+    if doc is None:
+        say("The labels that came from your PC don't read (%s); den-live starts with none." % reason)
+        return False
+    part = target.with_name(target.name + ".new")
+    part.write_text(json.dumps(doc, separators=(",", ":")), encoding="utf-8")
+    os.replace(part, target)
+    say("Your PC's %d labels are den-live's now; label and save in Home from here on." % len(doc["labels"]))
+    return True
 
 
 def roll(log):
@@ -265,13 +420,18 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     roll(live / "detector.log")
     # The den's labels: kept in the service's own state, read and saved through the gateway's den-live route.
     (state / "labels").mkdir(parents=True, exist_ok=True)
+    seed_labels(env, state / "labels")
+    fixed, why = asks_settings(config, paths["room_model"].parent)
+    if fixed is None:
+        say("The Qwen ask is off: %s." % why)
+    starter = None if fixed is None else asks_starter(fixed, config_path, site=config["site"], state=state, camera_id=camera_id)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,
                     floor=None, packs=config["content_packs"], site=config["site"], picked_on=picked_on, state=live,
                     detector_argv=[config["venv_python"], "-B", str(HERE / "detect_worker.py"), "--tools-root",
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
-                    status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say))
+                    status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say), asks=starter)
 
 
 def stopping(_signum, _frame):

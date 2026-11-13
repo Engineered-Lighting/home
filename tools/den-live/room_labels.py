@@ -270,3 +270,12 @@ def line_for(labels_doc, track, body=None, scan_revision=None):
         return None
     phrase = near_phrase(doc["labels"], xy)
     return f"Seated {phrase}." if phrase else None
+
+
+def near_line(store, scan_revision):
+    """The Qwen ask's hook (ask.Asker's near_line): track -> (line_for's line or None, the labels' revision), from the
+    Store's document as it is at each ask, so a save in Home reaches the next ask."""
+    def line(track):
+        doc = store.get()
+        return line_for(doc, track, None, scan_revision), doc["revision"]
+    return line

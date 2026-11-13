@@ -13,8 +13,11 @@
 #     lock's versions, wheels only, each with --no-deps: CPU torch from PyTorch's CPU index, rtmlib from its wheel in
 #     the release, the rest from PyPI. Then it holds the venv to the lock as the detector does, and loads the models
 #     once through the detector's own checks.
-#  5. Writes /etc/den-live/config.json and the unit's drop-in, from settings.json and the running Home gateway.
-#  6. Installs the three private inputs root-only in /etc/den-live/private/, and the unit.
+#  5. Writes /etc/den-live/config.json and the unit's drop-in, from settings.json and the running Home gateway. With
+#     the Qwen ask set up (settings.json's asks block), the drop-in also allows Home Assistant's one address and loads
+#     its token as a credential.
+#  6. Installs the three private inputs root-only in /etc/den-live/private/, and the unit. With the Qwen ask set up, a
+#     fourth: ha-token.txt; without it, an old one is removed.
 #  7. Points /opt/den-live/current at this release and (re)starts den-live, then waits for its stream to answer.
 # It prints words only, never a token or a coordinate, and ends with its undo lines. Any stop, an unexpected one too
 # (the ERR trap), prints why, the undo lines and, once this run has switched releases, the line back to the old one.
@@ -113,6 +116,20 @@ for name in room-model.jsonl camera-token.txt register-receipt.json settings.jso
 done
 [[ -x "${python}" ]] || refuse "LA has no ${python}: the detector's wheels are Python 3.12's"
 "${python}" -c 'import ensurepip, venv' >/dev/null 2>&1 || refuse "Python 3.12's venv module is missing (Ubuntu's python3.12-venv package)"
+# The Qwen ask: settings that set it up and its token come together or not at all. The drop-in's LoadCredential follows
+# the settings, so a token missing beside them would stop the unit from starting.
+if "${python}" -c 'import json, sys; sys.exit(0 if "asks" in json.load(open(sys.argv[1], encoding="utf-8")) else 1)' "${here}/settings.json"; then
+  [[ -s "${here}/ha-token.txt" ]] || refuse "settings.json sets the Qwen ask up, but ha-token.txt isn't beside install.sh"
+elif [[ -e "${here}/ha-token.txt" ]]; then
+  refuse "ha-token.txt is beside install.sh, but settings.json doesn't set the Qwen ask up"
+fi
+# Your labels from the PC: settings that bring them and the file come together, as the token does (the drop-in's
+# LoadCredential follows the settings).
+if "${python}" -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1], encoding="utf-8")).get("labels_seed") is True else 1)' "${here}/settings.json"; then
+  [[ -s "${here}/room-labels.json" ]] || refuse "settings.json brings your labels, but room-labels.json isn't beside install.sh"
+elif [[ -e "${here}/room-labels.json" ]]; then
+  refuse "room-labels.json is beside install.sh, but settings.json doesn't bring labels"
+fi
 work="$(mktemp -d)"
 say "The tarball matches its sha256 (${want:0:12})."
 
@@ -197,6 +214,23 @@ for name in room-model.jsonl camera-token.txt register-receipt.json; do
 done
 install -m 0644 -- "${release}/stack/services/den-live/den-live.service" "${unit}"
 say "Private inputs: room model, camera token and step 2's receipt, root-only in ${etc}/private."
+# The Qwen ask's Home Assistant token, only when install_la.py brought one (the settings' asks block, and the drop-in's
+# LoadCredential for it, come with it). Without one, an old copy goes, so the ask is off and nothing stale stays.
+if [[ -s "${here}/ha-token.txt" ]]; then
+  install -m 0600 -o root -g root -- "${here}/ha-token.txt" "${etc}/private/ha-token.txt"
+  say "The Qwen ask: Home Assistant's token, root-only in ${etc}/private. It asks only while Frigate sees someone seated."
+else
+  rm -f -- "${etc}/private/ha-token.txt"
+  say "The Qwen ask: off (no Home Assistant token came with this install)."
+fi
+# Your labels from the PC, when install_la.py brought them: a root-only seed the service copies into its own state once,
+# only while it has no labels (run_service.seed_labels). Without one, an old seed goes; the service's own labels stay.
+if [[ -s "${here}/room-labels.json" ]]; then
+  install -m 0600 -o root -g root -- "${here}/room-labels.json" "${etc}/private/room-labels.json"
+  say "Your labels: brought from the PC. den-live takes them only if it has none yet."
+else
+  rm -f -- "${etc}/private/room-labels.json"
+fi
 
 # ---- 7. this release, live -------------------------------------------------------------------------------------
 previous="$(readlink -f "${base}/current" 2>/dev/null || true)"

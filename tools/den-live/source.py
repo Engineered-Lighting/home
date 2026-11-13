@@ -20,6 +20,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from functools import partial
 
 from body_clock import AGE_HEADER, lease_clock
 
@@ -34,9 +35,9 @@ class AllowedCamera:
     """den-take's Camera, held to ALLOWED_PATHS: any other path is refused here, before a connection is opened. It has
     no health(): den-take's /health check is a path this client doesn't ask for."""
 
-    def __init__(self, camera, *, body_timing=None):
+    def __init__(self, camera, *, read_body_bundle=None):
         self._camera = camera
-        self._body_timing = body_timing
+        self._read_body_bundle = read_body_bundle
         self.host, self.port = camera.host, camera.port
 
     def __repr__(self):
@@ -50,33 +51,38 @@ class AllowedCamera:
 
     def get_bundle(self, timeout=5.0):
         """Read the latest bundle and its optional same-response exposure receipt."""
-        if self._body_timing is None:
+        if self._read_body_bundle is None:
             status, body = self.get("/frame.npz", timeout)
             return status, body, None
-        token, max_body = self._body_timing
-        connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+        return self._read_body_bundle(timeout)
+
+
+def _get_body_bundle(camera, max_body, token, timeout):
+    connection = http.client.HTTPConnection(camera.host, camera.port, timeout=timeout)
+    try:
+        headers = {"Authorization": "Bearer " + token} if token else {}
+        connection.request("GET", "/frame.npz", headers=headers)
+        response = connection.getresponse()
+        body = response.read(max_body + 1)
+        if len(body) > max_body:
+            raise http.client.HTTPException("response too large")
+        if response.length:
+            raise http.client.IncompleteRead(body, response.length)
+        values = [value for key, value in response.getheaders() if key.casefold() == AGE_HEADER.casefold()]
         try:
-            connection.request("GET", "/frame.npz", headers={"Authorization": "Bearer " + token})
-            response = connection.getresponse()
-            body = response.read(max_body + 1)
-            if len(body) > max_body:
-                raise http.client.HTTPException("response too large")
-            if response.length:
-                raise http.client.IncompleteRead(body, response.length)
-            values = [value for key, value in response.getheaders() if key.casefold() == AGE_HEADER.casefold()]
-            try:
-                receipt = json.loads(values[0]) if len(values) == 1 and len(values[0]) <= 2048 else None
-            except ValueError:
-                receipt = None
-            return response.status, body, receipt
-        finally:
-            connection.close()
+            receipt = json.loads(values[0]) if len(values) == 1 and len(values[0]) <= 2048 else None
+        except (ValueError, RecursionError):
+            receipt = None
+        return response.status, body, receipt
+    finally:
+        connection.close()
 
 
 def camera_client(take, url, token, *, body_timing=False):
     """den-take's client held to the den-live paths, with optional frame-age receipts."""
-    timing = (token, take.MAX_BODY) if body_timing else None
-    return AllowedCamera(take.Camera(url, token), body_timing=timing)
+    camera = take.Camera(url, token)
+    read_body_bundle = partial(_get_body_bundle, camera, take.MAX_BODY, token) if body_timing else None
+    return AllowedCamera(camera, read_body_bundle=read_body_bundle)
 
 
 @dataclass(frozen=True)

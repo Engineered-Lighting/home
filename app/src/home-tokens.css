@@ -1052,7 +1052,8 @@ button.hg-no-press:active {
 .home-den-live-chip[data-state="live"] .home-den-live-chip-dot { background: var(--apt-ok, #91e6bd); }
 .home-den-live-chip[data-state="attention"] .home-den-live-chip-dot { background: var(--hg-warn, #ffb224); }
 .home-den-live-chip-facts { color: var(--hg-fg-2, #a1a1a1); font-variant-numeric: tabular-nums; }
-.home-den-live-chip-facts:empty, .home-den-live-chip-banner:empty { display: none; }
+.home-den-live-chip-qwen { color: var(--hg-fg-1, #d4d4d4); overflow-wrap: anywhere; }
+.home-den-live-chip-facts:empty, .home-den-live-chip-qwen:empty, .home-den-live-chip-banner:empty { display: none; }
 .home-den-live-chip-banner { margin-top: 4px!important; color: var(--hg-warn, #ffb224); overflow-wrap: anywhere; }
 .apt-home-shell[data-look-only] .apt-home-stage { top: 52px!important; right: 0!important; bottom: 0!important; }
 .apt-home-shell .apt-home-look-only { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hg-fg-1); font-size: 13px; font-weight: 500; }

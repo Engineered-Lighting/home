@@ -127,7 +127,14 @@ class HueOverlay:
         if self.clear_attempt is not None or authority.get("active"):
             if self.clear_attempt is None:
                 self.clear_attempt = {"epoch": self.epoch, "publisher": self.publisher}
-            cleared = self._call("coordinator_clear", self.clear_attempt)
+            try:
+                cleared = self._call("coordinator_clear", self.clear_attempt)
+            except ha_link.HaError:
+                # A lost response can still be replayed while HA remembers the request.
+                # After an authority change, a rejected replay must let the next step claim again.
+                if self.clear_attempt["epoch"] != self.epoch:
+                    self.clear_attempt = None
+                raise
             stream, watermark = cleared["stream_id"], cleared["watermark"]
         else:
             stream, watermark = attrs["correction_stream_id"], attrs["correction_watermark"]
@@ -136,7 +143,9 @@ class HueOverlay:
         self._save()
         self.accepted = self.pending = self.last_sent = None
         self.clear_attempt = None
-        self.clear_requested.clear()
+        with self.lock:
+            self.latest = {**self.latest, "learned": {}}
+            self.clear_requested.clear()
 
     def step(self):
         poll_started = self.clock()

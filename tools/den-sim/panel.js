@@ -155,7 +155,7 @@
   /* ---------- reading Home's real overlay ---------- */
   const overlay = () => {
     const engine = window.__APT_ENGINE;
-    return engine?.siteId === 'victoria' && engine.overlay?.virtualFixturesReadback ? engine.overlay : null;
+    return engine?.siteId === window.__denSimSite && engine?.overlay?.virtualFixturesReadback ? engine.overlay : null;
   };
   const fixtureDescriptors = () => {
     const live = overlay();

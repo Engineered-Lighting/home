@@ -28,6 +28,7 @@ import { sealRegisteredDeskTarget } from '../../app/src/home-3d/registered-desk-
 import { readActiveBinding, REGISTRATION_ROUTE } from '../../web-gateway/equipment-registration.mjs';
 import { createContentPackHandler } from '../../web-gateway/content-pack-route.mjs';
 import { createLightingLayerHandler } from '../../web-gateway/lighting-layer.mjs';
+import { SITES } from '../../web-gateway/home-location.mjs';
 import { readPackIndex } from '../content-packs.mjs';
 import { authoredDocument, installPack } from '../fixtures/apartment-home-shell-fixtures.mjs';
 import { privateReason, standInSofa, writeGeometry } from './brain.mjs';
@@ -41,6 +42,7 @@ import { TABLE, headTools, personColumn, receiptView, sha256 } from './receipt.m
 import { topLine } from './top_line.mjs';
 
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
+const DEN_SITE = BRAIN_BASE.split('/').at(-1);
 const HERE = path.dirname(fileURLToPath(import.meta.url)), ROOT = path.resolve(HERE, '../..'), SRC = path.join(ROOT, 'app/src');
 const refs = JSON.parse(fs.readFileSync(path.join(HERE, 'refs.json'), 'utf8'));
 const SEAT_HEIGHT_M = .45;
@@ -126,7 +128,7 @@ function qwenWords(roots) {
 function packRoot() {
   if (room === 'real') return path.resolve(refs.content_packs);
   const packs = path.join(run, 'packs');
-  const items = ['echo', 'victoria'].map(site => installPack(packs, site));
+  const items = SITES.map(site => installPack(packs, site));
   fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1,
     packs: items.map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
   return packs;
@@ -476,9 +478,9 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const type = file => TYPES[path.extname(file).toLowerCase()] || 'application/octet-stream';
 
 // Runs before Home's own scripts. CSP blocks that happen before the panel loads still count.
-const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__denSimCsp=[];`
+const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__denSimCsp=[];window.__denSimSite=${JSON.stringify(DEN_SITE)};`
   + `document.addEventListener('securitypolicyviolation',function(e){window.__denSimCsp.push({uri:e.blockedURI,directive:e.effectiveDirective});});`
-  + `try{localStorage.setItem('apartment3d.site','victoria');localStorage.setItem('home.perf.backgroundWarmup','off');localStorage.setItem('apartment3d.prewarm','off');}catch(_){}</script>`;
+  + `try{localStorage.setItem('apartment3d.site',window.__denSimSite);localStorage.setItem('home.perf.backgroundWarmup','off');localStorage.setItem('apartment3d.prewarm','off');}catch(_){}</script>`;
 function homePage() {
   const html = fs.readFileSync(path.join(SRC, 'index.html'), 'utf8');
   if (!html.includes('<head>') || !html.includes('</body>')) throw Error('index.html no longer has the expected shape');
@@ -523,7 +525,7 @@ function readJson(req, limit = 16384) {
 // Both are the gateway's own read-only routes, in the gateway's own order.
 const handleLighting = createLightingLayerHandler({ contentPacksDir: PACKS, authenticate: () => true });
 const handlePack = createContentPackHandler({ contentPacksDir: PACKS, authenticate: () => true });
-const LAB_CAPABILITIES = { site_id: 'victoria', cameras: [], live_previews: {}, live_videos: {}, recording_allowed: false,
+const LAB_CAPABILITIES = { site_id: DEN_SITE, cameras: [], live_previews: {}, live_videos: {}, recording_allowed: false,
   experiments: [], apartment_viewing: { provisioned: false } };
 
 const server = http.createServer(async (req, res) => {
@@ -618,6 +620,6 @@ server.listen(PORT, HOST, () => {
     `Run output: ${run}`, 'Nothing is sent. Press Ctrl+C to stop.'].join('\n'));
   writeRunJson();
   // The pack catalog must resolve before the page asks for it.
-  if (!readPackIndex(PACKS).packs.some(item => item.active && item.manifest.siteId === 'victoria')) console.error('No active Victoria pack in ' + PACKS);
+  if (!readPackIndex(PACKS).packs.some(item => item.active && item.manifest.siteId === DEN_SITE)) console.error('No active den pack in ' + PACKS);
 });
 for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cancelClick(); feed.dispose(); server.closeAllConnections(); server.close(() => process.exit()); });

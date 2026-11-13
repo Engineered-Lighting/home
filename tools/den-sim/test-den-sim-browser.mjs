@@ -27,13 +27,14 @@ import path from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { BRAIN_BASE } from './feed.mjs';
 
 // LOCALAPPDATA points at scratch here, so Playwright is told where its browsers really are.
 process.env.PLAYWRIGHT_BROWSERS_PATH ||= path.join(os.homedir(), 'AppData', 'Local', 'ms-playwright');
 const { chromium } = createRequire(import.meta.url)('playwright');
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const HOST = '127.0.0.1', PORT = 18180, ORIGIN = `http://${HOST}:${PORT}`;
-const BRAIN_STATE = '/api/lighting-brain/v1/homes/victoria/state';
+const BRAIN_STATE = BRAIN_BASE + '/state';
 const ZHA = '/api/services/zha/issue_zigbee_cluster_command', HUE = '/api/services/light/turn_on';
 // Home's own bench probe. The page's security policy stops it before any network.
 const EXPECTED_CSP_BLOCKS = new Set(['http://127.0.0.1:8765/healthz']);

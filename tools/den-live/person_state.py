@@ -9,7 +9,8 @@ and each track's near phrase (the labels' words; xy_m and the labels make it aga
 millimetre and seconds to the millisecond.
 
 The anchor: before a run's first snapshot in each day's file it writes one line
-    {"schema": "den-person-state-1", "service_run_id": <run>, "anchor": {"mono": <time.monotonic()>, "ts": <time.time()>}}
+    {"schema": "den-person-state-1", "service_run_id": <run>,
+     "anchor": {"mono": <time.monotonic()>, "ts": <time.time()>}}
 so that run's *_mono times join the *_ts times of the ask log and the trace (contract 0's clocks).
 """
 import time

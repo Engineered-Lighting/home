@@ -617,11 +617,12 @@ class Perceiving(unittest.TestCase):
 
     def test_idle_keeps_the_epoch_while_a_fresh_frame_is_at_the_detector(self):
         """The review's case: after a 2.6 s stall, a frame captured 2.9 s after the last fresh one is at the detector
-        when an idle tick passes 3.0 s. The epoch stays, and finish takes the frame. The control: the same idle tick
-        with no frame at the detector starts the next epoch."""
+        when an idle tick passes 3.0 s. The epoch stays, and finish takes the frame. The controls: the same idle tick
+        with no frame at the detector starts the next epoch, and a frame that never finishes holds it only until its
+        capture plus FRESH_S."""
         state = {'status': 'ok', 'why': None}
         frames = bundles(READING)
-        for pending in (True, False):
+        for pending in (True, 'never finishes', False):
             with self.subTest(pending=pending):
                 p = self.perceiver(READING)
                 self.run_take(p, frames[:1])
@@ -640,6 +641,10 @@ class Perceiving(unittest.TestCase):
                     continue
                 self.assertAlmostEqual(prepared.ref.capture_mono, start + 2.9, places=6)
                 self.assertEqual(p.sessions, 1, 'a fresh frame at the detector holds the epoch')
+                if pending == 'never finishes':
+                    p.idle(state, prepared.ref.capture_mono + perceive.FRESH_S)
+                    self.assertEqual(p.sessions, 2, 'the control: the hold runs out at the capture plus FRESH_S')
+                    continue
                 event = p.finish(prepared, p.detector.detect(late, 0.7), state, start + 3.6)
                 self.assertIsNotNone(event, 'finish took the frame')
                 self.assertEqual((event['perception_status'], p.sessions, p.counts['expired']), ('fresh', 1, 0))

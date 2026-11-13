@@ -41,7 +41,7 @@ function staticSources(root) {
       const trustedAsset = /^(?:vendor|fonts|icons)\//.test(relative)
         && /\.(?:wasm|woff2?|ttf|otf|png|jpe?g|webp|svg|ico|ktx2|json)$/.test(entry.name);
       const rootAsset = directory === root && ['index.html', 'favicon.svg', 'favicon.ico', 'favicon-32.png', 'apple-touch-icon.png', 'site.webmanifest'].includes(entry.name);
-      if (!/\.(?:js|mjs|jsx|css)$/.test(entry.name) && !trustedAsset && !rootAsset) continue;
+      if (!/\.(?:js|mjs|jsx|css)$/.test(entry.name) && !trustedAsset && !rootAsset && relative !== 'precompiled/manifest.json') continue;
       bytes += stat.size;
       assert.ok(stat.size <= 32 * 1024 * 1024 && bytes <= 256 * 1024 * 1024, 'static source bytes are bounded');
       sources.set('/' + relative, { selected: file, relative });

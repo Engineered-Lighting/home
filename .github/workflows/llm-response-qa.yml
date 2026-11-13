@@ -81,6 +81,9 @@ jobs:
       - name: Install Chromium for authored Apartment acceptance
         run: npx playwright install --with-deps chromium
 
+      - name: Build Home JSX for authored shell browser acceptance
+        run: node tools/build-app-jsx.mjs
+
       - name: Authored Apartment shell browser acceptance, part 2
         run: node --test tools/test-apartment-home-shell-browser-part2.mjs
 

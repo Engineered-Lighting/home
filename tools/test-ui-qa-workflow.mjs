@@ -60,11 +60,11 @@ test('independent workers retain runtime, deadlines, six original commands and u
       else assert.doesNotMatch(entry, /^        if:/m);
     }
   }
-  assert.equal(shell.length, 12); assert.equal(shellParts.length, 7); assert.equal(touched.length, 7);
+  assert.equal(shell.length, 12); assert.equal(shellParts.length, 8); assert.equal(touched.length, 7);
   assert.deepEqual(shell.slice(0, 4).map(withoutComments), touched.slice(0, 4).map(withoutComments));
   assert.deepEqual(shellParts.slice(0, 4).map(withoutComments), touched.slice(0, 4).map(withoutComments));
   assert.equal(field(jobs.shell_browser_parts.split('    steps:\n')[0], 'name'), 'full-shell browser parts 2 and 3');
-  assert.deepEqual(runs(shellParts), [...setupCommands, ...shellPartCommands]);
+  assert.deepEqual(runs(shellParts), [...setupCommands, 'node tools/build-app-jsx.mjs', ...shellPartCommands]);
   assert.deepEqual(runs(shell), [...setupCommands, ...originalCommands.slice(0, 4),
     'node --test tools/test-ui-qa-workflow.mjs', 'node --test tools/test-touched-shards.mjs', originalCommands[4]]);
   assert.deepEqual(runs(touched), [...setupCommands, shardedCommand]);

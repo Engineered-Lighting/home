@@ -96,8 +96,8 @@ the camera or its mount, and take two fresh tapes, as on 2026-11-11.
 6. **The same nine in your scan.** Your scan opens on a local page, with the camera's picture beside it and your clicks
    numbered. For each row, orbit to the feature and click it once without dragging. Then Save.
 7. **The distance check.** A rigid fit keeps distances, so all 36 pair distances are compared, camera against scan. A
-   feature that disagrees with the others by more than 6 cm (the median over its 8 pairs) is named, worst first, and
-   the paste stops.
+   feature that disagrees with the others by more than 15 cm, den-register's gate (the median over its 8 pairs), is
+   named, worst first, and the paste stops. Between 6 and 15 cm it's only noted in one line, and the paste goes on.
 8. **The fit.** den-register fits with a 0.15 m gate, then each sofa check must be within 10 cm. It prints
    `REGISTERED den-oak@<date>.<n>` or `REFUSED` with each reason.
 9. **The held-out take, 20 s.** "Leave the view again." Your scan's floor and upper walls, seen from the new

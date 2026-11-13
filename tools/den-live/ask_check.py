@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The inference plan's step 4: the ask check, from this PC. The owner's paste, once den-live asks Qwen on LA.
 
-    python -B C:\\claude\\home\\.claude\\worktrees\\zealous-faraday-76b9d1\\tools\\den-live\\ask_check.py --home https://<your Home address>
+    python -B C:\\claude\\home\\.claude\\worktrees\\den-live\\tools\\den-live\\ask_check.py --home https://<your Home address>
 
 It follows den-live's people stream through your Home's tailnet address with no cookie, as the walk test does, and
 speaks three cues:

@@ -927,6 +927,92 @@ class RunLocalScale(unittest.TestCase):
         self.assertIn('asks for depth x0.971, but its take was made at x1: paste register_now.py again', text)
 
 
+# ---- the plan's 02-3 real-replay check (replay_person_state_check.py) ----------------------------------------------
+
+class ReplayVerdict(unittest.TestCase):
+    """The three lines' verdicts, the live loop's pacing and the cues' clock, on synthetic numbers."""
+
+    def test_three_lines_and_what_passes(self):
+        import replay_person_state_check as check
+        good = [(2.1, [(5.0, 5.0), (7.5, 7.5)], 0), (2.45, [(9.0, 9.0)], 0)]
+        lines, passed = check.lines(good)
+        self.assertEqual(lines, ['since, ask less preview: 0.000 s at most over 3 replies (should be 0)',
+                                 'seated latency per trial: 2.10 s, 2.45 s (each should be 2.5 s or less)',
+                                 'revision bumps while sitting per trial: 0, 0 (each should be 0)'])
+        self.assertTrue(passed)
+        for bad, words in (([(2.1, [(5.0, 4.75)], 0)], '0.250 s at most over 1 replies'),
+                           ([(2.6, [(5.0, 5.0)], 0)], '2.60 s'),
+                           ([(None, [(5.0, 5.0)], 0)], 'never seated'),
+                           ([(2.1, [(5.0, 5.0)], 1)], 'per trial: 1 ('),
+                           ([(2.1, [(5.0, None)], 0)], '1 with no seated since on one side'),
+                           ([(2.1, [], 0)], 'no ask was answered')):
+            with self.subTest(words=words):
+                lines, passed = check.lines(bad)
+                self.assertFalse(passed)
+                self.assertIn(words, ' | '.join(lines))
+
+    def test_the_detector_takes_the_newest_frame_when_free(self):
+        import replay_person_state_check as check
+        frames = [{'arrival': 10.0 + i * 0.05, 'compute': 0.12, 'n': i} for i in range(8)]
+        taken = check.paced(frames)
+        self.assertEqual([(frame['n'], round(done, 2)) for frame, done in taken],
+                         [(0, 10.12), (2, 10.24), (4, 10.36), (7, 10.48)], 'free at 10.36, the mailbox holds frame 7')
+        slow = [{'arrival': 10.0 + i * 0.25, 'compute': 0.07, 'n': i} for i in range(3)]
+        self.assertEqual([frame['n'] for frame, _ in check.paced(slow)], [0, 1, 2], 'a free detector takes every frame')
+
+    def test_a_cue_goes_on_the_cameras_clock(self):
+        import replay_person_state_check as check
+        recv, host = [100.0, 100.05, 100.1], [5.0, 5.25, 5.5]   # recorded five times faster than the camera's clock
+        self.assertAlmostEqual(check.camera_time(100.07, recv, host), 5.35)
+        self.assertAlmostEqual(check.camera_time(99.99, recv, host), 4.95, msg='before the first frame, its own pace')
+
+
+@unittest.skipUnless(HAVE_SET, 'needs a prepared den-sim set')
+class ReplayCheck(unittest.TestCase):
+    """replay_person_state_check.py on den-sim's renders: exactly three lines of words and numbers, never a coordinate."""
+    SHAPES = (r'^since, ask less preview: (?:\d+\.\d{3} s at most over \d+ replies(?:, \d+ with no seated since on one '
+              r'side)?|no ask was answered, so nothing to compare) \(should be 0\)$',
+              r'^seated latency per trial: (?:never seated|\d+\.\d\d s)(?:, (?:never seated|\d+\.\d\d s))* '
+              r'\(each should be 2\.5 s or less\)$',
+              r'^revision bumps while sitting per trial: \d+(?:, \d+)* \(each should be 0\)$')
+
+    def run_check(self, *argv, folder=SET):
+        import replay_person_state_check as check
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = check.main([str(folder), '--floor=-3,-3.5,3,2.5', *argv], tools_root=TOOLS)
+        lines = out.getvalue().splitlines()
+        if code != 2:
+            self.assertEqual(len(lines), 3, 'exactly three lines')
+            for line, shape in zip(lines, self.SHAPES):
+                self.assertRegex(line, shape)
+        return code, lines
+
+    def test_the_reading_take_has_one_since_and_no_bumps(self):
+        code, lines = self.run_check('--take', READING.name)
+        self.assertRegex(lines[0], r'^since, ask less preview: 0\.000 s at most over [1-9]\d* replies \(should be 0\)$')
+        self.assertEqual(lines[2], 'revision bumps while sitting per trial: 0 (each should be 0)')
+        latency = float(re.search(r'(\d+\.\d\d) s', lines[1]).group(1))
+        # den-sim's scenes start seated: den-track's association settles first (about 1.9 s from the first frame), and
+        # only then can the 2 s hold begin. A sit-down after walking in is tracked before it, so it has no such wait.
+        self.assertTrue(3.0 < latency < 4.5, latency)
+        self.assertEqual(code, 0 if latency <= 2.5 else 1)
+
+    def test_a_standing_take_is_never_seated_and_never_asked(self):
+        standing = next(json.loads((folder / 'take.json').read_text(encoding='utf-8'))['take'] for folder in
+                        (SET / 'truth').iterdir() if json.loads((folder / 'take.json').read_text(encoding='utf-8'))
+                        ['person']['where'].startswith('standing'))
+        code, lines = self.run_check('--take', standing)
+        self.assertEqual(code, 1)
+        self.assertEqual(lines[:2], ['since, ask less preview: no ask was answered, so nothing to compare (should be 0)',
+                                     'seated latency per trial: never seated (each should be 2.5 s or less)'])
+
+    def test_a_folder_with_no_trial_stops_in_one_line(self):
+        code, lines = self.run_check(folder=scratch('den-live-replays-'))
+        self.assertEqual((code, lines), (2, ["replay check: stopped: no take in that folder has a begin cue and recorded "
+                                             "detector rows (den-sim's prepared format)."]))
+
+
 # ---- end to end: the real detector, the fake camera, the page ------------------------------------------------------
 
 @unittest.skipUnless(HAVE_SET and NODE and sc.VENV_PY.is_file() and (rl.APP / 'app' / 'src' / 'home-3d' / 'apartment-people-layer.mjs').is_file(),

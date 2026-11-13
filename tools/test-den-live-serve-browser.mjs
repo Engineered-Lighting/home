@@ -493,8 +493,9 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
     assert.ok((await readDrawn()).every(on => on === false));
     const other = await context.newPage();
     try {
+      await other.bringToFront();
       await other.goto(page.url(), { waitUntil: 'domcontentloaded' });
-      await other.waitForFunction(() => window.HomeDenLiveView?.status()?.spot?.stopped === true);
+      await other.waitForFunction(() => !document.hidden && window.HomeDenLiveView?.status()?.spot?.stopped === true);
       const observed = await other.evaluate(() => window.HomeDenLiveView.status().spot.stop_counter);
       await page.bringToFront();
       await page.waitForFunction(() => !document.hidden && window.HomeDenLiveView?.status()?.chip);
@@ -510,6 +511,10 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
       }, { url: denBase + '/coordinator', stop_counter: observed });
       assert.equal(staleResume, 409, 'a second tab cannot resume past a newer Stop');
       assert.ok((await readDrawn()).every(on => on === false));
+    } catch (error) {
+      const otherState = await other.evaluate(() => ({ hidden: document.hidden, den: window.HomeDenLiveView?.status() }));
+      error.message += '\nOther tab: ' + JSON.stringify(otherState);
+      throw error;
     } finally { await other.close(); }
     await clickCoordinator(page, button('resume'), 'resume');
     await waitForSpot(true);

@@ -15,8 +15,9 @@ Numbers this phase sets, with where they come from:
 - association_revision (contract 2): it moves only once a track's safe has held its new value for two consecutive
   processed frames. Each frame's association status stays honest: one unsafe frame says ambiguous, so the ask skips
   it, and the revision stays.
-- The registration gate is step 2's method file's gate_m (0.10). den-observe's own max_error_bound_m is the ladder's
-  0.05, which a scan-picked registration isn't held to (plan pick 3).
+- The registration gate is step 2's method file's gate_m (0.15 m), with its sofa checks held to sofa_check_max_m
+  (0.10 m) by register_now.py. den-observe's own max_error_bound_m is the ladder's 0.05, which a scan-picked
+  registration isn't held to (plan pick 3).
 - The clock: capture time on this PC's monotonic clock = t_host + offset, the offset anchored to this PC's arrival
   times (the 5th percentile over the last 50 frames: the least delayed). The den Jetson's wall clock read 1970 on
   2026-11-11, so the tracker never uses captured_unix_ns (plan L1); and a monotonic clock here means a wall-clock step

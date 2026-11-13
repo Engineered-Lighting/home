@@ -199,7 +199,7 @@ class PipelineTests(unittest.TestCase):
         perceiver.core, perceiver.strong = SimpleNamespace(step=lambda *args: [(track, "confirmed")]), set()
         perceiver.clock = SimpleNamespace(add=lambda *_: None, offset=lambda: 0)
         perceiver._transit = lambda *_: None
-        perceiver.require_source_correction = False
+        perceiver.require_source_correction, perceiver.source_correction = False, None
         perceiver.mode, perceiver.light_since, perceiver.dark_since = mode, None, 99
         perceiver.event = lambda ago, tracks, camera, now: {**camera, "camera": {"why": None, **camera},
                                                             "seq": 2, "capture_ts": 123.0, "tracks": tracks}

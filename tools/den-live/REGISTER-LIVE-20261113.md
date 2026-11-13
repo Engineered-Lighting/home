@@ -29,9 +29,9 @@ Two real-room fits were refused under v1. Most of the cause was the method, then
 - **The edge guard.** After the clicks, on the copy's depth: a click whose 7 x 7 window (den-register's
   `depth_window_px` 3) spreads, p90 - p10, by more than max(`edge_min_m`, `edge_fraction` x its depth) sits on a depth
   edge. The guard names it, and the click page opens again, up to `edge_rounds` times in one paste. The spread is taken
-  about the window's own least-squares plane: the floor seen at 3 m from a lens about 1.4 m up changes depth by about
-  1.5 cm a pixel, so a raw spread would name a good floor-level corner (on the den simulation's renders it named the
-  set's own floor-level click), while a step between two surfaces is left whole.
+  about the window's own least-squares plane: the floor seen a few metres off changes depth by a centimetre or more a
+  pixel, so a raw spread would name a good floor-level corner (on the den simulation's renders it named the set's own
+  floor-level click), while a step between two surfaces is left whole.
 - **The distance check,** after the scan picks and before the fit. A rigid fit keeps distances, so all 36 pair
   distances are compared, camera against scan. A feature whose median difference over its 8 pairs is over `gate_m`
   (0.15 m) is a wrong click or pick, which no fit could pass. It's named, worst first, in centimetres, and the paste

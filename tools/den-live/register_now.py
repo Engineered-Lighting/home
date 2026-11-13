@@ -101,8 +101,8 @@ TAPES = (("lens_height_m", "the lens's height above the floor", 0.5, 3.0),
 WIDTH, HEIGHT = 640, 400
 RANSAC_TRIES, WALL_TRIES, SAMPLE_STEP, SEED = 400, 1500, 2, 0
 HIDDEN = re.compile(r"^\s*camera at x |^Next: |^Or, if this take")   # den-register's lines for its own command line
-# A den-register line about the camera (camera_below_floor's "the fit puts the camera -42.0 cm from the floor", the
-# mount check's "... 2.87 m from the camera") would carry the pose: its numbers are withheld. So is a click's pixel.
+# A den-register line about the camera (camera_below_floor's "the fit puts the camera -50.0 cm from the floor", the
+# mount check's "... 2.50 m from the camera") would carry the pose: its numbers are withheld. So is a click's pixel.
 CAMERA_WORDS = re.compile(r"camera", re.I)
 NUMBER = re.compile(r"[-+]?[0-9]+(?:\.[0-9]+)?(?:\s*(?:cm|mm|m|degrees|deg)(?![A-Za-z]))?")
 PIXEL = re.compile(r"\(\s*[-+]?[0-9.]+\s*,\s*[-+]?[0-9.]+\s*\)")

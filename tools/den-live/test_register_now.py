@@ -309,7 +309,8 @@ class SourceCorrection(unittest.TestCase):
 
 # ---- the depth check: the floor, the facing wall and the two tapes ---------------------------------------------------
 
-HEIGHT_TAPE, WALL_TAPE = 1.37, 5.0   # room_points' own lens height and facing wall: synthetic, not the den's
+HEIGHT_TAPE, WALL_TAPE = 1.50, 5.0   # room_points' lens height and facing wall: round numbers used only in tests
+PITCH_DEG = 10                      # and its camera's pitch, down
 
 
 def room_points(height, pitch_deg, seed=1, floor_n=6000, table_n=1500, wall_at=5.0):
@@ -335,7 +336,7 @@ TAPES = {'lens_height_m': HEIGHT_TAPE, 'facing_wall_m': WALL_TAPE}
 
 class DepthCheck(unittest.TestCase):
     def test_true_depth_needs_no_scale(self):
-        check = rn.scale_check(room_points(1.37, 11), TAPES, LIVE)
+        check = rn.scale_check(room_points(HEIGHT_TAPE, PITCH_DEG), TAPES, LIVE)
         self.assertEqual(check['result'], 'none')
         self.assertEqual(check['depth_scale'], 1.0)
         self.assertLess(abs(check['floor_pct']), 0.5)
@@ -343,7 +344,7 @@ class DepthCheck(unittest.TestCase):
         self.assertAlmostEqual(check['floor_wall_deg'], 90, delta=1)
 
     def test_three_percent_long_gives_a_scale(self):
-        check = rn.scale_check(room_points(1.37, 11) * 1.03, TAPES, LIVE)
+        check = rn.scale_check(room_points(HEIGHT_TAPE, PITCH_DEG) * 1.03, TAPES, LIVE)
         self.assertEqual(check['result'], 'scale')
         self.assertAlmostEqual(check['floor_pct'], 3.0, delta=0.4)
         self.assertAlmostEqual(check['wall_pct'], 3.0, delta=0.4)
@@ -352,12 +353,12 @@ class DepthCheck(unittest.TestCase):
                          % (check['floor_pct'], check['wall_pct'], check['bend_pts'], check['depth_scale']))
 
     def test_one_percent_off_is_within_the_no_scale_band(self):
-        check = rn.scale_check(room_points(1.37, 11) * 0.99, TAPES, LIVE)
+        check = rn.scale_check(room_points(HEIGHT_TAPE, PITCH_DEG) * 0.99, TAPES, LIVE)
         self.assertEqual((check['result'], check['depth_scale']), ('none', 1.0))
 
     def test_a_seven_point_bend_stops(self):
         """The floor reads 3.5% long and the facing wall 3.5% short: their mean is right, and no one scale fixes both."""
-        points = room_points(1.37, 11)
+        points = room_points(HEIGHT_TAPE, PITCH_DEG)
         bent = {'lens_height_m': HEIGHT_TAPE / 1.035, 'facing_wall_m': WALL_TAPE / 0.965}
         check = rn.scale_check(points, bent, LIVE)
         self.assertEqual(check['result'], 'stop')
@@ -367,16 +368,16 @@ class DepthCheck(unittest.TestCase):
         self.assertNotIn('depth_scale', check)
 
     def test_more_than_ten_percent_off_stops_rather_than_clamping(self):
-        far = rn.scale_check(room_points(1.37, 11) * 1.15, TAPES, LIVE)
+        far = rn.scale_check(room_points(HEIGHT_TAPE, PITCH_DEG) * 1.15, TAPES, LIVE)
         self.assertEqual(far['result'], 'stop')   # 15% long: the wall isn't within 10% of its tape at all
         self.assertIn("can't find the facing wall within 10%", far['why'])
         # the floor 13.9% long and the wall 9% long: a bend under 5 points, but a mean past what den-live will scale
-        check = rn.scale_check(room_points(1.37, 11), {'lens_height_m': HEIGHT_TAPE / 1.139, 'facing_wall_m': WALL_TAPE / 1.09}, LIVE)
+        check = rn.scale_check(room_points(HEIGHT_TAPE, PITCH_DEG), {'lens_height_m': HEIGHT_TAPE / 1.139, 'facing_wall_m': WALL_TAPE / 1.09}, LIVE)
         self.assertEqual(check['result'], 'stop')
         self.assertIn('more than den-live will scale', check['why'])
 
     def test_no_facing_wall_or_no_floor_says_so(self):
-        points = room_points(1.37, 11)
+        points = room_points(HEIGHT_TAPE, PITCH_DEG)
         no_wall = points[points[:, 2] < 3.0]
         self.assertEqual(rn.scale_check(no_wall, TAPES, LIVE)['why'], "the depth check can't find the facing wall within 10% of your wall tape")
         wall = np.column_stack((np.linspace(-2, 2, 500), np.linspace(0.4, 2, 500), np.full(500, 4.0)))
@@ -388,11 +389,11 @@ class DepthCheck(unittest.TestCase):
         farthest strong plane near the tape, so the check measures it, not the wardrobe."""
         world = np.random.default_rng(7)
         front = np.column_stack((world.uniform(-1.0, 1.0, 2400), world.uniform(0.3, 2.4, 2400), np.full(2400, 4.7)))
-        pitch = math.radians(11)   # room_points' camera: 1.37 m up, pitched 11 degrees down, the wall 5.0 m ahead
+        pitch = math.radians(PITCH_DEG)   # room_points' camera: HEIGHT_TAPE up, pitched PITCH_DEG down, the wall 5.0 m ahead
         fwd, down = np.array([0, -math.sin(pitch), math.cos(pitch)]), np.array([0, -math.cos(pitch), -math.sin(pitch)])
-        rel = front - np.array([0, 1.37, 0])
+        rel = front - np.array([0, HEIGHT_TAPE, 0])
         cabinet = np.column_stack((rel[:, 0], rel @ down, rel @ fwd)) + world.normal(0, 0.004, rel.shape)
-        plain = room_points(1.37, 11)
+        plain = room_points(HEIGHT_TAPE, PITCH_DEG)
         behind = np.zeros(len(plain), bool)
         behind[-3000:] = np.abs(plain[-3000:, 0]) < 1.0 * 5.0 / 4.7   # room_points' last 3000 are the wall: the front hides these
         scene = np.vstack((plain[~behind], cabinet))
@@ -411,16 +412,16 @@ class DepthCheck(unittest.TestCase):
 
 class Floor(unittest.TestCase):
     def test_height_and_pitch(self):
-        plane = rn.floor_plane(room_points(1.37, 11), LIVE)
-        self.assertAlmostEqual(plane['height_m'], 1.37, delta=0.01)
-        self.assertAlmostEqual(plane['pitch_down_deg'], 11, delta=0.5)
+        plane = rn.floor_plane(room_points(HEIGHT_TAPE, PITCH_DEG), LIVE)
+        self.assertAlmostEqual(plane['height_m'], HEIGHT_TAPE, delta=0.01)
+        self.assertAlmostEqual(plane['pitch_down_deg'], PITCH_DEG, delta=0.5)
         self.assertAlmostEqual(plane['roll_deg'], 0, delta=0.5)
 
     def test_a_table_with_more_points_than_the_floor_still_loses_to_it(self):
         """A table out-supports the floor, the floor is still strong, the lower wins. Best support alone would measure
-        the table, 0.92 m below the lens."""
-        plane = rn.floor_plane(room_points(1.37, 11, floor_n=3000, table_n=6000), LIVE)
-        self.assertAlmostEqual(plane['height_m'], 1.37, delta=0.01)
+        the table, 1.05 m below the lens."""
+        plane = rn.floor_plane(room_points(HEIGHT_TAPE, PITCH_DEG, floor_n=3000, table_n=6000), LIVE)
+        self.assertAlmostEqual(plane['height_m'], HEIGHT_TAPE, delta=0.01)
 
     def test_no_level_plane(self):
         wall = np.column_stack((np.linspace(-2, 2, 500), np.linspace(0.4, 2, 500), np.full(500, 4.0)))
@@ -436,14 +437,14 @@ class Tapes(unittest.TestCase):
         return tapes, out.getvalue()
 
     def test_two_tapes_in_metres_never_echoed(self):
-        tapes, text = self.ask('1,423', '4.187')
-        self.assertEqual(tapes, {'lens_height_m': 1.423, 'facing_wall_m': 4.187})
-        self.assertNotIn('1.423', text)
-        self.assertNotIn('4.187', text)
+        tapes, text = self.ask('1,5', '4.25')   # round numbers used only in tests
+        self.assertEqual(tapes, {'lens_height_m': 1.5, 'facing_wall_m': 4.25})
+        self.assertNotIn('1.5', text)
+        self.assertNotIn('4.25', text)
 
     def test_a_tape_that_isnt_metres_is_asked_again_then_stops(self):
-        tapes, text = self.ask('137', 'one', '1.4', '4.2')
-        self.assertEqual(tapes['lens_height_m'], 1.4)
+        tapes, text = self.ask('150', 'one', '1.5', '4.25')
+        self.assertEqual(tapes['lens_height_m'], 1.5)
         self.assertEqual(text.count("That isn't the lens's height"), 2)
         with self.assertRaises(rn.Stop):
             self.ask('x', 'y', 'z')
@@ -451,7 +452,7 @@ class Tapes(unittest.TestCase):
 
 # ---- the edge guard ----------------------------------------------------------------------------------------------
 
-def floor_plane_depth(height=1.4, fy=400.0, cy=200.0):
+def floor_plane_depth(height=HEIGHT_TAPE, fy=400.0, cy=200.0):
     """A level camera's depth of an endless floor `height` below it: z = fy height / (v - cy) below the horizon."""
     v = np.arange(rn.HEIGHT, dtype=np.float64)[:, None] * np.ones((1, rn.WIDTH))
     with np.errstate(divide='ignore'):
@@ -462,15 +463,15 @@ def floor_plane_depth(height=1.4, fy=400.0, cy=200.0):
 class EdgeGuard(unittest.TestCase):
     def test_a_slanted_floor_and_an_inside_corner_are_clear(self):
         z = floor_plane_depth()
-        v = 200 + round(400 * 1.4 / 3.0)   # the floor 3 m away: about 1.6 cm of depth a pixel
+        v = 200 + round(400 * HEIGHT_TAPE / 3.5)   # the floor 3.5 m away: about 2 cm of depth a pixel
         spread, depth = rn.window_spread(z, 320, v, 3)
-        self.assertAlmostEqual(depth, 3.0, delta=0.05)
+        self.assertAlmostEqual(depth, 3.5, delta=0.05)
         self.assertLess(spread, 0.01)
         raw = np.percentile(z[v - 3:v + 4, 317:324], 90) - np.percentile(z[v - 3:v + 4, 317:324], 10)
-        self.assertGreater(raw, max(0.04, 0.02 * 3.0), 'the control: the raw spread would name a good floor click')
+        self.assertGreater(raw, max(0.04, 0.02 * 3.5), 'the control: the raw spread would name a good floor click')
         corner = z.copy()
-        corner[:v, :] = 3.0   # a wall rising from the floor at 3 m: an inside corner, continuous depth
-        self.assertLess(rn.window_spread(corner, 320, v, 3)[0], max(0.04, 0.02 * 3.0))
+        corner[:v, :] = z[v, 320]   # a wall rising from the floor 3.5 m away: an inside corner, continuous depth
+        self.assertLess(rn.window_spread(corner, 320, v, 3)[0], max(0.04, 0.02 * 3.5))
 
     def test_an_outer_edge_is_named(self):
         z = np.full((rn.HEIGHT, rn.WIDTH), 3.2)
@@ -493,7 +494,7 @@ def nine_pairs(seed=4, noise=0.0, scale=1.0):
     cam = rng.uniform([-1.5, -1.0, 1.5], [1.5, 1.2, 4.5], (9, 3))
     a = math.radians(40)
     rot = np.array([[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]])
-    room = cam @ rot.T + [2.0, -1.0, 1.3] + rng.normal(0, noise, (9, 3))
+    room = cam @ rot.T + [2.0, -1.0, HEIGHT_TAPE] + rng.normal(0, noise, (9, 3))
     return {pid: (list(c * scale), list(r)) for pid, c, r in zip(rn.IDS, cam, room)}
 
 
@@ -648,7 +649,7 @@ class HeldOut(unittest.TestCase):
     """The held-out take judged in the room: the take's depth lifted through the registration, the floor's pixels
     against z = 0, the upper walls' against the scan's surface. On a synthetic box room, ray-cast for the camera's view
     and sampled every 2 cm for the scan."""
-    pose = look_pose([2.0, 0.3, 1.4], yaw_deg=5)
+    pose = look_pose([2.0, 0.3, HEIGHT_TAPE], yaw_deg=5)
 
     def check(self, registration, table=None, measured=None):
         """The camera is at self.pose; the registration says registration."""
@@ -819,9 +820,9 @@ class Summary(unittest.TestCase):
 class Privacy(unittest.TestCase):
     def test_a_den_register_line_with_the_cameras_place_never_reaches_the_console(self):
         """Planted lines as den-register's run_fit prints them (print(..., file=out)): a refusal that puts the camera
-        42 cm below the floor, the mount check's reach, the camera's place and a click's pixel. None of their numbers
+        50 cm below the floor, the mount check's reach, the camera's place and a click's pixel. None of their numbers
         is passed on; the residuals and the reason codes are."""
-        planted = {'camera_below_floor': 'the fit puts the camera -42.0 cm from the floor; check that x, y and z follow '
+        planted = {'camera_below_floor': 'the fit puts the camera -50.0 cm from the floor; check that x, y and z follow '
                                          'the room frame (right-handed, z up)',
                    'depth_missing': 'f3: 10 of 49 pixels near (123.4, 200.1) have depth'}
         out = io.StringIO()
@@ -831,12 +832,12 @@ class Privacy(unittest.TestCase):
             for reason, detail in planted.items():
                 print(f'  {reason}: {detail}', file=lines)
             print('  fit   f1       residual 3.0 cm, leave-one-out 4.1 cm', file=lines)
-            print('  camera at x 1.234, y -2.345, z 1.402 m in the room frame', file=lines)
-            print('  But the mount check could not confirm it: the farthest of these marks is 2.87 m from the camera, '
+            print('  camera at x 1.234, y -2.345, z 1.500 m in the room frame', file=lines)
+            print('  But the mount check could not confirm it: the farthest of these marks is 2.50 m from the camera, '
                   'and it needs 3 m, because a turn shows most far away. Click or add a cross further off and fit again.', file=lines)
             print('Next: python -B tools\\den-register\\register.py fit x --take y', file=lines)
         text = out.getvalue()
-        for number in ('42', '123.4', '200.1', '1.234', '2.345', '1.402', '2.87'):
+        for number in ('50.0', '123.4', '200.1', '1.234', '2.345', '1.500', '2.50'):
             self.assertNotIn(number, text)
         self.assertIn('  camera_below_floor: the fit puts the camera (withheld) from the floor;', text)
         self.assertIn('  depth_missing: f3: 10 of 49 pixels near (the click) have depth', text)

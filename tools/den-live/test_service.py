@@ -935,7 +935,7 @@ class InstallLA(unittest.TestCase):
         import room_labels
         root = scratch('den-live-root-')
         self.assertIsNone(install_la.labels_seed(root), 'no labels on this PC: nothing to bring')
-        sofa = {'id': 'l-sofa-1', 'name': 'sofa', 'kind': 'seat', 'box': {'centre_m': [1.0, 2.0, 0.42], 'size_m': [2.0, 0.9, 0.85], 'yaw_deg': 0},
+        sofa = {'id': 'l-sofa-1', 'name': 'sofa', 'kind': 'seat', 'box': {'centre_m': [1.0, 2.0, 0.4], 'size_m': [2.0, 1.0, 0.8], 'yaw_deg': 0},
                 'on_wall': False, 'made_by': 'owner', 'status': 'confirmed', 'updated_at': None}
         store = room_labels.Store(root / 'private' / 'labels', say=lambda *_: None)
         self.assertEqual(store.put({**room_labels.empty('rev-a'), 'labels': [sofa]})[0], 200)

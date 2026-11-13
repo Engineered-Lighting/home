@@ -11,6 +11,7 @@ from unittest.mock import patch
 import coordinator_live
 from contracts import FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
 import run_service
+import seated as seated_rule
 import sofa_check
 from stream import PeopleStream
 from test_preview import joints
@@ -49,6 +50,7 @@ def main():
     def feed():
         seq = 0
         first = time.monotonic()
+        published = seated_rule.Published()
         while not halt.wait(.1):
             if scene == "silent":
                 continue
@@ -65,7 +67,8 @@ def main():
                                  origin[1] - fx * (jx - 1.2) + fy * (jy - 1), jz + z - .65), status)
                          for name, ((jx, jy, jz), status) in joints(seated).items()}
             track = TrackEvidence("synthetic-owner", "confirmed", origin, .1, "stereo", ("pose",),
-                                  "confident", 1, first, room_pose)
+                                  "confident", 1, first, room_pose,
+                                  seated=published.update("synthetic-owner", 1, now, room_pose))   # perception's seated
             tracking = TrackingSnapshot("browser", 1, seq, ref, "fresh", None, "present", (track,),
                                         track.track_id if seated else None, 1)
             service.offer_snapshot(tracking)

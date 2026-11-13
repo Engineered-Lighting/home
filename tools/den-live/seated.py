@@ -13,10 +13,15 @@ The room frame is den-observe's z_up_metric_floor0, so z is height above the flo
 Seated (below) keeps each track's recent poses and its last answer, and passes that answer back as was_seated.
 den-live's joints are {name: [xyz, status]}; body.py's are [x, y, z, confidence], so a supported joint counts as 1.0
 and an uncertain one as 0.5 (both over body.py's 0.3).
+
+Published (below) is contract 2's seated {state, since_mono, basis}: perceive.py works it out once per track per frame
+and puts it on the track's evidence. The ask and the preview read it and never work it out again, so there's one answer.
 """
 import math
 import statistics
 from collections import deque
+
+from contracts import SeatedState
 
 BODY_PIN = "9d5c802b"   # the coordinator's commit this copy is held to
 COPIED = ("_joint", "_mid", "shoulder_mid", "head", "_passes", "_torso_xy", "seated")
@@ -127,3 +132,43 @@ class Seated:
             self.samples.pop(gone, None)
             self.was.pop(gone, None)
         return result
+
+
+class Published:
+    """Contract 2's seated {state, since_mono, basis}, once per track per frame: Seated's rule on the track's
+    stereo-supported joints, started again whenever the track's association_revision moves.
+    - since_mono: the capture time of the first sample of the hold that qualified (seated()'s own window), kept for as
+      long as the track stays seated;
+    - basis: hips when the newest sample has both hips, else head (seated()'s stand-in for the hips).
+    Not seated is SeatedState(False, None, None)."""
+
+    def __init__(self):
+        self.rule, self.since, self.revision = Seated(), {}, {}
+
+    def update(self, track_id, revision, t, joints):
+        """This frame's answer for one track; joints is its stereo-supported pose now, or {} without one."""
+        if self.revision.get(track_id) != revision:
+            self._forget(track_id)
+            self.revision[track_id] = revision
+        self.rule.update(track_id, t, joints)
+        if not self.rule.seated(track_id, t):
+            self.since.pop(track_id, None)
+            return SeatedState(False, None, None)
+        samples = self.rule.samples[track_id]
+        if track_id not in self.since:
+            last = samples[-1][0]
+            self.since[track_id] = next(at for at, _ in samples if last - SEATED_HOLD_S - 0.25 <= at)
+        newest = samples[-1][1]
+        both_hips = _joint(newest, "left_hip") and _joint(newest, "right_hip")
+        return SeatedState(True, self.since[track_id], "hips" if both_hips else "head")
+
+    def keep(self, track_ids):
+        """Forget every track but these (the frame's own)."""
+        for gone in set(self.revision) - set(track_ids):
+            self._forget(gone)
+            self.revision.pop(gone, None)
+
+    def _forget(self, track_id):
+        self.rule.samples.pop(track_id, None)
+        self.rule.was.pop(track_id, None)
+        self.since.pop(track_id, None)

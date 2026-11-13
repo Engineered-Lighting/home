@@ -12,6 +12,7 @@ import zipfile
 from unittest.mock import patch
 
 import ask
+import contracts
 import coordinator_live
 import fixture_rgb
 import occupancy
@@ -130,6 +131,30 @@ class EvidenceTests(unittest.TestCase):
         self.assertIsNone(self.p.prepare(old, 104.0))
         self.assertNotEqual(self.scene.perceiver().run_id, self.p.run_id)
 
+    def test_seated_is_published_once_and_resets_on_a_revision_bump(self):
+        """Contract 2's seated on the real pins: the reader's hips are low, so after the hold the track says seated,
+        with since_mono a frame's capture time; one unsafe frame keeps it; two move the revision, and seated starts
+        its hold again."""
+        self.confirmed()
+        for i in range(17, 20):   # den-track is sure of the reader from 1.8 s; the 2 s hold ends 1.6 s later
+            self.advance(100.0 + i / 5, i)
+        track, = self.p.snapshot.tracks
+        self.assertEqual((track.seated.state, track.seated.basis), (True, "hips"))
+        captures = {round(100.0 + i / 5, 3) for i in range(20)}
+        self.assertIn(round(track.seated.since_mono, 3), captures, "the hold's first sample")
+        self.advance(104.0, 20, extra=True)
+        kept, = (t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
+        self.assertEqual(kept.seated, track.seated, "one unsafe frame keeps the episode")
+        self.advance(104.2, 21, extra=True)
+        moved, = (t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
+        self.assertEqual(moved.association_revision, track.association_revision + 1)
+        self.assertEqual(moved.seated, contracts.SeatedState(False, None, None))
+        for i in range(22, 40):
+            self.advance(100.0 + i / 5, i)
+        again, = (t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
+        self.assertTrue(again.seated.state)
+        self.assertGreater(again.seated.since_mono, 104.2, "a new hold, after the bump")
+
     def test_late_worker_result_expires_even_for_empty_detection(self):
         bundle, reply = self.scene.sample(100, 1, empty=True)
         prepared = self.p.prepare(bundle, 100)
@@ -239,11 +264,14 @@ class EvidenceTests(unittest.TestCase):
             self.assertFalse(handed_off)
 
             frigate = "on"
+            self.assertTrue(track.seated.state, "seated already: perception's answer doesn't wait for Frigate")
             for seq in range(25, 80):
                 feed(seq)
-                if seq < 32:
-                    self.assertFalse(posts, "Frigate on still needs the seated window")
+                if seq < 29:   # the stills: frames since Frigate read on, the oldest about 1.5 s before the newest
+                    self.assertFalse(posts, "Frigate on still needs stills from its own window")
             self.assertTrue(handed_off)
+            self.assertEqual({reply.gate["seated_since_mono"] for reply in handed_off}, {coordinator.episode.started})
+            self.assertEqual(self.p.snapshot.tracks[0].seated.since_mono, coordinator.episode.started)
             self.assertTrue(coordinator.episode.need.engaged)
             self.assertTrue(coordinator.latest["fixtures"]["F3"]["on"],
                             (coordinator.latest_decision, coordinator.track))
@@ -251,7 +279,9 @@ class EvidenceTests(unittest.TestCase):
                                 for row in trace))
             self.assertEqual(coordinator.episode.requests[-1], handed_off[-1].request_id)
 
-            for raw, reply in zip(posts, handed_off, strict=True):
+            # The newest post's reply can still be waiting for the next frame to hand it over.
+            self.assertIn(len(posts) - len(handed_off), (0, 1))
+            for raw, reply in zip(posts[:len(handed_off)], handed_off, strict=True):
                 self.assertIsInstance(reply, InferenceReply)
                 self.assertEqual(reply.request_body_sha256, hashlib.sha256(raw).hexdigest())
                 request = json.loads(raw)

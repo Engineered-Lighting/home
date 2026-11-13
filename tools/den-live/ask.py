@@ -1,14 +1,16 @@
 """den-live's Qwen ask (inference plan, step 2). Standard library, in the loop's own process.
 
 When it asks (the owner, 2026-11-12: Qwen only once Frigate has noticed someone):
-- Frigate's occupancy reads on (occupancy.py), a confirmed track is seated (seated.py), the settings say asks_on, and
-  the back-off monitor is below its step 2.
+- Frigate's occupancy reads on (occupancy.py), a confirmed track is seated, the settings say asks_on, and the back-off
+  monitor is below its step 2. Seated is contract 2's, which perception publishes once per track (seated.Published,
+  on TrackEvidence.seated); the ask reads it and never works it out again, so it and the preview have one answer.
 - One ask in flight at a time; the next no sooner than min_interval_s after the last was sent (2 s; at least 4 s at the
   monitor's step 1); at most max_per_minute in any 60 s; BACKOFF_S after a failure.
-What it sends: 3 stills from the last 3 s, picked by spread() (perception-lab qwen_live.spread at den-core-live's pin,
-copied), made into JPEGs in the detector's process (stills.py), in den_live_scene's den-live-scene-2 body. The context is
-the local time, Qwen's last valid answer when it's under 10 s old, and near_person: the labeling plan's line, only while
-its switch is on and exactly one person is tracked.
+What it sends: 3 stills from the last 3 s, none from before the seated episode's since_mono or the association's since,
+picked by spread() (perception-lab qwen_live.spread at den-core-live's pin, copied), made into JPEGs in the detector's
+process (stills.py), in den_live_scene's den-live-scene-2 body. The context is the local time, Qwen's last valid
+answer when it's under 10 s old, and near_person: the labeling plan's line, only while its switch is on and exactly one
+person is tracked.
 What it keeps: one words-only line per ask in <state>/days/<UTC date>/asks.jsonl (no image, no reply text), for
 RETENTION_DAYS. Every time the chain has is in it: each still's capture and arrival, decided, sent and answered.
 observe() updates the current TrackingSnapshot and pop_reply() returns a bound InferenceReply after the snapshot.
@@ -29,7 +31,6 @@ from pathlib import Path
 from uuid import uuid4
 
 import den_live_scene as scene
-import seated as seated_rule
 from contracts import INFERENCE_S, PERCEPTION_S, InferenceReply
 
 ASK_SCHEMA = "den-live-ask-1"
@@ -199,7 +200,6 @@ class Asker:
         self.site_id, self.camera_id = site_id, camera_id
         self.log = AskLog(state)
         self.lock = threading.Lock()
-        self.seated = seated_rule.Seated()
         self.pool = deque()
         self.support = self.eligibility = self.gate_signature = None
         self.eligibility_revision = self.gate_revision = 0
@@ -253,6 +253,14 @@ class Asker:
             return track
         return None
 
+    @staticmethod
+    def _seated_since(track, frame):
+        """The seated episode's since_mono when perception says this track is seated on this frame, else None."""
+        state = track.seated
+        if state is None or state.state is not True or state.since_mono is None:
+            return None
+        return state.since_mono if state.since_mono <= frame.capture_mono else None
+
     def observe(self, event, snapshot):
         """Update eligibility, then finalize replies against this same snapshot on the perception loop."""
         now = self.clock()
@@ -264,22 +272,16 @@ class Asker:
             if (scope != self.support or
                     self.pool and frame is not None and frame.capture_mono - self.pool[-1].capture_mono >= PERCEPTION_S):
                 self.pool.clear()
-                self.seated = seated_rule.Seated()
             self.support = scope
             seated = False
             if track is not None:
-                pose = {name: joint for name, joint in track.supported_pose.items() if joint[1] == "supported"}
-                seated = bool(pose) and seated_rule._passes(seated_rule.body_joints(pose))
-                if seated:
-                    if not self.pool or frame.key != self.pool[-1].key:
-                        self.seated.update(track.track_id, frame.capture_mono, pose)
-                        self.pool.append(frame)
-                        while frame.capture_mono - self.pool[0].capture_mono > POOL_S:
-                            self.pool.popleft()
-                    seated = self.seated.seated(track.track_id, frame.capture_mono)
-                else:
-                    self.pool.clear()
-                    self.seated = seated_rule.Seated()
+                # Contract 2's seated, as perception published it for this track on this frame. The pool keeps
+                # the supported frames; _prepare takes stills only from the seated episode, since_mono on.
+                seated = self._seated_since(track, frame) is not None
+                if not self.pool or frame.key != self.pool[-1].key:
+                    self.pool.append(frame)
+                    while frame.capture_mono - self.pool[0].capture_mono > POOL_S:
+                        self.pool.popleft()
             if why is None:
                 if snapshot.status != "fresh" or frame is None or frame.mode != "rgb":
                     why = snapshot.reason or "no fresh RGB frame"
@@ -329,8 +331,10 @@ class Asker:
         return len(self.sent)
 
     def _prepare(self, now, track, occupancy, level):
+        seated_since = track.seated.since_mono   # eligible, so seated: the episode the stills must lie in
+        start = max(track.association_since_mono, seated_since)
         try:
-            frames = tuple(spread([frame for frame in self.pool if frame.capture_mono >= track.association_since_mono], now))
+            frames = tuple(spread([frame for frame in self.pool if frame.capture_mono >= start], now))
         except FramesUnavailable:
             self.counts["frames_unavailable"] += 1
             return None
@@ -344,7 +348,8 @@ class Asker:
             "ask_id": self.ask_seq, "stage": "stills", "decided_mono": now, "decided_at": self.wall(),
             "request_id": hashlib.sha256(f"{self.session_id}:{self.ask_seq}".encode()).hexdigest(),
             "frames": frames, "keys": [list(frame.key) for frame in frames], "track": track,
-            "association": evidence, "eligibility_revision": self.eligibility_revision, "gate_revision": self.gate_revision,
+            "association": evidence, "seated_since_mono": seated_since,
+            "eligibility_revision": self.eligibility_revision, "gate_revision": self.gate_revision,
             "occupancy": occupancy, "backoff_level": level, "valid_until_mono": latest.capture_mono + INFERENCE_S,
         }
         self.inflight = request
@@ -526,7 +531,8 @@ class Asker:
                 association_revision=track.association_revision, eligibility_revision=ask["eligibility_revision"],
                 frames=ask["frames"], observation=observation, association=ask["association"],
                 gate={"frigate_raw": ask["occupancy"]["raw"], "frigate_effective": ask["occupancy"]["effective"],
-                      "read_age_ms": ask["occupancy"]["read_age_ms"], "seated_track_id": track.track_id},
+                      "read_age_ms": ask["occupancy"]["read_age_ms"], "seated_track_id": track.track_id,
+                      "seated_since_mono": ask["seated_since_mono"]},
                 model={"served_alias": model, "artifact_id": observation["artifact_sha256"],
                        "prompt_version": scene.PROMPT_VERSION},
                 observed_mono=latest.capture_mono, available_mono=answered_mono,

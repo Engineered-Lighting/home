@@ -28,6 +28,16 @@ def pose(track):
     return result
 
 
+def seated(track, captured):
+    """Contract 2's seated, as perception published it on the track: (True, since_mono) while seated with a hold that
+    began at or before this frame, else (False, None). The preview reads it and never works it out again."""
+    value = field(track, "seated")
+    since = field(value, "since_mono")
+    if field(value, "state") is True and finite(since) and since <= captured:
+        return True, since
+    return False, None
+
+
 def activity(facts):
     word = field(facts, "activity_hypothesis")
     if field(facts, "people_visible") != "one" or word in (None, "unclear"):

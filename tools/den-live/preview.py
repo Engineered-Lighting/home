@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 
 from contracts import PERCEPTION_S
-from preview_evidence import Episode, field, finite, pose
+from preview_evidence import Episode, field, finite, pose, seated as published_seated
 from preview_trace import PreviewTrace
 
 
@@ -71,7 +71,7 @@ class Preview:
         self.track_seq = -1
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
         self.eligible_track = None
-        self.samples = []
+        self.captured = None   # the newest frame taken for the track
         self.shift = None
         self.target_basis = None
         self.latest_decision = self.latest = self.problem = None
@@ -143,7 +143,7 @@ class Preview:
     def _drop_track(self):
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
         self.eligible_track = None
-        self.samples.clear()
+        self.captured = None
         self.shift = self.target_basis = None
 
     def tracking(self, snapshot):
@@ -195,18 +195,20 @@ class Preview:
         if key != self.track_binding:
             self._drop_track()
             self.track_binding = key
-        if self.samples and captured <= self.samples[-1][0]:
+        if self.captured is not None and captured <= self.captured:
             return
         body = self.core.body
         head = field(track, "coarse_head_room_m") or body.head(joints)
         if head and not body.head(joints):
             joints["nose"] = [*head, 1.0]
-        self.samples = [(at, value) for at, value in self.samples if captured - at <= 3] + [(captured, joints)]
+        self.captured = captured
         self.track_until = deadline
-        seated = body.seated(self.samples, now, was_seated=self.episode is not None)
-        if seated and self.episode is None:
+        # Contract 2's seated, published once by perception: the episode starts at its since_mono, the same instant
+        # the ask's stills start from.
+        seated, since = published_seated(track, captured)
+        if seated and (self.episode is None or self.episode.started != since):
             policy = self.core.need_v1.make_policy({"phone_patience_s": self.settings["phone_patience_s"]})
-            self.episode = Episode(policy, key, captured, (self.binding["transform_id"], self.binding["scan_revision"]))
+            self.episode = Episode(policy, key, since, (self.binding["transform_id"], self.binding["scan_revision"]))
             self.shift = body.ShiftFilter(self.settings["shift_m"], self.settings["shift_hold_s"])
         if not seated:
             self.episode = self.shift = self.target_basis = None
@@ -229,7 +231,7 @@ class Preview:
             if (self.episode is not None and self.on and not self.stopped
                     and field(reply, "eligibility_revision") == self.eligibility
                     and field(reply, "track_id") == self.eligible_track
-                    and finite(field(reply, "observed_mono")) and field(reply, "observed_mono") <= self.samples[-1][0]):
+                    and finite(field(reply, "observed_mono")) and field(reply, "observed_mono") <= self.captured):
                 self.episode.accept(reply, now, self.settings["phone_patience_s"])
             self._evaluate(now)
 

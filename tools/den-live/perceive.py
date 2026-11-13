@@ -59,6 +59,7 @@ from collections import deque
 from pathlib import Path
 
 import room_labels
+import seated as seated_rule
 from body import head_exclusion
 from body_clock import receipt_arrival
 from body_input import bundle_frame_key, qualified as qualified_body_input
@@ -421,6 +422,7 @@ class Perceiver:
         self.last_capture = None
         self.body_input = None
         self.associations = {}
+        self.seated = seated_rule.Published()   # contract 2's seated, once per track per frame
 
     def _epoch(self, *, clock_reset=False):
         self._clear_body("scope_changed")
@@ -789,7 +791,8 @@ class Perceiver:
                 basis = "stereo" if stereo_torso or any(o["kind"] == "person_box" for o in position_observations) else "plane"
             evidence.append(TrackEvidence(track_id, marker["state"], tuple(marker["xy_m"]), marker["sigma_m"],
                                           basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
-                                          revision, since, MappingProxyType(stereo), marker.get("near")))
+                                          revision, since, MappingProxyType(stereo), marker.get("near"),
+                                          seated=self.seated.update(track_id, revision, capture_mono, stereo)))
             if safe and stereo and ref.depth is not None:
                 depth_mono = ref.depth.host_s + offset
                 if (abs(ref.depth.host_s - ref.rgb.host_s) <= RGB_PAIR_S + 1e-9
@@ -808,6 +811,7 @@ class Perceiver:
                                        "joint_covariance_m2": {COCO[j["j"]]: j["cov"] for j in pose["joints_room"]
                                                                if j.get("lift") == "stereo"}}
         self.associations = {e.track_id: self.associations[e.track_id] for e in evidence}
+        self.seated.keep([e.track_id for e in evidence])
         possible_person = any(o["kind"] in ("person_box", "keypoints") for o in observations)
         presence = "present" if candidates else "unknown" if possible_person or tracks else "empty"
         self._submit_body(prepared, observations=observations, tracks=tracks, supported=supported, association=association)

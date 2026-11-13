@@ -226,6 +226,30 @@ class SeatedTest(unittest.TestCase):
             self.assertEqual(getattr(seated, name), getattr(body, name), name)
         self.assertEqual(inspect.signature(seated.seated).parameters["max_gap_s"].default, 3.0)
 
+    def test_published_since_is_the_holds_first_sample_and_a_revision_bump_resets_it(self):
+        """Contract 2's seated {state, since_mono, basis}: the same rule, once per track per frame."""
+        rule, answers = seated.Published(), []
+        for i in range(13):   # 3 s of frames every 0.25 s, hips low and still from t = 10
+            answers.append(rule.update("t1", 1, 10.0 + i * 0.25, joints(0.5)))
+        first = next(i for i, a in enumerate(answers) if a.state)
+        self.assertEqual(first, 6, "a 2 s hold with at least 1.5 s of samples")
+        self.assertEqual(answers[first].since_mono, 10.0, "the hold's first sample")
+        self.assertEqual({(a.since_mono, a.basis) for a in answers[first:]}, {(answers[first].since_mono, "hips")})
+        self.assertEqual(answers[0], seated.SeatedState(False, None, None))
+        moved = rule.update("t1", 2, 13.25, joints(0.5))   # association_revision moved: the hold starts again
+        self.assertEqual(moved, seated.SeatedState(False, None, None))
+        for i in range(1, 9):
+            again = rule.update("t1", 2, 13.25 + i * 0.25, joints(0.5))
+        self.assertEqual((again.state, again.since_mono), (True, 13.25))
+        no_pose = rule.update("t1", 2, 15.5, {})   # a frame with no pose for it changes nothing
+        self.assertEqual(no_pose, again)
+        head_only = seated.Published()
+        for i in range(9):
+            answer = head_only.update("t1", 1, i * 0.25, {"nose": [[0, 0, 1.1], "supported"]})
+        self.assertEqual((answer.state, answer.basis), (True, "head"))
+        rule.keep(["t2"])
+        self.assertEqual(rule.update("t1", 2, 15.75, joints(0.5)).state, False, "a track it forgot starts again")
+
     def test_den_lives_joints_become_body_pys(self):
         self.assertEqual(seated.body_joints({"left_hip": [[1, 2, 0.5], "uncertain"], "nose": [[0, 0, 1], "unsupported"]}),
                          {"left_hip": [1, 2, 0.5, 0.5]})
@@ -325,6 +349,7 @@ class AskTest(unittest.TestCase):
         self.frame_id = 0
         self.status, self.since = "confident", self.clock.t - 60.0
         self.accepted = []
+        self.rule, self.rule_epoch = seated.Published(), 1   # perception's seated, as perceive.py publishes it
 
     def tick(self, seconds=0.25, hip=0.5, people=1, xy=(1.0, 1.0), epoch=1, usable=True, drain=True):
         """One frame: confirmed tracks seated (or not), the ask's observe, and any stills reply sent at once."""
@@ -336,8 +361,11 @@ class AskTest(unittest.TestCase):
         frame = FrameRef("run", epoch, self.frame_id, f"camera-{epoch}", "rgb", rgb, None, None, "rig", "pose", "scan",
                          captured, self.clock.t - 0.1, captured)
         pose = {name: (tuple(xyz), "supported") for name, (xyz, _) in joints(hip, x=xy[0]).items()}
+        if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
+            self.rule, self.rule_epoch = seated.Published(), epoch
         evidence = tuple(TrackEvidence(t["track_id"], "confirmed", xy, 0.1, "stereo", ("obs",), self.status,
-                                       0, self.since, pose) for t in tracks)
+                                       0, self.since, pose, seated=self.rule.update(t["track_id"], 0, captured, pose))
+                         for t in tracks)
         snapshot = TrackingSnapshot("run", epoch, self.frame_id, frame if usable else None,
                                     "fresh" if usable else "stale", None, "present", evidence)
         event = self.asker.observe({"tracks": tracks, "health": {}}, snapshot)
@@ -411,8 +439,12 @@ class AskTest(unittest.TestCase):
         self.assertEqual(self.asks_sent(), 0)
         self.assertNotIn("activity", event["tracks"][0], "an unsure answer never shows on a marker")
         self.status, self.since = "confident", self.clock.t + 3.0   # confident only from inside the next window
-        self.run_for(4)
-        self.assertEqual(self.asks_sent(), 0)
+        self.run_for(3)
+        self.assertEqual(self.asks_sent(), 0, "no frame is past the association's since yet")
+        self.run_for(3)
+        stills = [still["captured_at"] for line in self.log_lines() for still in line["stills"]]
+        self.assertTrue(stills)
+        self.assertGreaterEqual(min(stills), self.since, "no still from before the association was confident")
 
     def test_a_failure_backs_off_and_three_say_qwen_isnt_answering(self):
         self.replies = [OSError("refused")]

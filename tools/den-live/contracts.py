@@ -56,6 +56,15 @@ class FrameRef:
 
 
 @dataclass(frozen=True)
+class SeatedState:
+    """Contract 2's seated: state True while seated; since_mono, the capture time of the first sample of the hold that
+    qualified (None while not seated); basis, hips or head (None while not seated). seated.Published makes it."""
+    state: bool
+    since_mono: float | None
+    basis: str | None
+
+
+@dataclass(frozen=True)
 class TrackEvidence:
     track_id: str
     state: str
@@ -68,6 +77,7 @@ class TrackEvidence:
     association_since_mono: float | None
     supported_pose: Mapping[str, tuple[tuple[float, float, float], str]]
     near: str | None = None
+    seated: SeatedState | None = None   # perception's one answer; consumers read it and never work it out again
 
 
 @dataclass(frozen=True)

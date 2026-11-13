@@ -11,10 +11,13 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+import ask
 import coordinator_live
-from contracts import FrameRef, InferenceReply, PlaneRef
+from contracts import FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
 import preview
+import run_local
 import run_service
+import seated as seated_rule
 import sofa_check
 import stream
 
@@ -47,6 +50,7 @@ class PreviewTest(unittest.TestCase):
         self.now = 100.0
         self.seq = 0
         self.encoded = []
+        self.rule, self.rule_epoch = seated_rule.Published(), 1
         self.preview = self.make_preview()
         self.preview.configure({"fade_in_s": 0, "pre_aim": False})
 
@@ -56,8 +60,12 @@ class PreviewTest(unittest.TestCase):
 
     def track(self, *, seated=True, epoch=1, more=False):
         self.seq += 1
+        if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
+            self.rule, self.rule_epoch = seated_rule.Published(), epoch
+        pose = joints(seated)
         track = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": "confident",
-                 "association_revision": 2, "current_obs_ids": ("pose",), "supported_pose": joints(seated)}
+                 "association_revision": 2, "current_obs_ids": ("pose",), "supported_pose": pose,
+                 "seated": self.rule.update("t1", 2, self.now, pose)}   # perception's one answer
         frame = {**BINDING, "capture_mono": self.now}
         self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": epoch, "seq": self.seq, "frame": frame,
                                      "status": "fresh", "presence": "present", "eligibility_revision": 1,
@@ -172,6 +180,44 @@ class PreviewTest(unittest.TestCase):
                 self.assertIsNone(self.preview.episode.last_observed)
         self.read(frames=(frame,))
         self.assertEqual(self.preview.episode.need.playing, 1)
+
+    def test_the_ask_and_the_preview_read_one_seated_since(self):
+        """Contract 2's seated, published once by perception: on the same frames the ask's reply and the preview's
+        episode carry the snapshot's own since_mono, so stills from the hold are inside the preview's episode."""
+        from test_ask import FakeDetector, FakeOccupancy, completion, facts
+        asker = ask.Asker(detector=FakeDetector(), occupancy=FakeOccupancy(), state=self.path, site_id="site",
+                          camera_id="den-oak", post=lambda body: completion(json.dumps(facts())),
+                          clock=lambda: self.now, wall=lambda: self.now, start=False)
+        self.addCleanup(asker.close)
+        observe = run_local.evidence_observer(asker, self.preview)
+        replies, offer = [], self.preview.offer_inference
+        self.preview.offer_inference = lambda reply: (replies.append(reply), offer(reply))
+        rule, published, captures = seated_rule.Published(), [], []
+        for frame_id in range(1, 25):
+            self.now += .25
+            captured = self.now - .1
+            captures.append(captured)
+            frame = FrameRef("run", 1, frame_id, "synthetic", "rgb", PlaneRef(frame_id, captured, captured, 640, 360),
+                             None, None, None, BINDING["transform_id"], BINDING["scan_revision"], captured, captured,
+                             captured)
+            pose = {name: (tuple(xyz), status) for name, (xyz, status) in joints(True).items()}
+            track = TrackEvidence("t1", "confirmed", (1.2, 1.0), .1, "stereo", ("pose",), "confident", 2, 90.0, pose,
+                                  seated=rule.update("t1", 2, captured, pose))
+            published.append(track.seated)
+            observe({"tracks": [{"track_id": "t1", "state": "confirmed", "xy_m": [1.2, 1.0]}], "health": {}},
+                    TrackingSnapshot("run", 1, frame_id, frame, "fresh", None, "present", (track,)))
+            while not asker.jobs.empty():
+                job, args, kwargs = asker.jobs.get_nowait()
+                job(*args, **kwargs)
+        since = {state.since_mono for state in published if state.state}
+        self.assertEqual(len(since), 1, "one seated episode")
+        self.assertTrue(replies, "the ask answered while seated")
+        self.assertEqual({reply.gate["seated_since_mono"] for reply in replies}, since)
+        self.assertEqual({self.preview.episode.started}, since)
+        self.assertEqual(list(self.preview.episode.requests), [reply.request_id for reply in replies],
+                         "the preview took every reply: its stills lie inside the episode")
+        said_seated = captures[next(i for i, state in enumerate(published) if state.state)]
+        self.assertLess(replies[0].frames[0].capture_mono, said_seated, "the first stills include the hold")
 
     def test_visible_contradictions_break_the_reading_streak(self):
         self.seat()

@@ -17,6 +17,10 @@ type: changed
   clicks and picks. A take stopped part way keeps nothing, and a v1 take or its clicks never come back. A take with
   fewer than 10 frames (a slow link) is refused and never counts as whole, so `--again` stops on it rather than
   measure, click and fit on it.
+- After a camera release changes its depth correction, `--again` stops before anything and says to paste without
+  it, so the old take can't qualify the old correction again; a held-out take on another correction than the
+  registration's take never qualifies either. den-live's refusal of such frames now says the same: paste
+  `register_now.py` without `--again`, which records a new take, and on LA then `install_la.py` again.
 - A held-out empty-room take is carried into the room through the new registration and compared there with the
   scan's floor and upper walls, each judged on its own: at least 75% within noise, and no 1 m range bin with a median
   residual over 10 cm.

@@ -14,7 +14,8 @@ Its inputs, all from systemd:
   folder): room-model.jsonl (step 2's registration), camera-token.txt (the camera's bearer token) and
   register-receipt.json (the step 2 receipt that registered and qualified it, den-live-register-now-2, which says
   the scan revision its picks were made on and the camera's depth correction its take was made on: a frame with
-  another factor or calibration hash is refused, and the status line says to register again).
+  another factor or calibration hash is refused, and the status line says to paste register_now.py without --again,
+  which records a new take, then install_la.py again).
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
   its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot,
   numbers only, with a mono-and-wall anchor; person_state.py), beside the ask's asks.jsonl, both kept 14 days. No
@@ -562,7 +563,8 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
                     status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say),
                     asks=starter, coordinator=coordinator, body_input=body_input, body_profile=body_profile,
-                    person_log=state)   # den-person-state-1, in state/days/<UTC date>/ beside the ask's asks.jsonl
+                    person_log=state,   # den-person-state-1, in state/days/<UTC date>/ beside the ask's asks.jsonl
+                    reinstall=True)   # a frame on another correction: register_now.py without --again, then install_la.py
 
 
 def stopping(_signum, _frame):

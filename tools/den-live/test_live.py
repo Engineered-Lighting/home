@@ -352,12 +352,12 @@ class Perceiving(unittest.TestCase):
         self.wall = 0.0  # a step in that wall clock, as time sync makes one
 
     def perceiver(self, take, floor=(-3.0, -3.5, 3.0, 2.5), require=False, room_model=None, luma=120.0, gate=0.10, change=None,
-                  source_correction=None):
+                  source_correction=None, reinstall=False):
         copy = perceive.track_method_copy(self.tools, list(floor), scratch('den-live-method-'))
         return perceive.Perceiver(self.tools, room_model_path=room_model or FIT / 'room-model.jsonl', camera_id='den-virtual',
                                   max_error_bound_m=gate, track_method_path=copy, detector=RecordedDetector(take, luma, change),
                                   home='den', require_source_correction=require, now=lambda: 1_800_000_000.0 + self.now,
-                                  source_correction=source_correction)
+                                  source_correction=source_correction, reinstall=reinstall)
 
     def run_take(self, perceiver, frames):
         events = []
@@ -436,8 +436,9 @@ class Perceiving(unittest.TestCase):
     def test_frames_on_another_correction_than_the_receipts_are_refused(self):
         """The review's case: a camera release re-measures its factor, and den-live would stack the receipt's scale on
         another correction. Every frame must say applied with the receipt's factor and calibration hash, whatever the
-        scale; one with another is refused and counted, and the status and why say register again. The control: the
-        receipt's own correction goes on."""
+        scale; one with another is refused and counted, and the status and why say to register again with a new take:
+        register_now.py without --again, whose old take would find its registration qualified already. The LA service's
+        why adds install_la.py after. The control: the receipt's own correction goes on."""
         import test_register_now as tr
         receipt = (tr.CORRECTED['factor'], tr.CORRECTED['calibration_sha256'])
 
@@ -457,9 +458,14 @@ class Perceiving(unittest.TestCase):
                 self.assertTrue(all(e['tracks'] == [] for e in events))
                 self.assertEqual({(e['perception_status'], e['camera']['why']) for e in events},
                                  {('refused', perceive.CORRECTION_CHANGED)})
-                self.assertIn('register again', perceive.CORRECTION_CHANGED)
+                self.assertIn('paste register_now.py without --again, which records a new take', perceive.CORRECTION_CHANGED)
                 self.assertIn('12 refused for depth', rl.status_line(p, events[-1]))
-                self.assertIn('register again', rl.status_line(p, events[-1]))
+                self.assertIn(': %s |' % perceive.CORRECTION_CHANGED, rl.status_line(p, events[-1]))
+        p = self.perceiver(READING, require=True, source_correction=receipt, reinstall=True)   # the LA service's
+        events = self.run_take(p, corrected(factor=0.901))
+        self.assertEqual({e['camera']['why'] for e in events},
+                         {perceive.CORRECTION_CHANGED + ', then paste install_la.py again'})
+        self.assertEqual({e['perception_status'] for e in events}, {'refused'})
         p = self.perceiver(READING, require=True, source_correction=receipt)
         events = self.run_take(p, corrected())
         self.assertEqual(p.counts['refused_depth'], 0, 'the control: the receipt\'s own correction goes on')

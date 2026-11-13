@@ -31,6 +31,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -324,6 +325,18 @@ class ServiceRefusals(unittest.TestCase):
             self.assertEqual(code, rs.EXIT_REFUSED, text)
             self.assertIn(words, text)
             self.assertNotIn('Starting the detector', text, 'refused before the detector')
+
+    @unittest.skipUnless(HAVE_SET and sc.VENV_PY.is_file() and HAVE_BINARIES, 'needs the venv, its models and a prepared den-sim set')
+    def test_a_frame_on_another_correction_says_to_install_again_after_registering(self):
+        """LA starts on the receipt install_la.py gave it, so its why for a frame on another depth correction than the
+        receipt's adds install_la.py after register_now.py without --again (perceive.REINSTALL)."""
+        seen = {}
+
+        def serve(**kw):
+            seen.update(kw)
+        with unittest.mock.patch.object(rs.rl, 'serve', serve):
+            code, text = self.main(Service('http://127.0.0.1:9', 'x' * 32), camera_id='den-virtual')
+        self.assertEqual((code, seen.get('reinstall')), (0, True), text)
 
     def test_write_config_and_the_drop_in(self):
         base = scratch('den-live-install-')

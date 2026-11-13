@@ -210,6 +210,40 @@ def source_correction(R, take_dir):
             "why": sorted(why)}
 
 
+def correction_of(found):
+    """The one correction a source_correction record names, (factor, calibration_sha256): every frame applied, one
+    factor and one calibration hash. None when it names no single one (no records, as on den-sim's renders, or a mix)."""
+    if not isinstance(found, dict) or not found.get("frames") or found.get("applied") != found["frames"]:
+        return None
+    factors, calibrations = found.get("factors") or [], found.get("calibrations") or []
+    return (factors[0], calibrations[0]) if len(factors) == 1 and len(calibrations) == 1 else None
+
+
+def camera_correction(R, camera, wait, tries=5, poll_s=0.2):
+    """The camera's depth correction now, as correction_of would name it for a take of it: one fresh /frame.npz, read
+    as source_correction reads a take's frames. A camera release with a re-measured factor or another calibration
+    changes it."""
+    for _ in range(tries):
+        try:
+            status, body = camera.get("/frame.npz")
+        except (OSError, R.take.http.client.HTTPException) as exc:
+            raise Stop("the camera at %s:%s did not answer (%s)" % (camera.host, camera.port, type(exc).__name__)) from None
+        if status in (401, 403):
+            raise Stop("the camera refused the token")
+        try:
+            full = R.scene.read_bundle(body)["full"] if status == 200 else None
+        except R.scene.Refused:
+            full = None   # a frame that doesn't read: ask again
+        if full is not None:
+            record = full.get("depth_correction")
+            if (type(record) is not dict or record.get("applied") is not True
+                    or type(record.get("factor")) not in (int, float) or not 0.5 <= record["factor"] <= 1.5):
+                return None
+            return record["factor"], str(record.get("calibration_sha256"))
+        wait(poll_s)
+    raise Stop("the camera gave no frame to read its depth correction from")
+
+
 def source_line(found, live):
     if not live["require_source_correction"]:
         return ("Depth correction at the camera: not required by this method file (%d of %d frames say applied)."
@@ -1448,6 +1482,11 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
     except Stop as exc:
         write_receipt(work, receipt)
         raise exc
+    if again and camera_correction(R, camera(), wait) != correction_of(receipt["source_correction"]):
+        # A camera release changed its correction since this take: den-register would find these clicks registered
+        # already, and the shortcut at step 9 would qualify the old correction again, which den-live refuses.
+        raise Stop("the camera's depth correction isn't the one the take %s was made on: paste the line without --again, "
+                   "which records a new take" % raw.name)
 
     # 4: the depth check on the take's median
     plane, k, used = median_plane(R, raw, live["median_min_valid"])
@@ -1609,6 +1648,17 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
                                "why": "the held-out take stopped"}
         raise paste.stop("the held-out take stopped: %s" % exc, "the held-out take stopped: %s. The registration "
                          "stands, unqualified; paste with --again to take the held-out take again" % exc) from None
+    if correction_of(held_source) != correction_of(receipt["source_correction"]):
+        # The camera's correction changed since the registration's take (a camera release): the receipt would qualify
+        # a correction den-live then refuses on every frame.
+        receipt["held_out"] = {"take": held.name, "within_noise": None, "worst_bin_m": None, "ok": False,
+                               "why": "made on another camera depth correction than the registration's take",
+                               "source_frames": held_source["frames"]}
+        say(held_line(receipt["held_out"]))
+        code = paste.end(1, "the held-out take was made on another camera depth correction than the registration's "
+                            "take: paste the line without --again, which records a new take")
+        show()
+        return code
     numbers = held_out(R, work, held, transform_id, scale, points, live)
     receipt["held_out"] = {"take": held.name, **numbers, "source_frames": held_source["frames"]}
     say(held_line(numbers))

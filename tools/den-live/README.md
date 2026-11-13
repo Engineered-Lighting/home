@@ -135,13 +135,14 @@ tape, which re-clicking won't fix: check the tapes, then tell an agent.
 |---|---|
 | `Depth corrected at the camera: x0.889 on all N frames.` | The camera service's correction is on; the paste goes on |
 | `stopped: the camera's depth isn't corrected at its source ...` | Some frame says the correction is off, or has no record. Nothing was clicked. Tell an agent the line |
+| `stopped: the camera's depth correction isn't the one the take ... was made on ...` | `--again` only: a camera release changed the correction since that take. Paste the line without `--again`; it records a new take |
 | `Depth check: ... no scale` or `... scale x... applied` | The depth agrees with your tapes, or will once den-live's scale is applied; the clicking goes on |
 | `Depth check: ... STOP: ...` | The depth bends, or it's off by more than 10%, or the check can't find the floor or the facing wall. Tell an agent the summary block |
 | `Edge guard: f3 sits on a depth edge ...` | Click f3 a little inside one surface; the page opens again for it |
 | `Distance check: f4 disagrees with ...` | Re-pick f4 or re-click it, then paste with `--again` |
 | `REGISTERED den-oak@...` | den-register wrote the registration to the private `room-model.jsonl`. It still has to qualify |
 | `REFUSED` | The reasons name the features. Re-click or re-pick them and paste with `--again` |
-| `Held-out take: ...` | How well your scan, seen from the new registration, matches a fresh take of the empty den |
+| `Held-out take: ...` | How well your scan, seen from the new registration, matches a fresh take of the empty den. It must be on the registration take's camera correction, or nothing qualifies |
 | `QUALIFIED: yes` | Step 3 and the LA service will start on it |
 
 What's kept, all under `%USERPROFILE%\den-live\private\register\`: the takes (`takes\`: the take, its median copy
@@ -247,6 +248,7 @@ The owner qualification uses one short tailnet phone run in room light and one w
 - **Person state:** the LA service logs each snapshot as `den-person-state-1` beside the ask's log, in `days/<UTC date>/person-state.jsonl`, numbers only (no image, name or words: the snapshot's reason and the near phrase stay out), with one mono-and-wall anchor per run per day file. It's kept 14 days like the ask's log, and the two stop at 300 MB a day together ("What's kept on LA", step 4). `run_local.py` keeps nothing.
 - **The replay check (plan 02-3):** `replay_person_state_check.py "<your sofa replays folder>"` replays each take, in den-sim's prepared format, through the Perceiver, the ask and the lighting preview on this PC, and prints three lines: the seated since's difference between the ask and the preview (should be 0), seated latency per trial from its begin cue (2.5 s or less) and revision bumps while sitting (0). Never a coordinate. Its docstring says what it assumes about the replays.
 - **The scan revision:** it must be the one step 2 picked on. If the active scan changed since, it stops and asks you to register again.
+- **The camera's correction:** every frame must say the correction step 2's take was made on, the receipt's factor and calibration hash. After a camera release that changes either, every frame is refused, and the status says to paste `register_now.py` without `--again`, which records a new take. On LA it adds: then paste `install_la.py` again.
 - **Too dark:** the picture's mean brightness under 40 (of 255) for 3 s gives "too dark" until step 6's infrared.
 
 **Every 10 s it prints one line**, for example `camera ok | 4.0 frames a second | 1 people | 0.25 s behind | 0 dropped a minute | 160 frames`. Anything dropped is named at the end, such as `, 3 out of order`. That's words and counts, never a position. Tell an agent those lines if something looks wrong.

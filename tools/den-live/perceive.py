@@ -32,7 +32,9 @@ Numbers this phase sets, with where they come from:
   that doesn't is refused, counted and never lifted. And when step 2's receipt names the correction its take was made
   on (source_correction: one factor, one calibration_sha256), every bundle must say applied with that factor and that
   hash, whatever the depth scale (body_rgb.py's rule): after a camera release with a re-measured factor, the receipt's
-  scale would sit on another correction. Such a frame is refused and counted, and the status says register again.
+  scale would sit on another correction. Such a frame is refused and counted, and the status says to paste
+  register_now.py without --again, which records a new take (--again would find the old take's registration qualified
+  already); the LA service's adds to paste install_la.py again after.
 - Step 2's depth scale (contract 1, den-live-register-now-2's depth_scale, 0.90-1.10, 1.0 for none): every depth
   plane is multiplied by it right after it's read, before any lift, so the lift sees the depth the registration was
   fitted on. The figure's depth gets the same scale in the detector's process (body.py). The Perceiver refuses a scale
@@ -88,7 +90,9 @@ HEADING_FRESH_S = 3.0   # an arrow older than this is left off: den-track keeps 
 PERSON_MIN = 0.5     # den-detect's pose line, and plan L3's marker line
 TRANSIT_MAX_S = 5.0  # arrival less captured_unix_ns counts only between 0 and this (plan L1)
 NOT_CORRECTED = "depth not corrected at the camera"
-CORRECTION_CHANGED = "the camera's depth correction isn't the one step 2 registered on: register again with step 2"
+CORRECTION_CHANGED = ("the camera's depth correction isn't the one step 2 registered on: paste register_now.py without "
+                      "--again, which records a new take")
+REINSTALL = ", then paste install_la.py again"   # the LA service's refusal adds it: LA starts on the receipt it was given
 
 
 class Stop(Exception):
@@ -372,18 +376,22 @@ class Perceiver:
     now, capture_ts is now less how long ago the frame was captured."""
 
     depth_scale, depth_table = 1.0, None   # step 2's depth scale and its table; __init__ sets them from the registration
+    correction_changed = CORRECTION_CHANGED   # the why on a frame with another correction; __init__ adds REINSTALL on LA
 
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
                  require_source_correction=True, content_revision=None, now=time.time, depth_scale=1.0,
-                 source_correction=None):
+                 source_correction=None, reinstall=False):
         """source_correction: (factor, calibration_sha256) from step 2's receipt, the camera's correction its take was
-        made on; every frame must say applied with exactly these. None holds frames to no receipt (a direct caller)."""
+        made on; every frame must say applied with exactly these. None holds frames to no receipt (a direct caller).
+        reinstall: the LA service's, whose why on such a frame also says to paste install_la.py again."""
         self.t, self.detector, self.home, self.now = tools, detector, home, now
         self.body_provider = None
         self.body = None   # a body_link.BodyLink, when the live body runs: asked for each fresh frame, never waited for
         self.labels = None   # a room_labels.Store: each track's near phrase, from the confirmed labels on this scan
         self.require_source_correction = require_source_correction
         self.source_correction = None if source_correction is None else tuple(source_correction)
+        if reinstall:
+            self.correction_changed = CORRECTION_CHANGED + REINSTALL
         try:
             room_model = tools.roommodel.load(room_model_path)
             transform_id = tools.roommodel.current_transform_id(room_model, camera_id)
@@ -529,7 +537,7 @@ class Perceiver:
         self.body_input = None
         status = camera_state.get("status")
         if status not in ("starting", "offline", "refused"):
-            status = "refused" if self.problem == CORRECTION_CHANGED else "stale"   # a frame was refused: register again
+            status = "refused" if self.problem == self.correction_changed else "stale"   # a frame was refused: register again
         self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
         return self._snapshot(self.event(None, [], camera_state, now_mono), status=status)
 
@@ -668,7 +676,7 @@ class Perceiver:
         if self.source_correction is not None and not (
                 isinstance(correction, dict) and correction.get("applied") is True
                 and (correction.get("factor"), correction.get("calibration_sha256")) == self.source_correction):
-            self._drop("refused_depth", now_mono, CORRECTION_CHANGED)
+            self._drop("refused_depth", now_mono, self.correction_changed)
             return None
         try:
             self.camera.check_frame(meta.get("intrinsics"))
@@ -703,7 +711,7 @@ class Perceiver:
         """Synchronous replay entry; live uses prepare and finish around worker polling."""
         prepared = self.prepare(bundle, now_mono)
         if prepared is None:
-            if self.problem in (NOT_CORRECTED, CORRECTION_CHANGED):
+            if self.problem in (NOT_CORRECTED, self.correction_changed):
                 return self.idle(camera_state, now_mono)
             return None
         detector = self.detector
@@ -1005,7 +1013,7 @@ class Loop(threading.Thread):
                             if p.snapshot.camera_epoch != p.sessions:
                                 self._publish(p._snapshot(p.event(None, [], camera, now), status="starting"))
                                 last = now
-                            if prepared is None and p.problem in (NOT_CORRECTED, CORRECTION_CHANGED, "camera clock moved back"):
+                            if prepared is None and p.problem in (NOT_CORRECTED, p.correction_changed, "camera clock moved back"):
                                 self._publish(p.idle(camera, now))
                                 last = now
                             if prepared is not None and detector.submit(bundle, now - prepared.ref.capture_mono, prepared.ref):

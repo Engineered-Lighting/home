@@ -1314,6 +1314,14 @@ def scaled_take(factor):
     return changed_take('marks-x%g' % factor, lambda data: rn.scale_bundle(R, data, factor))
 
 
+def corrected_take(factor):
+    """The marks take's usable frames, each saying the camera service applied its depth correction at factor (a camera
+    release re-measures it)."""
+    record = dict(CORRECTED, factor=factor)
+    return changed_take('marks-corrected-%g' % factor,
+                        lambda data: with_metadata(data, lambda meta: meta.update(depth_correction=dict(record))))
+
+
 def bent_take(floor_f, rest_w, pose):
     """The marks take's usable frames with the floor's depth times (1 + floor_f) and every other pixel's times
     (1 + rest_w): the floor and the walls apart by (floor_f - rest_w) x 100 points, as the depth check measures a bend.
@@ -1799,6 +1807,50 @@ class OnRenders(unittest.TestCase):
         self.assertIn('Already registered as %s' % transform, text)
         receipt = self.receipt()
         self.assertEqual((receipt['fit']['result'], receipt['fit']['transform_id'], receipt['qualified']), ('registered', transform, True))
+
+    def test_again_after_the_cameras_correction_changed_stops_before_qualified_already(self):
+        """The review's loop: a camera release re-measures its factor, so den-live refuses every frame and says to
+        register again. --again would reuse the old take, find its registration qualified already and write a fresh
+        qualified receipt on the old correction. It stops first, before any page, in one sentence; a paste without
+        --again records a new take and qualifies on the new correction."""
+        self.camera.show(corrected_take(0.889))
+        self.qualified()
+        self.assertEqual(self.receipt()['source_correction']['factors'], [0.889])
+        before = len(list(self.work().glob('register-now-*.json')))
+        self.camera.show(corrected_take(0.901))
+        code, text = self.paste(again=True, clicker=self.fail_if_called, picker=self.fail_if_called, shower=self.fail_if_called)
+        self.assertEqual(code, 2, text)
+        self.assertRegex(text, r"(?m)^register: stopped: the camera's depth correction isn't the one the take \d{8}-\d{6} "
+                               r"was made on: paste the line without --again, which records a new take$")
+        self.assertNotIn('qualified already', text)
+        self.assertEqual(len(list(self.work().glob('register-now-*.json'))), before, 'no receipt, so none says qualified')
+        code, text = self.paste(clicker=self.clicker(), picker=self.picker(), shower=lambda w, t: None)
+        self.assertEqual(code, 0, text)
+        self.assertEqual((self.receipt()['qualified'], self.receipt()['source_correction']['factors']), (True, [0.901]))
+
+    def test_a_held_out_take_on_another_correction_doesnt_qualify(self):
+        """The review's variant: a registration left unqualified (its held-out check couldn't run), and a camera release
+        landing while --again runs, after its own check. The held-out take, on the new correction, would qualify the
+        receipt on the old one. It doesn't: the receipt says why, and to paste without --again."""
+        self.camera.show(corrected_take(0.889))
+        self.ply_now = None
+        code, text = self.paste(clicker=self.clicker(), picker=self.picker(), shower=lambda w, t: None)
+        self.assertEqual(code, 1, text)
+        self.ply_now = self.ply
+        picker = self.picker(only=set())
+
+        def released(work, take):
+            self.camera.show(corrected_take(0.901))
+            picker(work, take)
+        code, text = self.paste(again=True, clicker=self.kept_clicks, picker=released, shower=lambda w, t: None)
+        self.assertEqual(code, 1, text)
+        self.assertIn('Already registered as', text)
+        self.assertIn("Held-out take: made on another camera depth correction than the registration's take.", self.summary(text))
+        self.assertIn("QUALIFIED: no, because the held-out take was made on another camera depth correction than the "
+                      "registration's take: paste the line without --again, which records a new take.", self.summary(text))
+        receipt = self.receipt()
+        self.assertEqual((receipt['qualified'], receipt['held_out']['ok'], receipt['source_correction']['factors']),
+                         (False, False, [0.889]))
 
     def test_a_fresh_paste_starts_the_picks_afresh(self):
         self.qualified()

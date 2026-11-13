@@ -361,13 +361,14 @@ def start_body(perceiver, out, detector, body_input):
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, registration, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          labels=None, asks=None, coordinator=None, body_input=None, body_profile=None, person_log=None):
+          labels=None, asks=None, coordinator=None, body_input=None, body_profile=None, person_log=None, reinstall=False):
     """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator.
 
     registration(transform_id) is what step 2's qualified receipt says about the room model's registration,
     {scan_revision, depth_scale, correction_factor, calibration_sha256}, or a Refusal: no receipt, or none qualified,
     starts nothing. The camera's correction its take was made on goes to the Perceiver, which refuses any frame with
-    another; with the correction required, a receipt that names none is refused here.
+    another, saying to paste register_now.py without --again (and, with reinstall, the LA service's, install_la.py
+    again after); with the correction required, a receipt that names none is refused here.
     person_log: a state folder whose days/ get each snapshot as den-person-state-1 (person_state.py), beside the ask's
     log; None keeps nothing, as run_local.py does."""
     R = rn.den_register(trees["register"])
@@ -403,7 +404,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
         perceiver = perceive.Perceiver(t, room_model_path=room_model, camera_id=camera_id, max_error_bound_m=m["gate_m"],
                                        track_method_path=method_copy, home="den", content_revision=revision,
                                        require_source_correction=require, source_correction=source_correction,
-                                       depth_scale=registered["depth_scale"])   # every depth plane, before any lift
+                                       depth_scale=registered["depth_scale"],   # every depth plane, before any lift
+                                       reinstall=reinstall)
     except perceive.Stop as exc:
         raise Refusal(str(exc)) from None
     perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits

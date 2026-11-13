@@ -45,7 +45,7 @@ from pathlib import Path
 
 import room_labels
 from body import head_exclusion
-from body_input import qualified as qualified_body_input
+from body_input import bundle_frame_key, qualified as qualified_body_input
 
 SCHEMA = "den-live-people-1"
 FRESH_S = 1.5
@@ -361,17 +361,25 @@ class Perceiver:
         if self.body is not None:
             self.body.clear(reason)
 
-    def _body_input(self, bundle, meta, depth):
+    def _submit_body(self, bundle, meta, depth, frame_key, *, observations=(), tracks=(), supported=(), association=None):
         if self.body is None or self.body_input is None:
-            return None
+            return
+        if frame_key is None:
+            self._clear_body("unavailable")
+            return
         try:
-            value = self.body_input(bundle, meta, depth)
-            if qualified_body_input(value, self.scope) and value.capture_earliest_mono <= bundle.arrival_mono:
-                return value
+            value = self.body_input(bundle, meta, depth, frame_key=frame_key, mode=self.mode,
+                                    observations=observations, tracks=tracks, supported=supported,
+                                    association={} if association is None else association)
+            if (qualified_body_input(value, self.scope) and value.frame_key == frame_key
+                    and value.capture_earliest_mono <= bundle.arrival_mono):
+                request = self._body_request(value)
+                if request is not None:
+                    self.body.submit(self.detector.next_id, **request)
+                return
         except Exception:
             pass   # the optional body adapter cannot interrupt tracking
         self._clear_body("unavailable")
-        return None
 
     def _body_request(self, value):
         if value is None:
@@ -453,23 +461,15 @@ class Perceiver:
         except t.roommodel.RegistrationRefused as exc:
             self._clear_body("scope_changed")
             raise Refused("the camera no longer matches the registration (%s); register again with step 2" % exc) from None
-        body_request = None
-        try:
-            body_request = self._body_request(self._body_input(bundle, meta, depth))
-        except Exception:
-            self._clear_body("unavailable")
-        body_key = {"frame_key": body_request["frame_key"]} if body_request is not None else {}
+        frame_key = bundle_frame_key(bundle, meta) if self.body is not None else None
+        body_key = {"frame_key": frame_key} if frame_key is not None else {}
         reply = self.detector.detect(bundle, max(0.0, now_mono - capture_mono), **body_key)
         if "error" in reply:
             return self._drop("detector_errors", now_mono, "detector errors")
-        if body_request is not None:
-            try:
-                self.body.submit(self.detector.next_id, **body_request)
-            except Exception:
-                self._clear_body("unavailable")
         self.problem = None
         self._mode(reply.get("luma"), now_mono)
         if self.mode == "none":
+            self._submit_body(bundle, meta, depth, frame_key)
             return self.event(now_mono - capture_mono, [], dict(camera_state, why="too dark"), now_mono)
         self.last_capture = capture_mono
         observations = t.observe.observe(reply["row"], meta, depth, self.camera, self.settings, offset_s=offset)
@@ -504,6 +504,8 @@ class Perceiver:
             supported.append(set(track.obs_ids))
             # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
             association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
+        self._submit_body(bundle, meta, depth, frame_key, observations=observations, tracks=tracks,
+                          supported=supported, association=association)
         self.lags.append((now_mono, now_mono - capture_mono))
         event = self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
         # For the Qwen ask (ask.py): this frame's detection id (the detector's process keeps the frame under it), its

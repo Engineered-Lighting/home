@@ -265,9 +265,21 @@ clients are unaffected.
     `kernel-fault-inspection-<date>.json` receipt and by moving
     `last-preflight.json` `at` past the fault, as on 2026-09-29.
   - The LA camera pilot rejects every request: camera chat and live facts.
-    Its scan starts from `_KERNEL_BASELINE`, hard-coded in
-    `camera_pilot_service.py`, and a restart re-scans from there. The only fix
-    is a pilot release that moves that baseline past the inspected fault.
+    In 2026-10, its scan started from `_KERNEL_BASELINE`, hard-coded in
+    `camera_pilot_service.py`, so only a pilot release could move past an
+    inspected fault. Since 2026-11-11 the scan resumes from
+    `private/kernel-fault-checkpoint.json`, which only a clean scan writes. To
+    move past an inspected fault, the owner writes
+    `private/kernel-fault-receipt.json` as the service user, mode 0600:
+
+    ```json
+    {"version": 1, "inspected_through": "2026-11-11 21:37:41 UTC",
+     "note": "memcg OOM confined to one service cgroup"}
+    ```
+
+    The next scan, at most 30 s later, starts one second after
+    `inspected_through`. No release or restart is needed, and a later fault
+    still refuses.
 
   So cap downloads generously: the first run, with 8 workers under 4g, was
   OOM-killed. The script now uses 2 workers under 8g.

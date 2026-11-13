@@ -16,7 +16,7 @@ class LifecycleError(Exception):
 
 # Content-free gate identities a host adapter may prove; thresholds live there.
 PREFLIGHT_REASONS=frozenset({'preflight_memory','preflight_vram','preflight_thermal','preflight_disk',
-    'preflight_failed_unit','preflight_kernel_fault','preflight_model_health','preflight_source',
+    'preflight_failed_unit','preflight_kernel_fault','preflight_kernel_scan_incomplete','preflight_model_health','preflight_source',
     'preflight_worker_active','preflight_worker_readiness'})
 
 

@@ -124,6 +124,17 @@ ingress slot during a session. Known `start_live.preflight` refusals are recorde
 as content-free lease reasons (`preflight_memory`, `preflight_vram`,
 `preflight_thermal`, `preflight_disk`, ...); unknown ones stay `preflight_rejected`.
 
+The kernel-fault gate scans the kernel journal from `kernel-fault-checkpoint.json`
+(less 5 s) to now in chunks of at most 6 hours, for at most 60 s per preflight.
+Each clean chunk is recorded as soon as it is clean. A missing, malformed or
+future checkpoint starts at the fixed baseline instead, which is earlier and
+never later. A fault, or any reply that is not a clean "no entries", fails the
+lease as `preflight_kernel_fault` and is never recorded as clean. When the 60 s
+run out first, the lease fails as `preflight_kernel_scan_incomplete`; the next
+lease resumes from the recorded chunks, so a stale checkpoint catches up over a
+few leases and needs no manual advance. Progress is logged to stderr as
+`la lease kernel scan outcome=...`.
+
 Deploy order: the supervisor files and the worker tree ship separately, and an
 older worker sends a plain 409 that can never prove ready. Stage a worker release
 whose `remote_http.py` declares `READINESS_REPLY` and point `managed-source.json`

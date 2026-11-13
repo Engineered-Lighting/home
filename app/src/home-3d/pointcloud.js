@@ -182,6 +182,8 @@ void main() {
  * opacity, cutaway) reach it unchanged; only the colour differs.
  */
 export function createLitPointsMaterial(base, { texture, width }) {
+    // A look material that names its classic base relights from that base.
+    base = base?.userData?.classicPoints || base;
     const vertex = base.vertexShader
         .replace('varying float vIntensity;', 'varying float vIntensity;\nuniform sampler2D uLitColor;\nuniform int uLitWidth;\nvarying vec3 vLitColor;')
         .replace('vIntensity = intensity;', 'vIntensity = intensity;\n    vLitColor = texelFetch(uLitColor, ivec2(gl_VertexID % uLitWidth, gl_VertexID / uLitWidth), 0).rgb;');
@@ -256,6 +258,314 @@ export function createPointsMaterial() {
         } catch (e) { /* */ }
     };
     return mat;
+}
+
+/*
+ * The x-ray look (WebGL only), after laser-scan section renders: faint points
+ * add up into light, so surfaces read as translucent layers and the far rooms
+ * show through the near ones. Brightness comes from density, not from
+ * per-point sparkle.
+ *
+ *   - point-features.mjs gives each point a normal and its sample spacing, plus
+ *     the floor height and which side of each wall is inside (a worker, once
+ *     per load);
+ *   - a scan has about a millionth of the points a survey scan has, so each
+ *     point is drawn XRAY_COPIES times, spread across the patch of surface it
+ *     stands for; up close a point grows to cover its patch and shares the
+ *     same light over the larger area, so tone stays continuous at every zoom;
+ *   - the copies add into a half-float target before the main render (no depth
+ *     test), and one full-screen pass maps that light to the screen with a
+ *     soft shoulder, 1 - exp(-light * exposure), drawn first so markers and
+ *     labels stay on top;
+ *   - dollhouse: a wall seen from outside its room (the side without floor)
+ *     drops to a 25 cm stub, as do partitions between the camera and the orbit
+ *     centre, from any angle, on any scan. Home's own cutaway still applies.
+ *
+ * The classic material stays the cloud's own material: the engine writes its
+ * uniforms every frame and the x-ray materials share those uniform objects;
+ * the lit layer and the WebGPU port still start from it, and whenever another
+ * material is on the cloud (the Lighting view's), x-ray steps aside and the
+ * cloud draws as before. Opt out per browser with localStorage
+ * 'apartment3d.pointLook' = 'classic'.
+ */
+export const XRAY_COPIES = 6;
+export const XRAY_POINT_PX = 1.3;
+export const XRAY_GAIN = 0.09;
+export const XRAY_EXPOSURE = 2.6;
+export const XRAY_GAMMA = 1.25;
+export const XRAY_FOG = 0.45;
+export const XRAY_CUT_STUB_M = 0.25;
+/* The CSS viewport the gain was tuned at: the same points over fewer pixels pile up brighter. */
+export const XRAY_REFERENCE_CSS_AREA = 1148 * 754;
+export const POINT_LOOK_KEY = 'apartment3d.pointLook';
+/* Points on this layer draw only into the x-ray target; the cloud itself moves to an unrendered layer. */
+export const XRAY_LAYER = 30;
+const HIDDEN_LAYER = 31;
+
+const xrayCutGlsl = /* glsl */ `
+    // dollhouse: walls seen from outside their room, and partitions on the camera's side, drop to a stub
+    vec3 nO = normalize(normal);
+    if (uPlanCut > 0.5 && position.z > uFloorZ + ${XRAY_CUT_STUB_M.toFixed(2)} && abs(nO.z) < 0.4) {
+        vec3 nV = normalize(normalMatrix * normal), vV = normalize(-(modelViewMatrix * vec4(position, 1.0)).xyz);
+        vec2 toCam = normalize(uCamLocal.xy - uTargetLocal.xy);
+        bool cut = abs(aInside) > 0.5
+            ? dot(nV * sign(aInside), vV) < -0.02
+            : dot(position.xy - uTargetLocal.xy, toCam) > 0.4 && abs(dot(normalize(nO.xy), toCam)) > 0.45;
+        if (cut) { gl_Position = vec4(2.0, 2.0, 2.0, 1.0); gl_PointSize = 0.0; return; }
+    }
+`;
+
+export const xrayVertexShader = /* glsl */ `
+${cutawayVertexDeclarations}
+uniform float uPixelRatio;
+uniform float uFadeNear;
+uniform float uWallNear;
+uniform float uFadeFar;
+uniform float uViewportPx;
+uniform float uCopy;
+uniform float uXrayGain;
+uniform float uPlanCut;
+uniform float uFloorZ;
+uniform vec3 uCamLocal;
+uniform vec3 uTargetLocal;
+
+attribute float intensity;
+attribute float aSpacing;
+attribute float aInside;
+
+varying float vLight;
+
+float hash(float x) { return fract(sin(x) * 43758.5453); }
+
+void main() {
+    ${xrayCutGlsl}
+    float r = fract(sin(dot(position.xy, vec2(12.9898, 78.233)) + position.z * 3.7) * 43758.5453);
+    // each copy sits a little way across the surface; copy 0 is the measured point
+    vec3 t1 = normalize(cross(nO, abs(nO.z) < 0.9 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0))), t2 = cross(nO, t1);
+    float spacing = aSpacing * 0.255;                                   // aSpacing: mm / 255
+    vec3 p = position + (t1 * (hash(r * 91.7 + uCopy * 13.1) - 0.5) + t2 * (hash(r * 37.3 + uCopy * 7.7) - 0.5))
+        * spacing * 1.2 * step(0.5, uCopy);
+    vec4 mvPosition = modelViewMatrix * vec4(p, 1.0);
+    vDollhouseLocal = (uDollhouseWorldToLocal * modelMatrix * vec4(position, 1.0)).xyz;
+    float depth = -mvPosition.z;
+    float fade = 1.0 - ${XRAY_FOG.toFixed(2)} * smoothstep(uFadeNear * 0.5, uFadeFar, depth);
+    if (uWallNear > 0.0) fade *= smoothstep(uWallNear * 0.35, uWallNear * 0.85, depth);
+    // up close a point grows to cover its patch and shares the same light over the larger area
+    float base = ${XRAY_POINT_PX.toFixed(2)} * uPixelRatio;
+    float patchPx = spacing * projectionMatrix[1][1] * 0.5 * uViewportPx / max(depth, 0.2) * 0.75;
+    float size = max(base, patchPx);
+    vLight = (0.12 + intensity) * fade * uXrayGain * (base * base) / (size * size);
+    gl_PointSize = size;
+    gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+export const xrayFragmentShader = /* glsl */ `
+${cutawayFragmentDeclarations}
+varying float vLight;
+
+void main() {
+    float d = length(gl_PointCoord - vec2(0.5));
+    if (d > 0.5) discard;
+    float keep = homeDollhouseKeep();
+    if (keep <= 0.001) discard;
+    float k = exp(-d * d * 10.0) * keep;
+    gl_FragColor = vec4(vec3(vLight * k), vLight * k);
+}
+`;
+
+export const xrayCompositeFragmentShader = /* glsl */ `
+uniform sampler2D tLight;
+uniform float uExposure;
+uniform float uGamma;
+uniform float uOpacity;
+varying vec2 vUv;
+
+void main() {
+    float light = texture2D(tLight, vUv).r;
+    float t = pow(1.0 - exp(-light * uExposure), uGamma) * uOpacity;
+    gl_FragColor = vec4(vec3(t), t);                                   // premultiplied over the page
+}
+`;
+
+/** The x-ray gain for a CSS viewport: the same points over fewer pixels pile up brighter. */
+export function xrayGainForViewport(cssWidth, cssHeight) {
+    const area = finiteOr(cssWidth, 0) * finiteOr(cssHeight, 0);
+    const ratio = area > 0 ? area / XRAY_REFERENCE_CSS_AREA : 1;
+    return XRAY_GAIN * Math.min(4, Math.max(0.15, ratio));
+}
+
+/** Whether this browser keeps the classic cloud (localStorage opt-out). */
+export function xrayLookOptedOut(storage = globalThis.localStorage) {
+    try { return storage?.getItem?.(POINT_LOOK_KEY) === 'classic'; } catch (e) { return false; }
+}
+
+/** The x-ray copy materials and the composite, sharing the classic material's per-frame uniform objects. */
+export function createXrayMaterials(base, { copies = XRAY_COPIES } = {}) {
+    const shared = {};
+    for (const [name, uniform] of Object.entries(base.uniforms)) {
+        if (name.startsWith('uDollhouse') || ['uPixelRatio', 'uFadeNear', 'uFadeFar', 'uWallNear', 'uOpacity'].includes(name)) shared[name] = uniform;
+    }
+    const own = {
+        uViewportPx: { value: 1080 }, uXrayGain: { value: XRAY_GAIN }, uPlanCut: { value: 0 }, uFloorZ: { value: 0 },
+        uCamLocal: { value: new THREE.Vector3() }, uTargetLocal: { value: new THREE.Vector3() },
+    };
+    const copiesMaterials = [];
+    for (let c = 0; c < copies; c++) {
+        const material = new THREE.ShaderMaterial({
+            name: 'apartment-points-xray',
+            uniforms: { ...shared, ...own, uCopy: { value: c } },
+            vertexShader: xrayVertexShader,
+            fragmentShader: xrayFragmentShader,
+            transparent: true,
+            blending: THREE.CustomBlending,
+            blendEquation: THREE.AddEquation,
+            blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+            blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneFactor,
+            depthWrite: false,
+            depthTest: false,
+        });
+        // modes.js keeps these out of the depth buffer; x-ray has no depth by design
+        material.userData.noDepthWrite = true;
+        material.userData.classicPoints = base;
+        copiesMaterials.push(material);
+    }
+    const composite = new THREE.ShaderMaterial({
+        name: 'apartment-points-xray-composite',
+        uniforms: { tLight: { value: null }, uExposure: { value: XRAY_EXPOSURE }, uGamma: { value: XRAY_GAMMA }, uOpacity: base.uniforms.uOpacity },
+        vertexShader: 'varying vec2 vUv;\nvoid main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+        fragmentShader: xrayCompositeFragmentShader,
+        transparent: true,
+        blending: THREE.CustomBlending,
+        blendEquation: THREE.AddEquation,
+        blendSrc: THREE.OneFactor, blendDst: THREE.OneMinusSrcAlphaFactor,
+        blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+        depthWrite: false,
+        depthTest: false,
+    });
+    return { copies: copiesMaterials, composite, uniforms: own };
+}
+
+/** Half-float colour targets: WebGL2 with a float colour-buffer extension. */
+export function xraySupported(renderer) {
+    try {
+        if (!renderer?.capabilities?.isWebGL2) return false;
+        return !!(renderer.extensions?.has?.('EXT_color_buffer_float') || renderer.extensions?.has?.('EXT_color_buffer_half_float'));
+    } catch (e) { return false; }
+}
+
+function computeFeaturesInWorker(geometry, count, signal) {
+    return new Promise((resolve, reject) => {
+        const search = new URL(import.meta.url).search;
+        let worker;
+        try {
+            worker = new Worker(new URL(`./point-features-worker.mjs${search}`, import.meta.url), { type: 'module', name: 'home-point-features' });
+        } catch (error) { reject(error); return; }
+        const stop = () => { worker.terminate(); reject(new DOMException('scene_load_aborted', 'AbortError')); };
+        if (signal?.aborted) { stop(); return; }
+        signal?.addEventListener?.('abort', stop, { once: true });
+        worker.onmessage = (event) => {
+            signal?.removeEventListener?.('abort', stop);
+            worker.terminate();
+            if (event.data?.ok) resolve(event.data); else reject(new Error(event.data?.error || 'point features failed'));
+        };
+        worker.onerror = (event) => { signal?.removeEventListener?.('abort', stop); worker.terminate(); reject(new Error(event.message || 'point features worker failed')); };
+        // copies: the geometry keeps its own arrays
+        const positions = geometry.getAttribute('position').array.slice(0, count * 3);
+        const intensity = geometry.getAttribute('intensity').array.slice(0, count);
+        worker.postMessage({ positions, intensity, count }, [positions.buffer, intensity.buffer]);
+    });
+}
+
+/**
+ * Computes the features for a loaded cloud and puts the x-ray look on it.
+ * Resolves to { prepass(), update(state), detach(), ms, cells } or rejects (the classic look stays).
+ *   update({ viewportPx, cssWidth, cssHeight, cameraLocal, targetLocal, cut }) once per frame;
+ *   prepass() just before the main render: accumulates the copies into the light target.
+ */
+export async function attachXrayLook(points, base, { renderer, scene, camera, signal } = {}) {
+    if (!xraySupported(renderer)) throw new Error('x-ray needs half-float render targets');
+    const geometry = points.geometry;
+    const count = Math.min(geometry.getAttribute('position').count, geometry.drawRange.count);
+    const features = await computeFeaturesInWorker(geometry, count, signal);
+    if (signal?.aborted) throw new DOMException('scene_load_aborted', 'AbortError');
+    geometry.setAttribute('normal', new THREE.BufferAttribute(features.normal, 3, true));
+    geometry.setAttribute('aSpacing', new THREE.BufferAttribute(features.spacing, 1, true));
+    geometry.setAttribute('aInside', new THREE.BufferAttribute(features.inside, 1, true));
+    const { copies, composite, uniforms } = createXrayMaterials(base);
+    uniforms.uFloorZ.value = features.floorZ;
+    const group = new THREE.Group();
+    group.name = 'apartment-points-xray';
+    for (const material of copies) {
+        const copy = new THREE.Points(geometry, material);
+        copy.frustumCulled = false;
+        copy.raycast = () => {};
+        copy.layers.set(XRAY_LAYER);
+        group.add(copy);
+    }
+    points.add(group);
+    const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+    const target = new THREE.WebGLRenderTarget(Math.max(1, size.x), Math.max(1, size.y), { type: THREE.HalfFloatType, depthBuffer: false });
+    composite.uniforms.tLight.value = target.texture;
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), composite);
+    quad.name = 'apartment-points-xray-composite';
+    quad.frustumCulled = false;
+    quad.renderOrder = -1000;
+    quad.raycast = () => {};
+    scene.add(quad);
+    const ownLayers = points.layers.mask;
+    let active = false;
+    const setActive = (on) => {
+        active = on;
+        group.visible = on;
+        quad.visible = on && points.visible;
+        if (on) points.layers.set(HIDDEN_LAYER); else points.layers.mask = ownLayers;
+    };
+    const look = {
+        ms: features.ms, cells: features.cells, floorZ: features.floorZ, target,
+        get active() { return active; },
+        update({ viewportPx, cssWidth, cssHeight, cameraLocal, targetLocal, cut = true } = {}) {
+            // another material on the cloud (the Lighting view's) means the cloud draws as before
+            setActive(points.material === base);
+            if (!active) return;
+            if (Number.isFinite(viewportPx) && viewportPx > 0) uniforms.uViewportPx.value = viewportPx;
+            uniforms.uXrayGain.value = xrayGainForViewport(cssWidth, cssHeight);
+            uniforms.uPlanCut.value = cut ? 1 : 0;
+            if (cameraLocal) uniforms.uCamLocal.value.fromArray(cameraLocal);
+            if (targetLocal) uniforms.uTargetLocal.value.fromArray(targetLocal);
+        },
+        prepass() {
+            quad.visible = active && points.visible;
+            if (!quad.visible) return;
+            const buffer = renderer.getDrawingBufferSize(new THREE.Vector2());
+            if (buffer.x !== target.width || buffer.y !== target.height) target.setSize(Math.max(1, buffer.x), Math.max(1, buffer.y));
+            const previous = renderer.getRenderTarget(), autoClear = renderer.autoClear, mask = camera.layers.mask;
+            const clear = renderer.getClearColor(new THREE.Color()), clearAlpha = renderer.getClearAlpha();
+            try {
+                camera.layers.set(XRAY_LAYER);
+                renderer.setRenderTarget(target);
+                renderer.setClearColor(0x000000, 0);
+                renderer.autoClear = true;
+                renderer.render(scene, camera);
+            } finally {
+                camera.layers.mask = mask;
+                renderer.setRenderTarget(previous);
+                renderer.setClearColor(clear, clearAlpha);
+                renderer.autoClear = autoClear;
+            }
+        },
+        detach() {
+            setActive(false);
+            points.remove(group);
+            scene.remove(quad);
+            quad.geometry.dispose();
+            for (const material of copies) material.dispose();
+            composite.dispose();
+            target.dispose();
+        },
+    };
+    setActive(points.material === base);
+    return look;
 }
 
 const RECORD = 13; // 3*f32 + u8

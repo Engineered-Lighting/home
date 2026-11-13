@@ -351,7 +351,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             pts.visible = v;
             pts.traverse?.((object) => {
                 for (const material of Array.isArray(object.material) ? object.material : object.material ? [object.material] : []) {
-                    material.depthWrite = depthWrite;
+                    // The x-ray look's copy points never write depth; x-ray has no depth by design.
+                    material.depthWrite = material.userData?.noDepthWrite ? false : depthWrite;
                 }
             });
         }

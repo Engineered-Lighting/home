@@ -195,12 +195,25 @@ async function proofInPage({modes, phase}) {
   if (phase === 'frames') { result.webgpu = e.webgpuReadback(); return result; }
   // Picking and projection: CPU paths, identical on both backends.
   await e.modes.setMode('mesh', { duration: 0 });
+  // Picks ray-cast the collision mesh and, on Victoria, accept hits through the
+  // dollhouse cut, which waits on the room registration. Both arrive
+  // asynchronously. Picking before they land compared all-empty picks on a fast
+  // machine and, on CI's SwiftShader, picks from a backend that had the mesh
+  // against one that did not. Pick only once both are in, on both backends.
+  await Promise.race([e.modes.preload(['collision']).catch(() => null), new Promise(resolve => setTimeout(resolve, 60000))]);
+  for (const until = performance.now() + 60000; performance.now() < until;) {
+    if (e.modes.getCollision?.() && e.getEquipmentCutawayRegistrationStatus?.()?.admitted) break;
+    await frames(5);
+  }
   e.rig.snapHome(0); await settle();
   const rect = e.renderer.domElement.getBoundingClientRect();
+  const cut = e.modes.debugInfo?.().dollhouseCutaway;
   result.contractScene = { rect:{x:rect.x,y:rect.y,width:rect.width,height:rect.height},
     cameraPosition:e.camera.position.toArray(),cameraQuaternion:e.camera.quaternion.toArray(),
     cameraWorld:e.camera.matrixWorld.toArray(),cameraProjection:e.camera.projectionMatrix.toArray(),
-    apartmentWorld:e.apartmentRoot.matrixWorld.toArray(),tweening:e.rig.isTweening() };
+    apartmentWorld:e.apartmentRoot.matrixWorld.toArray(),tweening:e.rig.isTweening(),
+    collision:!!e.modes.getCollision?.(),
+    cutaway:{admitted:!!e.getEquipmentCutawayRegistrationStatus?.()?.admitted,enabled:!!cut?.enabled,metricShell:!!cut?.metricShell} };
   // Off-centre grid: the home pose is symmetric, so a centred column runs
   // exactly along the room's corner seam, where the face a ray meets is a
   // rounding tie (the WebGPU projection rounds differently at ~1e-13).
@@ -314,7 +327,8 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
     try {
       const context = await browser.newContext({ viewport, deviceScaleFactor: 1, serviceWorkers: 'block' });
       await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
-      await context.addInitScript(() => { localStorage.setItem('apartment3d.site', 'echo'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true; });
+      // The x-ray Cloud look is WebGL-only; the WebGPU port mirrors the classic cloud, so compare against that.
+      await context.addInitScript(() => { localStorage.setItem('apartment3d.site', 'echo'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); localStorage.setItem('apartment3d.pointLook', 'classic'); window.HG_DISABLE_SERVICE_WORKER = true; });
       await context.route('**/*', route => {
         const url = new URL(route.request().url());
         if (['data:', 'blob:'].includes(url.protocol) || url.origin === origin) return route.continue();
@@ -364,6 +378,8 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       console.log('Authored renderer contract context: ' + JSON.stringify({backend,reference:reference.contractScene,
         candidate:candidate.contractScene,referenceFit:reference.fit,candidateFit:candidate.fit}));
       assertNumericallyEqual(candidate.contractScene, reference.contractScene, 'camera and viewport');
+      assert.equal(reference.contractScene.collision, true, 'the collision mesh loaded before picking');
+      assert.ok(reference.picks.filter(Boolean).length > 0, 'the picks hit the room');
       contracts = {
         picks: assertNumericallyEqual(candidate.picks, reference.picks, 'surface picks'),
         projections: assertNumericallyEqual(candidate.projections, reference.projections, 'overlay projection'),

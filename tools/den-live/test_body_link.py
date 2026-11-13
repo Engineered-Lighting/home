@@ -5,7 +5,7 @@ import unittest
 import urllib.request
 from types import SimpleNamespace
 
-from body_input import BodyInput, qualified
+from body_input import BodyInput, bundle_frame_key, qualified
 from body_link import BodyLink
 from perceive import Perceiver, body_person
 from stream import BODY_SCHEMA, BASE, PeopleStream
@@ -113,6 +113,13 @@ class LinkTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_exact_key_comes_from_retained_bundle_metadata(self):
+        bundle = SimpleNamespace(session="camera", rgb_seq=10)
+        meta = dict(session="camera", rgb_seq=10, depth_seq=21)
+        self.assertEqual(bundle_frame_key(bundle, meta), ["camera", 10, 21])
+        for changes in (dict(session="other"), dict(rgb_seq=11), dict(depth_seq=None), dict(depth_seq=True)):
+            self.assertIsNone(bundle_frame_key(bundle, {**meta, **changes}))
+
     def test_pipeline_handoff_uses_bound_scope_and_body_joints(self):
         track = dict(track_id="one", state="confirmed", association="confident", xy_m=[0, 2])
         joints = [(-0.2, 2, 1.2), (0.2, 2, 1.2), (-0.16, 2, 0.8), (0.16, 2, 0.8)]
@@ -142,29 +149,71 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(request["frame_key"], "exact")
         self.assertEqual(request["person"]["head_evidence"], evidence)
 
-    def test_body_submission_does_not_depend_on_the_legacy_rgb_mode(self):
+    def pipeline_process(self, mode, provider):
         calls = []
         detector = SimpleNamespace(next_id=42)
-        detector.detect = lambda bundle, delay, **key: calls.append(key) or {"luma": 0, "row": {}}
+        detector.detect = lambda bundle, delay, **key: calls.append(("detect", key)) or {"luma": 0, "row": {}}
         camera = SimpleNamespace(check_frame=lambda _: None)
-        tools = SimpleNamespace(takes=SimpleNamespace(read_frame=lambda _: ({}, None)),
-                                roommodel=SimpleNamespace(RegistrationRefused=ValueError))
+        observation = dict(kind="keypoints", obs_id="current-pose", validity="valid")
+        track = SimpleNamespace(id=1, obs_ids={"current-pose"}, heading_as_of=None, last_seen=100)
+        track_record = dict(track_id="one", position=dict(x=0, y=1, cov=[[0.1, 0], [0, 0.1]]), heading=None,
+                            association=dict(status="confident", since_ts=99.0))
+        meta = dict(session="camera", rgb_seq=7, depth_seq=20)
+        tools = SimpleNamespace(takes=SimpleNamespace(read_frame=lambda _: (meta, None)),
+                                roommodel=SimpleNamespace(RegistrationRefused=ValueError),
+                                observe=SimpleNamespace(observe=lambda *_, **__: [observation]),
+                                records=SimpleNamespace(frames_from_observations=lambda *args: ([], None),
+                                                        track_record=lambda *args: track_record))
         perceiver = Perceiver.__new__(Perceiver)
         perceiver.t, perceiver.camera, perceiver.detector = tools, camera, detector
-        perceiver.last_t_host, perceiver.last_capture, perceiver.session = 99.0, 99.0, "camera"
-        perceiver.counts, perceiver.arrivals = {"frames": 0}, []
+        perceiver.home, perceiver.scope = "den", SCOPE
+        perceiver.last_t_host, perceiver.last_capture, perceiver.session, perceiver.sessions = 99.0, 99.0, "camera", 3
+        perceiver.counts, perceiver.arrivals, perceiver.lags = {"frames": 0, "observations": 0}, [], []
+        perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})
+        perceiver.core, perceiver.strong = SimpleNamespace(step=lambda *args: [(track, "confirmed")]), set()
         perceiver.clock = SimpleNamespace(add=lambda *_: None, offset=lambda: 0)
         perceiver._transit = lambda *_: None
         perceiver.require_source_correction = False
-        perceiver.mode, perceiver.light_since, perceiver.dark_since = "none", None, 1
-        perceiver.event = lambda *args: args[2]
-        perceiver._body_input = lambda *_: "qualified input"
-        perceiver._body_request = lambda value: {"frame_key": "exact-infrared"} if value else None
-        perceiver.body = SimpleNamespace(submit=lambda frame_id, **kwargs: calls.append((frame_id, kwargs)))
-        bundle = SimpleNamespace(data=b"fake", session="camera", t_host=100.0, arrival_mono=100.1)
-        event = perceiver.process(bundle, {}, 100.2)
-        self.assertEqual(calls, [{"frame_key": "exact-infrared"}, (42, {"frame_key": "exact-infrared"})])
+        perceiver.mode, perceiver.light_since, perceiver.dark_since = mode, None, 99
+        perceiver.event = lambda ago, tracks, camera, now: {**camera, "capture_ts": 123.0, "tracks": tracks}
+        perceiver.body_input = lambda *_, **data: calls.append(("provider", data)) or provider(data)
+        perceiver._body_request = lambda value: {"frame_key": value.frame_key, "mode": value.mode}
+        perceiver.body = SimpleNamespace(submit=lambda frame_id, **kwargs: calls.append(("submit", frame_id, kwargs)),
+                                         clear=lambda reason: calls.append(("clear", reason)))
+        bundle = SimpleNamespace(data=b"fake", session="camera", rgb_seq=7, t_host=100.0,
+                                 arrival_mono=100.1, arrival_unix=1000)
+        return calls, perceiver.process(bundle, {}, 100.2)
+
+    def pipeline_input(self, data, *, key=None):
+        return BodyInput(data["frame_key"] if key is None else key, SCOPE["run_id"], SCOPE["track_epoch"],
+                         SCOPE["content_revision"], SCOPE["transform_id"], BINDING["depth_profile"],
+                         99.5, "infrared" if data["mode"] == "none" else "rgb", "person")
+
+    def test_rgb_provider_runs_after_current_track_association(self):
+        calls, event = self.pipeline_process("rgb", self.pipeline_input)
+        key = ["camera", 7, 20]
+        self.assertEqual(calls[0], ("detect", {"frame_key": key}))
+        kind, data = calls[1]
+        self.assertEqual((kind, data["mode"]), ("provider", "rgb"))
+        self.assertEqual(data["observations"][0]["obs_id"], "current-pose")
+        self.assertEqual(data["tracks"], event["tracks"])
+        self.assertEqual(data["supported"], [{"current-pose"}])
+        self.assertEqual(data["association"], {"e3-one": ("confident", 99.0)})
+        self.assertEqual(calls[2], ("submit", 42, {"frame_key": key, "mode": "rgb"}))
+
+    def test_ir_body_submission_survives_legacy_rgb_darkness(self):
+        calls, event = self.pipeline_process("none", self.pipeline_input)
+        key = ["camera", 7, 20]
+        self.assertEqual(calls, [("detect", {"frame_key": key}),
+                                 ("provider", {"frame_key": key, "mode": "none", "observations": (), "tracks": (),
+                                               "supported": (), "association": {}}),
+                                 ("submit", 42, {"frame_key": key, "mode": "infrared"})])
         self.assertEqual(event["why"], "too dark")
+
+    def test_wrong_provider_key_clears_body_without_changing_markers(self):
+        calls, event = self.pipeline_process("rgb", lambda data: self.pipeline_input(data, key=["camera", 7, 19]))
+        self.assertEqual(calls[-1], ("clear", "unavailable"))
+        self.assertEqual(event["tracks"][0]["track_id"], "e3-one")
 
 
 def read_event(response):

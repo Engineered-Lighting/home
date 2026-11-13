@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from helpers import T0, FakeBrain, FakeClock, load_timeline, make_bridge, rel, replay
 from victoria_ha_bridge.core import Outbox, Timing
 
@@ -47,6 +49,42 @@ def test_outbox_expiry_without_refresh():
     assert outbox.pending == []
     assert outbox.stats.dropped_expired == 1
     assert brain.batches == []
+
+
+def test_backoff_stays_capped_through_a_long_outage(caplog):
+    # A brain that stays down for hours or days must not crash the bridge.
+    # 2 ** 1024 no longer fits in a float, so an uncapped exponent raised
+    # OverflowError after about 1,024 consecutive failures (~8.5 h at the 30 s
+    # cap). Drive 1,200 failures (10 h) and then recover.
+    timing = Timing()
+    failures = 1200
+    clock = FakeClock()
+    brain = FakeBrain(clock, down=lambda t: t < failures * timing.retry_max_s)
+    outbox = Outbox(brain, timing)
+    outbox.put("occupancy", {"type": "occupancy", "observed_at": T0, "ttl_s": 1e9})
+
+    caplog.set_level(logging.INFO, logger="victoria_ha_bridge")
+    for i in range(failures):
+        clock.now = T0 + i * timing.retry_max_s
+        outbox.flush(clock.now)
+        assert outbox.stats.failed_attempts == i + 1
+
+    assert outbox._failures == failures
+    assert outbox._next_attempt_at - clock.now == timing.retry_max_s
+    assert len(brain.attempts) == failures
+    assert brain.attempts[:6] == [0, 30, 60, 90, 120, 150]
+    assert outbox.brain_reachable is False
+
+    clock.now = T0 + failures * timing.retry_max_s
+    outbox.flush(clock.now)
+    assert outbox.brain_reachable is True
+    assert len(brain.batches) == 1
+    assert outbox.pending == []
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert [m for m in messages if m.startswith("brain unreachable")] == [
+        "brain unreachable (ConnectionRefusedError); buffering, retry in 2 s"]
+    assert f"brain reachable again after {failures} failed attempt(s)" in messages
 
 
 def test_rejected_batch_is_dropped_not_retried():

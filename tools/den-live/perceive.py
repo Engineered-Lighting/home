@@ -22,6 +22,10 @@ Numbers this phase sets, with where they come from:
   picture to use then, so the stream says mode none, why too dark.
 - Every bundle must say depth_correction applied when the method file asks for it (as step 2's paste checks); one
   that doesn't is refused, counted and never lifted.
+- Step 2's depth scale (contract 1, den-live-register-now-2's depth_scale, 0.90-1.10, 1.0 for none): every depth
+  plane is multiplied by it right after it's read, before any lift, so the lift sees the depth the registration was
+  fitted on. The figure's depth gets the same scale in the detector's process (body.py). The Perceiver refuses a scale
+  other than the one the registration's own take was made at (its name says, <take>-x0.971-m). At 1.0 nothing changes.
 
 An event holds tracks' floor positions in your scan's frame, their spread, heading and age: no joints, no image, no
 name. Only confirmed and coasting tracks go out, and only once a pose or a person box at 0.5 or more has supported
@@ -41,6 +45,7 @@ import sys
 import threading
 import time
 import uuid
+from array import array
 from dataclasses import dataclass
 from types import MappingProxyType
 from collections import deque
@@ -50,7 +55,8 @@ import room_labels
 from body import head_exclusion
 from body_clock import receipt_arrival
 from body_input import bundle_frame_key, qualified as qualified_body_input
-from contracts import FIGURE_S, PERCEPTION_S, RGB_PAIR_S, FrameRef, PlaneRef, TrackEvidence, TrackingSnapshot
+from contracts import (DEPTH_SCALE_RANGE, FIGURE_S, PERCEPTION_S, RGB_PAIR_S, FrameRef, PlaneRef, TrackEvidence,
+                       TrackingSnapshot, take_scale)
 
 SCHEMA = "den-live-people-1"
 FRESH_S = PERCEPTION_S
@@ -350,7 +356,7 @@ class Perceiver:
     now, capture_ts is now less how long ago the frame was captured."""
 
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
-                 require_source_correction=True, content_revision=None, now=time.time):
+                 require_source_correction=True, content_revision=None, now=time.time, depth_scale=1.0):
         self.t, self.detector, self.home, self.now = tools, detector, home, now
         self.body_provider = None
         self.body = None   # a body_link.BodyLink, when the live body runs: asked for each fresh frame, never waited for
@@ -361,8 +367,18 @@ class Perceiver:
             transform_id = tools.roommodel.current_transform_id(room_model, camera_id)
             self.camera = tools.roommodel.Camera(room_model, transform_id, max_error_bound_m=max_error_bound_m)
             self.camera.take_state(now(), scored=False)   # this session ends now: after the registration's own take
+            fitted_on = take_scale((tools.roommodel.resolve(room_model, transform_id).get("mount") or {}).get("take"))
         except tools.roommodel.RegistrationRefused as exc:
             raise Refused("the registration can't be used: %s" % exc) from None
+        if type(depth_scale) not in (int, float) or not DEPTH_SCALE_RANGE[0] <= depth_scale <= DEPTH_SCALE_RANGE[1]:
+            raise Refused("den-live's depth scale must lie within %g-%g, not %r" % (*DEPTH_SCALE_RANGE, depth_scale))
+        if depth_scale != fitted_on:
+            raise Refused("%s was fitted on depth x%g, and den-live would apply x%g: register again with step 2's "
+                          "register_now.py" % (transform_id, fitted_on, depth_scale))
+        self.depth_scale = float(depth_scale)
+        # Each millimetre value's scaled value, once: 0 stays 0, as register_now.py's median copy rounds it.
+        self.depth_table = None if self.depth_scale == 1.0 else array(
+            "H", [0] + [min(65535, max(1, round(v * self.depth_scale))) for v in range(1, 65536)])
         method = tools.observe_method.load(tools.observe_tree / "tools" / "den-observe" / "METHOD.md")
         self.settings = tools.observe.Settings(method)
         self.settings.max_age_s = FRESH_S
@@ -539,7 +555,7 @@ class Perceiver:
             person["head_evidence"] = value.head_evidence
         rotation, translation = self.camera.room_from_left
         setup = {"binding": binding, "left_k": list(self.camera.rig.left_k[:4]),
-                 "room_from_left": [[list(r) for r in rotation], list(translation)]}
+                 "room_from_left": [[list(r) for r in rotation], list(translation)], "depth_scale": self.depth_scale}
         self.body.prepare(scope, binding, person["track_id"] if person else None)
         return dict(frame_key=value.frame_key, scope=scope, setup=setup, capture_mono=value.capture_earliest_mono,
                     observation=value.observation, person=person)
@@ -610,6 +626,7 @@ class Perceiver:
             meta, depth = self.t.takes.read_frame(bundle.data)
         except self.t.takes.BundleError:
             return self._drop("unreadable", now_mono, "frames unreadable")
+        depth = self.scaled(depth)
         self._transit(meta, bundle)
         raw = meta.get("raw") or {}
         correction = raw.get("depth_correction")
@@ -632,6 +649,13 @@ class Perceiver:
                        calibration, self.scope["transform_id"], self.scope["content_revision"], capture_mono,
                        bundle.arrival_mono, self.now() - (now_mono - capture_mono))
         return Prepared(ref, meta, depth, bundle)
+
+    def scaled(self, depth):
+        """The depth plane times step 2's depth scale, before any lift: the same plane at 1.0."""
+        if self.depth_table is None:
+            return depth
+        return self.t.takes.Depth(depth.width, depth.height, array("H", map(self.depth_table.__getitem__, depth.mm)),
+                                  depth.t_host, depth.sequence)
 
     def process(self, bundle, camera_state, now_mono):
         """Synchronous replay entry; live uses prepare and finish around worker polling."""

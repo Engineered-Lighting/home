@@ -3,7 +3,8 @@
 Only a qualified empty observation can feed the background. A person needs a
 foreground component supported by their current measured torso joints and a
 conservative exclusion for the head and upper neck. Every emitted point is an
-actual depth pixel from that bundle.
+actual depth pixel from that bundle, times step 2's depth scale (the setup's
+depth_scale, as perceive.py scales the lift's depth; 1.0 changes nothing).
 """
 import base64
 import io
@@ -12,6 +13,7 @@ import time
 import zipfile
 
 HEIGHT, WIDTH = 400, 640
+DEPTH_SCALE_RANGE = (0.90, 1.10)   # contracts.py's: this file loads in the detector's venv on its own
 N = HEIGHT * WIDTH
 EMPTY_S, LEARN_FRAMES, RELEARN_S = 8.0, 12, 120.0
 CUT_MM, NEAR_LIMB_MM, EDGE_MM = 120, 40, 60
@@ -306,14 +308,16 @@ class BodyMaker:
         return normal @ self.R.T
 
 
-def depth_of(np, data):
-    """Read the retained bundle's rectified-left unsigned millimetre plane."""
+def depth_of(np, data, scale=1.0):
+    """Read the retained bundle's rectified-left unsigned millimetre plane, times step 2's depth scale."""
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         if archive.getinfo("depth_mm.npy").file_size > 1 << 21:
             raise ValueError("depth_mm is too large")
         depth = np.load(io.BytesIO(archive.read("depth_mm.npy")), allow_pickle=False)
     if depth.dtype != np.dtype("<u2") or depth.shape != (HEIGHT, WIDTH):
         raise ValueError("depth_mm must be 400x640 uint16")
+    if scale != 1.0:   # as perceive.py's table: rounded half to even, 0 stays 0
+        depth = np.where(depth > 0, np.clip(np.rint(depth * scale), 1, 65535), 0).astype("<u2")
     return depth
 
 
@@ -322,6 +326,7 @@ class BodyChannel:
 
     def __init__(self):
         self.maker = self.binding = None
+        self.depth_scale = 1.0
 
     def handle(self, header, kept):
         """kept is the last detection's (worker id, bundle bytes, pipeline frame key)."""
@@ -334,6 +339,10 @@ class BodyChannel:
                 cv2.setNumThreads(1)
                 if self.binding is None:
                     raise ValueError("missing body calibration binding")
+                scale = setup.get("depth_scale", 1.0)
+                if type(scale) not in (int, float) or not DEPTH_SCALE_RANGE[0] <= scale <= DEPTH_SCALE_RANGE[1]:
+                    raise ValueError("depth scale outside its range")
+                self.depth_scale = float(scale)
                 self.maker = BodyMaker(np, cv2, left_k=setup["left_k"], room_from_left=setup["room_from_left"])
                 return {"body_ready": True, "binding": self.binding}
             except Exception as exc:
@@ -355,7 +364,7 @@ class BodyChannel:
             return {**reply, "frame": None, "why": "stale"}
         try:
             start = time.perf_counter()
-            frame, why = self.maker.step(depth_of(self.maker.np, kept[1]), observation=observation,
+            frame, why = self.maker.step(depth_of(self.maker.np, kept[1], self.depth_scale), observation=observation,
                                          person=header.get("person"), now=float(header["now"]),
                                          frame_key=frame_key, binding=binding)
             return {**reply, "frame": frame, "why": why, "compute_s": round(time.perf_counter() - start, 4),

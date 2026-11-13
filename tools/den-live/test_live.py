@@ -527,6 +527,8 @@ class Qualified(unittest.TestCase):
 
     def test_a_qualified_receipt_gives_its_scan_and_depth_scale(self):
         self.assertEqual(rl.qualified_registration(qualified_receipt(), FIT_TRANSFORM), {'scan_revision': 'rev-1', 'depth_scale': 1.0})
+        scaled = qualified_receipt(depth_scale=0.971, take='20261113-200000-x0.971-m')
+        self.assertEqual(rl.qualified_registration(scaled, FIT_TRANSFORM), {'scan_revision': 'rev-1', 'depth_scale': 0.971})
 
     def test_every_other_receipt_is_refused_in_words(self):
         v1 = {'schema': 'den-live-register-now-1', 'fit': {'result': 'registered', 'transform_id': FIT_TRANSFORM}, 'scan_revision': 'rev-1'}
@@ -587,6 +589,113 @@ class RunLocalRefuses(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(text.strip(), "live: stopped: step 2 registered %s but didn't qualify it: paste register_now.py again"
                          % FIT_TRANSFORM)
+
+
+# ---- step 2's depth scale, applied before any lift (contract 1, den-live-register-now-2's depth_scale) ---------------
+
+def model_made_at(scale, folder=None):
+    """The set's room model with its registration's take renamed as register_now.py names a copy at this scale."""
+    folder = folder or scratch('den-live-model-')
+    lines = (FIT / 'room-model.jsonl').read_text(encoding='utf-8').strip().splitlines()
+    revision = json.loads(lines[-1])
+    for camera in revision['cameras']:
+        camera['mount']['take'] = '20261113-200000-x%g-m' % scale
+    (folder / 'room-model.jsonl').write_text('\n'.join(lines[:-1] + [json.dumps(revision)]) + '\n', encoding='utf-8')
+    return folder / 'room-model.jsonl'
+
+
+@unittest.skipUnless(HAVE_SET, 'needs a prepared den-sim set')
+class DepthScale(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tools = perceive.Tools(sc.archive(TOOLS, 'observe'), sc.archive(TOOLS, 'track'))
+        sys.path.insert(0, str(cls.tools.observe_tree / 'tools' / 'den-take'))
+
+    def perceiver(self, room_model, scale):
+        copy = perceive.track_method_copy(self.tools, [-3.0, -3.5, 3.0, 2.5], scratch('den-live-method-'))
+        return perceive.Perceiver(self.tools, room_model_path=room_model, camera_id='den-virtual', max_error_bound_m=0.10,
+                                  track_method_path=copy, detector=RecordedDetector(READING), home='den',
+                                  require_source_correction=False, now=lambda: 1_800_000_000.0, depth_scale=scale)
+
+    def test_den_live_refuses_a_scale_it_doesnt_apply(self):
+        """A registration fitted on depth x0.971 with den-live applying none, and the other way round: refused."""
+        for model, scale, words in ((model_made_at(0.971), 1.0, 'was fitted on depth x0.971, and den-live would apply x1'),
+                                    (FIT / 'room-model.jsonl', 0.971, 'was fitted on depth x1, and den-live would apply x0.971'),
+                                    (model_made_at(1.2), 1.2, "den-live's depth scale must lie within 0.9-1.1")):
+            with self.assertRaises(perceive.Refused) as caught:
+                self.perceiver(model, scale)
+            self.assertIn(words, str(caught.exception))
+        self.assertEqual(self.perceiver(model_made_at(0.971), 0.971).depth_scale, 0.971)
+
+    def test_every_depth_plane_is_scaled_before_the_lift_and_one_changes_nothing(self):
+        frames = bundles(READING)[:3]
+        plain, scaled = self.perceiver(FIT / 'room-model.jsonl', 1.0), self.perceiver(model_made_at(0.971), 0.971)
+        for p in (plain, scaled):
+            p.process(frames[0], {'status': 'ok', 'why': None}, frames[0].t_host + 0.35)
+        raw = self.tools.takes.read_frame(frames[1].data)[1]
+        same = plain.prepare(frames[1], frames[1].t_host + 0.35).depth
+        self.assertEqual(list(same.mm), list(raw.mm), 'at 1.0 the plane is the bundle\'s own')
+        self.assertIs(plain.scaled(raw), raw)
+        got = scaled.prepare(frames[1], frames[1].t_host + 0.35).depth
+        self.assertEqual((got.width, got.height, got.t_host, got.sequence), (raw.width, raw.height, raw.t_host, raw.sequence))
+        self.assertEqual(list(got.mm), [round(v * 0.971) if v else 0 for v in raw.mm])
+
+    def test_the_lift_sees_the_scaled_depth(self):
+        """The same reading take, lifted at x1 and at x0.97 on registrations made at those scales: the reader's marker
+        comes 3% nearer the camera along its ray, as the depth says."""
+        def last(p):
+            events = []
+            for bundle in bundles(READING):
+                event = p.process(bundle, {'status': 'ok', 'why': None}, bundle.t_host + 0.35)
+                if event is not None and event['tracks']:
+                    events.append(event)
+            return events[-1]['tracks'][0]['xy_m']
+        plain, scaled = self.perceiver(FIT / 'room-model.jsonl', 1.0), self.perceiver(model_made_at(0.97), 0.97)
+        camera = plain.camera.room_from_left[1][:2]   # the left camera's place: depth runs from it
+        near, far = math.dist(last(scaled), camera), math.dist(last(plain), camera)
+        self.assertAlmostEqual(near / far, 0.97, delta=0.012)
+
+
+@unittest.skipUnless(HAVE_SET, 'needs a prepared den-sim set')
+class RunLocalScale(unittest.TestCase):
+    """run_local.py hands step 2's depth scale to the live loop, and refuses a receipt whose scale the room model's
+    registration wasn't made at, before the detector starts."""
+
+    def run_local(self, receipt, model):
+        root = scratch('den-live-root-')
+        work = root / 'private' / 'register'
+        work.mkdir(parents=True)
+        shutil.copyfile(model, work / 'room-model.jsonl')
+        (work / 'register-now-1.json').write_text(json.dumps(receipt), encoding='utf-8')
+        app = root / 'app-checkout'
+        (app / 'app' / 'src' / 'home-3d').mkdir(parents=True)
+        (app / 'app' / 'src' / 'home-3d' / 'apartment-people-layer.mjs').touch()
+        (root / 'token.txt').write_text('t' * 32, encoding='ascii')
+
+        def detector(*args, **kw):
+            raise perceive.Stop('the test stops here, at the detector')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                unittest.mock.patch.object(rl.sc, 'archive', lambda tools_root, key, real=sc.archive: real(TOOLS, key)), \
+                unittest.mock.patch.object(rl.perceive, 'DetectorWorker', detector):
+            code = rl.main([], root=root, console=lambda: True, camera_url='http://127.0.0.1:9', token_file=root / 'token.txt',
+                           venv=Path(sys.executable), app=app, room_model=work / 'room-model.jsonl', camera_id='den-virtual',
+                           floor=[-2.5, -3.0, 2.5, 2.0], require_correction=False, until=lambda: True)
+        return code, out.getvalue()
+
+    def test_a_qualified_scale_reaches_the_perceiver(self):
+        code, text = self.run_local(qualified_receipt(depth_scale=0.971, take='20261113-200000-x0.971-m'), model_made_at(0.971))
+        self.assertIn("Registration %s; the camera's correction not required; den-live's depth scale x0.971." % FIT_TRANSFORM, text)
+        self.assertIn('live: stopped: the test stops here, at the detector', text)
+
+    def test_den_live_refuses_a_receipt_with_a_scale_the_registration_wasnt_made_at(self):
+        code, text = self.run_local(qualified_receipt(depth_scale=0.971, take='20261113-200000-x0.971-m'), FIT / 'room-model.jsonl')
+        self.assertEqual(code, 2)
+        self.assertEqual(text.strip(), "live: stopped: %s was fitted on depth x1, and den-live would apply x0.971: register "
+                                       "again with step 2's register_now.py" % FIT_TRANSFORM)
+        code, text = self.run_local(qualified_receipt(depth_scale=0.971), model_made_at(0.971))
+        self.assertEqual(code, 2)
+        self.assertIn('asks for depth x0.971, but its take was made at x1: paste register_now.py again', text)
 
 
 # ---- end to end: the real detector, the fake camera, the page ------------------------------------------------------

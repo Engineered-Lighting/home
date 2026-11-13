@@ -187,9 +187,6 @@ def qualified_registration(receipt, transform_id):
     if take_scale(receipt.get("take")) != scale:
         raise ValueError("step 2's receipt for %s asks for depth x%g, but its take was made at x%g"
                          % (transform_id, scale, take_scale(receipt.get("take"))))
-    if scale != 1.0:
-        raise ValueError("step 2's receipt for %s asks for depth x%g, and this den-live applies no depth scale"
-                         % (transform_id, scale))
     return {"scan_revision": revision, "depth_scale": float(scale)}
 
 
@@ -369,12 +366,14 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
         method_copy = perceive.track_method_copy(t, perceive.padded(bounds), state)
         perceiver = perceive.Perceiver(t, room_model_path=room_model, camera_id=camera_id, max_error_bound_m=m["gate_m"],
                                        track_method_path=method_copy, home="den", content_revision=revision,
-                                       require_source_correction=bool(live["require_source_correction"] if require_correction is None else require_correction))
+                                       require_source_correction=bool(live["require_source_correction"] if require_correction is None else require_correction),
+                                       depth_scale=registered["depth_scale"])   # every depth plane, before any lift
     except perceive.Stop as exc:
         raise Refusal(str(exc)) from None
     perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits
-    say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
-                                                          "required" if perceiver.require_source_correction else "not required"))
+    say("Registration %s; the camera's correction %s; den-live's depth scale %s." % (
+        perceiver.camera.transform_id, "required" if perceiver.require_source_correction else "not required",
+        "none" if perceiver.depth_scale == 1.0 else "x%g" % perceiver.depth_scale))
     if (body_input is None and body_profile is not None and body_profile.scan_revision == revision
             and body_profile.transform_id == perceiver.camera.transform_id):
         body_input = body_rgb.RgbBodyInput(body_profile, perceiver.camera)

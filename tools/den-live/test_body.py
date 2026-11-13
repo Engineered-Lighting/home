@@ -255,6 +255,35 @@ class ChannelTest(unittest.TestCase):
         self.assertIsNone(ch.maker.background)
         self.assertEqual(ch.handle(body_header("fixture-7"), kept)["why"], "scope_changed")
 
+    def test_the_figures_depth_gets_step_2s_depth_scale(self):
+        """The setup's depth_scale multiplies the retained bundle's depth before the maker sees it, as perceive.py
+        scales the lift's depth; without one, or at 1.0, the depth is the bundle's own. Outside 0.90-1.10 it's refused."""
+        seen = []
+
+        class Maker:
+            np = np
+
+            def step(self, depth, **kw):
+                seen.append(depth)
+                return None, "warming_background"
+
+            def interrupt_learning(self):
+                pass
+        depth = scene()[0].copy()
+        depth[0, 0] = 0
+        kept = (1, bundle(depth), "fixture-7")
+        for scale, expected in ((None, depth), (1.0, depth), (0.97, np.where(depth > 0, np.rint(depth * 0.97), 0))):
+            ch = B.BodyChannel()
+            setup = dict(SETUP["setup"], **({} if scale is None else {"depth_scale": scale}))
+            self.assertEqual(ch.handle({"kind": "setup_body", "setup": setup}, None), {"body_ready": True, "binding": BINDING})
+            ch.maker = Maker()
+            ch.handle(body_header("fixture-7"), kept)
+            np.testing.assert_array_equal(seen[-1], expected)
+            self.assertEqual(seen[-1].dtype, np.dtype("<u2"))
+        self.assertEqual(seen[-1][0, 0], 0, 'no depth stays no depth')
+        refused = B.BodyChannel().handle({"kind": "setup_body", "setup": dict(SETUP["setup"], depth_scale=1.2)}, None)
+        self.assertEqual(refused, {"body_refused": "ValueError", "binding": BINDING})
+
     def test_real_worker_protocol_reader_round_trip_on_subprocess_pipe(self):
         code = """
 import json, sys

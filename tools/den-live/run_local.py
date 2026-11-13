@@ -198,7 +198,7 @@ def den_take(observe_tree):
 
 def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id=CAMERA_ID, page_room="real",
         open_page=webbrowser.open, until=None, status_every_s=STATUS_EVERY_S, floor=None, require_correction=None,
-        page_extra=(), page_port=PAGE_PORT, stream_port=STREAM_PORT):
+        page_extra=(), page_port=PAGE_PORT, stream_port=STREAM_PORT, body_input=None):
     trees = {key: sc.archive(root / "tools", key) for key in TREES}
     if not Path(room_model).is_file():
         raise Stop("no registration yet: paste step 2's line (register_now.py) first")
@@ -230,7 +230,7 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
                                 "--state", str(root / "state" / "detector")],
                  stream_port=stream_port, busy="is another run_local.py still open?", until=until,
                  status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page,
-                 labels=room_labels.Store(root / "private" / "labels", say=say))
+                 labels=room_labels.Store(root / "private" / "labels", say=say), body_input=body_input)
 
 
 def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="real", page_extra=(), page_port=PAGE_PORT,
@@ -261,27 +261,17 @@ def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="
         out.close()
 
 
-def start_body(perceiver, out, detector, revision):
-    """The live body, set up in the detector's process with the registration's rectified-left intrinsics and
-    room_from_camera. Its frames go out on the stream's /body path, tagged with the registration and scan revision the
-    markers carry. One that doesn't set up is said once; the markers go on without it."""
-    camera = perceiver.camera
-    rotation, translation = camera.room_from_left
-    setup = {"left_k": list(camera.rig.left_k[:4]), "room_from_left": [[list(r) for r in rotation], list(translation)], "home": perceiver.home}
-    scope = {"transform_id": camera.transform_id, "content_revision": revision}
-    link = body_link.BodyLink(detector, setup=setup, on_frame=lambda frame: out.publish_body({**frame, **scope}))
-    if link.stopped:
-        say("The live body is off: %s. The markers go on." % link.stopped)
-        link.close()
-        return None
+def start_body(perceiver, out, detector, body_input):
+    """Attach the link now. Its first qualified bundle schedules worker setup without a wait."""
+    link = body_link.BodyLink(detector, stream=out)
     perceiver.body = link
-    say("The live body is on, in the detector's process. It learns the empty room once the den has been empty for a few seconds.")
+    perceiver.body_input = body_input
     return link
 
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          labels=None, asks=None):
+          labels=None, asks=None, body_input=None):
     """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
     only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
     registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup. labels is
@@ -291,6 +281,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None
+    registered_on = None
     if floor is None:
         bounds, revision = scan_floor(packs, site)
         say("Floor: your scan's walkable floor (pack %s), padded %g m on every side." % (revision, perceive.FLOOR_PAD_M))
@@ -327,8 +318,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
             out = people_stream.PeopleStream(port=stream_port, labels=labels)
         except OSError:
             raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
-        if body:
-            link = start_body(perceiver, out, detector, revision)
+        if body and body_input is not None and revision is not None and registered_on == revision:
+            link = start_body(perceiver, out, detector, body_input)
         if asks is not None:
             try:
                 asker = asks(detector)   # (asker, stop), or None when the ask can't start

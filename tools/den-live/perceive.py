@@ -44,6 +44,8 @@ from collections import deque
 from pathlib import Path
 
 import room_labels
+from body import head_exclusion
+from body_input import qualified as qualified_body_input
 
 SCHEMA = "den-live-people-1"
 FRESH_S = 1.5
@@ -228,10 +230,10 @@ class DetectorWorker:
         except ValueError:
             raise Stop("the detector wrote something that isn't its protocol (its log: %s)" % self.log.name) from None
 
-    def detect(self, bundle, delay_s):
+    def detect(self, bundle, delay_s, *, frame_key=None):
         self.next_id += 1
         header = json.dumps({"id": self.next_id, "rgb_seq": bundle.rgb_seq, "t_host": bundle.t_host,
-                             "delay_s": round(delay_s, 4)}).encode("utf-8")
+                             "delay_s": round(delay_s, 4), "frame_key": frame_key}).encode("utf-8")
         try:
             with self.write_lock:
                 self.proc.stdin.write(struct.pack(">I", len(header)) + header + struct.pack(">I", len(bundle.data)) + bundle.data)
@@ -268,6 +270,7 @@ class Perceiver:
                  require_source_correction=True, content_revision=None, now=time.time):
         self.t, self.detector, self.home, self.now = tools, detector, home, now
         self.body = None   # a body_link.BodyLink, when the live body runs: asked for each fresh frame, never waited for
+        self.body_input = None
         self.labels = None   # a room_labels.Store: each track's near phrase, from the confirmed labels on this scan
         self.require_source_correction = require_source_correction
         try:
@@ -304,6 +307,7 @@ class Perceiver:
         self.counts[what] += 1
         self.drops.append(now_mono)
         self.problem = problem
+        self._clear_body("stale" if what == "out_of_order" else "unavailable")
         return None
 
     def _health(self, now_mono):
@@ -350,7 +354,53 @@ class Perceiver:
     def idle(self, camera_state, now_mono):
         """An event with no new frame shown: the camera is offline, slow, or its frames are being dropped (the why says
         which). Tracks are left to fade on the page."""
+        self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
         return self.event(None, [], camera_state, now_mono)
+
+    def _clear_body(self, reason):
+        if self.body is not None:
+            self.body.clear(reason)
+
+    def _body_input(self, bundle, meta, depth):
+        if self.body is None or self.body_input is None:
+            return None
+        try:
+            value = self.body_input(bundle, meta, depth)
+            if qualified_body_input(value, self.scope) and value.capture_earliest_mono <= bundle.arrival_mono:
+                return value
+        except Exception:
+            pass   # the optional body adapter cannot interrupt tracking
+        self._clear_body("unavailable")
+        return None
+
+    def _body_request(self, value):
+        if value is None:
+            return None
+        scope = value.scope(self.home)
+        binding = value.binding()
+        if value.observation not in ("person", "empty"):
+            self.body.clear("ambiguous" if value.observation == "ambiguous" else "pose_unavailable", scope=scope)
+            return
+        person = None
+        if value.observation == "person":
+            if (value.track or {}).get("association") == "ambiguous":
+                self.body.clear("ambiguous", scope=scope)
+                return None
+            person = body_person(value.track, value.pose, self.t.records.body_heading,
+                                 self.track_method.tracker["heading_max_sd_deg"])
+            if person is None:
+                self.body.clear("pose_unavailable", scope=scope)
+                return None
+            if head_exclusion(value.head_evidence, frame_key=value.frame_key, binding=binding) is None:
+                self.body.clear("head_mask_unavailable", scope=scope)
+                return None
+            person["head_evidence"] = value.head_evidence
+        rotation, translation = self.camera.room_from_left
+        setup = {"binding": binding, "left_k": list(self.camera.rig.left_k[:4]),
+                 "room_from_left": [[list(r) for r in rotation], list(translation)]}
+        self.body.prepare(scope, binding, person["track_id"] if person else None)
+        return dict(frame_key=value.frame_key, scope=scope, setup=setup, capture_mono=value.capture_earliest_mono,
+                    observation=value.observation, person=person)
 
     def _mode(self, luma, now_mono):
         if luma is None:
@@ -375,6 +425,7 @@ class Perceiver:
         self.last_frame = None
         went_back = self.last_t_host is not None and bundle.t_host < self.last_t_host - EPOCH_BACK_S
         if bundle.session != self.session or went_back:   # a camera restart starts a new epoch: new tracks, a new clock
+            self._clear_body("scope_changed")
             self.session, self.sessions = bundle.session, self.sessions + 1
             self.clock.reset()
             self._new_core()
@@ -400,10 +451,22 @@ class Perceiver:
         try:
             self.camera.check_frame(meta.get("intrinsics"))
         except t.roommodel.RegistrationRefused as exc:
+            self._clear_body("scope_changed")
             raise Refused("the camera no longer matches the registration (%s); register again with step 2" % exc) from None
-        reply = self.detector.detect(bundle, max(0.0, now_mono - capture_mono))
+        body_request = None
+        try:
+            body_request = self._body_request(self._body_input(bundle, meta, depth))
+        except Exception:
+            self._clear_body("unavailable")
+        body_key = {"frame_key": body_request["frame_key"]} if body_request is not None else {}
+        reply = self.detector.detect(bundle, max(0.0, now_mono - capture_mono), **body_key)
         if "error" in reply:
             return self._drop("detector_errors", now_mono, "detector errors")
+        if body_request is not None:
+            try:
+                self.body.submit(self.detector.next_id, **body_request)
+            except Exception:
+                self._clear_body("unavailable")
         self.problem = None
         self._mode(reply.get("luma"), now_mono)
         if self.mode == "none":
@@ -448,11 +511,6 @@ class Perceiver:
         self.last_frame = {"id": getattr(self.detector, "next_id", None), "session": self.sessions, "capture_ts": event["capture_ts"],
                            "capture_mono": capture_mono, "arrival_unix": bundle.arrival_unix,
                            "poses": track_poses(observations, tracks, supported), "association": association}
-        # The live body, made in the detector's process from the bundle it kept: only while the detector keeps up (a
-        # frame older than FRESH_S is left out), and never waited for.
-        if self.body is not None and now_mono - capture_mono <= FRESH_S:
-            self.body.submit(self.detector.next_id, now=now_mono, capture_ts=event["capture_ts"], seq=event["seq"],
-                             person=body_person(observations, tracks, supported))
         return event
 
 
@@ -483,33 +541,25 @@ def track_poses(observations, tracks, supported):
     return out
 
 
-def body_person(observations, tracks, supported):
-    """Who the live body is made for: the first confirmed track a pose supports in this frame, with that pose's room
-    joints (supported or uncertain; unsupported ones left out); else the first confirmed track, without joints; else
-    None (nobody tracked, so the body step may learn the empty room)."""
-    poses = {o["obs_id"]: o for o in observations if o.get("kind") == "keypoints" and o.get("validity") == "valid"}
-    first = None
-    for track, obs_ids in zip(tracks, supported):
-        if track["state"] != "confirmed":
-            continue
-        person = {"track_id": track["track_id"], "xy_m": track["xy_m"], "joints": {}}
-        first = first or person
-        for obs_id in obs_ids:
-            pose = poses.get(obs_id)
-            if pose is None:
-                continue
-            for entry in pose.get("joints_room") or []:
-                j = entry.get("j")
-                if isinstance(j, int) and 0 <= j < len(COCO) and entry.get("xyz") and entry.get("status") in ("supported", "uncertain"):
-                    person["joints"][COCO[j]] = [entry["xyz"], entry["status"]]
-            return person
-    if first is not None:
-        return first
-    if tracks:
-        return {"track_id": tracks[0]["track_id"], "xy_m": tracks[0]["xy_m"], "joints": {}}
-    # Someone the tracker hasn't confirmed yet still isn't an empty room: no body, and no learning either.
-    seen = any(o.get("kind") in ("keypoints", "person_box") for o in observations)
-    return {"track_id": None, "xy_m": None, "joints": {}} if seen else None
+def body_person(track, pose, heading, max_heading_sd):
+    """Pass only the current supported body joints from one confidently associated pose."""
+    if (not track or track.get("state") != "confirmed" or track.get("association") != "confident"
+            or not isinstance(track.get("track_id"), str) or not 0 < len(track["track_id"]) <= 64
+            or not pose or pose.get("kind") != "keypoints" or pose.get("validity") != "valid"):
+        return None
+    joints = {name: entry for name, entry in pose_joints(pose).items() if entry[1] == "supported" and name in COCO[5:]}
+    names = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    facing = None
+    if all(name in joints for name in names):
+        left, right, hip_l, hip_r = (joints[name][0] for name in names)
+        sx, sy = right[0] - left[0], right[1] - left[1]
+        hx, hy = hip_r[0] - hip_l[0], hip_r[1] - hip_l[1]
+        span = math.hypot(sx, sy) * math.hypot(hx, hy)
+        if min(math.hypot(sx, sy), math.hypot(hx, hy)) >= 0.08 and sx * hx + sy * hy >= 0.5 * span:
+            value = heading(pose)
+            if value is not None and value[1] <= max_heading_sd:
+                facing = value[0]
+    return {"track_id": track["track_id"], "xy_m": track.get("xy_m"), "joints": joints, "facing_deg": facing}
 
 
 class Loop(threading.Thread):

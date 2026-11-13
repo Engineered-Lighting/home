@@ -381,7 +381,7 @@ def roll(log):
 
 
 def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, trees=None, camera_id=rl.CAMERA_ID,
-        require_correction=None):
+        require_correction=None, body_input=None):
     """camera_id and require_correction are the tests' (the den simulation's renders are camera den-virtual, with no
     depth_correction record); the service uses den-oak and the method file's rule."""
     env = os.environ if env is None else env
@@ -431,7 +431,8 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                     detector_argv=[config["venv_python"], "-B", str(HERE / "detect_worker.py"), "--tools-root",
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
-                    status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say), asks=starter)
+                    status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say), asks=starter,
+                    body_input=body_input)
 
 
 def stopping(_signum, _frame):

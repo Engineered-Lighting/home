@@ -55,6 +55,7 @@ class Occupancy(threading.Thread):
         self.last_ok = self.last_on = None
         self.raw = None
         self.problem = "not read yet"
+        self.effective, self.revision = "unknown", 0
         self.counts = {"reads": 0, "failed": 0}
 
     def poll_once(self):
@@ -68,6 +69,7 @@ class Occupancy(threading.Thread):
             return
         now = self.clock()
         with self.lock:
+            self._evidence(now)  # latch a stale gap before a successful read replaces last_ok
             self.counts["reads"] += 1
             if word in ("on", "off"):
                 self.raw, self.last_ok, self.problem = word, now, None
@@ -75,6 +77,7 @@ class Occupancy(threading.Thread):
                     self.last_on = now
             else:
                 self.raw, self.problem = None, "Frigate's sensor reads %s" % ("unavailable" if word == "unavailable" else "something else")
+            self._evidence(now)
 
     def _failed(self, why):
         with self.lock:
@@ -91,10 +94,24 @@ class Occupancy(threading.Thread):
 
     def state(self):
         """(word, why): on, off or unknown, and a short sentence for the health line when it isn't on."""
-        now = self.clock()
+        evidence = self.evidence()
+        return evidence["effective"], evidence["why"]
+
+    def evidence(self):
+        """The effective gate and a revision that remembers observed close/reopen transitions."""
         with self.lock:
-            if self.last_ok is None or now - self.last_ok > self.stale_s or self.raw is None:
-                return "unknown", "Frigate unread: %s" % (self.problem or "no reply")
-            if self.raw == "on" or (self.last_on is not None and now - self.last_on <= self.hold_s):
-                return "on", None
-            return "off", "Frigate sees nobody"
+            return self._evidence(self.clock())
+
+    def _evidence(self, now):
+        age = None if self.last_ok is None else max(0.0, now - self.last_ok)
+        if age is None or age > self.stale_s or self.raw is None:
+            word, why = "unknown", "Frigate unread: %s" % (self.problem or "no reply")
+        elif self.raw == "on" or (self.last_on is not None and now - self.last_on <= self.hold_s):
+            word, why = "on", None
+        else:
+            word, why = "off", "Frigate sees nobody"
+        if (word == "on") != (self.effective == "on"):
+            self.revision += 1
+        self.effective = word
+        return {"raw": self.raw, "effective": word, "why": why, "revision": self.revision,
+                "read_age_ms": None if age is None else round(age * 1000, 1)}

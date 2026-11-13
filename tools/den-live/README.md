@@ -150,16 +150,19 @@ It says which one is missing if it can't start.
 - `source.py` fetches the camera's newest frame about 5 times a second.
 - `detect_worker.py`, in the detector's venv with no network, runs YOLO26s and RTMPose-m on each frame.
 - `perceive.py` runs den-observe and den-track, unedited, on step 2's registration. It checks every frame says the camera corrected its depth.
-- The live body (`body.py`) runs in the same detector process, on the frame it just detected, so the frame crosses once. `body_link.py` asks for it after tracking, never waits for it, and skips frames the detector is late on (over 1.5 s).
+- The live body (`body.py`) runs in the same detector process on the exact retained bundle. `body_link.py` keeps one body request in flight. The people stream starts without waiting for body setup.
 - `stream.py` serves the people stream on 127.0.0.1:8111, and the body frames on their own path, `/body`.
 - `live_page.mjs` serves Home on 127.0.0.1:18190: this checkout when it holds the body layer (`claude/den-live-body`), else the `claude/den-live-home` worktree. It passes the streams through on the same paths step 4's gateway route will use.
 
-**The live body.** Beside your marker, your body is drawn in the Recording look: warm gold points, with your name, what you're doing and what you hold. In your deployed Home only signed-in devices see it; look-only devices see the markers only.
-- The first time the den is empty for 8 s, it learns the empty room, in memory only, never saved. Until then there's no body. It learns again after two minutes of an empty den.
-- It keeps what reads at least 12 cm nearer than the empty room, or 4 cm inside a limb your pose places (a leg against the sofa), within 0.9 m of you.
-- It adds your back, limbs nothing measured covers (drawn fainter), and what you hold: something in your hands, still for 4 frames, drawn steady in blue.
-- When the depth shows no body but your pose is there (thin depth at night, or before the empty room is learned), it draws you from the pose alone, every point faint.
-- It sends at most about 3 body frames a second, about 3,500 points each for a reader (roughly 75 KB); Home moves smoothly between them. It takes about 16 ms a frame here. A busy body skips frames. If it won't set up, only the body goes, and the line `The live body is off: ...` says why. The markers go on.
+**The live body.** A tailnet Home view can show current measured gold particles and a torso-facing cue. The head and upper neck are removed before encoding. Missing surfaces are left empty. The figure clears when the track, privacy evidence, or measured depth is insufficient, or when its one-second capture deadline passes. Background learning uses eight seconds of confidently empty input followed by 12 qualified frames, in memory.
+
+**Pipeline handoff.** Pass a `body_input` provider to `run_local.serve` or `run_service.run`. The live loop attaches `[session, rgb_seq, depth_seq]` from the parsed camera bundle to the detector request. It then calls `body_input(bundle, meta, depth, *, frame_key, mode, observations, tracks, supported, association)` after current RGB pose lifting and tracking. `supported` holds each track's observation IDs in `tracks` order. `association` maps track IDs to their association status and change time. In legacy RGB darkness `mode` is `none` and those collections are empty, so a qualified infrared provider can supply its own current pose and track for the same bundle.
+
+The provider returns a `body_input.BodyInput` with the exact passed frame key, pipeline run ID and track epoch, registered scan revision and transform, qualified depth-profile ID, and earliest possible acquisition time of the paired inputs in this process's monotonic clock. The existing camera packaging timestamp and arrival estimate are insufficient. The depth profile must supply current measured rays, with the sensor correction already applied. Return `None` for unqualified inputs. The standard service leaves the figure empty until a live provider supplies those fields.
+
+For a person, include the current confirmed, confident track and its supported calibrated pose observation. For empty background learning, the provider must affirm that the region is empty and that the depth profile is healthy. Use `ambiguous` or `unknown` otherwise. Private `head_evidence` has `frame_key`, `binding` (`run_id`, `track_epoch`, `content_revision`, `transform_id`, `depth_profile`), `bounds_px` for the whole head and upper neck in rectified depth pixels, and the separate `alignment_px`, `localization_px` and `motion_px` uncertainty margins. Omit incomplete bounds. The body helper expands the bound and removes those rays before deriving the stream data.
+
+The owner qualification uses one short tailnet phone run in room light and one with the qualified dark profile. Start empty, walk and turn, sit with a book, reach, recline, and leave. Cross with a second person and reconnect after expiry. Check each posture and direction cue, head exclusion, room alignment, marker continuity, and clearing. Record capture-to-paint, visibility and gaps by posture as local diagnostics.
 
 **Its numbers:**
 - **The floor:** the tracker's floor box is your scan's walkable floor, padded 1 m on every side. den-track's own box is a tape rectangle in no scan frame. In the den simulation, your real sofa sat outside it, and one reader split into three tracks.
@@ -425,7 +428,7 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 **The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
 
 **What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
-- Three stills from the last 3 s, made into JPEGs in the detector's process (`stills.py`).
+- Two or three stills from a continuously supported subject window, made into JPEGs in the detector's process (`stills.py`).
 - Today's Lab question, with three changes:
   - "hobby" and "craft" are added;
   - the old camera placement is removed;
@@ -441,12 +444,14 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 - the labels fields.
 
 **What it gives.**
-- **The stream:** `health.qwen {state, why, last_reply_at, reply_s_median, asks_per_min, backoff_level}` on every event.
-  - Each track it asked about gets `activity {word, close_up, at}` for 30 s, but only when den-track was sure, through the stills' window, whose answer it was.
-  - The state reads `unavailable` after 3 failed questions in a row, or 3 sets of pictures that didn't come.
-- **In-process:** each answer goes to `Asker.on_reply` hooks as `{"fact": <la-fact-log-1 line>, "ask": <the log line>}`.
-  - The log line carries `association {safe, status, since_at}`: whether den-track held the asked track confident through the stills' window, and since before it.
-  - The end-to-end plan's person state holds a reply that isn't safe.
+- The people stream shows Qwen health and activity for the one currently bound track until the evidence expires.
+- The in-process coordinator consumes a typed reply with ordered frame keys, camera epoch, track ID, association and
+  eligibility revisions, and a deadline ten seconds after the newest input still. A reply that cannot bind remains
+  diagnostic evidence. The coordinator can use the live output in virtual-only mode without sending fixture or Hue calls.
+
+**Offline replay.** From the checkout root, run `python -B -m unittest discover -s tools/den-live -p test_evidence.py`.
+The fixture generates its own RGB/depth bundles and uses the pinned observe and tracker code. It requires no prepared
+takes or camera access.
 
 **Turning it on (inference plan, step 3).**
 

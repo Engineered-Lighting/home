@@ -56,6 +56,8 @@ class Bundle:
     t_host: float          # the Jetson's host monotonic clock at the RGB frame
     arrival_unix: float    # this PC's wall clock when the bytes arrived
     arrival_mono: float    # this PC's monotonic clock then
+    fetch_s: float | None = None
+    parse_s: float | None = None
 
 
 class Mailbox:
@@ -91,10 +93,11 @@ class CameraSource(threading.Thread):
         self.status, self.why = "starting", None
         self.polls = self.errors = 0
         self.sessions = []
+        self.camera_session = None
         self._seen = deque(maxlen=64)
 
     def state(self):
-        return {"status": self.status, "why": self.why}
+        return {"status": self.status, "why": self.why, "session": self.camera_session}
 
     def run(self):
         clock = self.take.clock
@@ -121,7 +124,10 @@ class CameraSource(threading.Thread):
                         self._seen.append(key)
                         if not self.sessions or self.sessions[-1] != meta["session"]:
                             self.sessions.append(meta["session"])
-                        self.mailbox.put(Bundle(body, meta["session"], meta["rgb_seq"], meta["t_host"], arrival_unix, arrival_mono))
+                        self.camera_session = meta["session"]
+                        self.status, self.why = "ok", None
+                        self.mailbox.put(Bundle(body, meta["session"], meta["rgb_seq"], meta["t_host"], arrival_unix,
+                                                arrival_mono, arrival_mono - started, clock() - arrival_mono))
                         fresh, last_new = True, arrival_mono
             elif status in (401, 403):
                 self.errors += 1

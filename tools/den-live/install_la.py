@@ -13,6 +13,7 @@
    install.sh, and the private inputs: the room model, the camera token, that receipt, and a settings file with the
    camera's address and the den's site (both read at run time on this PC, never written into git). With labels in
    <data root>\\private\\labels\\ that read, it brings them too: den-live takes them once, only while LA has none.
+   With --preview-geometry it brings the private Home geometry export as a separate service credential.
 4. It runs install.sh there with sudo: ssh -t, so sudo can ask for your password.
 5. Whatever happened, it removes /dev/shm/den-live-install/ from LA, and its own copies here.
 
@@ -44,6 +45,7 @@ REMOTE = "/dev/shm/den-live-install"
 # The Qwen ask's two private files, saved once beside the camera token: the den-live user's long-lived token (the same
 # admin user and token the coordinator's link uses) and the den home's Home Assistant address as LA reaches it.
 HA_TOKEN_FILE, HA_URL_FILE = "den-live-ha-token.txt", "den-live-ha-url.txt"
+PREVIEW_GEOMETRY = "virtual-fixtures.json"
 INSTALL_SH = Path("stack") / "services" / "den-live" / "install.sh"
 
 
@@ -131,12 +133,28 @@ def labels_seed(root):
     return path, len(doc["labels"])
 
 
+def preview_geometry_export(path, site):
+    """Validate the export envelope and keep the original bytes for the service credential."""
+    try:
+        payload = Path(path).read_bytes()
+        doc = json.loads(payload)
+    except (OSError, ValueError):
+        raise Stop("the private Home preview geometry export could not be read") from None
+    if (not isinstance(doc, dict) or doc.get("schema") != "lighting-brain-geometry-1"
+            or doc.get("physical_commands") is not False or doc.get("home") != site or doc.get("room") != "den"
+            or not isinstance(doc.get("fixtures"), list) or not doc["fixtures"]):
+        raise Stop("choose the registered Den preview geometry exported by Home")
+    return payload
+
+
 def undo_lines(host):
     return ['  ssh -t %s "sudo systemctl disable --now den-live"' % host]
 
 
 def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID,
-        ha_token_file=None, ha_url_file=None):
+        ha_token_file=None, ha_url_file=None, preview_geometry=None):
+    site = rl.den_site()
+    geometry = None if preview_geometry is None else preview_geometry_export(preview_geometry, site)
     tools_dir = root / "tools"
     observe, track = sc.archive(tools_dir, "observe"), sc.archive(tools_dir, "track")
     model, receipt, transform_id = registration(root, perceive.Tools(observe, track), camera_id)
@@ -153,6 +171,8 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
                               "off. To turn it on, save %s and %s first (README, \"The Qwen ask\")." % (HA_TOKEN_FILE, HA_URL_FILE)))
     seed = labels_seed(root)
     say("Your labels: %s" % ("%d from this PC; LA takes them only if it has none yet." % seed[1] if seed else "none from this PC."))
+    if geometry is not None:
+        say("Virtual preview: bringing the private Home geometry export with Hue overlay disabled.")
     say("Building the release...")
     out_dir = root / "private" / "release"
     built = release.build(out_dir=out_dir, source=source, token=token, models_dir=models_dir, wheel=wheel)
@@ -165,13 +185,16 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         shutil.copyfile(model, outbox / "room-model.jsonl")
         shutil.copyfile(token_file, outbox / "camera-token.txt")
         shutil.copyfile(receipt, outbox / "register-receipt.json")
-        settings = {"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url, "site": rl.den_site()}
+        settings = {"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url, "site": site}
         if ha_token:
             settings["asks"] = {"ha_url": ha_url, "ha_entity": rs.FRIGATE_ENTITY}
             (outbox / rs.HA_TOKEN).write_text(ha_token + "\n", encoding="utf-8", newline="\n")
         if seed:
             settings["labels_seed"] = True
             shutil.copyfile(seed[0], outbox / rs.LABELS_SEED)
+        if geometry is not None:
+            settings["coordinator"] = {"preview": True, "transform_id": transform_id, "hue_overlay": False}
+            (outbox / PREVIEW_GEOMETRY).write_bytes(geometry)
         (outbox / "settings.json").write_text(json.dumps(settings) + "\n", encoding="utf-8", newline="\n")
         (outbox / "install.sh").write_bytes(built["contents"][INSTALL_SH.as_posix()])   # the release's own, byte for byte
         say("Copying the release and the private inputs to %s:%s ..." % (host, REMOTE))
@@ -180,7 +203,8 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         copied = True
         files = [built["tarball"], *(outbox / name for name in ("install.sh", "room-model.jsonl", "camera-token.txt",
                                                                 "register-receipt.json", "settings.json")),
-                 *([outbox / rs.HA_TOKEN] if ha_token else []), *([outbox / rs.LABELS_SEED] if seed else [])]
+                 *([outbox / rs.HA_TOKEN] if ha_token else []), *([outbox / rs.LABELS_SEED] if seed else []),
+                 *([outbox / PREVIEW_GEOMETRY] if geometry is not None else [])]
         if transport.copy(files, REMOTE):
             raise Stop("scp to %s stopped part way" % host)
         say("Installing on %s (sudo asks for your password there)..." % host)
@@ -203,6 +227,7 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--host", default=HOST, help="the ssh host for LA (default %(default)s)")
     parser.add_argument("--camera", help="the camera's URL as LA reaches it (default: den-take's)")
+    parser.add_argument("--preview-geometry", type=Path, help="private registered Den geometry export from Home")
     args = parser.parse_args(argv)
     if not console():   # a background run is refused before anything: no build, no ssh
         say("install: refused, no console. Paste the line into PowerShell yourself.")
@@ -212,6 +237,8 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_
         branch, commit = check_branch()   # before anything is built or copied
         say("Installing from %s at %s." % (branch, commit))
         take = rl.den_take(sc.archive(root / "tools", "observe"))
+        if args.preview_geometry is not None:
+            kw["preview_geometry"] = args.preview_geometry
         code = run(root=root, host=args.host, camera_url=args.camera or take.DEFAULT_CAMERA,
                    token_file=kw.pop("token_file", None) or take.DEFAULT_TOKEN_FILE, transport=transport or SSH(args.host), **kw)
     except Stop as exc:

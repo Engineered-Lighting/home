@@ -89,6 +89,8 @@ KNOWN_PINNED = {
     ("observe", "stack/services/perception-lab/host_home.py"): ("6e1688f85f67404e17163bca40912da58b123eb1", (_HOME,)),   # LA's own paths
     ("observe", "tools/den-take/take.py"): ("badd932b9abefb490ffcc884bbf7eeca03a8b19d", ("private address",)),   # its default camera
     ("register", "tools/den-take/take.py"): ("badd932b9abefb490ffcc884bbf7eeca03a8b19d", ("private address",)),
+    # The lighting brain's den fixture ids, which the coordinator's aim.py import loads with it (its geometry module)
+    ("coordinator", "stack/services/lighting-brain/lighting_brain/geometry.py"): ("cb2795ad40a86d1369c705c63bf79633ce63bd66", (_PLACE, _SITE)),
 }
 
 

@@ -1,0 +1,90 @@
+"""In-process evidence shared by perception, the ask, and the coordinator."""
+from dataclasses import dataclass
+from typing import Mapping
+
+PERCEPTION_S = 1.5
+FIGURE_S = 1.0
+INFERENCE_S = 10.0
+RGB_PAIR_S = 0.067
+IR_PAIR_S = 0.020
+FrameKey = tuple[str, int, int]
+
+
+@dataclass(frozen=True)
+class PlaneRef:
+    seq: int
+    device_s: float | None
+    host_s: float
+    width: int
+    height: int
+
+
+@dataclass(frozen=True)
+class FrameRef:
+    service_run_id: str
+    camera_epoch: int
+    frame_id: int
+    camera_session: str
+    mode: str
+    rgb: PlaneRef
+    right: PlaneRef | None
+    depth: PlaneRef | None
+    calibration_id: str | None
+    transform_id: str
+    scan_revision: str | None
+    capture_mono: float
+    arrival_mono: float
+    capture_ts: float
+
+    @property
+    def key(self) -> FrameKey:
+        return self.service_run_id, self.camera_epoch, self.frame_id
+
+
+@dataclass(frozen=True)
+class TrackEvidence:
+    track_id: str
+    state: str
+    xy_m: tuple[float, float]
+    sigma_m: float
+    position_basis: str
+    current_obs_ids: tuple[str, ...]
+    association_status: str
+    association_revision: int
+    association_since_mono: float | None
+    supported_pose: Mapping[str, tuple[tuple[float, float, float], str]]
+    near: str | None = None
+
+
+@dataclass(frozen=True)
+class TrackingSnapshot:
+    service_run_id: str
+    camera_epoch: int
+    seq: int
+    frame: FrameRef | None
+    status: str
+    reason: str | None
+    presence: str
+    tracks: tuple[TrackEvidence, ...]
+    eligible_track_id: str | None = None
+    eligibility_revision: int = 0
+
+
+@dataclass(frozen=True)
+class InferenceReply:
+    request_id: str
+    request_body_sha256: str
+    service_run_id: str
+    camera_epoch: int
+    track_id: str
+    association_revision: int
+    eligibility_revision: int
+    frames: tuple[FrameRef, ...]
+    observation: Mapping
+    association: Mapping
+    gate: Mapping
+    model: Mapping
+    observed_mono: float
+    available_mono: float
+    valid_until_mono: float
+    timings_ms: Mapping

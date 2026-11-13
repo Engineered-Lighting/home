@@ -40,13 +40,19 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
+from dataclasses import dataclass
+from types import MappingProxyType
 from collections import deque
 from pathlib import Path
 
 import room_labels
+from body import head_exclusion
+from body_input import qualified as qualified_body_input
+from contracts import FIGURE_S, PERCEPTION_S, RGB_PAIR_S, FrameRef, PlaneRef, TrackEvidence, TrackingSnapshot
 
 SCHEMA = "den-live-people-1"
-FRESH_S = 1.5
+FRESH_S = PERCEPTION_S
 FLOOR_PAD_M = 1.0
 # den-track's METHOD.md at its pin: the floor_m slot's exact text, which the method copy replaces (as the den
 # simulation's chain.py hop 8 does, 85744f2c on claude/den-sim-connected).
@@ -165,7 +171,13 @@ class DetectorWorker:
         self.frame_timeout_s, self.next_id = frame_timeout_s, 0
         self.on_body = None
         self.on_stills = None   # the Qwen ask's stills (ask.py): replies whose first key is stills_id
-        self.write_lock = threading.Lock()   # the loop and the ask's sender both write requests
+        self.writes = queue.Queue(maxsize=1)
+        self.writer_stop = threading.Event()
+        self.pending = None
+        self.optional = None
+        self.dispatch_lock = threading.Lock()
+        self.writer = threading.Thread(target=self._write, daemon=True, name="den-live-detector-writer")
+        self.writer.start()
         self.replies = queue.Queue()
         threading.Thread(target=self._read, daemon=True, name="den-live-detector-reader").start()
         try:
@@ -186,6 +198,9 @@ class DetectorWorker:
                         reply = json.loads(raw.decode("utf-8"))
                     except ValueError:
                         reply = {"stills_id" if stills else "body_id": None, "error": "ProtocolError"}
+                    with self.dispatch_lock:
+                        if self.optional is not None and self.optional[0] == ("stills" if stills else "body"):
+                            self.optional = None
                     handler = self.on_stills if stills else self.on_body
                     if handler is not None:
                         try:
@@ -205,15 +220,36 @@ class DetectorWorker:
                     except Exception:
                         pass
 
-    def send_alone(self, header):
-        """A header with no bundle after it (the live body's setup and requests). Raises Stop if the process is gone."""
-        data = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    def _write(self):
         try:
-            with self.write_lock:
+            while not self.writer_stop.is_set():
+                try:
+                    header, bundle = self.writes.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                data = json.dumps(header, separators=(",", ":")).encode("utf-8")
                 self.proc.stdin.write(struct.pack(">I", len(data)) + data)
+                if bundle is not None:
+                    self.proc.stdin.write(struct.pack(">I", len(bundle)))
+                    self.proc.stdin.write(bundle)
                 self.proc.stdin.flush()
         except (OSError, ValueError):
-            raise Stop("the detector process stopped (its log: %s)" % self.log.name) from None
+            self.replies.put(None)
+
+    def send_alone(self, header):
+        """Queue optional work without waiting for the pipe or a busy detector."""
+        with self.dispatch_lock:
+            if self.proc.poll() is not None:
+                raise Stop("the detector process stopped")
+            if self.pending is not None or self.optional is not None:
+                return False
+            try:
+                self.writes.put_nowait((header, None))
+            except queue.Full:
+                return False
+            kind = "stills" if header["kind"] == "stills" else "body"
+            self.optional = (kind, time.monotonic())
+            return True
 
     def _line(self, timeout_s, what):
         try:
@@ -228,36 +264,84 @@ class DetectorWorker:
         except ValueError:
             raise Stop("the detector wrote something that isn't its protocol (its log: %s)" % self.log.name) from None
 
-    def detect(self, bundle, delay_s):
-        self.next_id += 1
-        header = json.dumps({"id": self.next_id, "rgb_seq": bundle.rgb_seq, "t_host": bundle.t_host,
-                             "delay_s": round(delay_s, 4)}).encode("utf-8")
+    def submit(self, bundle, delay_s, ref=None):
+        with self.dispatch_lock:
+            if self.pending is not None:
+                return False
+            if self.proc.poll() is not None:
+                raise Stop("the detector process stopped")
+            self.next_id += 1
+            header = {"id": self.next_id, "rgb_seq": bundle.rgb_seq, "t_host": bundle.t_host,
+                      "delay_s": delay_s}
+            if ref is not None:
+                header["frame_key"] = list(ref.key)
+            try:
+                self.writes.put_nowait((header, bundle.data))
+            except queue.Full:
+                return False
+            self.pending = (self.next_id, header.get("frame_key"), time.monotonic())
+            return True
+
+    def poll(self):
+        with self.dispatch_lock:
+            pending = self.pending
+            optional = self.optional
+        if pending is None:
+            if optional is not None and time.monotonic() - optional[1] >= self.frame_timeout_s:
+                raise Stop("the detector didn't answer optional work")
+            return None
+        frame_id, key, started = pending
         try:
-            with self.write_lock:
-                self.proc.stdin.write(struct.pack(">I", len(header)) + header + struct.pack(">I", len(bundle.data)) + bundle.data)
-                self.proc.stdin.flush()
-        except OSError:
-            raise Stop("the detector process stopped (its log: %s)" % self.log.name) from None
-        reply = self._line(self.frame_timeout_s, "a frame")
-        if reply.get("id") != self.next_id:
+            raw = self.replies.get_nowait()
+        except queue.Empty:
+            if time.monotonic() - started >= self.frame_timeout_s:
+                raise Stop("the detector didn't answer a frame")
+            return None
+        if raw is None:
+            raise Stop("the detector process stopped")
+        try:
+            reply = json.loads(raw.decode("utf-8"))
+        except ValueError:
+            raise Stop("the detector wrote something that isn't its protocol") from None
+        if reply.get("id") != frame_id or (key is not None and reply.get("frame_key") != key):
             raise Stop("the detector answered out of turn")
+        with self.dispatch_lock:
+            self.pending = None
+        return reply
+
+    def detect(self, bundle, delay_s, *, ref=None):
+        """Synchronous entry for local tools; the service uses submit and poll."""
+        while not self.submit(bundle, delay_s, ref):
+            time.sleep(0.005)
+        while (reply := self.poll()) is None:
+            time.sleep(0.005)
         return reply
 
     def close(self):
-        try:
-            if self.proc.stdin:
-                self.proc.stdin.close()
-            self.proc.wait(10)
-        except (OSError, subprocess.TimeoutExpired):
-            self.proc.kill()
-            self.proc.wait(5)
-        finally:
-            if self.proc.stdout:
-                self.proc.stdout.close()
-            self.log.close()
+        self.writer_stop.set()
+        if self.proc.poll() is None:
+            try:
+                self.proc.kill()  # releases any blocked reader or writer before closing a pipe
+            except ProcessLookupError:
+                pass
+        self.proc.wait(5)
+        self.writer.join(2)
+        if self.proc.stdin:
+            self.proc.stdin.close()
+        if self.proc.stdout:
+            self.proc.stdout.close()
+        self.log.close()
 
 
 # ---- one frame -----------------------------------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Prepared:
+    ref: FrameRef
+    meta: dict
+    depth: object
+    bundle: object
+
 
 class Perceiver:
     """Times: the tracker runs on this PC's monotonic clock (capture_mono = t_host + the arrival-anchored offset), so a
@@ -267,6 +351,7 @@ class Perceiver:
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
                  require_source_correction=True, content_revision=None, now=time.time):
         self.t, self.detector, self.home, self.now = tools, detector, home, now
+        self.body_provider = None
         self.body = None   # a body_link.BodyLink, when the live body runs: asked for each fresh frame, never waited for
         self.labels = None   # a room_labels.Store: each track's near phrase, from the confirmed labels on this scan
         self.require_source_correction = require_source_correction
@@ -280,18 +365,26 @@ class Perceiver:
         method = tools.observe_method.load(tools.observe_tree / "tools" / "den-observe" / "METHOD.md")
         self.settings = tools.observe.Settings(method)
         self.settings.max_age_s = FRESH_S
+        self.settings.max_gap_s = RGB_PAIR_S + 1e-9  # float rounding at the inclusive 67 ms boundary
         self.track_method = tools.track_method.Method(str(track_method_path))
         self.floor = self.track_method.room["floor_m"]
         self.scope = {"transform_id": self.camera.transform_id, "content_revision": content_revision}
         self.clock = ClockOffset()
         self.session, self.sessions, self.seq = None, 0, 0
+        self.run_id, self.frame_id = uuid.uuid4().hex, 0
+        self.retired = set()
+        self.last_seq = self.calibration_id = None
+        self.clock_reset_candidate = None
+        self.snapshot = TrackingSnapshot(self.run_id, 0, 0, None, "starting", None, "unknown", ())
+        self.body_input = None
         self.mode, self.dark_since, self.light_since = "rgb", None, None
         self.counts = {"frames": 0, "refused_depth": 0, "unreadable": 0, "detector_errors": 0, "expired": 0, "out_of_order": 0,
                        "observations": 0, "weak_only_hidden": 0}
         self.last_t_host = self.last_capture = None
         self.arrivals, self.lags, self.drops, self.transits = deque(), deque(), deque(), deque()
         self.problem = None
-        self.last_frame = None   # the last fully processed frame, for the Qwen ask (process() sets it)
+        self.hops = {}
+        self.last_input_mono = None
         self._new_core()
 
     def _new_core(self):
@@ -299,6 +392,23 @@ class Perceiver:
         self.core = self.t.records.tracker_core.TrackerCore(self.track_method.tracker, exits=room["exits_m"], floor=room["floor_m"])
         self.strong = set()   # tracks a pose or a person box at PERSON_MIN or more has ever supported
         self.last_capture = None
+        self.body_input = None
+        self.associations = {}
+
+    def _epoch(self, *, clock_reset=False):
+        self.sessions += 1
+        self._new_core()
+        self.dark_since = self.light_since = None
+        if clock_reset:
+            self.clock.reset()
+            self.last_t_host = self.last_seq = None
+            self.clock_reset_candidate = None
+            self.mode = "rgb"
+
+    def _timing(self, now_mono, **seconds):
+        for stage, elapsed in seconds.items():
+            if elapsed is not None:
+                self.hops.setdefault(stage, deque(maxlen=100)).append((now_mono, max(0.0, elapsed) * 1000.0))
 
     def _drop(self, what, now_mono, problem):
         self.counts[what] += 1
@@ -316,13 +426,22 @@ class Perceiver:
         while self.transits and now_mono - self.transits[0][0] > HEALTH_S:
             self.transits.popleft()
         seconds = (self.arrivals[-1] - self.arrivals[0]) if len(self.arrivals) > 1 else 0
-        return {"fps_in": round((len(self.arrivals) - 1) / seconds, 2) if seconds > 0 else None,
+        timings = {}
+        for stage, samples in self.hops.items():
+            while samples and now_mono - samples[0][0] > HEALTH_S:
+                samples.popleft()
+            if not samples:
+                continue
+            values = sorted(value for _, value in samples)
+            timings[stage] = {"n": len(values), "p50": round(statistics.median(values), 1),
+                              "p95": round(values[math.ceil(len(values) * 0.95) - 1], 1)}
+        return {"timings_ms": timings, "fps_in": round((len(self.arrivals) - 1) / seconds, 2) if seconds > 0 else None,
                 "dropped_per_min": len(self.drops),
                 "lag_s_median": round(statistics.median(lag for _, lag in self.lags), 3) if self.lags else None,
                 "transit_s_median": round(statistics.median(s for _, s in self.transits), 3) if self.transits else None}
 
     def _transit(self, meta, bundle):
-        """Arrival here less the bundle's captured_unix_ns, kept only between 0 and TRANSIT_MAX_S (the module note)."""
+        """Legacy wall-clock packaging-to-arrival estimate for display; never used as a freshness bound."""
         captured = (meta.get("raw") or {}).get("captured_unix_ns")
         if type(captured) is not int:
             return
@@ -347,69 +466,212 @@ class Perceiver:
         labels = [label for label in doc["labels"] if label["status"] == "confirmed"] if usable else []
         return [{**track, "near": room_labels.near_phrase(labels, track["xy_m"]) if labels else None} for track in tracks]
 
+    def _snapshot(self, event, *, ref=None, status, presence="unknown", tracks=()):
+        if status != "fresh":
+            self.body_input = None
+        self.snapshot = TrackingSnapshot(self.run_id, self.sessions, event["seq"], ref, status,
+                                         event["camera"]["why"], presence, tuple(tracks))
+        event["presence"] = presence
+        event["perception_status"] = status
+        return event
+
     def idle(self, camera_state, now_mono):
-        """An event with no new frame shown: the camera is offline, slow, or its frames are being dropped (the why says
-        which). Tracks are left to fade on the page."""
-        return self.event(None, [], camera_state, now_mono)
+        self.body_input = None
+        self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
+        status = camera_state.get("status")
+        if status not in ("starting", "offline", "refused"):
+            status = "stale"
+        if self.last_capture is not None:
+            self._epoch()
+        return self._snapshot(self.event(None, [], camera_state, now_mono), status=status)
+
+    def _clear_body(self, reason):
+        if self.body is not None:
+            self.body.clear(reason)
+
+    def _submit_body(self, bundle, meta, depth, frame_key, *, observations=(), tracks=(), supported=(), association=None):
+        if self.body is None or self.body_provider is None:
+            return
+        if frame_key is None:
+            self._clear_body("unavailable")
+            return
+        try:
+            value = self.body_provider(bundle, meta, depth, frame_key=frame_key, mode=self.mode,
+                                    observations=observations, tracks=tracks, supported=supported,
+                                    association={} if association is None else association)
+            if (qualified_body_input(value, self.scope) and value.frame_key == frame_key
+                    and value.capture_earliest_mono <= bundle.arrival_mono):
+                request = self._body_request(value)
+                if request is not None:
+                    self.body.submit(self.detector.next_id, **request)
+                return
+        except Exception:
+            pass   # the optional body adapter cannot interrupt tracking
+        self._clear_body("unavailable")
+
+    def _body_request(self, value):
+        if value is None:
+            return None
+        scope = value.scope(self.home)
+        binding = value.binding()
+        if value.observation not in ("person", "empty"):
+            self.body.clear("ambiguous" if value.observation == "ambiguous" else "pose_unavailable", scope=scope)
+            return
+        person = None
+        if value.observation == "person":
+            if (value.track or {}).get("association") == "ambiguous":
+                self.body.clear("ambiguous", scope=scope)
+                return None
+            person = body_person(value.track, value.pose, self.t.records.body_heading,
+                                 self.track_method.tracker["heading_max_sd_deg"])
+            if person is None:
+                self.body.clear("pose_unavailable", scope=scope)
+                return None
+            if head_exclusion(value.head_evidence, frame_key=value.frame_key, binding=binding) is None:
+                self.body.clear("head_mask_unavailable", scope=scope)
+                return None
+            person["head_evidence"] = value.head_evidence
+        rotation, translation = self.camera.room_from_left
+        setup = {"binding": binding, "left_k": list(self.camera.rig.left_k[:4]),
+                 "room_from_left": [[list(r) for r in rotation], list(translation)]}
+        self.body.prepare(scope, binding, person["track_id"] if person else None)
+        return dict(frame_key=value.frame_key, scope=scope, setup=setup, capture_mono=value.capture_earliest_mono,
+                    observation=value.observation, person=person)
 
     def _mode(self, luma, now_mono):
         if luma is None:
             return
         if luma < DARK_LUMA:
             self.light_since = None
-            self.dark_since = self.dark_since or now_mono
+            self.dark_since = now_mono if self.dark_since is None else self.dark_since
             if self.mode == "rgb" and now_mono - self.dark_since >= DARK_S:
                 self.mode = "none"
         elif luma > LIGHT_LUMA:
             self.dark_since = None
-            self.light_since = self.light_since or now_mono
+            self.light_since = now_mono if self.light_since is None else self.light_since
             if self.mode == "none" and now_mono - self.light_since >= DARK_S:
                 self.mode = "rgb"
         else:
             self.dark_since = self.light_since = None
 
-    def process(self, bundle, camera_state, now_mono):
-        """One bundle to one event, or None when the frame is dropped (counted; the loop says why if it lasts).
-        now_mono is this PC's monotonic clock now. Raises Stop when the registration no longer fits the camera."""
-        t = self.t
-        self.last_frame = None
-        went_back = self.last_t_host is not None and bundle.t_host < self.last_t_host - EPOCH_BACK_S
-        if bundle.session != self.session or went_back:   # a camera restart starts a new epoch: new tracks, a new clock
-            self.session, self.sessions = bundle.session, self.sessions + 1
-            self.clock.reset()
-            self._new_core()
-        self.last_t_host = bundle.t_host
+    @staticmethod
+    def _plane(raw, width, height):
+        if not isinstance(raw, dict) or type(raw.get("sequence")) is not int:
+            return None
+        host = raw.get("host_monotonic_timestamp_seconds")
+        device = raw.get("device_timestamp_seconds")
+        if type(host) not in (int, float) or not math.isfinite(host):
+            return None
+        if type(device) not in (int, float) or not math.isfinite(device):
+            device = None
+        return PlaneRef(raw["sequence"], device, host, raw.get("width", width), raw.get("height", height))
+
+    def prepare(self, bundle, now_mono):
+        """Read a candidate before submission and fix its identity and estimated capture time."""
+        if bundle.session in self.retired:
+            return self._drop("out_of_order", now_mono, "retired camera session")
+        if bundle.session != self.session:
+            if self.session is not None:
+                self.retired.add(self.session)
+            self.session = bundle.session
+            self._epoch(clock_reset=True)
+        elif self.last_t_host is not None and (bundle.t_host <= self.last_t_host or bundle.rgb_seq <= self.last_seq):
+            previous = self.clock_reset_candidate
+            if bundle.t_host < self.last_t_host - EPOCH_BACK_S and bundle.rgb_seq < self.last_seq:
+                if previous is not None and bundle.t_host > previous[0] and bundle.rgb_seq > previous[1]:
+                    self._epoch(clock_reset=True)
+                else:
+                    self.clock_reset_candidate = bundle.t_host, bundle.rgb_seq
+                    return self._drop("out_of_order", now_mono, "camera clock moved back")
+            else:
+                self.clock_reset_candidate = None
+                return self._drop("out_of_order", now_mono, "frames out of order")
+        self.clock_reset_candidate = None
+        if self.last_input_mono is not None and bundle.arrival_mono - self.last_input_mono >= FRESH_S:
+            self.dark_since = self.light_since = None
+        self.last_input_mono = bundle.arrival_mono
+        self.last_t_host, self.last_seq = bundle.t_host, bundle.rgb_seq
+        self._timing(now_mono, fetch=bundle.fetch_s, parse=bundle.parse_s, mailbox=now_mono - bundle.arrival_mono)
         self.counts["frames"] += 1
         self.arrivals.append(bundle.arrival_mono)
         self.clock.add(bundle.t_host, bundle.arrival_mono)
-        offset = self.clock.offset()
-        capture_mono = bundle.t_host + offset
-        # den-track takes frames in time order only. The offset is re-estimated each frame, so a frame can land at or
-        # before the last one by a few milliseconds; it's skipped and counted, never fed backwards.
+        capture_mono = bundle.t_host + self.clock.offset()
+        if now_mono >= capture_mono + FRESH_S:
+            return self._drop("expired", now_mono, "camera frame expired")
         if self.last_capture is not None and capture_mono <= self.last_capture:
             return self._drop("out_of_order", now_mono, "frames out of order")
         try:
-            meta, depth = t.takes.read_frame(bundle.data)
-        except t.takes.BundleError:
+            meta, depth = self.t.takes.read_frame(bundle.data)
+        except self.t.takes.BundleError:
             return self._drop("unreadable", now_mono, "frames unreadable")
         self._transit(meta, bundle)
-        correction = (meta.get("raw") or {}).get("depth_correction")
+        raw = meta.get("raw") or {}
+        correction = raw.get("depth_correction")
         if self.require_source_correction and not (isinstance(correction, dict) and correction.get("applied") is True):
             self._drop("refused_depth", now_mono, "depth not corrected at the camera")
-            return self.event(now_mono - capture_mono, [], camera_state, now_mono)
+            return None
         try:
             self.camera.check_frame(meta.get("intrinsics"))
-        except t.roommodel.RegistrationRefused as exc:
+        except self.t.roommodel.RegistrationRefused as exc:
             raise Refused("the camera no longer matches the registration (%s); register again with step 2" % exc) from None
-        reply = self.detector.detect(bundle, max(0.0, now_mono - capture_mono))
+        calibration = correction.get("calibration_sha256") if isinstance(correction, dict) else None
+        if self.calibration_id is not None and calibration != self.calibration_id:
+            self._epoch()
+        self.calibration_id = calibration
+        frames = raw.get("frames") or {}
+        self.frame_id += 1
+        ref = FrameRef(self.run_id, self.sessions, self.frame_id, bundle.session, self.mode,
+                       self._plane(frames.get("rgb"), 640, 360) or PlaneRef(bundle.rgb_seq, meta.get("t_device"), bundle.t_host, 640, 360),
+                       self._plane(frames.get("right"), 640, 400), self._plane(frames.get("depth"), 640, 400),
+                       calibration, self.scope["transform_id"], self.scope["content_revision"], capture_mono,
+                       bundle.arrival_mono, self.now() - (now_mono - capture_mono))
+        return Prepared(ref, meta, depth, bundle)
+
+    def process(self, bundle, camera_state, now_mono):
+        """Synchronous replay entry; live uses prepare and finish around worker polling."""
+        prepared = self.prepare(bundle, now_mono)
+        if prepared is None:
+            if self.problem == "depth not corrected at the camera":
+                return self.idle(camera_state, now_mono)
+            return None
+        detector = self.detector
+        delay = max(0.0, now_mono - prepared.ref.capture_mono)
+        reply = detector.detect(bundle, delay, ref=prepared.ref) if isinstance(detector, DetectorWorker) else detector.detect(bundle, delay)
+        return self.finish(prepared, reply, camera_state, now_mono)
+
+    def finish(self, prepared, reply, camera_state, now_mono):
+        self.body_input = None
+        ref, meta, depth = prepared.ref, prepared.meta, prepared.depth
+        capture_mono = ref.capture_mono
+        if ref.camera_epoch != self.sessions or now_mono >= capture_mono + FRESH_S:
+            return self._drop("expired", now_mono, "detector result expired")
         if "error" in reply:
-            return self._drop("detector_errors", now_mono, "detector errors")
+            self._drop("detector_errors", now_mono, "detector errors")
+            return self.idle(camera_state, now_mono)
         self.problem = None
-        self._mode(reply.get("luma"), now_mono)
-        if self.mode == "none":
-            return self.event(now_mono - capture_mono, [], dict(camera_state, why="too dark"), now_mono)
+        previous_mode = self.mode
+        luma = reply.get("luma")
+        self._mode(luma, capture_mono)
+        if previous_mode != self.mode:
+            self._epoch()
+            # The worker keyed this frame before the handover; start with the next frame.
+            return self._snapshot(self.event(None, [], dict(camera_state, why="mode changed"), now_mono), status="degraded")
+        if self.mode == "none" or luma is None or luma < DARK_LUMA:
+            if self.last_capture is not None and capture_mono - self.last_capture >= FRESH_S:
+                dark_since, light_since = self.dark_since, self.light_since
+                self._epoch()
+                self.dark_since, self.light_since = dark_since, light_since
+            self._submit_body(prepared.bundle, meta, depth, list(ref.key))
+            return self._snapshot(self.event(now_mono - capture_mono, [], dict(camera_state, why="too dark"), now_mono),
+                                  status="degraded")
         self.last_capture = capture_mono
-        observations = t.observe.observe(reply["row"], meta, depth, self.camera, self.settings, offset_s=offset)
+        offset = capture_mono - ref.rgb.host_s
+        row = reply["row"]
+        row = dict(row, available_ts=ref.rgb.host_s + max(0.0, now_mono - capture_mono))
+        start_lift = time.monotonic()
+        observations = self.t.observe.observe(row, meta, depth, self.camera, self.settings, offset_s=offset)
+        self._timing(now_mono, lift=time.monotonic() - start_lift, detector_model=reply.get("compute_s"))
+        start_track = time.monotonic()
         self.counts["observations"] += len(observations)
         if any(o.get("validity") == "rejected:detector_result_expired" for o in observations):
             self.counts["expired"] += 1
@@ -419,7 +681,7 @@ class Perceiver:
         # has supported it.
         strong = {o["obs_id"] for o in observations if o.get("validity") == "valid"
                   and (o.get("kind") == "keypoints" or (o.get("kind") == "person_box" and (o.get("score") or 0) >= PERSON_MIN))}
-        frames, _counts = t.records.frames_from_observations(observations, self.track_method.tracker)
+        frames, _counts = self.t.records.frames_from_observations(observations, self.track_method.tracker)
         detections = frames[0]["detections"] if frames else []
         tracks, supported, association = [], [], {}
         for track, state in self.core.step(capture_mono, detections):
@@ -430,10 +692,10 @@ class Perceiver:
             if track.id not in self.strong:
                 self.counts["weak_only_hidden"] += 1
                 continue
-            record = t.records.track_record(track, state)
+            record = self.t.records.track_record(track, state)
             cov = record["position"]["cov"]
             fresh = bool(record["heading"]) and track.heading_as_of is not None and capture_mono - track.heading_as_of <= HEADING_FRESH_S
-            tracks.append({"track_id": "e%d-%s" % (self.sessions, record["track_id"]), "state": state,
+            tracks.append({"track_id": "%s-e%d-%s" % (self.run_id, self.sessions, record["track_id"]), "state": state,
                            "xy_m": [record["position"]["x"], record["position"]["y"]],
                            "sigma_m": round(math.sqrt(max(cov[0][0], cov[1][1], 0.0)), 3),
                            "heading_deg": record["heading"]["deg"] if fresh else None,
@@ -441,24 +703,72 @@ class Perceiver:
             supported.append(set(track.obs_ids))
             # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
             association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
+        now_mono += time.monotonic() - start_lift
+        if now_mono >= capture_mono + FRESH_S:
+            return self._drop("expired", now_mono, "tracking result expired")
+        self._timing(now_mono, track=time.monotonic() - start_track)
         self.lags.append((now_mono, now_mono - capture_mono))
         event = self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
-        # For the Qwen ask (ask.py): this frame's detection id (the detector's process keeps the frame under it), its
-        # times, and each confirmed track's pose heights for the seated test.
-        self.last_frame = {"id": getattr(self.detector, "next_id", None), "session": self.sessions, "capture_ts": event["capture_ts"],
-                           "capture_mono": capture_mono, "arrival_unix": bundle.arrival_unix,
-                           "poses": track_poses(observations, tracks, supported), "association": association}
-        # The live body, made in the detector's process from the bundle it kept: only while the detector keeps up (a
-        # frame older than FRESH_S is left out), and never waited for.
-        if self.body is not None and now_mono - capture_mono <= FRESH_S:
-            self.body.submit(self.detector.next_id, now=now_mono, capture_ts=event["capture_ts"], seq=event["seq"],
-                             person=body_person(observations, tracks, supported))
-        return event
+        candidates = [o for o in observations if o["kind"] in ("person_box", "keypoints")
+                      and (o.get("score") or 0) >= PERSON_MIN]
+        evidence = []
+        for marker, obs_ids in zip(event["tracks"], supported):
+            track_id = marker["track_id"]
+            status, since = association[track_id]
+            sources = [o for o in candidates if o["obs_id"] in obs_ids and o.get("validity") == "valid"]
+            pose = next((o for o in sources if o["kind"] == "keypoints"), {})
+            safe = (marker["state"] == "confirmed" and status == "confident" and len(candidates) == 1
+                    and bool(sources))
+            revision, was_safe, previous_since = self.associations.get(track_id, (0, False, None))
+            if safe != was_safe or (safe and since != previous_since):
+                revision += 1
+            self.associations[track_id] = revision, safe, since
+            stereo = stereo_joints(pose) if meta.get("intrinsics") is not None else {}
+            position_observations = [o for o in sources if o.get("room_position")]
+            if not position_observations:
+                basis = "coast"
+            else:
+                stereo_torso = {"left_hip", "right_hip", "left_shoulder", "right_shoulder"}.intersection(stereo)
+                basis = "stereo" if stereo_torso or any(o["kind"] == "person_box" for o in position_observations) else "plane"
+            evidence.append(TrackEvidence(track_id, marker["state"], tuple(marker["xy_m"]), marker["sigma_m"],
+                                          basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
+                                          revision, since, MappingProxyType(stereo), marker.get("near")))
+            if safe and stereo and ref.depth is not None:
+                depth_mono = ref.depth.host_s + offset
+                if (abs(ref.depth.host_s - ref.rgb.host_s) <= RGB_PAIR_S + 1e-9
+                        and now_mono < min(capture_mono, depth_mono) + FIGURE_S):
+                    self.body_input = {"frame": ref, "track_id": track_id, "observation_id": pose["obs_id"],
+                                       "association_revision": revision, "box_native": pose["image_box"],
+                                       "depth_mm": depth, "left_k": self.camera.rig.left_k,
+                                       "selected_k": self.camera.rig.rgb_k,
+                                       "selected_from_left": (self.camera.rig.rotation, self.camera.rig.translation),
+                                       "room_from_left": self.camera.room_from_left,
+                                       "alignment_error_m": self.camera.error_bound_m,
+                                       "pair_skew_s": ref.depth.host_s - ref.rgb.host_s,
+                                       "selected_distortion": self.camera.rig.rgb_d,
+                                       "valid_until_mono": min(capture_mono, depth_mono) + FIGURE_S,
+                                       "pose": stereo, "head_native": tuple(pose["keypoints"][:5]),
+                                       "joint_covariance_m2": {COCO[j["j"]]: j["cov"] for j in pose["joints_room"]
+                                                               if j.get("lift") == "stereo"}}
+        self.associations = {e.track_id: self.associations[e.track_id] for e in evidence}
+        possible_person = any(o["kind"] in ("person_box", "keypoints") for o in observations)
+        presence = "present" if candidates else "unknown" if possible_person or tracks else "empty"
+        if self.body is not None:
+            self._submit_body(prepared.bundle, meta, depth, list(ref.key), observations=observations,
+                              tracks=tracks, supported=supported, association=association)
+        snapshot_event = self._snapshot(event, ref=ref, status="fresh", presence=presence, tracks=evidence)
+        return snapshot_event
 
 
 COCO = ("nose", "left_eye", "right_eye", "left_ear", "right_ear", "left_shoulder", "right_shoulder", "left_elbow",
         "right_elbow", "left_wrist", "right_wrist", "left_hip", "right_hip", "left_knee", "right_knee", "left_ankle",
         "right_ankle")   # den-observe's coco17 joints_room order
+
+
+def stereo_joints(pose):
+    """Only current metric joints can support the seated rule and downstream aim."""
+    return {COCO[j["j"]]: (tuple(j["xyz"]), "supported") for j in pose.get("joints_room", ())
+            if j.get("lift") == "stereo" and j.get("status") == "supported" and j.get("xyz") is not None}
 
 
 def pose_joints(pose):
@@ -483,7 +793,7 @@ def track_poses(observations, tracks, supported):
     return out
 
 
-def body_person(observations, tracks, supported):
+def _legacy_body_person(observations, tracks, supported):
     """Who the live body is made for: the first confirmed track a pose supports in this frame, with that pose's room
     joints (supported or uncertain; unsupported ones left out); else the first confirmed track, without joints; else
     None (nobody tracked, so the body step may learn the empty room)."""
@@ -512,40 +822,115 @@ def body_person(observations, tracks, supported):
     return {"track_id": None, "xy_m": None, "joints": {}} if seen else None
 
 
+def body_person(track, pose, heading, max_heading_sd=None):
+    """Pass only the current supported body joints from one confidently associated pose."""
+    if max_heading_sd is None:
+        return _legacy_body_person(track, pose, heading)
+    if (not track or track.get("state") != "confirmed" or track.get("association") != "confident"
+            or not isinstance(track.get("track_id"), str) or not 0 < len(track["track_id"]) <= 64
+            or not pose or pose.get("kind") != "keypoints" or pose.get("validity") != "valid"):
+        return None
+    joints = {name: entry for name, entry in pose_joints(pose).items() if entry[1] == "supported" and name in COCO[5:]}
+    names = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    facing = None
+    if all(name in joints for name in names):
+        left, right, hip_l, hip_r = (joints[name][0] for name in names)
+        sx, sy = right[0] - left[0], right[1] - left[1]
+        hx, hy = hip_r[0] - hip_l[0], hip_r[1] - hip_l[1]
+        span = math.hypot(sx, sy) * math.hypot(hx, hy)
+        if min(math.hypot(sx, sy), math.hypot(hx, hy)) >= 0.08 and sx * hx + sy * hy >= 0.5 * span:
+            value = heading(pose)
+            if value is not None and value[1] <= max_heading_sd:
+                facing = value[0]
+    return {"track_id": track["track_id"], "xy_m": track.get("xy_m"), "joints": joints, "facing_deg": facing}
+
+
 class Loop(threading.Thread):
     """The newest bundle from the mailbox, perceived, published. When no event has gone out for idle_s (no frame, or
     every frame dropped), an idle event says why, so the page never reads a running loop as stopped."""
 
-    def __init__(self, source, mailbox, perceiver, publish, *, idle_s=1.0, clock=time.monotonic, observe=None):
-        """observe: one observer or a list of them, observe(event, frame), in order. Each sees each event before it's
-        published and returns it, perhaps with more in it (the Qwen ask, ask.Asker.observe; later the end-to-end plan's
-        person state). frame is the perceiver's last_frame for an event of a processed frame, else None. An observer's
-        failure is its own: the event goes on as it was."""
+    def __init__(self, source, mailbox, perceiver, publish, *, idle_s=1.0, clock=time.monotonic, observe=None, body_sink=None):
+        """Observers receive the public event and its in-process snapshot before publication."""
         super().__init__(daemon=True, name="den-live-loop")
         self.source, self.mailbox, self.perceiver, self.publish = source, mailbox, perceiver, publish
         self.idle_s, self.clock = idle_s, clock
+        self.body_sink = body_sink
         self.observers = list(observe) if isinstance(observe, (list, tuple)) else ([observe] if observe else [])
         self.halt = threading.Event()
         self.stop_reason = self.stop_error = None
 
+    def _publish(self, event):
+        for observe in self.observers:
+            try:
+                event = observe(event, self.perceiver.snapshot) or event
+            except Exception:   # an observer cannot take the camera loop down
+                pass
+        if self.body_sink is not None:
+            try:
+                self.body_sink(self.perceiver.snapshot, self.perceiver.body_input)
+            except Exception:   # body processing cannot stop the marker loop
+                pass
+        started = time.monotonic()
+        self.publish(event)
+        self.perceiver._timing(self.clock(), publish=time.monotonic() - started)
+
     def run(self):
+        p = self.perceiver
+        detector = p.detector
+        pending = None
+        submitted = None
+        last = self.clock()
         try:
-            last = self.clock()
             while not self.halt.is_set():
-                bundle = self.mailbox.take(self.idle_s)
-                now_mono = self.clock()
-                event = None if bundle is None else self.perceiver.process(bundle, self.source.state(), now_mono)
-                frame = self.perceiver.last_frame if event is not None else None
-                if event is None and now_mono - last >= self.idle_s:
-                    event = self.perceiver.idle(self.source.state(), now_mono)
-                if event is not None:
-                    for observe in self.observers:
-                        try:
-                            event = observe(event, frame) or event
-                        except Exception:   # an observer's failure is its own; the markers go on
-                            pass
-                    self.publish(event)
-                    last = now_mono
+                now = self.clock()
+                camera = self.source.state()
+                ref = p.snapshot.frame
+                if ref is not None and (now >= ref.capture_mono + FRESH_S
+                                        or camera.get("status") in ("offline", "refused")
+                                        or camera.get("session") not in (None, ref.camera_session)):
+                    self._publish(p.idle(camera, now))
+                    last = now
+                if pending is not None:
+                    reply = detector.poll()
+                    if reply is not None:
+                        result_at = self.clock()
+                        p._timing(result_at, detector_turnaround=result_at - submitted)
+                        current = self.source.state()
+                        if (current.get("status") in ("offline", "refused")
+                                or current.get("session") not in (None, pending.ref.camera_session)):
+                            event = p.idle(current, result_at)
+                        else:
+                            event = p.finish(pending, reply, current, result_at)
+                        pending = None
+                        if event is not None:
+                            self._publish(event)
+                            last = result_at
+                if pending is None:
+                    bundle = self.mailbox.take(min(self.idle_s, 0.02))
+                    if bundle is not None:
+                        now = self.clock()
+                        if not hasattr(detector, "submit"):
+                            event = p.process(bundle, camera, now)
+                            if event is not None:
+                                self._publish(event)
+                                last = now
+                        else:
+                            prepared = p.prepare(bundle, now)
+                            if p.snapshot.camera_epoch != p.sessions:
+                                self._publish(p._snapshot(p.event(None, [], camera, now), status="starting"))
+                                last = now
+                            if prepared is None and p.problem in ("depth not corrected at the camera", "camera clock moved back"):
+                                self._publish(p.idle(camera, now))
+                                last = now
+                            if prepared is not None and detector.submit(bundle, now - prepared.ref.capture_mono, prepared.ref):
+                                pending = prepared
+                                submitted = now
+                else:
+                    self.halt.wait(0.02)
+                now = self.clock()
+                if p.snapshot.frame is None and now - last >= self.idle_s:
+                    self._publish(p.idle(self.source.state(), now))
+                    last = now
         except Stop as exc:
             self.stop_reason, self.stop_error = str(exc), exc
         except Exception as exc:  # a type name only: the loop's text could quote what it read

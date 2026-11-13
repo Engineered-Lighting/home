@@ -72,10 +72,16 @@ LAB = "stack/services/perception-lab/"
 # qwen_live.spread's import closure, as chain.py lists it (QWEN_LIVE): 8 Lab modules, no third-party package.
 QWEN_LIVE = ("qwen_live.py", "qwen_scene.py", "qwen_transport.py", "occupancy_gate.py", "analysis.py", "analysis_result.py",
              "experiment_history.py", "reasoning.py")
+COORDINATOR = ("den_coordinator", "body", "bulbs", "eye", "joints", "learn", "scurve", "share", "situation", "spot_light",
+               "spot_rule", "need", "need_v1")
+BRAIN = ("__init__", "aim", "settings", "geometry")
 TREES = {"observe": ("rung-2-observe", ("tools/den-observe", "tools/den-take", *detect.WORKERS)),
          "register": ("den-register", ("tools/den-register", "tools/den-take")),
          "track": ("claude/rung-3-track-local-514d6b", ("tools/den-track",)),   # step 3's live loop
-         "core": ("den-core-live", tuple(LAB + name for name in QWEN_LIVE))}
+         "core": ("den-core-live", tuple(LAB + name for name in QWEN_LIVE)),
+         # The den lighting coordinator's core: only the files it imports, so the release scan reads no others.
+         "coordinator": ("den-coordinator", tuple("tools/den-core/%s.py" % name for name in COORDINATOR)
+                         + tuple("stack/services/lighting-brain/lighting_brain/%s.py" % name for name in BRAIN))}
 REMOTE = "/dev/shm/den-live-check"
 try:
     VENV_PY = Path.home() / "ml" / "den-detector" / "Scripts" / "python.exe"
@@ -148,7 +154,12 @@ def archive(tools_root, key, pins=None):
     ref_name = TREES[key][0]
     if archived(tools_root, key, pins):
         return tree
-    done = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar", sha, *paths], capture_output=True)
+    checkout = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+    if checkout.returncode:
+        raise Stop("the git checkout for pinned tools is unavailable")
+    done = subprocess.run(["git", "-C", checkout.stdout.strip(), "archive", "--format=tar", sha, *paths],
+                          capture_output=True)
     if done.returncode:
         raise Stop("git archive of %s at %s failed" % (ref_name, sha))
     shutil.rmtree(tree, ignore_errors=True)

@@ -27,6 +27,7 @@ import perceive  # noqa: E402
 import run_service  # noqa: E402
 import seated  # noqa: E402
 import stills  # noqa: E402
+from contracts import FrameRef, PlaneRef, TrackEvidence, TrackingSnapshot  # noqa: E402
 
 PIN = "f9d63320"
 LAB = "stack/services/perception-lab/"
@@ -261,6 +262,20 @@ class OccupancyTest(unittest.TestCase):
         self.assertEqual(word, "unknown")
         self.assertIn("didn't answer", why)
 
+    def test_close_and_reopen_between_consumer_reads_advances_revision(self):
+        words, now = ["on"], [0.0]
+        reader = occupancy.Occupancy(lambda: words[0], clock=lambda: now[0])
+        reader.poll_once()
+        first = reader.evidence()
+        for words[0] in ("unavailable", "on"):
+            reader.poll_once()
+        reopened = reader.evidence()
+        self.assertEqual(reopened["effective"], "on")
+        self.assertEqual(reopened["revision"], first["revision"] + 2)
+        now[0] = 20.0
+        reader.poll_once()
+        self.assertEqual(reader.evidence()["revision"], reopened["revision"] + 2)
+
 
 # ---- the ask -------------------------------------------------------------------------------------------------------
 
@@ -272,6 +287,7 @@ class FakeDetector:
         self.requests.append(header)
         if self.answer and self.on_stills:
             self.on_stills({"stills_id": header["id"],
+                            "frames": header["frames"],
                             "jpegs": [base64.b64encode(b"\xff\xd8" + bytes([i + 1]) * 30).decode() for i in range(len(header["frames"]))]})
 
 
@@ -279,8 +295,9 @@ class FakeOccupancy:
     def __init__(self, word="on"):
         self.word = word
 
-    def state(self):
-        return (self.word, None if self.word == "on" else "Frigate sees nobody")
+    def evidence(self):
+        return {"raw": self.word, "effective": self.word, "read_age_ms": 0.0, "revision": 0,
+                "why": None if self.word == "on" else "Frigate sees nobody"}
 
 
 class Clock:
@@ -307,19 +324,33 @@ class AskTest(unittest.TestCase):
                                site_id="site", camera_id="den-oak", clock=self.clock, wall=self.clock, start=False)
         self.frame_id = 0
         self.status, self.since = "confident", self.clock.t - 60.0
+        self.accepted = []
 
-    def tick(self, seconds=0.25, hip=0.5, people=1, xy=(1.0, 1.0)):
+    def tick(self, seconds=0.25, hip=0.5, people=1, xy=(1.0, 1.0), epoch=1, usable=True, drain=True):
         """One frame: confirmed tracks seated (or not), the ask's observe, and any stills reply sent at once."""
         self.clock.t += seconds
         self.frame_id += 1
-        tracks = [{"track_id": "e1-trk-%d" % n, "state": "confirmed", "xy_m": list(xy)} for n in range(people)]
-        frame = {"id": self.frame_id, "session": 1, "capture_ts": self.clock.t - 0.2, "capture_mono": self.clock.t - 0.2,
-                 "arrival_unix": self.clock.t - 0.1, "poses": {t["track_id"]: joints(hip, x=xy[0]) for t in tracks},
-                 "association": {t["track_id"]: (self.status, self.since) for t in tracks}}
-        event = self.asker.observe({"tracks": tracks, "health": {}}, frame)
-        while not self.asker.jobs.empty():
-            self.asker.send(*self.asker.jobs.get_nowait())
+        tracks = [{"track_id": f"e{epoch}-trk-{n}", "state": "confirmed", "xy_m": list(xy)} for n in range(people)]
+        captured = self.clock.t - 0.2
+        rgb = PlaneRef(self.frame_id, captured, captured, 640, 360)
+        frame = FrameRef("run", epoch, self.frame_id, f"camera-{epoch}", "rgb", rgb, None, None, "rig", "pose", "scan",
+                         captured, self.clock.t - 0.1, captured)
+        pose = {name: (tuple(xyz), "supported") for name, (xyz, _) in joints(hip, x=xy[0]).items()}
+        evidence = tuple(TrackEvidence(t["track_id"], "confirmed", xy, 0.1, "stereo", ("obs",), self.status,
+                                       0, self.since, pose) for t in tracks)
+        snapshot = TrackingSnapshot("run", epoch, self.frame_id, frame if usable else None,
+                                    "fresh" if usable else "stale", None, "present", evidence)
+        event = self.asker.observe({"tracks": tracks, "health": {}}, snapshot)
+        if reply := self.asker.pop_reply():
+            self.accepted.append(reply)
+        if drain:
+            self.drain()
         return event
+
+    def drain(self):
+        while not self.asker.jobs.empty():
+            function, args, kwargs = self.asker.jobs.get_nowait()
+            function(*args, **kwargs)
 
     def run_for(self, seconds, **kw):
         event = None
@@ -356,15 +387,14 @@ class AskTest(unittest.TestCase):
         self.assertTrue(track["activity"]["close_up"])
 
     def test_the_log_line_and_the_hand_off(self):
-        got = []
-        self.asker.on_reply.append(got.append)
-        self.run_for(4)
-        self.assertTrue(got)
-        fact, line = got[0]["fact"], got[0]["ask"]
-        self.assertEqual(fact["schema"], "la-fact-log-1")
-        self.assertEqual(fact["observation"]["facts"]["activity_hypothesis"], "reading")
+        self.run_for(5)
+        reply = self.accepted[0]
+        self.assertEqual(reply.observation["schema"], "qwen-observation-1")
+        self.assertEqual(reply.observation["facts"]["activity_hypothesis"], "reading")
+        self.assertEqual(reply.track_id, "e1-trk-0")
+        self.assertEqual(reply.valid_until_mono, reply.observed_mono + 10.0)
         logged = self.log_lines()[0]
-        self.assertEqual(logged, line)
+        self.assertEqual(logged["request_id"], reply.request_id)
         self.assertEqual(logged["outcome"], "completed")
         self.assertIn(len(logged["stills"]), (2, 3))   # the first ask can come before 3 s of frames; spread takes 2 to 3
         self.assertEqual(len(self.log_lines()[-1]["stills"]), 3)
@@ -378,11 +408,11 @@ class AskTest(unittest.TestCase):
     def test_association_is_unsafe_when_ambiguous_in_the_window_or_too_new(self):
         self.status = "ambiguous"
         event = self.run_for(4)
-        self.assertFalse(self.log_lines()[-1]["association"]["safe"])
+        self.assertEqual(self.asks_sent(), 0)
         self.assertNotIn("activity", event["tracks"][0], "an unsure answer never shows on a marker")
         self.status, self.since = "confident", self.clock.t + 3.0   # confident only from inside the next window
         self.run_for(4)
-        self.assertFalse(self.log_lines()[-1]["association"]["safe"])
+        self.assertEqual(self.asks_sent(), 0)
 
     def test_a_failure_backs_off_and_three_say_qwen_isnt_answering(self):
         self.replies = [OSError("refused")]
@@ -420,9 +450,10 @@ class AskTest(unittest.TestCase):
         sent = json.loads(json.loads(self.bodies[-1])["messages"][1]["content"][0]["text"])
         self.assertEqual(sent["near_person"], "Seated at the desk, beside the 3D printer.")
         self.assertEqual(self.log_lines()[-1]["labels"]["labels_revision"], 7)
-        self.run_for(4, people=2)
-        sent = json.loads(json.loads(self.bodies[-1])["messages"][1]["content"][0]["text"])
-        self.assertIsNone(sent["near_person"])
+        previous = self.asks_sent()
+        event = self.run_for(4, people=2)
+        self.assertEqual(self.asks_sent(), previous)
+        self.assertTrue(all("activity" not in track for track in event["tracks"]))
         self.asker.settings = ask.Settings(block={"labels_to_qwen": False})
         self.run_for(4)
         sent = json.loads(json.loads(self.bodies[-1])["messages"][1]["content"][0]["text"])
@@ -432,11 +463,11 @@ class AskTest(unittest.TestCase):
         """The labeling plan's step 2 adds near (a string or null) to every track: the gate and the ask ignore it."""
         real_observe = self.asker.observe
 
-        def observe(event, frame):
+        def observe(event, snapshot):
             for track in event["tracks"]:
                 track["near"] = "Seated on the sofa."
                 track["something_new"] = {"x": 1}
-            return real_observe(event, frame)
+            return real_observe(event, snapshot)
         self.asker.observe = observe
         event = self.run_for(6)
         self.assertGreaterEqual(self.asks_sent(), 2)
@@ -460,16 +491,90 @@ class AskTest(unittest.TestCase):
         self.assertEqual(event["health"]["qwen"]["why"], "the pictures aren't being made")
 
     def test_the_gate_is_checked_again_before_posting(self):
-        real_send = self.asker.send
-
-        def send(*args):
-            self.occupancy.word = "off"   # Frigate turns off between the decision and the post
-            return real_send(*args)
-        self.asker.send = send
-        self.run_for(4)
+        for _ in range(12):
+            self.tick(drain=False)
+        self.occupancy.word = "off"
+        self.drain()
         self.assertEqual(self.asks_sent(), 0)
         self.assertEqual(self.log_lines()[-1]["outcome"], "not_sent")
         self.assertIsNone(self.asker.inflight)
+
+    def test_queued_ask_after_link_loss_never_posts(self):
+        for _ in range(12):
+            self.tick(drain=False)
+        self.tick(usable=False, drain=False)
+        self.drain()
+        self.assertEqual(self.asks_sent(), 0)
+        self.assertEqual(self.log_lines()[-1]["outcome"], "not_sent")
+        self.assertEqual(self.accepted, [])
+
+    def test_a_late_completion_cannot_cross_a_swap(self):
+        self.run_for(1.5)
+        while self.asks_sent() == 0:
+            self.tick()
+        event = self.tick(people=2)
+        self.assertTrue(all("activity" not in track for track in event["tracks"]))
+        self.assertEqual(self.accepted, [])
+        self.assertEqual(self.log_lines()[-1]["invalid_reason"], "evidence_changed")
+
+    def test_a_late_completion_cannot_cross_a_camera_restart(self):
+        while self.asks_sent() == 0:
+            self.tick()
+        self.tick(epoch=2)
+        self.assertEqual(self.accepted, [])
+        self.assertEqual(self.log_lines()[-1]["invalid_reason"], "evidence_changed")
+
+    def test_pending_request_keeps_its_permit_and_cannot_survive_a_reopened_gate(self):
+        words = ["on"]
+        reader = occupancy.Occupancy(lambda: words[0], clock=self.clock)
+        reader.poll_once()
+        self.asker.occupancy = reader
+        post = self.asker.post
+        permits = []
+
+        def close_and_reopen(body):
+            request = self.asker.inflight
+            for words[0] in ("unavailable", "on"):
+                reader.poll_once()
+            self.run_for(4)
+            permits.append((self.asker.inflight is request, len(self.detector.requests)))
+            return post(body)
+
+        self.asker.post = close_and_reopen
+        for _ in range(7):
+            self.tick()
+        self.tick(drain=False)
+        log, args, kwargs = self.asker.jobs.get_nowait()
+        log(*args, **kwargs)
+        self.assertEqual(self.asks_sent(), 1)
+        self.assertEqual(permits, [(True, 1)])
+        self.assertEqual(self.accepted, [])
+        self.assertEqual(self.log_lines()[-1]["invalid_reason"], "evidence_changed")
+
+    def test_a_late_completion_cannot_cross_inference_expiry(self):
+        while self.asks_sent() == 0:
+            self.tick()
+        self.tick(seconds=10)
+        self.assertEqual(self.accepted, [])
+        self.assertEqual(self.log_lines()[-1]["invalid_reason"], "evidence_expired")
+
+    def test_a_model_reply_with_multiple_people_is_unbound(self):
+        self.replies = [completion(json.dumps(facts(people="multiple")))]
+        self.run_for(4)
+        self.assertGreaterEqual(self.asks_sent(), 1)
+        self.assertEqual(self.accepted, [])
+        self.assertEqual(self.log_lines()[-1]["invalid_reason"], "model_subject_unbound")
+
+    def test_stills_with_wrong_epoch_are_rejected(self):
+        self.detector.answer = False
+        for _ in range(8):
+            self.tick(drain=False)
+        header = self.detector.requests[0]
+        mismatched = [["run", 2, key[-1]] for key in header["frames"]]
+        self.detector.on_stills({"stills_id": header["id"], "frames": mismatched, "jpegs": ["x"] * len(mismatched)})
+        self.drain()
+        self.assertEqual(self.asks_sent(), 0)
+        self.assertEqual(self.log_lines()[-1]["why"], "stills_frame_mismatch")
 
     def test_an_ask_ends_once_and_never_ends_the_next(self):
         self.run_for(4)
@@ -520,6 +625,7 @@ class DetectorChannelTest(unittest.TestCase):
     def test_stills_replies_go_to_on_stills_never_the_rows(self):
         worker = object.__new__(perceive.DetectorWorker)
         worker.replies, worker.on_body, got = queue.Queue(), None, []
+        worker.dispatch_lock, worker.optional = threading.Lock(), ("stills", 3)
         worker.on_stills = got.append
         worker.proc = type("P", (), {"stdout": io.BytesIO(b'{"stills_id":3,"jpegs":["eA=="]}\n{"id":1,"row":{}}\n')})()
         worker._read()
@@ -541,9 +647,9 @@ class StillsTest(unittest.TestCase):
     def test_ring_and_a_missing_frame(self):
         ring = stills.Ring(size=2)
         for n in range(3):
-            ring.keep(n, b"x")
-        self.assertIsNone(ring.get(0))
-        answer = stills.handle({"id": 9, "frames": [0]}, ring, None, None, None, None)
+            ring.keep(("run", 1, n), b"x")
+        self.assertIsNone(ring.get(("run", 1, 0)))
+        answer = stills.handle({"id": 9, "frames": [["run", 1, 0], ["run", 1, 1]]}, ring, None, None, None, None)
         self.assertEqual(answer, {"stills_id": 9, "error": "frame_gone"})
 
     def test_jpegs_from_a_frame(self):
@@ -552,11 +658,14 @@ class StillsTest(unittest.TestCase):
             from PIL import Image
         except ImportError:
             self.skipTest("numpy and Pillow are the detector venv's")
-        nv12 = bytes(640 * 360) + bytes([128]) * (640 * 180)
         ring = stills.Ring()
-        ring.keep(1, b"bundle")
+        ring.keep(("run", 1, 1), b"\x00")
+        ring.keep(("run", 1, 2), b"\x40")
         decode = lambda plane, w, h: np.zeros((h, w, 3), np.uint8) + plane[0, 0]
-        answer = stills.handle({"id": 4, "frames": [1]}, ring, np, Image, decode, lambda data, with_rgb: ({}, nv12))
+        frames = [["run", 1, 1], ["run", 1, 2]]
+        answer = stills.handle({"id": 4, "frames": frames}, ring, np, Image, decode,
+                               lambda data, with_rgb: ({}, data * (640 * 360) + bytes([128]) * (640 * 180)))
+        self.assertEqual(answer["frames"], frames)
         self.assertTrue(base64.b64decode(answer["jpegs"][0]).startswith(b"\xff\xd8"))
 
 

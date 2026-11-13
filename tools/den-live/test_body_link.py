@@ -1,349 +1,306 @@
-"""The live body's plumbing in den-live: the stream's /body path, who the body is made for, and the loop's link to the
-body step in the detector's process. body.py's own tests are test_body.py (the detector's venv).
-
-    python -B -X utf8 tools\\den-live\\test_body_link.py
-
-The link tests run a stand-in for detect_worker.py in the detector's venv: the real protocol and the real body step,
-with rows replayed instead of the models. They're skipped without the venv; the render test also needs a den-sim set.
-"""
-import dataclasses
-import io
+"""Synthetic body-v2 worker ordering, exact-frame pipeline handoff and SSE replay."""
 import json
-import math
-import struct
-import sys
-import tempfile
-import threading
 import time
 import unittest
 import urllib.error
 import urllib.request
-import zipfile
-from pathlib import Path
+from collections import deque
+from types import SimpleNamespace
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
-import body_link  # noqa: E402
-import perceive  # noqa: E402
-import sofa_check as sc  # noqa: E402  the venv
-import stream as people_stream  # noqa: E402
-
-
-def sse(url, count, timeout=5):
-    got, done = [], threading.Event()
-
-    def read():
-        try:
-            with urllib.request.urlopen(url, timeout=timeout) as response:
-                block = []
-                for raw in response:
-                    line = raw.decode('utf-8').rstrip('\r\n')
-                    if line:
-                        block.append(line)
-                        continue
-                    if block:
-                        got.append(block)
-                        block = []
-                    if len(got) >= count:
-                        break
-        finally:
-            done.set()
-    threading.Thread(target=read, daemon=True).start()
-    return got, done
+from body_input import BodyInput, bundle_frame_key, qualified
+from body_link import BodyLink
+from contracts import TrackingSnapshot
+from perceive import Perceiver, body_person
+from stream import BODY_SCHEMA, BASE, PeopleStream
 
 
-class BodyPath(unittest.TestCase):
+SCOPE = dict(home="den", run_id="synthetic-run", track_epoch=3, content_revision="synthetic-scan",
+             transform_id="synthetic-transform", mode="rgb")
+BINDING = {key: SCOPE[key] for key in ("run_id", "track_epoch", "content_revision", "transform_id")}
+BINDING["depth_profile"] = "synthetic-depth"
+SETUP = dict(binding=BINDING, left_k=[400, 400, 320, 200], room_from_left=[[[1, 0, 0], [0, 0, 1], [0, -1, 0]], [0, 0, 1.4]])
+PERSON = dict(track_id="e3-one", xy_m=[0, 2], joints={}, facing_deg=0)
+FRAME = dict(track_id=PERSON["track_id"], facing_deg=0, shoulder_midpoint_m=[0, 2, 1.2], pelvis_z_m=0.8,
+             points=dict(count=1, key="QSwCAA==", position_mm="BQDQBwoF", normal="AIEA", kind="AA=="))
+
+
+class Detector:
+    def __init__(self):
+        self.headers = []
+        self.on_body = None
+
+    def send_alone(self, header):
+        self.headers.append(header)
+
+    def setup(self):
+        self.on_body({"body_ready": True, "binding": self.headers[-1]["setup"]["binding"]})
+
+    def reply(self, *, header=None, frame=FRAME, why=None):
+        header = header or self.headers[-1]
+        self.on_body(dict(body_id=header["id"], request_id=header["request_id"], frame_key=header["frame_key"],
+                          binding=header["binding"], frame=frame, why=why))
+
+
+class LinkTests(unittest.TestCase):
     def setUp(self):
-        self.stream = people_stream.PeopleStream(port=0, heartbeat_s=0.3, max_clients=2).start()
-        self.base = 'http://127.0.0.1:%d/api/den-live/v1/homes/den/' % self.stream.port
+        self.detector = Detector()
+        self.events = []
+        self.now = 100.0
+        stream = SimpleNamespace(publish_body=self.publish)
+        self.link = BodyLink(self.detector, stream=stream, clock=lambda: self.now)
+
+    def publish(self, scope, **event):
+        self.events.append((scope, event))
+        return True
+
+    def submit(self, *, frame_id=8, scope=SCOPE, setup=SETUP, observation="person", person=PERSON, age=0.1):
+        return self.link.submit(frame_id, frame_key=["camera", frame_id], scope=scope, setup=setup,
+                                capture_mono=self.now - age, observation=observation, person=person)
+
+    def setup_worker(self):
+        self.assertFalse(self.submit())
+        self.assertEqual(self.detector.headers[-1]["kind"], "setup_body")
+        self.detector.setup()
+
+    def test_async_setup_and_exact_reply(self):
+        self.assertEqual(self.detector.headers, [])
+        self.setup_worker()
+        self.assertTrue(self.submit())
+        request = self.detector.headers[-1]
+        self.assertEqual(request["frame_key"], ["camera", 8])
+        self.assertEqual(request["binding"], BINDING)
+        self.assertFalse(self.submit(frame_id=9))
+        self.detector.reply()
+        self.assertEqual(self.events[-1], (SCOPE, dict(frame=FRAME, capture_mono=99.9)))
+        self.assertFalse(self.submit(frame_id=9))
+
+    def test_expiry_and_mismatched_key(self):
+        self.setup_worker()
+        self.submit()
+        self.detector.reply(header={**self.detector.headers[-1], "frame_key": "wrong"})
+        self.assertEqual(self.events[-1][1], dict(reason="unavailable"))
+        self.now += 0.5
+        self.submit()
+        self.now += 1.0
+        self.detector.reply()
+        self.assertEqual(self.events[-1][1], dict(reason="stale"))
+        self.assertFalse(self.submit(age=1.1))
+
+    def test_ambiguity_invalidates_late_ready_and_scope_rebinds(self):
+        self.setup_worker()
+        self.submit()
+        request = self.detector.headers[-1]
+        self.link.clear("ambiguous", scope=SCOPE)
+        self.detector.reply(header=request)
+        self.assertEqual(self.events[-1][1], dict(reason="ambiguous"))
+        scope = {**SCOPE, "track_epoch": 4, "content_revision": "new-scan"}
+        setup = {**SETUP, "binding": {**BINDING, "track_epoch": 4, "content_revision": "new-scan"}}
+        self.assertFalse(self.submit(scope=scope, setup=setup))
+        self.detector.setup()
+        self.assertTrue(self.submit(scope=scope, setup=setup))
+        self.detector.reply()
+        self.assertEqual(self.events[-1][0], scope)
+
+    def test_empty_batch_is_reset_by_unknown_and_warmup_clear_is_not_repeated(self):
+        self.setup_worker()
+        self.submit(observation="empty", person=None)
+        self.detector.reply(frame=None, why="warming_background")
+        published = len(self.events)
+        self.submit(observation="empty", person=None)
+        self.assertFalse(self.detector.headers[-1]["reset_learning"])
+        self.detector.reply(frame=None, why="warming_background")
+        self.assertEqual(len(self.events), published)
+        self.link.clear("pose_unavailable")
+        self.submit(observation="empty", person=None)
+        self.assertTrue(self.detector.headers[-1]["reset_learning"])
+
+
+class PipelineTests(unittest.TestCase):
+    def test_exact_key_comes_from_retained_bundle_metadata(self):
+        bundle = SimpleNamespace(session="camera", rgb_seq=10)
+        meta = dict(session="camera", rgb_seq=10, depth_seq=21)
+        self.assertEqual(bundle_frame_key(bundle, meta), ["camera", 10, 21])
+        for changes in (dict(session="other"), dict(rgb_seq=11), dict(depth_seq=None), dict(depth_seq=True)):
+            self.assertIsNone(bundle_frame_key(bundle, {**meta, **changes}))
+
+    def test_pipeline_handoff_uses_bound_scope_and_body_joints(self):
+        track = dict(track_id="one", state="confirmed", association="confident", xy_m=[0, 2])
+        joints = [(-0.2, 2, 1.2), (0.2, 2, 1.2), (-0.16, 2, 0.8), (0.16, 2, 0.8)]
+        pose = dict(kind="keypoints", validity="valid", joints_room=[
+            dict(j=j, status="supported", xyz=list(xyz)) for j, xyz in zip((5, 6, 11, 12), joints)
+        ] + [dict(j=0, status="supported", xyz=[0, 2, 1.4])])
+        evidence = dict(frame_key="exact", binding=BINDING, bounds_px=[200, 30, 300, 100],
+                        alignment_px=1, localization_px=2, motion_px=3)
+        data = BodyInput("exact", "synthetic-run", 3, "synthetic-scan", "synthetic-transform", "synthetic-depth",
+                         99.5, "infrared", "person", track, pose, evidence)
+        self.assertTrue(qualified(data, SCOPE))
+        self.assertFalse(qualified(data, {**SCOPE, "transform_id": "other"}))
+        person = body_person(track, pose, lambda _: (0, 10), 30)
+        self.assertEqual(set(person["joints"]), {"left_shoulder", "right_shoulder", "left_hip", "right_hip"})
+        self.assertEqual(person["facing_deg"], 0)
+        self.assertIsNone(body_person({**track, "state": "coasting"}, pose, lambda _: (0, 10), 30))
+        self.assertIsNone(body_person({**track, "association": "ambiguous"}, pose, lambda _: (0, 10), 30))
+        perceiver = Perceiver.__new__(Perceiver)
+        perceiver.home = "den"
+        perceiver.body = SimpleNamespace(prepare=lambda *args: None)
+        perceiver.camera = SimpleNamespace(room_from_left=SETUP["room_from_left"], rig=SimpleNamespace(left_k=SETUP["left_k"]))
+        perceiver.track_method = SimpleNamespace(tracker={"heading_max_sd_deg": 30})
+        perceiver.t = SimpleNamespace(records=SimpleNamespace(body_heading=lambda _: (0, 10)))
+        request = perceiver._body_request(data)
+        self.assertEqual(request["scope"], {**SCOPE, "mode": "infrared"})
+        self.assertEqual(request["setup"], SETUP)
+        self.assertEqual(request["frame_key"], "exact")
+        self.assertEqual(request["person"]["head_evidence"], evidence)
+
+    def pipeline_process(self, mode, provider):
+        calls = []
+        detector = SimpleNamespace(next_id=42)
+        detector.detect = lambda bundle, delay, **key: calls.append(("detect", key)) or {"luma": 100 if mode == "rgb" else 0, "row": {}}
+        camera = SimpleNamespace(check_frame=lambda _: None, error_bound_m=.1)
+        observation = dict(kind="keypoints", obs_id="current-pose", validity="valid", score=.9)
+        track = SimpleNamespace(id=1, obs_ids={"current-pose"}, heading_as_of=None, last_seen=100)
+        track_record = dict(track_id="one", position=dict(x=0, y=1, cov=[[0.1, 0], [0, 0.1]]), heading=None,
+                            association=dict(status="confident", since_ts=99.0))
+        meta = dict(session="camera", rgb_seq=7, depth_seq=20)
+        tools = SimpleNamespace(takes=SimpleNamespace(read_frame=lambda _: (meta, None)),
+                                roommodel=SimpleNamespace(RegistrationRefused=ValueError),
+                                observe=SimpleNamespace(observe=lambda *_, **__: [observation]),
+                                records=SimpleNamespace(frames_from_observations=lambda *args: ([], None),
+                                                        track_record=lambda *args: track_record))
+        perceiver = Perceiver.__new__(Perceiver)
+        perceiver.t, perceiver.camera, perceiver.detector = tools, camera, detector
+        perceiver.home, perceiver.scope = "den", SCOPE
+        perceiver.last_t_host, perceiver.last_capture, perceiver.session, perceiver.sessions = 99.0, 99.0, "camera", 3
+        perceiver.counts = {"frames": 0, "observations": 0, "weak_only_hidden": 0}
+        perceiver.arrivals, perceiver.lags, perceiver.drops = [], [], []
+        perceiver.run_id, perceiver.frame_id, perceiver.retired, perceiver.last_seq = "synthetic-run", 0, set(), 6
+        perceiver.clock_reset_candidate = perceiver.last_input_mono = perceiver.calibration_id = None
+        perceiver.associations, perceiver.hops = {}, {}
+        perceiver.labels, perceiver.now = None, lambda: 1000
+        perceiver.snapshot = TrackingSnapshot(perceiver.run_id, 3, 1, None, "starting", None, "unknown", ())
+        perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})
+        perceiver.core, perceiver.strong = SimpleNamespace(step=lambda *args: [(track, "confirmed")]), set()
+        perceiver.clock = SimpleNamespace(add=lambda *_: None, offset=lambda: 0)
+        perceiver._transit = lambda *_: None
+        perceiver.require_source_correction = False
+        perceiver.mode, perceiver.light_since, perceiver.dark_since = mode, None, 99
+        perceiver.event = lambda ago, tracks, camera, now: {**camera, "camera": {"why": None, **camera},
+                                                            "seq": 2, "capture_ts": 123.0, "tracks": tracks}
+        perceiver.body_provider = lambda *_, **data: calls.append(("provider", data)) or provider(data)
+        perceiver._body_request = lambda value: {"frame_key": value.frame_key, "mode": value.mode}
+        perceiver.body = SimpleNamespace(submit=lambda frame_id, **kwargs: calls.append(("submit", frame_id, kwargs)),
+                                         clear=lambda reason: calls.append(("clear", reason)))
+        bundle = SimpleNamespace(data=b"fake", session="camera", rgb_seq=7, t_host=100.0,
+                                 arrival_mono=100.1, arrival_unix=1000, fetch_s=0, parse_s=0)
+        return calls, perceiver.process(bundle, {}, 100.2)
+
+    def pipeline_input(self, data, *, key=None):
+        return BodyInput(data["frame_key"] if key is None else key, SCOPE["run_id"], SCOPE["track_epoch"],
+                         SCOPE["content_revision"], SCOPE["transform_id"], BINDING["depth_profile"],
+                         99.5, "infrared" if data["mode"] == "none" else "rgb", "person")
+
+    def test_rgb_provider_runs_after_current_track_association(self):
+        calls, event = self.pipeline_process("rgb", self.pipeline_input)
+        key = ["synthetic-run", 3, 1]
+        self.assertEqual(calls[0], ("detect", {}))
+        kind, data = calls[1]
+        self.assertEqual((kind, data["mode"]), ("provider", "rgb"))
+        self.assertEqual(data["observations"][0]["obs_id"], "current-pose")
+        self.assertEqual(data["tracks"], event["tracks"])
+        self.assertEqual(data["supported"], [{"current-pose"}])
+        self.assertEqual(data["association"], {"synthetic-run-e3-one": ("confident", 99.0)})
+        self.assertEqual(calls[2], ("submit", 42, {"frame_key": key, "mode": "rgb"}))
+
+    def test_ir_body_submission_survives_legacy_rgb_darkness(self):
+        calls, event = self.pipeline_process("none", self.pipeline_input)
+        key = ["synthetic-run", 3, 1]
+        self.assertEqual(calls, [("detect", {}),
+                                 ("provider", {"frame_key": key, "mode": "none", "observations": (), "tracks": (),
+                                               "supported": (), "association": {}}),
+                                 ("submit", 42, {"frame_key": key, "mode": "infrared"})])
+        self.assertEqual(event["why"], "too dark")
+
+    def test_wrong_provider_key_clears_body_without_changing_markers(self):
+        calls, event = self.pipeline_process("rgb", lambda data: self.pipeline_input(data, key=["camera", 7, 19]))
+        self.assertEqual(calls[-1], ("clear", "unavailable"))
+        self.assertEqual(event["tracks"][0]["track_id"], "synthetic-run-e3-one")
+
+
+def read_event(response):
+    fields = {}
+    while True:
+        raw = response.readline()
+        if not raw:
+            raise EOFError("stream closed before the next event")
+        line = raw.decode().rstrip()
+        if not line:
+            if "event" in fields:
+                return fields["event"], json.loads(fields["data"])
+            fields.clear()
+        if ": " in line and not line.startswith(":"):
+            name, value = line.split(": ", 1)
+            fields[name] = value
+
+
+class StreamTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 100.0
+        self.stream = PeopleStream(port=0, clock=lambda: self.now, wall_clock=lambda: 1000.0, heartbeat_s=0.05).start()
         self.addCleanup(self.stream.close)
+        self.base = f"http://127.0.0.1:{self.stream.port}{BASE}den/"
 
-    def test_body_frames_go_on_their_own_path_and_never_on_the_people_stream(self):
-        bodies, body_done = sse(self.base + 'body', 3)
-        people, people_done = sse(self.base + 'stream', 3)
-        time.sleep(0.2)
-        self.stream.publish_body({'schema': 'den-live-body-1', 'seq': 4, 'track_id': 'e1-trk-1'})
-        self.stream.publish({'schema': 'den-live-people-1', 'seq': 5, 'tracks': []})
-        self.assertTrue(body_done.wait(5) and people_done.wait(5))
-        self.assertIn(['id: 4', 'event: body', 'data: {"schema":"den-live-body-1","seq":4,"track_id":"e1-trk-1"}'], bodies)
-        self.assertFalse(any('event: people' in line for block in bodies for line in block))
-        self.assertFalse(any('event: body' in line for block in people for line in block))
-        self.assertIn([': heartbeat'], bodies)
+    def test_capture_deadline_and_clear_replay_with_independent_markers(self):
+        self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
+        self.assertTrue(self.stream.publish_body(SCOPE, frame={**FRAME, "head": "must never be forwarded"}, capture_mono=99.5))
+        with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
+            self.assertEqual(response.headers["X-Home-Den-Body-Schema"], BODY_SCHEMA)
+            self.assertEqual(read_event(response), ("body_clock", {"server_ts": 1000}))
+            name, first = read_event(response)
+            self.assertEqual(name, "body")
+            self.assertEqual(first["expires_ts"] - first["capture_ts"], 1)
+            self.assertNotIn("head", first)
+        self.now += 0.2
+        with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
+            read_event(response)
+            self.assertEqual(read_event(response), ("body", first))
+        self.now += 0.4
+        with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
+            read_event(response)
+            name, cleared = read_event(response)
+            self.assertEqual((name, cleared["status"], cleared["reason"]), ("body", "clear", "stale"))
+            self.assertGreater(cleared["seq"], first["seq"])
+            self.assertNotIn("points", cleared)
+        with urllib.request.urlopen(self.base + "stream", timeout=3) as response:
+            self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])
 
-    def test_a_new_body_client_gets_the_newest_frame_and_the_cap_holds(self):
-        self.stream.publish_body({'schema': 'den-live-body-1', 'seq': 9})
-        got, done = sse(self.base + 'body', 2)
-        self.assertTrue(done.wait(5))
-        self.assertIn('id: 9', got[1])
-        time.sleep(0.8)   # the server notices that reader's close at its next heartbeat
-        with urllib.request.urlopen(self.base + 'body', timeout=5), urllib.request.urlopen(self.base + 'body', timeout=5):
-            time.sleep(0.2)
-            with self.assertRaises(urllib.error.HTTPError) as refused:
-                urllib.request.urlopen(self.base + 'body', timeout=5)
-            self.assertEqual(refused.exception.code, 503)
-            with urllib.request.urlopen(self.base + 'stream', timeout=5):
-                pass   # the people stream has its own cap
+    def test_slow_ready_expiry_preserves_newer_ready_and_clear_precedes_recovery(self):
+        from stream import _Client
+        client = _Client(2)
+        self.stream.body_clients.add(client)
+        self.stream.publish_body(SCOPE, frame=FRAME, capture_mono=99.1)
+        old = client.events.popleft()
+        self.stream.publish_body(SCOPE, reason="ambiguous")
+        self.stream.publish_body(SCOPE, frame=FRAME, capture_mono=100)
+        self.now += 0.2
+        self.assertIsNone(self.stream.body_for_write(old, client))
+        self.assertEqual([item[0]["status"] for item in client.events], ["clear", "ready"])
+        self.assertEqual(self.stream.body_latest[0]["status"], "ready")
 
-    def test_a_frame_without_a_seq_still_has_an_id(self):
-        got, done = sse(self.base + 'body', 2)
-        time.sleep(0.2)
-        self.stream.publish_body({'schema': 'den-live-body-1', 'seq': None})
-        self.assertTrue(done.wait(5))
-        self.assertIn('id: 0', got[1])
-
-
-class BodyPerson(unittest.TestCase):
-    def pose(self, obs_id, joints):
-        return {'obs_id': obs_id, 'kind': 'keypoints', 'validity': 'valid',
-                'joints_room': [{'j': j, 'xyz': xyz, 'status': status} for j, xyz, status in joints]}
-
-    def test_the_first_confirmed_track_with_a_pose_gives_its_room_joints(self):
-        tracks = [{'track_id': 'e1-trk-2', 'state': 'coasting', 'xy_m': [3, 3]}, {'track_id': 'e1-trk-1', 'state': 'confirmed', 'xy_m': [1, 2]}]
-        observations = [self.pose('o-1', [(0, [1, 2, 1.6], 'supported'), (9, [1.2, 2, 1.0], 'uncertain'), (15, None, 'unsupported'),
-                                          (16, [1, 2, 0.1], 'unsupported')])]
-        person = perceive.body_person(observations, tracks, [set(), {'o-1'}])
-        self.assertEqual(person['track_id'], 'e1-trk-1')
-        self.assertEqual(person['joints'], {'nose': [[1, 2, 1.6], 'supported'], 'left_wrist': [[1.2, 2, 1.0], 'uncertain']})
-
-    def test_no_pose_gives_the_track_alone_and_nobody_gives_none(self):
-        tracks = [{'track_id': 'e1-trk-1', 'state': 'confirmed', 'xy_m': [1, 2]}]
-        self.assertEqual(perceive.body_person([], tracks, [set()]), {'track_id': 'e1-trk-1', 'xy_m': [1, 2], 'joints': {}})
-        self.assertIsNone(perceive.body_person([], [], []))
-        coasting = [{'track_id': 'e1-trk-3', 'state': 'coasting', 'xy_m': [0, 0]}]
-        self.assertEqual(perceive.body_person([], coasting, [set()])['track_id'], 'e1-trk-3', 'someone coasting is not an empty den')
-
-    def test_someone_not_tracked_yet_is_not_an_empty_den(self):
-        seen = [{'obs_id': 'o-2', 'kind': 'person_box', 'validity': 'valid'}]
-        self.assertEqual(perceive.body_person(seen, [], []), {'track_id': None, 'xy_m': None, 'joints': {}})
+    def test_missing_provider_leaves_people_and_spot_routes_available(self):
+        self.stream.body_available = False
+        self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
+        spot = {"epoch": "synthetic-preview", "valid_until_mono": self.now + 5, "seq": 10}
+        self.stream.publish_spot(spot)
+        with self.assertRaises(urllib.error.HTTPError) as missing:
+            urllib.request.urlopen(self.base + "body-v2", timeout=3)
+        with missing.exception as error:
+            self.assertEqual(error.code, 503)
+            self.assertEqual(json.load(error)["error"], "body_unavailable")
+            self.assertIsNone(error.headers.get("X-Home-Den-Body-Schema"))
+        with urllib.request.urlopen(self.base + "stream", timeout=3) as response:
+            self.assertEqual(read_event(response), ("spot_snapshot", spot))
+            self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])
 
 
-# A stand-in for detect_worker.py: its protocol, rows replayed from a detections.jsonl (or none), and the real body step.
-STUB = r'''
-import json, struct, sys
-sys.path.insert(0, %(here)r)
-import body
-rows = {}
-if len(sys.argv) > 1:
-    for line in open(sys.argv[1], encoding="utf-8"):
-        if line.strip():
-            row = json.loads(line)
-            rows[row["frame"]["rgb_seq"]] = row
-out = sys.stdout
-def say(value):
-    out.write(json.dumps(value, separators=(",", ":")) + "\n"); out.flush()
-def message():
-    size = sys.stdin.buffer.read(4)
-    if len(size) < 4:
-        return None
-    n = struct.unpack(">I", size)[0]
-    data = b""
-    while len(data) < n:
-        chunk = sys.stdin.buffer.read(n - len(data))
-        if not chunk:
-            return None
-        data += chunk
-    return data
-say({"ready": True, "load_ms": 0, "warm_ms": 0})
-kept, channel = None, body.BodyChannel()
-while True:
-    raw = message()
-    if raw is None:
-        sys.exit(0)
-    header = json.loads(raw)
-    if header.get("kind") in ("setup_body", "body"):
-        say(channel.handle(header, kept))
-        continue
-    data = message()
-    kept = (header["id"], data)
-    row = rows.get(header["rgb_seq"])
-    if row is None:
-        say({"id": header["id"], "error": "KeyError"})
-        continue
-    row = dict(row, available_ts=row["frame"]["capture_ts"] + header["delay_s"] + 0.07)
-    say({"id": header["id"], "row": row, "compute_s": 0.07, "luma": 120.0})
-'''
-
-
-def stub_argv(rows=None):
-    folder = Path(tempfile.mkdtemp(prefix='den-live-stub-'))
-    script = folder / 'stub_worker.py'
-    script.write_text(STUB % {'here': str(HERE)}, encoding='utf-8')
-    return [str(sc.VENV_PY), '-B', str(script)] + ([str(rows)] if rows else []), folder / 'stub.log'
-
-
-def bundle(value_mm=3000):
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, 'w') as z:   # a minimal depth_mm.npy: 400x640 uint16, all one value
-        header = "{'descr': '<u2', 'fortran_order': False, 'shape': (400, 640), }"
-        header += ' ' * (118 - len(header)) + '\n'
-        z.writestr('depth_mm.npy', b'\x93NUMPY\x01\x00' + struct.pack('<H', len(header)) + header.encode('latin1')
-                   + value_mm.to_bytes(2, 'little') * (400 * 640))
-    return buf.getvalue()
-
-
-@dataclasses.dataclass
-class FakeBundle:
-    data: bytes
-    rgb_seq: int = 1
-    t_host: float = 0.0
-
-
-SETUP = {'left_k': [400.0, 400.0, 320.0, 200.0], 'room_from_left': [[[1, 0, 0], [0, 0, 1], [0, -1, 0]], [0, 0, 1.4]], 'home': 'den'}
-
-
-@unittest.skipUnless(sc.VENV_PY.is_file(), "needs the detector's venv")
-class Link(unittest.TestCase):
-    def detector(self, rows=None):
-        argv, log = stub_argv(rows)
-        worker = perceive.DetectorWorker(argv, log, start_timeout_s=60)
-        self.addCleanup(worker.close)
-        return worker
-
-    def wait_idle(self, link, timeout=10):
-        end = time.monotonic() + timeout
-        while link.busy and time.monotonic() < end:
-            time.sleep(0.01)
-        self.assertFalse(link.busy)
-
-    def test_the_body_runs_in_the_detectors_process_between_frames(self):
-        worker = self.detector()
-        frames = []
-        link = body_link.BodyLink(worker, setup=SETUP, on_frame=frames.append)
-        self.assertTrue(link.alive, link.stopped)
-        reply = worker.detect(FakeBundle(bundle()), 0.0)          # the row: KeyError here (no rows), and the bundle is kept
-        self.assertEqual(reply, {'id': 1, 'error': 'KeyError'})
-        self.assertTrue(link.submit(worker.next_id, now=0.0, capture_ts=1.0, seq=1, person=None))
-        self.assertFalse(link.submit(worker.next_id, now=0.0, capture_ts=1.0, seq=1, person=None), 'never two in flight')
-        self.assertEqual(link.counts['skipped_busy'], 1)
-        self.wait_idle(link)
-        self.assertEqual(link.why, 'nobody tracked')
-        reply = worker.detect(FakeBundle(bundle(), rgb_seq=2), 0.0)   # rows still come back in turn after a body reply
-        self.assertEqual(reply['id'], 2)
-        person = {'track_id': 'e1-trk-1', 'xy_m': [0, 2.5], 'joints': {}}
-        self.assertTrue(link.submit(worker.next_id, now=0.5, capture_ts=1.5, seq=3, person=person))
-        self.wait_idle(link)
-        self.assertEqual(link.why, 'learning the empty room')
-        self.assertFalse(link.submit(worker.next_id, now=0.6, capture_ts=1.6, seq=4, person=person), 'at most about 3 body frames a second')
-        self.assertEqual(link.counts['skipped_rate'], 1)
-        self.assertTrue(link.submit(worker.next_id - 1, now=1.0, capture_ts=2.0, seq=5, person=person))
-        self.wait_idle(link)
-        self.assertEqual(link.why, 'frame not kept', 'only the frame just detected')
-        self.assertEqual(frames, [])
-
-    def test_a_body_that_wont_set_up_turns_only_the_body_off(self):
-        worker = self.detector()
-        link = body_link.BodyLink(worker, setup={'left_k': 'nonsense'}, on_frame=lambda f: None)
-        self.assertFalse(link.alive)
-        self.assertIn("didn't set up", link.stopped)
-        self.assertFalse(link.submit(worker.next_id, now=0, capture_ts=0, seq=1, person=None))
-        self.assertEqual(worker.detect(FakeBundle(bundle()), 0.0)['id'], 1, 'the detector goes on')
-
-    def test_a_detector_that_stops_turns_the_body_off(self):
-        worker = self.detector()
-        link = body_link.BodyLink(worker, setup=SETUP, on_frame=lambda f: None)
-        self.assertTrue(link.alive)
-        worker.proc.kill()
-        worker.proc.wait(10)
-        end = time.monotonic() + 10
-        while link.alive and time.monotonic() < end:
-            time.sleep(0.01)
-        self.assertFalse(link.alive)
-        self.assertEqual(link.stopped, 'the detector process stopped')
-
-
-def _renders():
-    try:
-        import test_live as tl
-        return tl if tl.HAVE_SET else None
-    except Exception:
-        return None
-
-
-TL = _renders()
-EMPTY_TAKE, READING_TAKE = '84c26951a000', '85b080a5815b'   # the den-sim set's "Nobody there" and "Reading on the couch"
-
-
-@unittest.skipUnless(TL and sc.VENV_PY.is_file() and (TL.SET / EMPTY_TAKE / 'detections.jsonl').is_file(),
-                     "needs a prepared den-sim set and the detector's venv")
-class OnRenders(unittest.TestCase):
-    """The real perceiver (den-observe, den-track), the real detector link and the real body step on the den simulation's
-    renders, through the registration fit on them: the empty den first, then someone reading on the couch."""
-
-    def test_the_empty_den_is_learned_then_the_reader_is_a_body_where_their_marker_is(self):
-        import array
-        import base64
-        import statistics
-        tools = perceive.Tools(sc.archive(TL.TOOLS, 'observe'), sc.archive(TL.TOOLS, 'track'))
-        sys.path.insert(0, str(tools.observe_tree / 'tools' / 'den-take'))
-        copy = perceive.track_method_copy(tools, [-3.0, -3.5, 3.0, 2.5], TL.scratch('den-live-method-'))
-        empty, reading = TL.SET / EMPTY_TAKE, TL.SET / READING_TAKE
-        # One file of rows for both takes, as one camera session: the reading take's RGB sequence numbers moved on by
-        # SHIFT, since the two renders count from the same start.
-        SHIFT = 100_000
-        lines = (empty / 'detections.jsonl').read_text(encoding='utf-8').splitlines()
-        for line in (reading / 'detections.jsonl').read_text(encoding='utf-8').splitlines():
-            if line.strip():
-                row = json.loads(line)
-                row['frame']['rgb_seq'] += SHIFT
-                lines.append(json.dumps(row))
-        rows = Path(tempfile.mkdtemp(prefix='den-live-rows-')) / 'detections.jsonl'
-        rows.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-        first = TL.bundles(empty, session='s1')
-        second = [dataclasses.replace(b, rgb_seq=b.rgb_seq + SHIFT) for b in TL.bundles(reading, session='s1')]
-        argv, log = stub_argv(rows)
-        worker = perceive.DetectorWorker(argv, log, start_timeout_s=60)
-        self.addCleanup(worker.close)
-        clock = {'now': 0.0}
-        p = perceive.Perceiver(tools, room_model_path=TL.FIT / 'room-model.jsonl', camera_id='den-virtual', max_error_bound_m=0.10,
-                               track_method_path=copy, detector=worker, home='den', require_source_correction=False,
-                               now=lambda: 1_800_000_000.0 + clock['now'])
-        camera = p.camera
-        rotation, translation = camera.room_from_left
-        frames = []
-        link = body_link.BodyLink(worker, setup={'left_k': list(camera.rig.left_k[:4]), 'room_from_left': [[list(r) for r in rotation], list(translation)],
-                                                 'home': 'den'}, on_frame=frames.append)
-        self.assertTrue(link.alive, link.stopped)
-        p.body = link
-        events, times = [], []
-
-        def run(take_frames, shift):
-            for b in take_frames:
-                b = dataclasses.replace(b, t_host=b.t_host + shift, arrival_mono=b.arrival_mono + shift)
-                clock['now'] = b.t_host + 0.35
-                event = p.process(b, {'status': 'ok', 'why': None}, b.t_host + 0.35)
-                if event is not None:
-                    events.append(event)
-                end = time.monotonic() + 10
-                while link.busy and time.monotonic() < end:   # here, one frame at a time, so the body never skips for being busy
-                    time.sleep(0.005)
-                if link.compute_s is not None:
-                    times.append(link.compute_s)
-        run(first, 0.0)
-        self.assertGreater(first[-1].t_host - first[0].t_host, 8.0, 'the empty take is long enough to learn the room')
-        self.assertEqual(link.why, 'nobody tracked')
-        run(second, first[-1].t_host - second[0].t_host + 0.2)
-        self.assertGreater(len(frames), 5, (link.counts, link.why))
-        last = frames[-1]
-        self.assertEqual(last['schema'], 'den-live-body-1')
-        mm = array.array('h', base64.b64decode(last['points']['position_mm']))
-        if sys.byteorder != 'little':
-            mm.byteswap()
-        kind = base64.b64decode(last['points']['kind'])
-        pts = [(mm[3 * i] / 1000, mm[3 * i + 1] / 1000, mm[3 * i + 2] / 1000) for i in range(len(kind))]
-        body = [q for q, k in zip(pts, kind) if k <= 1]
-        marker = events[-1]['tracks'][0]['xy_m']
-        centre = (statistics.median(q[0] for q in body), statistics.median(q[1] for q in body))
-        self.assertLess(math.dist(centre, marker), 0.35, (centre, marker))
-        heights = [q[2] for q in body]
-        self.assertGreater(max(heights) - min(heights), 0.5, 'a seated reader spans more than half a metre')
-        self.assertGreater(max(heights), 0.9, 'up to their head')
-        self.assertEqual(last['track_id'], events[-1]['tracks'][0]['track_id'])
-        size = len(json.dumps(last, separators=(',', ':')))
-        self.assertLess(size, 150_000, 'a frame stays small enough for a phone')
-        print('\n  on renders: %d body frames; last %d points (%d front/back, %d guessed, %d held), %d KB; joints %d; body step %.0f ms median, %.0f ms max'
-              % (len(frames), len(kind), len(body), kind.count(3), kind.count(5), size // 1024, len(last.get('joints') or []),
-                 1000 * statistics.median(times), 1000 * max(times)))
-
-
-if __name__ == '__main__':
-    unittest.main(verbosity=1)
+if __name__ == "__main__":
+    unittest.main()

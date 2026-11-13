@@ -10,7 +10,7 @@ their own checks, the weights held to requirements.lock's digests, the venv held
 venv's models folder, or --models (the LA service's, where install.sh puts them). With stdin closed at once it loads,
 says ready and exits 0: that's install.sh's check of the venv and the weights.
 
-In: for each frame, a 4-byte big-endian length and a JSON header {id, rgb_seq, t_host, delay_s}, then a 4-byte length
+In: for each frame, a 4-byte big-endian length and a JSON header {id, rgb_seq, t_host, delay_s, frame_key?}, then a 4-byte length
 and the bundle's bytes. delay_s is how long after capture the loop handed the frame over, so available_ts counts
 arrival and waiting plus compute (plan L3), not compute only.
 Out: one JSON line per frame: {id, row, compute_s, luma} (row: den-detections-1, as den-detect writes it; luma: the
@@ -18,9 +18,9 @@ mean of the frame's Y plane, 0 to 255, for the stream's too-dark rule) or {id, e
 line is {ready, load_ms, warm_ms}, or {refused} and exit 2.
 
 The live body (body.py's BodyChannel) runs here too, so a frame crosses the pipe once and numpy loads once. A header
-with a kind of setup_body or body comes alone, with no bundle after it: setup_body sets the body up once; body asks for
-the body of the frame this process detected last (it keeps that bundle), with the person the loop tracked on it. Their
-replies carry body_ready, body_refused or body_id, never id, so the loop tells them apart from detection rows.
+with a kind of setup_body or body comes alone, with no bundle after it: setup_body binds calibration; body asks for
+the body of the last bundle by both detection id and exact pipeline frame key. Their replies carry body_ready,
+body_refused or body_id, never id, so the loop tells them apart from detection rows.
 
 The Qwen ask's stills come from here too (stills.py): this process keeps the last few seconds of frames by their
 detection id, and a header of kind stills, with no bundle after it, asks for some of them as JPEGs. The reply carries
@@ -133,12 +133,19 @@ def main(argv=None):
                     import body
                     bodies = body.BodyChannel()
                 except Exception as exc:  # a type name only
-                    say({"body_refused": type(exc).__name__})
+                    if header.get("kind") == "setup_body":
+                        say({"body_refused": type(exc).__name__, "binding": (header.get("setup") or {}).get("binding")})
+                    else:
+                        say({"body_id": header.get("id"), "request_id": header.get("request_id"),
+                             "frame_key": header.get("frame_key"), "binding": header.get("binding"),
+                             "error": type(exc).__name__})
                     continue
             say(bodies.handle(header, kept))
             continue
-        kept = (header.get("id"), data)
-        ring.keep(header.get("id"), data)
+        kept = (header.get("id"), data, header.get("frame_key"))
+        identity = {"frame_key": header["frame_key"]} if "frame_key" in header else {}
+        if identity:
+            ring.keep(header["frame_key"], data)
         try:
             _meta, nv12 = detector.check.read_bundle(data, with_rgb=True)
             plane = np.frombuffer(nv12, np.uint8).reshape(detect.HEIGHT * 3 // 2, detect.WIDTH)
@@ -149,9 +156,9 @@ def main(argv=None):
             row = detector.row_of(result, capture_ts=t, available_ts=t + float(header["delay_s"]) + compute_s, rgb_seq=seq,
                                   width=detect.WIDTH, height=detect.HEIGHT, boxes_version="yolo26s-8.4.0",
                                   keypoints_version=detector.pose.manifest["model_version"])
-            say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1)})
+            say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1), **identity})
         except Exception as exc:  # one bad frame is a reply, not the end; a type name only, never its text
-            say({"id": header.get("id"), "error": type(exc).__name__})
+            say({"id": header.get("id"), "error": type(exc).__name__, **identity})
 
 
 if __name__ == "__main__":

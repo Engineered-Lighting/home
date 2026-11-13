@@ -59,7 +59,8 @@ APP = (LABELS_APP if (LABELS_APP / "app" / "src" / "home-den-labels-view.mjs").i
 PAGE_PORT, STREAM_PORT = 18190, 8111
 STATUS_EVERY_S = 10.0
 CAMERA_ID = "den-oak"
-TREES = ("observe", "track", "register")   # the pinned trees the loop loads: den-observe and den-take, den-track, den-register
+TREES = ("observe", "track", "register", "coordinator")   # the pinned trees the loop loads: den-observe and den-take,
+# den-track, den-register, and the den lighting coordinator's core (den-core and the lighting brain's aim)
 
 
 class Refusal(Stop):
@@ -198,7 +199,7 @@ def den_take(observe_tree):
 
 def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id=CAMERA_ID, page_room="real",
         open_page=webbrowser.open, until=None, status_every_s=STATUS_EVERY_S, floor=None, require_correction=None,
-        page_extra=(), page_port=PAGE_PORT, stream_port=STREAM_PORT):
+        page_extra=(), page_port=PAGE_PORT, stream_port=STREAM_PORT, body_input=None):
     trees = {key: sc.archive(root / "tools", key) for key in TREES}
     if not Path(room_model).is_file():
         raise Stop("no registration yet: paste step 2's line (register_now.py) first")
@@ -230,7 +231,7 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
                                 "--state", str(root / "state" / "detector")],
                  stream_port=stream_port, busy="is another run_local.py still open?", until=until,
                  status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page,
-                 labels=room_labels.Store(root / "private" / "labels", say=say))
+                 labels=room_labels.Store(root / "private" / "labels", say=say), body_input=body_input)
 
 
 def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="real", page_extra=(), page_port=PAGE_PORT,
@@ -241,7 +242,7 @@ def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="
         raise Stop("the Home checkout with the Labels tool isn't at %s" % app)
     store = room_labels.Store(Path(root) / "private" / "labels", say=say)
     try:
-        out = people_stream.PeopleStream(port=stream_port, labels=store)
+        out = people_stream.PeopleStream(port=stream_port, labels=store, body_available=False)
     except OSError:
         raise Stop("port %d is busy: is another run_local.py still open?" % stream_port) from None
     out.start()
@@ -261,36 +262,22 @@ def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="
         out.close()
 
 
-def start_body(perceiver, out, detector, revision):
-    """The live body, set up in the detector's process with the registration's rectified-left intrinsics and
-    room_from_camera. Its frames go out on the stream's /body path, tagged with the registration and scan revision the
-    markers carry. One that doesn't set up is said once; the markers go on without it."""
-    camera = perceiver.camera
-    rotation, translation = camera.room_from_left
-    setup = {"left_k": list(camera.rig.left_k[:4]), "room_from_left": [[list(r) for r in rotation], list(translation)], "home": perceiver.home}
-    scope = {"transform_id": camera.transform_id, "content_revision": revision}
-    link = body_link.BodyLink(detector, setup=setup, on_frame=lambda frame: out.publish_body({**frame, **scope}))
-    if link.stopped:
-        say("The live body is off: %s. The markers go on." % link.stopped)
-        link.close()
-        return None
+def start_body(perceiver, out, detector, body_input):
+    """Attach the link now. Its first qualified bundle schedules worker setup without a wait."""
+    link = body_link.BodyLink(detector, stream=out)
     perceiver.body = link
-    say("The live body is on, in the detector's process. It learns the empty room once the den has been empty for a few seconds.")
+    perceiver.body_provider = body_input
     return link
 
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          labels=None, asks=None):
-    """The live loop, shared by run_local (this PC, with the page) and run_service (the LA service, without it). It keeps
-    only the tracker's method copy and the detector's log in state. picked_on(transform_id) gives the scan revision the
-    registration was picked on, or None; after_start() runs once the loop is up and returns its own cleanup. labels is
-    the den's labels Store, served on the stream's labels path and giving each marker its near phrase.
-    asks(detector) -> (ask.Asker, its cleanup), when given, is the Qwen ask (the LA service's, when its settings say so);
-    with labels, the ask's near_line hook gets their line for the asked person (room_labels.near_line)."""
+          labels=None, asks=None, coordinator=None, body_input=None):
+    """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None
+    registered_on = None
     if floor is None:
         bounds, revision = scan_floor(packs, site)
         say("Floor: your scan's walkable floor (pack %s), padded %g m on every side." % (revision, perceive.FLOOR_PAD_M))
@@ -315,7 +302,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
     perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits
     say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
                                                           "required" if perceiver.require_source_correction else "not required"))
-    detector = out = src = loop = cleanup = link = asker = None
+    detector = out = src = loop = cleanup = link = asker = lighting = None
     try:
         say("Starting the detector (about half a minute)...")
         try:
@@ -323,12 +310,13 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
         except perceive.Stop as exc:
             raise Stop(str(exc)) from None
         perceiver.detector = detector
+        body_available = bool(body and body_input is not None and revision is not None and registered_on == revision)
         try:
-            out = people_stream.PeopleStream(port=stream_port, labels=labels)
+            out = people_stream.PeopleStream(port=stream_port, labels=labels, body_available=body_available)
         except OSError:
             raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
-        if body:
-            link = start_body(perceiver, out, detector, revision)
+        if body_available:
+            link = start_body(perceiver, out, detector, body_input)
         if asks is not None:
             try:
                 asker = asks(detector)   # (asker, stop), or None when the ask can't start
@@ -340,7 +328,18 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                 asker[0].near_line = room_labels.near_line(labels, revision)
         mailbox = source.Mailbox()
         src = source.CameraSource(take, camera, mailbox)
-        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=asker[0].observe if asker else None)
+        if coordinator is not None:
+            try:
+                lighting = coordinator()   # (service, stop), or None when it can't start
+            except Exception as exc:  # the coordinator's failure never stops the markers; a type name only
+                say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
+                lighting = None
+            if lighting is not None:
+                lighting[0].site = site
+                lighting[0].connect(out.publish_spot)
+                out.routes.update(lighting[0].routes())
+        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None)
+        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observer)
         out.start()
         src.start()
         loop.start()
@@ -359,7 +358,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
         return {"counts": dict(perceiver.counts), "sessions": perceiver.sessions, "latest": out.latest, "drops": mailbox.dropped,
                 "received": mailbox.received, "status": status_line(perceiver, out.latest),
                 "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped},
-                "asks": None if asker is None else dict(asker[0].counts)}
+                "asks": None if asker is None else dict(asker[0].counts),
+                "coordinator": None if lighting is None else dict(lighting[0].counts)}
     finally:
         for thread in (loop, src):
             if thread is not None:
@@ -369,6 +369,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                 thread.join(5)
         if asker is not None:
             asker[1]()
+        if lighting is not None:
+            lighting[1]()
         if detector is not None:
             detector.close()
         if link is not None:
@@ -377,6 +379,25 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
             out.close()
         if cleanup is not None:
             cleanup()
+
+
+def evidence_observer(asker, lighting):
+    """Deliver current typed tracking before any reply tied to that snapshot."""
+    def observe(event, snapshot):
+        if asker is not None:
+            try:
+                event = asker.observe(event, snapshot)
+            finally:
+                if lighting is not None:
+                    current = asker.snapshot
+                    lighting.offer_snapshot(current if current is not None and current.seq == snapshot.seq else snapshot)
+            reply = asker.pop_reply()
+            if lighting is not None and reply is not None:
+                lighting.offer_inference(reply)
+        elif lighting is not None:
+            lighting.offer_snapshot(snapshot)
+        return event
+    return observe
 
 
 def main(argv=None, *, root=None, camera_url=None, token_file=None, venv=sc.VENV_PY, console=sc.has_console, **kw):

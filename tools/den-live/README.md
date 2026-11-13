@@ -67,6 +67,10 @@ The markers draw in your scan's frame, so the camera has to be placed in it. Thi
 python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\register_now.py
 ```
 
+This line is the only registration command. It registers against this PC's active scan, v4, the scan of record. Add
+nothing to it but `--again` (below). Don't run any other registration script you may have been sent, such as a wrapper
+for the v3 scan: it would register against the wrong scan, and den-live would refuse the result.
+
 It needs the camera token (step 1's), Node on the PATH (the den simulation needs it too), and Python with numpy and
 Pillow. Before you paste: set the room light as for an evening's reading, keep the furniture where it is, don't touch
 the camera or its mount, and take two fresh tapes, as on 2026-11-11.
@@ -121,7 +125,8 @@ That keeps the take, its tapes, your clicks and your picks, opens both pages aga
 with named features, try that at most twice. A paste without `--again` asks for the tapes again, records a new take and
 starts the clicks and picks afresh. If the held-out check couldn't run, `--again` with nothing changed keeps the
 registration and takes the held-out take. After a pass, `--again` with nothing changed just says it's qualified
-already. `--packs <folder>` uses another content-pack folder for the scan page and the held-out check.
+already. `--packs <folder>` uses another content-pack folder for the scan page and the held-out check; it's for tests
+and agents, never for your registration session.
 
 If the distance check names most features and says every feature fits with their own scale, it's the depth scale or a
 tape, which re-clicking won't fix: check the tapes, then tell an agent.

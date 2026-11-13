@@ -253,42 +253,83 @@ class PersonStateLog(unittest.TestCase):
         self.assertNotIn('too dark', text)
         self.assertNotIn('camera-session', text)
 
-    def test_a_days_files_stop_at_the_cap_and_the_status_line_says_so(self):
-        """asks.jsonl and person-state.jsonl together stop at the day's cap: a line that would pass it is skipped and
-        counted, by either writer, and the status line says so. The next UTC day starts afresh. The real cap is 300 MB."""
+    def test_each_day_file_stops_at_its_own_cap_and_the_status_line_names_it(self):
+        """asks.jsonl and person-state.jsonl each stop at their own day's cap: a line that would pass it is skipped and
+        counted for that UTC day, and the status line says so, naming the file. Person state filling its share never
+        stops an ask. The next UTC day starts afresh, its counts too. The real caps are 50 MB and 300 MB."""
         import ask
         import person_state
-        self.assertEqual(ask.DAY_CAP_BYTES, 300 * 1024 * 1024)
+        self.assertEqual((ask.AskLog.CAP_BYTES, person_state.CAP_BYTES), (50 * 1024 * 1024, 300 * 1024 * 1024))
+        self.assertEqual(ask.AskLog(scratch('x-')).cap, 50 * 1024 * 1024, "the ask's own log, as the Asker makes it")
+        self.assertEqual(person_state.Log(scratch('x-')).out.cap, 300 * 1024 * 1024)
         state, wall = scratch('den-live-person-state-'), [1_800_000_000.0]
-        cap = 4000
-        log = person_state.Log(state, clock=lambda: 500.0, wall=lambda: wall[0], cap=cap)
-        asks = ask.AskLog(state, cap=cap)
+        log = person_state.Log(state, clock=lambda: 500.0, wall=lambda: wall[0], cap=4000)
+        asks = ask.AskLog(state, cap=2500, wall=lambda: wall[0])
         day = state / 'days' / '2027-01-15'
         self.assertTrue(asks.write({'ask': 1}, wall[0]))
         seq = 0
         while not log.skipped:
             seq += 1
             log.write(self.snapshot(seq=seq))
-        files = lambda folder: sum((folder / name).stat().st_size for name in ask.DAY_FILES)
-        self.assertLessEqual(files(day), cap)
-        self.assertGreater(files(day), cap - 1000, 'it filled the day, a line short at most')
+        size = lambda name: (day / name).stat().st_size
+        self.assertLessEqual(size('person-state.jsonl'), 4000)
+        self.assertGreater(size('person-state.jsonl'), 4000 - 1000, 'it filled its day, a line short at most')
         kept = (day / 'person-state.jsonl').read_text(encoding='utf-8').splitlines()
         self.assertEqual(len(kept), seq, 'the anchor and every snapshot before the cap')
         log.write(self.snapshot(seq=seq + 1))
-        self.assertFalse(asks.write({'ask': 2, 'pad': 'x' * 1000}, wall[0]), 'the ask log shares the cap')
+        self.assertTrue(asks.write({'ask': 2, 'pad': 'x' * 1000}, wall[0]), 'person state filled its own share only')
+        self.assertTrue(asks.write({'ask': 3, 'pad': 'x' * 1000}, wall[0]))
+        self.assertFalse(asks.write({'ask': 4, 'pad': 'x' * 1000}, wall[0]), "the ask log's own cap")
         self.assertEqual((log.skipped, asks.skipped), (2, 1))
-        self.assertLessEqual(files(day), cap)
+        self.assertLessEqual(size('asks.jsonl'), 2500)
 
         class P:
             counts = {'frames': 40, 'refused_depth': 0, 'detector_errors': 0, 'unreadable': 0, 'out_of_order': 0, 'expired': 0}
         line = rl.status_line(P(), {'camera': {'status': 'ok'}, 'health': {}, 'tracks': []}, [log, asks])
-        self.assertTrue(line.endswith("| 40 frames, 3 lines not kept: the day's files are at their cap"), line)
+        self.assertTrue(line.endswith("| 40 frames, 2 lines not kept today: the day's person-state.jsonl is at its cap, "
+                                      "1 line not kept today: the day's asks.jsonl is at its cap"), line)
         self.assertNotIn('not kept', rl.status_line(P(), {'camera': {'status': 'ok'}}, [person_state.Log(scratch('x-'))]))
-        wall[0] += 86400   # the next UTC day: its own files, its own anchor
+        wall[0] += 86400   # the next UTC day: its own files, its own anchor, its own counts
+        self.assertEqual((log.skipped, asks.skipped), (0, 0), 'the counts are per UTC day')
+        self.assertNotIn('not kept', rl.status_line(P(), {'camera': {'status': 'ok'}}, [log, asks]))
         log.write(self.snapshot(seq=seq + 2))
         lines = [json.loads(text) for text in (state / 'days' / '2027-01-16' / 'person-state.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertEqual(['anchor' in line for line in lines], [True, False])
-        self.assertEqual(log.skipped, 2)
+        self.assertTrue(asks.write({'ask': 5, 'pad': 'x' * 1000}, wall[0]))
+        self.assertEqual((log.skipped, asks.skipped), (0, 0))
+
+    def test_with_nobody_in_view_about_a_line_a_second_and_any_change_at_once(self):
+        """An empty den at 4-5 frames a second wrote about 200 MB of person state a day, so a few person-hours filled the
+        day. With nobody in view a line goes at most once in each second of the monotonic clock; every snapshot with
+        someone in view, and any change of presence or status, goes at once."""
+        import dataclasses
+        import person_state
+        state, mono = scratch('den-live-person-state-'), [1000.0]
+        log = person_state.Log(state, clock=lambda: mono[0], wall=lambda: 1_800_000_000.0 + mono[0])
+
+        def nobody(seq, **change):
+            return dataclasses.replace(self.snapshot(seq=seq), **{'tracks': (), 'presence': 'empty', 'eligible_track_id': None,
+                                                                    **change})
+        path = state / 'days' / '2027-01-15' / 'person-state.jsonl'
+        seqs = lambda: [line['seq'] for line in map(json.loads, path.read_text(encoding='utf-8').splitlines()) if 'anchor' not in line]
+        for seq in range(1, 301):   # a minute of an empty den at 5 frames a second
+            log.write(nobody(seq))
+            mono[0] += 0.2
+        self.assertIn(len(seqs()), (60, 61), 'about one line a second')
+        self.assertEqual(log.thinned, 300 - len(seqs()))
+        written, mono[0] = len(seqs()), 2000.0
+        log.write(nobody(301))                         # this second's line
+        log.write(nobody(302))                         # nothing changed, the same second: thinned
+        log.write(nobody(303, presence='unknown'))     # the same second, presence changed: at once
+        log.write(self.snapshot(seq=304))              # someone in view: every snapshot
+        log.write(self.snapshot(seq=305))
+        log.write(nobody(306))                         # they left
+        log.write(nobody(307, status='stale'))         # status changed
+        log.write(nobody(308, status='stale'))         # thinned
+        self.assertEqual(seqs()[written:], [301, 303, 304, 305, 306, 307])
+        mono[0] += 1.0
+        log.write(nobody(309, status='stale'))
+        self.assertEqual(seqs()[-1], 309, 'the next second')
 
     def test_a_log_that_cant_write_never_stops_the_loop(self):
         import person_state

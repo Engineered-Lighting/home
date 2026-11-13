@@ -173,33 +173,41 @@ def local_label(wall, zone=None):
 class AskLog:
     """One line per ask, words and numbers only, in <state>/days/<UTC date>/asks.jsonl; days past RETENTION_DAYS go.
     name: another day file beside it, kept the same way (person_state.py's person-state.jsonl).
-    A day's DAY_FILES together stop at cap bytes: a line that would pass it isn't written, and skipped counts it (the
-    status line says so). Both logs measure the same folder, so the cap holds across them."""
+    Each day file has its own cap, cap bytes (CAP_BYTES for the asks, 50 MB): a line that would pass it isn't written,
+    and skipped counts it for that UTC day (the status line says so, naming the file). One file filling its day never
+    stops another: a busy day's person state leaves the asks theirs."""
 
-    def __init__(self, state, name="asks.jsonl", cap=DAY_CAP_BYTES):
+    CAP_BYTES = 50 * 1024 * 1024   # a UTC day's asks.jsonl; person_state.py sets its own file's
+
+    def __init__(self, state, name="asks.jsonl", cap=None, wall=time.time):
         self.days, self.today, self.name = Path(state) / "days", None, name
-        self.cap, self.skipped = cap, 0
+        self.cap = self.CAP_BYTES if cap is None else cap
+        self.wall = wall   # what today is, for skipped
+        self.skipped_day, self.skipped_lines = None, 0
         self.lock = threading.Lock()
 
-    @staticmethod
-    def day_bytes(folder):
-        total = 0
-        for name in DAY_FILES:
-            try:
-                total += (folder / name).stat().st_size
-            except FileNotFoundError:
-                pass
-        return total
+    @property
+    def skipped(self):
+        """Lines not kept today (UTC) at the cap: the count starts again with each day."""
+        with self.lock:
+            today = time.strftime("%Y-%m-%d", time.gmtime(self.wall()))
+            return self.skipped_lines if self.skipped_day == today else 0
 
     def write(self, line, wall):
-        """True once written; False when the day's files are at the cap (counted in skipped)."""
+        """True once written; False when the day's file is at its cap (counted in skipped)."""
         text = json.dumps(line, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"   # ASCII: chars are bytes
         day = time.strftime("%Y-%m-%d", time.gmtime(wall))
         with self.lock:
             folder = self.days / day
             folder.mkdir(parents=True, exist_ok=True)
-            if self.day_bytes(folder) + len(text) > self.cap:
-                self.skipped += 1
+            try:
+                size = (folder / self.name).stat().st_size
+            except FileNotFoundError:
+                size = 0
+            if size + len(text) > self.cap:
+                if self.skipped_day != day:
+                    self.skipped_day, self.skipped_lines = day, 0
+                self.skipped_lines += 1
                 return False
             with open(folder / self.name, "a", encoding="utf-8", newline="\n") as out:
                 out.write(text)

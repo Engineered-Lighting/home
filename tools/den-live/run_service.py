@@ -17,9 +17,9 @@ Its inputs, all from systemd:
   another factor or calibration hash is refused, and the status line says to paste register_now.py without --again,
   which records a new take, then install_la.py again).
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
-  its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot,
-  numbers only, with a mono-and-wall anchor; person_state.py), beside the ask's asks.jsonl, both kept 14 days. No
-  frames and no stills.
+  its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot with
+  someone in view, about one a second with nobody, numbers only, with a mono-and-wall anchor; person_state.py), beside
+  the ask's asks.jsonl, both kept 14 days, each under its own day's cap (300 MB and 50 MB). No frames and no stills.
 - --config, the settings file install.sh writes (/etc/den-live/config.json): camera_url, content_packs (the gateway's
   content-pack folder), site (the den's site, as the gateway names it), venv_python, models and stream_port.
 

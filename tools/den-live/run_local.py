@@ -146,15 +146,17 @@ def stop_page(proc):
 
 def status_line(perceiver, latest, logs=()):
     """One line of words and counts from the newest event and the loop's own counters: never a position. logs: the day
-    files' writers (person_state.Log, ask.AskLog); lines they skipped at the day's cap are counted at the end."""
+    files' writers (person_state.Log, ask.AskLog), each with its own cap; the lines one skipped at its cap today (UTC)
+    are counted at the end, naming its file."""
     event = latest or {}
     health, camera, c = event.get("health") or {}, event.get("camera") or {}, perceiver.counts
     lag = health.get("lag_s_median")
-    skipped = sum(log.skipped for log in logs)
+    skipped = [(log.skipped, log.name) for log in logs]
     problems = ", ".join([*("%d %s" % (c[key], words) for key, words in (
         ("refused_depth", "refused for depth"), ("detector_errors", "detector errors"), ("unreadable", "unreadable"),
         ("out_of_order", "out of order"), ("expired", "too late")) if c[key]),
-        *(["%d lines not kept: the day's files are at their cap" % skipped] if skipped else [])])
+        *("%d %s not kept today: the day's %s is at its cap" % (count, "line" if count == 1 else "lines", name)
+          for count, name in skipped if count)])
     qwen = health.get("qwen")
     asks = "" if not qwen else " | Qwen %s%s, %d asks a minute" % (qwen["state"], (": " + qwen["why"]) if qwen.get("why") else "",
                                                                  qwen.get("asks_per_min") or 0)
@@ -369,8 +371,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
     starts nothing. The camera's correction its take was made on goes to the Perceiver, which refuses any frame with
     another, saying to paste register_now.py without --again (and, with reinstall, the LA service's, install_la.py
     again after); with the correction required, a receipt that names none is refused here.
-    person_log: a state folder whose days/ get each snapshot as den-person-state-1 (person_state.py), beside the ask's
-    log; None keeps nothing, as run_local.py does."""
+    person_log: a state folder whose days/ get the snapshots as den-person-state-1 (person_state.py: each with someone
+    in view, about one a second with nobody), beside the ask's log; None keeps nothing, as run_local.py does."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None

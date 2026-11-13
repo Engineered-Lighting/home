@@ -13,7 +13,12 @@ den-live's person state (step 02-3) is steadier and has one answer for seated.
 - `seated {state, since_mono, basis}` is worked out once per track per frame with the pinned rule and published on the
   track. It starts again with the association revision. The Qwen ask and the lighting preview read it instead of each
   working it out, so the ask's stills and the preview's episode start at the same instant.
-- The LA service logs each snapshot as `den-person-state-1` in `days/<UTC date>/person-state.jsonl`, beside the ask's
-  log: numbers only, with a mono-and-wall anchor, kept 14 days.
+- The LA service logs snapshots as `den-person-state-1` in `days/<UTC date>/person-state.jsonl`, beside the ask's
+  log: numbers only, with a mono-and-wall anchor, kept 14 days. Every snapshot with someone in view goes in; with
+  nobody in view, about one a second, plus any change of status or presence at once, so an empty den's day is about
+  50 MB rather than about 200 MB.
+- `person-state.jsonl` and the ask's `asks.jsonl` each have their own day's cap, 300 MB and 50 MB, so a busy day's
+  person state no longer stops the asks. The status line counts the lines not kept today, naming the file, and the
+  count starts again each UTC day.
 - Each marker in the people stream (`den-live-people-1`) adds `service_run_id`, `camera_epoch` and
   `association_revision`.

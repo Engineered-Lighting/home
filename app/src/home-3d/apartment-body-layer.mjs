@@ -1,7 +1,8 @@
 /* The live body in the apartment view, drawn in the owner-approved "Recording" look (2026-11-11): a projected memory in
  * warm light. Fine hot particles with interference bands, an analogue flicker and a rare glitch band, hotter where the
  * surface turns away and where it moves, two trailing frames, a soft glow, motes in the air and a faint floor pool.
- * - Provenance shows: back fill is a little dimmer, remembered limbs dimmer still, guessed limbs faint and flickering.
+ * - Provenance shows: back fill is a little dimmer, remembered limbs dimmer still, guessed limbs a little dimmer, never
+ *   flickering (owner, 2026-11-12: guessed legs that blink read as bouncing, not as a guess).
  * - The head is drawn thinner (no face: the data is depth only).
  * - What the person holds is part of the house, not of the person: steady points in Home's accent blue (#4D9CFF), no
  *   glow, flicker or trails.
@@ -13,7 +14,9 @@ import * as THREE from 'three';
 import { KIND, decodeBodyFrame, drawBuffers, mergeFrames, mergeJoints, zoomRatio, MAX_POINTS } from './apartment-body-frame.mjs';
 
 export const RECORDING = Object.freeze({ tint: [1.0, 0.5, 0.16], core: [1.0, 0.88, 0.62], object: [0x4d / 255, 0x9c / 255, 0xff / 255],
-    world: 0.0105, minPx: 1.1, gain: 1.15, glowWorld: 0.05, glowGain: 0.16, motes: 22, pool: 0.14 });
+    // No per-dot glow (glowGain 0): the design's glow was one bloom over the figure, and a halo behind every dot read
+    // as haze on each dot (owner, 2026-11-12). Gain and trails as the design had them.
+    world: 0.0105, minPx: 1.1, gain: 0.9, glowWorld: 0.05, glowGain: 0, trails: [0.4, 0.18], motes: 22, pool: 0.14 });
 const CAPACITY = MAX_POINTS * 2, GONE_S = 2.5, FADE_S = 0.6;
 
 const VERT = /* glsl */`
@@ -51,11 +54,11 @@ bool thinHead() { return vHead > 0.35 && vRand > 0.45; }
 const HOLO = COMMON + /* glsl */`
 void main() {
   float d = length(gl_PointCoord - vec2(0.5)); if (d > 0.5 || thinHead() || isObj() > 0.5) discard;
-  float g = isGuess(); if (g > 0.5 && hash(vec2(floor(uTime * 9.0), vRand * 91.0)) > 0.55) discard;
+  float g = isGuess();
   float core = exp(-d * d * 18.0);
   float band = 0.62 + 0.38 * pow(0.5 + 0.5 * sin(vWz * 150.0 + uTime * 2.2), 3.0);
   float e = (0.75 + 1.3 * vRim * vRim * (1.0 - vHead) + 1.1 * vMotion) * band * uFlicker * uGain * (1.0 - 0.3 * vHead);
-  e *= 1.0 - 0.55 * g - 0.2 * isMem() - 0.35 * isBack();
+  e *= 1.0 - 0.3 * g - 0.2 * isMem() - 0.35 * isBack();
   vec3 col = mix(uTint, uCore, clamp(vRim * vRim + vMotion * 0.8, 0.0, 1.0));
   gl_FragColor = vec4(col * e * core * vAlpha * uOpacity * (1.0 - 0.35 * vHead), 1.0);
 }`;
@@ -127,7 +130,8 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
     const halo = material(HALO, { uWorld: { value: 0.07 }, uMinPx: { value: 2 }, uMaxPx: { value: 64 } }, { blending: THREE.NormalBlending });
     const objectMat = material(OBJECT, { uTint: { value: new THREE.Vector3(...look.object) }, uGain: { value: 1 } }, { blending: THREE.NormalBlending, depthWrite: true });
     const ghosts = [0.5, 0.25].map(() => material(HOLO));
-    points(now0, halo, 'body-halo', 18); points(now0, glow, 'body-glow', 19); points(now0, holo, 'body-recording', 20); points(now0, objectMat, 'body-held-object', 21);
+    points(now0, halo, 'body-halo', 18); points(now0, glow, 'body-glow', 19).visible = look.glowGain > 0;
+    points(now0, holo, 'body-recording', 20); points(now0, objectMat, 'body-held-object', 21);
     ghostGeo.forEach((geo, i) => points(geo, ghosts[i], `body-trail-${i + 1}`, 17));
 
     // Motes: dust in the warm light around the person, drifting up.
@@ -253,7 +257,8 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         shared.uGlitch.value.set(!still && g < 0.16 ? z0 : 9, !still && g < 0.16 ? z0 + 0.1 : 9, 0.02 * Math.sin(at * 90));
         holo.uniforms.uOpacity.value = presence; objectMat.uniforms.uOpacity.value = presence;
         glow.uniforms.uOpacity.value = presence * (1 - 0.6 * zt); halo.uniforms.uOpacity.value = presence * 0.035;
-        ghosts[0].uniforms.uOpacity.value = still ? 0 : presence * 0.5; ghosts[1].uniforms.uOpacity.value = still ? 0 : presence * 0.25;
+        const trails = look.trails || [0.4, 0.18];
+        ghosts[0].uniforms.uOpacity.value = still ? 0 : presence * trails[0]; ghosts[1].uniforms.uOpacity.value = still ? 0 : presence * trails[1];
         moteMat.uniforms.uOpacity.value = presence;
         poolMat.uniforms.uOpacity.value = poolOn ? presence * look.pool * (1 - 0.5 * zt) : 0;
         if (centroid) pool.position.set(centroid[0], centroid[1], 0.012);

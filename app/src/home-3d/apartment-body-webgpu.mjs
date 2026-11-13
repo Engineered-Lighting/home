@@ -64,7 +64,7 @@ export function createBodySprites({ B, shared, body, held }) {
             const band = pow(sin(height.mul(150).add(ref(shared.uTime, 'float').mul(2.2))).mul(0.5).add(0.5), 3).mul(0.38).add(0.62);
             const energy = rim.mul(rim).mul(1.3).mul(float(1).sub(head)).add(motion.mul(1.1)).add(0.75)
                 .mul(band).mul(ref(shared.uFlicker, 'float')).mul(gain).mul(float(1).sub(head.mul(0.3)))
-                .mul(float(1).sub(guess.mul(0.55)).sub(remembered.mul(0.2)).sub(back.mul(0.35)));
+                .mul(float(1).sub(guess.mul(0.3)).sub(remembered.mul(0.2)).sub(back.mul(0.35)));
             const colour = mix(tint, ref(shared.uCore, 'vec3'), clamp(rim.mul(rim).add(motion.mul(0.8)), 0, 1));
             return vec4(colour.mul(energy).mul(core).mul(alpha).mul(opacity).mul(float(1).sub(head.mul(0.35))), 1);
         })();

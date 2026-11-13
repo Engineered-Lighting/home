@@ -97,6 +97,11 @@ TAPES = (("lens_height_m", "the lens's height above the floor", 0.5, 3.0),
 WIDTH, HEIGHT = 640, 400
 RANSAC_TRIES, WALL_TRIES, SAMPLE_STEP, SEED = 400, 1500, 2, 0
 HIDDEN = re.compile(r"^\s*camera at x |^Next: |^Or, if this take")   # den-register's lines for its own command line
+# A den-register line about the camera (camera_below_floor's "the fit puts the camera -42.0 cm from the floor", the
+# mount check's "... 2.87 m from the camera") would carry the pose: its numbers are withheld. So is a click's pixel.
+CAMERA_WORDS = re.compile(r"camera", re.I)
+NUMBER = re.compile(r"[-+]?[0-9]+(?:\.[0-9]+)?(?:\s*(?:cm|mm|m|degrees|deg)(?![A-Za-z]))?")
+PIXEL = re.compile(r"\(\s*[-+]?[0-9.]+\s*,\s*[-+]?[0-9.]+\s*\)")
 
 
 @dataclass(frozen=True)
@@ -242,9 +247,18 @@ def den_register(tree):
                            take=take, worksheet=worksheet)
 
 
+def scrub(line):
+    """One of den-register's lines as the console may show it: None for its camera's-place and command-line lines,
+    any line about the camera with its numbers withheld, and a click's pixel named, not given. Residuals, errors and
+    counts pass as they are."""
+    if HIDDEN.search(line):
+        return None
+    line = PIXEL.sub("(the click)", line)
+    return NUMBER.sub("(withheld)", line) if CAMERA_WORDS.search(line) else line
+
+
 class Lines:
-    """den-register's own printing, passed to the console line by line, except the camera's place and the next steps
-    for its own command line."""
+    """den-register's own printing, passed to the console line by line, through scrub."""
 
     def __init__(self):
         self.part = ""
@@ -253,7 +267,8 @@ class Lines:
         self.part += text
         while "\n" in self.part:
             line, self.part = self.part.split("\n", 1)
-            if not HIDDEN.search(line):
+            line = scrub(line)
+            if line is not None:
                 say(line)
         return len(text)
 
@@ -1435,7 +1450,7 @@ def main(argv=None, *, root=None, camera_url=None, token_file=None, timing=Timin
         if type(exc).__name__ in ("Refused", "NotUtf8") and hasattr(exc, "reason"):
             # den-register's own refusal outside the fit (a worksheet saved as UTF-16, a frame it can't use): its reason
             # and detail name files and points, never a coordinate.
-            say("register: stopped: den-register refused, %s: %s" % (exc.reason, str(exc.detail)[:300]))
+            say("register: stopped: den-register refused, %s: %s" % (exc.reason, scrub(str(exc.detail)[:300]) or ""))
             return 2
         say("register: stopped (%s). Paste the line again; if it repeats, tell an agent this line." % type(exc).__name__)
         return 2

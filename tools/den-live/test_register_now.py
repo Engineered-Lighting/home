@@ -662,6 +662,42 @@ class Summary(unittest.TestCase):
         self.assertFalse(any(line.startswith('Held-out') for line in lines))
 
 
+# ---- what reaches the console from den-register --------------------------------------------------------------------
+
+class Privacy(unittest.TestCase):
+    def test_a_den_register_line_with_the_cameras_place_never_reaches_the_console(self):
+        """Planted lines as den-register's run_fit prints them (print(..., file=out)): a refusal that puts the camera
+        42 cm below the floor, the mount check's reach, the camera's place and a click's pixel. None of their numbers
+        is passed on; the residuals and the reason codes are."""
+        planted = {'camera_below_floor': 'the fit puts the camera -42.0 cm from the floor; check that x, y and z follow '
+                                         'the room frame (right-handed, z up)',
+                   'depth_missing': 'f3: 10 of 49 pixels near (123.4, 200.1) have depth'}
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            lines = rn.Lines()
+            print('REFUSED', file=lines)
+            for reason, detail in planted.items():
+                print(f'  {reason}: {detail}', file=lines)
+            print('  fit   f1       residual 3.0 cm, leave-one-out 4.1 cm', file=lines)
+            print('  camera at x 1.234, y -2.345, z 1.402 m in the room frame', file=lines)
+            print('  But the mount check could not confirm it: the farthest of these marks is 2.87 m from the camera, '
+                  'and it needs 3 m, because a turn shows most far away. Click or add a cross further off and fit again.', file=lines)
+            print('Next: python -B tools\\den-register\\register.py fit x --take y', file=lines)
+        text = out.getvalue()
+        for number in ('42', '123.4', '200.1', '1.234', '2.345', '1.402', '2.87'):
+            self.assertNotIn(number, text)
+        self.assertIn('  camera_below_floor: the fit puts the camera (withheld) from the floor;', text)
+        self.assertIn('  depth_missing: f3: 10 of 49 pixels near (the click) have depth', text)
+        self.assertIn('  fit   f1       residual 3.0 cm, leave-one-out 4.1 cm', text, 'errors in centimetres pass')
+        self.assertNotIn('camera at', text)
+        self.assertNotIn('Next:', text)
+
+    def test_a_den_register_refusal_outside_the_fit_is_scrubbed_too(self):
+        self.assertEqual(rn.scrub('click_outside_frame: (700.5, -3.0) is outside the 640x400 frame'),
+                         'click_outside_frame: (the click) is outside the 640x400 frame')
+        self.assertIsNone(rn.scrub('  camera at x 1.0, y 2.0, z 3.0 m in the room frame'))
+
+
 # ---- the features' own scale -----------------------------------------------------------------------------------------
 
 class OwnScale(unittest.TestCase):

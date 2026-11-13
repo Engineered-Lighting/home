@@ -58,12 +58,67 @@ class EvidenceTests(unittest.TestCase):
     def test_tentative_rival_and_abrupt_darkness_invalidate_current_association(self):
         track = self.confirmed()
         self.advance(103.4, 17, extra=True)
+        self.advance(103.6, 18, extra=True)
         after = next(t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
         self.assertGreater(after.association_revision, track.association_revision)
         self.assertEqual(after.association_status, "ambiguous")
         self.assertIsNone(self.p.body_input)
-        self.advance(103.6, 18, luma=10)
+        self.advance(103.8, 19, luma=10)
         self.assertEqual((self.p.snapshot.status, self.p.snapshot.presence), ("degraded", "unknown"))
+
+    # ---- the grace (plan 02-3): identity survives one late frame or one unsafe frame ----
+
+    def test_one_dropped_frame_keeps_the_epoch_and_the_track_id(self):
+        """At about 2 frames a second, one frame lost is a gap past the pose's 1.5 s expiry: the loop publishes a
+        stale snapshot (idle), and the next frame goes on in the same epoch with the same track."""
+        track = self.confirmed()
+        last = self.p.snapshot.frame.capture_mono
+        self.p.idle({"status": "ok"}, last + perceive.FRESH_S + 0.1)   # what Loop does once the pose has expired
+        self.assertEqual((self.p.snapshot.status, self.p.snapshot.camera_epoch), ("stale", 1))
+        self.advance(last + 1.8, 17)
+        self.assertEqual(self.p.snapshot.status, "fresh")
+        self.assertEqual((self.p.sessions, self.p.snapshot.frame.camera_epoch), (1, 1))
+        self.assertEqual([t.track_id for t in self.p.snapshot.tracks], [track.track_id])
+
+    def test_three_seconds_without_a_fresh_frame_bumps_the_epoch(self):
+        for gap, epoch in ((perceive.EPOCH_GAP_S - 0.2, 1), (perceive.EPOCH_GAP_S + 0.2, 2)):
+            with self.subTest(gap=gap):
+                self.p = self.scene.perceiver()
+                track = self.confirmed()
+                last = self.p.snapshot.frame.capture_mono
+                self.p.idle({"status": "ok"}, last + perceive.FRESH_S + 0.1)
+                self.advance(last + gap, 17)
+                self.assertEqual((self.p.sessions, self.p.snapshot.camera_epoch), (epoch, epoch))
+                self.assertEqual(self.p.snapshot.frame.camera_epoch, epoch)
+                if epoch == 2:
+                    self.assertNotIn(track.track_id, [t.track_id for t in self.p.snapshot.tracks])
+
+    def test_one_unsafe_frame_keeps_the_revision_but_marks_the_frame_ambiguous(self):
+        track = self.confirmed()
+        self.advance(103.4, 17, extra=True)   # a second person box at 0.88: this frame isn't safe
+        unsafe, = (t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
+        self.assertEqual(unsafe.association_status, "ambiguous", "the ask skips this frame")
+        self.assertEqual(unsafe.association_revision, track.association_revision)
+        self.assertIsNone(self.p.body_input)
+        self.advance(103.6, 18)
+        again, = self.p.snapshot.tracks
+        self.assertEqual((again.track_id, again.association_status), (track.track_id, "confident"))
+        self.assertEqual(again.association_revision, track.association_revision)
+
+    def test_two_unsafe_frames_bump_the_revision(self):
+        track = self.confirmed()
+        self.advance(103.4, 17, extra=True)
+        self.advance(103.6, 18, extra=True)
+        unsafe, = (t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
+        self.assertEqual(unsafe.association_status, "ambiguous")
+        self.assertEqual(unsafe.association_revision, track.association_revision + 1)
+        self.advance(103.8, 19)   # the rival goes; its track stays a while, as a coasting one
+        pending, = (t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
+        self.assertEqual(pending.association_status, "ambiguous", "safe again for one frame only")
+        self.advance(104.0, 20)
+        back, = (t for t in self.p.snapshot.tracks if t.track_id == track.track_id)
+        self.assertEqual((back.association_status, back.association_revision),
+                         ("confident", track.association_revision + 2))
 
     def test_brief_gap_retains_id_and_retired_session_cannot_return(self):
         track = self.confirmed()

@@ -7,7 +7,14 @@ no network (detect_worker.py). den-observe (rung 2) and den-track (rung 3) run u
 
 Numbers this phase sets, with where they come from:
 - FRESH_S 1.5: the detector-freshness exception, plan pick 10. den-observe proposes 1.0; a frame crosses between
-  homes at step 4.
+  homes at step 4. It's the pose's expiry for every consumer; identity has the grace below.
+- The camera epoch (contract 0's camera_epoch, Perceiver.sessions): a new one on a new camera session, the camera's
+  clock going back more than EPOCH_BACK_S, a new depth calibration hash, a day/night mode switch, or EPOCH_GAP_S (3.0)
+  without a fresh frame. A late or missing frame never starts one: idle() publishes a stale snapshot and keeps the
+  epoch, and the tracker is kept across shorter gaps.
+- association_revision (contract 2): it moves only once a track's safe has held its new value for two consecutive
+  processed frames. Each frame's association status stays honest: one unsafe frame says ambiguous, so the ask skips
+  it, and the revision stays.
 - The registration gate is step 2's method file's gate_m (0.10). den-observe's own max_error_bound_m is the ladder's
   0.05, which a scan-picked registration isn't held to (plan pick 3).
 - The clock: capture time on this PC's monotonic clock = t_host + offset, the offset anchored to this PC's arrival
@@ -69,6 +76,7 @@ DARK_LUMA, LIGHT_LUMA, DARK_S = 40.0, 60.0, 3.0
 OFFSET_WINDOW, OFFSET_QUANTILE = 50, 0.05
 OUT_STATES = ("confirmed", "coasting")
 EPOCH_BACK_S = 1.0   # the camera's own clock going back more than this within a session is a new epoch
+EPOCH_GAP_S = 3.0    # this long without a fresh frame is a new epoch; a shorter gap keeps the epoch and the tracker
 HEALTH_S = 10.0      # frames a second and lag are over this window only: an old frame never speaks for now
 HEADING_FRESH_S = 3.0   # an arrow older than this is left off: den-track keeps its last heading indefinitely
 PERSON_MIN = 0.5     # den-detect's pose line, and plan L3's marker line
@@ -496,12 +504,12 @@ class Perceiver:
         return event
 
     def idle(self, camera_state, now_mono):
+        """A snapshot with no frame, saying why. It keeps the epoch and the tracker: a late or missing frame is only
+        stale, and the next fresh frame within EPOCH_GAP_S goes on with the same tracks (prepare's gap check)."""
         self.body_input = None
         status = camera_state.get("status")
         if status not in ("starting", "offline", "refused"):
             status = "stale"
-        if self.last_capture is not None:
-            self._epoch()
         self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
         return self._snapshot(self.event(None, [], camera_state, now_mono), status=status)
 
@@ -641,6 +649,10 @@ class Perceiver:
             self.camera.check_frame(meta.get("intrinsics"))
         except self.t.roommodel.RegistrationRefused as exc:
             raise Refused("the camera no longer matches the registration (%s); register again with step 2" % exc) from None
+        if self.last_capture is not None and capture_mono - self.last_capture >= EPOCH_GAP_S:
+            dark_since, light_since = self.dark_since, self.light_since   # the mode's own timers go on
+            self._epoch()
+            self.dark_since, self.light_since = dark_since, light_since
         calibration = correction.get("calibration_sha256") if isinstance(correction, dict) else None
         if self.calibration_id is not None and calibration != self.calibration_id:
             self._epoch()
@@ -693,10 +705,7 @@ class Perceiver:
             # The worker keyed this frame before the handover; start with the next frame.
             return self._snapshot(self.event(None, [], dict(camera_state, why="mode changed"), now_mono), status="degraded")
         if self.mode == "none" or luma is None or luma < DARK_LUMA:
-            if self.last_capture is not None and capture_mono - self.last_capture >= FRESH_S:
-                dark_since, light_since = self.dark_since, self.light_since
-                self._epoch()
-                self.dark_since, self.light_since = dark_since, light_since
+            # A dark frame isn't a fresh one: after EPOCH_GAP_S of them, prepare starts the next epoch.
             if self.mode == "none" and ref.camera_epoch == self.sessions:
                 self._submit_body(prepared)
             else:
@@ -758,10 +767,19 @@ class Perceiver:
             pose = next((o for o in sources if o["kind"] == "keypoints"), {})
             safe = (marker["state"] == "confirmed" and status == "confident" and len(candidates) == 1
                     and bool(sources))
-            revision, was_safe, previous_since = self.associations.get(track_id, (0, False, None))
-            if safe != was_safe or (safe and since != previous_since):
-                revision += 1
-            self.associations[track_id] = revision, safe, since
+            # The association grace: the revision moves once safe (and, while safe, den-track's since) has held its
+            # new value for two consecutive processed frames. This frame says confident only while it's safe and the
+            # revision is a safe one, so a single unsafe frame reads ambiguous and keeps the revision.
+            revision, committed, pending = self.associations.get(track_id, (0, (False, None), None))
+            current = (True, since) if safe else (False, None)
+            if current == committed:
+                pending = None
+            elif current == pending:
+                revision, committed, pending = revision + 1, current, None
+            else:
+                pending = current
+            self.associations[track_id] = revision, committed, pending
+            safe = safe and current == committed
             stereo = stereo_joints(pose) if meta.get("intrinsics") is not None else {}
             position_observations = [o for o in sources if o.get("room_position")]
             if not position_observations:

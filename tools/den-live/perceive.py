@@ -45,6 +45,7 @@ from pathlib import Path
 
 import room_labels
 from body import head_exclusion
+from body_clock import receipt_arrival
 from body_input import bundle_frame_key, qualified as qualified_body_input
 
 SCHEMA = "den-live-people-1"
@@ -371,8 +372,9 @@ class Perceiver:
             value = self.body_input(bundle, meta, depth, frame_key=frame_key, mode=self.mode,
                                     observations=observations, tracks=tracks, supported=supported,
                                     association={} if association is None else association)
+            arrival = receipt_arrival(bundle)
             if (qualified_body_input(value, self.scope) and value.frame_key == frame_key
-                    and value.capture_earliest_mono <= bundle.arrival_mono):
+                    and arrival is not None and value.capture_earliest_mono <= arrival):
                 request = self._body_request(value)
                 if request is not None:
                     self.body.submit(self.detector.next_id, **request)
@@ -467,7 +469,8 @@ class Perceiver:
         if "error" in reply:
             return self._drop("detector_errors", now_mono, "detector errors")
         self.problem = None
-        self._mode(reply.get("luma"), now_mono)
+        luma = reply.get("luma")
+        self._mode(luma, now_mono)
         if self.mode == "none":
             self._submit_body(bundle, meta, depth, frame_key)
             return self.event(now_mono - capture_mono, [], dict(camera_state, why="too dark"), now_mono)
@@ -504,8 +507,10 @@ class Perceiver:
             supported.append(set(track.obs_ids))
             # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
             association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
-        self._submit_body(bundle, meta, depth, frame_key, observations=observations, tracks=tracks,
-                          supported=supported, association=association)
+        if type(luma) not in (int, float) or not math.isfinite(luma) or luma < DARK_LUMA:
+            self._clear_body("pose_unavailable")
+        else:
+            self._submit_body(bundle, meta, depth, frame_key, observations=observations, tracks=tracks, supported=supported, association=association)
         self.lags.append((now_mono, now_mono - capture_mono))
         event = self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
         # For the Qwen ask (ask.py): this frame's detection id (the detector's process keeps the frame under it), its

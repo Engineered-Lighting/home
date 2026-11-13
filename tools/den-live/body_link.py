@@ -1,15 +1,15 @@
 """Submit the exact frame retained by the detector and fence late body replies."""
 import math
 import threading
-import time
 
+from body_clock import lease_clock
 from stream import BODY_LEASE_S
 
 MIN_INTERVAL_S = 0.3
 
 
 class BodyLink:
-    def __init__(self, detector, *, stream, min_interval_s=MIN_INTERVAL_S, clock=time.monotonic):
+    def __init__(self, detector, *, stream, min_interval_s=MIN_INTERVAL_S, clock=lease_clock):
         self.detector, self.stream, self.clock = detector, stream, clock
         self.min_interval_s = min_interval_s
         self.lock = threading.Lock()

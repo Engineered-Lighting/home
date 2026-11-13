@@ -23,6 +23,8 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from body_clock import lease_clock
+
 BASE = "/api/den-live/v1/homes/"
 LABELS_MAX_BYTES = 65536
 BACKLOG = 8
@@ -48,7 +50,7 @@ class _Client:
 
 class PeopleStream:
     def __init__(self, *, home="den", host="127.0.0.1", port=8111, max_clients=16, heartbeat_s=2.0, labels=None,
-                 clock=time.monotonic, wall_clock=time.time, body_available=True):
+                 clock=lease_clock, wall_clock=time.time, body_available=True):
         self.home, self.host, self.max_clients, self.heartbeat_s = home, host, max_clients, heartbeat_s
         self.labels = labels   # a room_labels.Store, or None: then the labels paths answer 503
         self.body_available = body_available

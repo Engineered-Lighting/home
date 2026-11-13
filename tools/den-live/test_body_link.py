@@ -152,7 +152,7 @@ class PipelineTests(unittest.TestCase):
     def pipeline_process(self, mode, provider):
         calls = []
         detector = SimpleNamespace(next_id=42)
-        detector.detect = lambda bundle, delay, **key: calls.append(("detect", key)) or {"luma": 0, "row": {}}
+        detector.detect = lambda bundle, delay, **key: calls.append(("detect", key)) or {"luma": 0 if mode == "none" else 120, "row": {}}
         camera = SimpleNamespace(check_frame=lambda _: None)
         observation = dict(kind="keypoints", obs_id="current-pose", validity="valid")
         track = SimpleNamespace(id=1, obs_ids={"current-pose"}, heading_as_of=None, last_seen=100)
@@ -181,7 +181,7 @@ class PipelineTests(unittest.TestCase):
         perceiver.body = SimpleNamespace(submit=lambda frame_id, **kwargs: calls.append(("submit", frame_id, kwargs)),
                                          clear=lambda reason: calls.append(("clear", reason)))
         bundle = SimpleNamespace(data=b"fake", session="camera", rgb_seq=7, t_host=100.0,
-                                 arrival_mono=100.1, arrival_unix=1000)
+                                 arrival_mono=100.1, arrival_unix=1000, receipt_arrival_mono=100.1)
         return calls, perceiver.process(bundle, {}, 100.2)
 
     def pipeline_input(self, data, *, key=None):

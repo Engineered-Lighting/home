@@ -35,8 +35,9 @@ workstation's own.
 7. The scan page, on 127.0.0.1: Home's own code on your scan. Click the same nine there. Home's display-mesh picker
    gives each one's room position, written to the worksheet as measured_with scan-pick.
 8. The distance check: all 36 pair distances, camera against scan. A rigid fit keeps distances, so a feature whose
-   median difference over its 8 pairs is over 6 cm is a wrong click or pick. It's named, worst first, in centimetres,
-   and the paste stops; --again keeps everything and opens both pages again.
+   median difference over its 8 pairs is over den-register's gate (the method file's gate_m, 0.15 m) is a wrong click
+   or pick that no fit could pass. It's named, worst first, in centimetres, and the paste stops; --again keeps
+   everything and opens both pages again. One over 6 cm but within the gate is only noted, and the paste goes on.
 9. den-register's fit at the method's gate, 0.15 m. Then register_now's own rule: each sofa check, c1-c3, within
    0.10 m. The features' own scale (Umeyama) is printed above the summary as a diagnostic.
 10. The held-out take, after a pass: leave the view again, 20 s. The scan's points.ply on stable surfaces (the floor,

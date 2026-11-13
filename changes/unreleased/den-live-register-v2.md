@@ -9,8 +9,10 @@ type: changed
   the floor and the facing wall with them. It stops on more than 5 points of bend, applies no scale within 1.5%, and
   otherwise sets one den-live depth scale within 0.90-1.10.
 - Nine features (six to fit, three checks beside the sofa) are clicked on the take's median depth, behind an edge
-  guard and a 36-pair distance check. den-register fits unedited at a 0.15 m gate, then each sofa check must be within
-  10 cm.
+  guard and a 36-pair distance check.
+- The gate is now the method file's `gate_m`, 0.15 m, where v1's was 0.10 m. den-register fits unedited at it, and the
+  distance check stops only on a feature past it; one past 6 cm but within it is only noted. Then each sofa check,
+  c1-c3, must be within 0.10 m.
 - A held-out empty-room take is carried into the room through the new registration and compared there with the
   scan's floor and upper walls, each judged on its own: at least 75% within noise, and no 1 m range bin with a median
   residual over 10 cm.

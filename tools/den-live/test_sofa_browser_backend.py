@@ -73,7 +73,8 @@ def main():
                 reply = InferenceReply(f"reply-{seq}", "synthetic", "browser", 1, track.track_id, 1, 1, (ref,),
                     {"status": "valid", "facts": {"people_visible": "one", "activity_hypothesis": "reading",
                                                   "book_state": "open", "held_object": "book"}},
-                    {"window_start_mono": now, "window_end_mono": now}, {}, {}, now, now, now + 10, {})
+                    {"safe": True, "status": "confident", "window_start_mono": now, "window_end_mono": now},
+                    {}, {}, now, now, now + 10, {})
                 service.offer_inference(reply)
             server.publish({"schema": "den-live-people-1", "home": "den", "seq": seq,
                             "transform_id": binding["transform_id"], "content_revision": binding["scan_revision"],

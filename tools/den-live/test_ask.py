@@ -558,11 +558,12 @@ class AskTest(unittest.TestCase):
         self.assertEqual(self.accepted, [])
         self.assertEqual(self.log_lines()[-1]["invalid_reason"], "evidence_expired")
 
-    def test_a_model_reply_with_multiple_people_is_unbound(self):
+    def test_a_model_reply_with_multiple_people_reaches_coordinator_but_never_labels_a_track(self):
         self.replies = [completion(json.dumps(facts(people="multiple")))]
-        self.run_for(4)
+        event = self.run_for(4)
         self.assertGreaterEqual(self.asks_sent(), 1)
-        self.assertEqual(self.accepted, [])
+        self.assertEqual(self.accepted[-1].observation["facts"]["people_visible"], "multiple")
+        self.assertNotIn("activity", event["tracks"][0])
         self.assertEqual(self.log_lines()[-1]["invalid_reason"], "model_subject_unbound")
 
     def test_stills_with_wrong_epoch_are_rejected(self):

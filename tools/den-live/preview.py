@@ -10,11 +10,12 @@ import time
 import uuid
 from pathlib import Path
 
+from contracts import PERCEPTION_S
 from preview_evidence import Episode, field, finite, pose
 from preview_trace import PreviewTrace
 
 
-POSE_AGE_S = 1.5
+POSE_AGE_S = PERCEPTION_S
 FRAME_S = .1
 LEASE_S = 1.0
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
@@ -205,7 +206,7 @@ class Preview:
         seated = body.seated(self.samples, now, was_seated=self.episode is not None)
         if seated and self.episode is None:
             policy = self.core.need_v1.make_policy({"phone_patience_s": self.settings["phone_patience_s"]})
-            self.episode = Episode(policy, key, captured)
+            self.episode = Episode(policy, key, captured, (self.binding["transform_id"], self.binding["scan_revision"]))
             self.shift = body.ShiftFilter(self.settings["shift_m"], self.settings["shift_hold_s"])
         if not seated:
             self.episode = self.shift = self.target_basis = None
@@ -366,6 +367,8 @@ class Preview:
                    "valid_ms": min(1500, max(1, math.floor((end - now) * 1000))) if end is not None else 1500,
                    "lit_motion": row["profile"].get("lit_motion"), "profile_id": row["profile"].get("label"),
                    "deadline": end}
+        if travel == "dim":
+            details["dim_level"] = self.settings["move_dim_level"]
         ticket = {"level": level, "deadline": end, "episode": self.episode, "person": person, "reason": reason,
                   "details": details}
         row["pending"] = ticket

@@ -3,6 +3,8 @@
 import math
 from collections import deque
 
+from contracts import INFERENCE_S
+
 
 def field(record, name, default=None):
     return record.get(name, default) if isinstance(record, dict) else getattr(record, name, default)
@@ -30,17 +32,21 @@ def activity(facts):
     word = field(facts, "activity_hypothesis")
     if field(facts, "people_visible") != "one" or word in (None, "unclear"):
         return "unknown"
-    phone = field(facts, "held_object") == "phone" and field(facts, "gaze_target") == "phone"
-    screen = field(facts, "typing_visible") == "yes" or (
+    visible = field(facts, "visible_basis") or ()
+    phone = "phone_screen_toward_face" in visible or (
+        field(facts, "held_object") == "phone" and field(facts, "gaze_target") == "phone")
+    screen = "hands_on_keyboard" in visible or field(facts, "typing_visible") == "yes" or (
         field(facts, "screen_facing_subject") == "yes" and field(facts, "gaze_target") == "screen")
-    if phone or screen or (word == "reading" and field(facts, "book_state") == "closed"):
+    closed_book = field(facts, "book_state") == "closed" or "book_closed" in visible
+    if phone or screen or (word == "reading" and closed_book):
         return "idle"
     return "playing" if word in ("reading", "hobby", "desk_hobby", "craft") else "idle"
 
 
 class Episode:
-    def __init__(self, policy, binding, started):
+    def __init__(self, policy, binding, started, frame_binding):
         self.need, self.binding, self.started = policy, binding, started
+        self.frame_binding = frame_binding
         self.last_observed = None
         self.valid_until = None
         self.requests = deque(maxlen=64)
@@ -67,9 +73,19 @@ class Episode:
         end = field(association, "window_end_mono")
         observed, available, valid = (field(reply, k) for k in ("observed_mono", "available_mono", "valid_until_mono"))
         if (not isinstance(request, str) or not request or request in self.requests or
+                field(association, "safe") is not True or field(association, "status") != "confident" or
                 not all(map(finite, (start, end, observed, available, valid))) or
                 not self.started <= start <= end == observed <= available <= now < valid or
                 (self.last_observed is not None and observed <= self.last_observed)):
+            return False
+        frames = field(reply, "frames", ())
+        frame_keys = ("service_run_id", "camera_epoch", "transform_id", "scan_revision")
+        expected = (*self.binding[:2], *self.frame_binding)
+        if not frames or any(tuple(field(frame, key) for key in frame_keys) != expected for frame in frames):
+            return False
+        captures = tuple(field(frame, "capture_mono") for frame in frames)
+        if (not all(map(finite, captures)) or captures[0] != start or captures[-1] != end or
+                any(left >= right for left, right in zip(captures, captures[1:]))):
             return False
         observation = field(reply, "observation")
         facts = field(observation, "facts")
@@ -78,12 +94,16 @@ class Episode:
         self.last_observed = observed
         self.requests.append(request)
         self.need.exit_idle_s = patience
+        if field(observation, "status") == "valid" and field(facts, "people_visible") in ("none", "multiple"):
+            self.clear_support()
+            self.started = observed
+            return True
         if status == "unknown":
             self.need.playing = 0
             return True
         self.need._dwell({"status": status, "observed_at": observed, "available_at": available,
                           "answered": True, "request_id": request, "facts": facts}, now)
-        self.valid_until = min(valid, observed + 10.0)
+        self.valid_until = min(valid, observed + INFERENCE_S)
         self.expire(now, patience)
         return True
 

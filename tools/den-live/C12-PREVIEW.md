@@ -6,11 +6,13 @@ The preview workstream provides the offline sender, trace, replay, and Home ray 
 
 Use `install_la.py --preview-geometry` with the private registered Home geometry export. The installer records `coordinator.preview: true`, the active camera transform and `hue_overlay: false`, and supplies the geometry through the systemd `virtual-fixtures.json` credential. The producer uses the exported pivots and fixture references. The sofa service constructs no HA write client and exposes no desk route. Its switch, Stop, and Resume act on local preview state.
 
-The live observer feeds `Preview` a current `TrackingSnapshot` before its bound `InferenceReply`. This carries the run, camera epoch, track, association revision and evidence deadline directly from perception. Home and the offline trace refer to the same successfully encoded per-fixture MOVE.
+The live observer feeds `Preview` a current `TrackingSnapshot` before its bound `InferenceReply`. The coordinator checks the attached stills against the sitting, camera epoch and registered scan. An unclear answer breaks the pending reading streak. Ambiguous tracking or a current answer reporting several people or nobody revokes spotlight support.
 
 ## Home and replay
 
-The coordinator GET includes `snapshot`, `trace_event_index`, and `trace_complete`. The people SSE sends `spot_clock` and `spot_snapshot`, with Home-frame angles and a monotonic deadline. Each fixture carries `last_move_trace_id`. Home draws the ray from the registered pivot and supplied aim through its normal surface intersection. The Full Home gateway maps browser controls to the local `/coordinator/virtual` routes. Resume names the current Stop counter.
+The coordinator GET includes `snapshot`, `trace_event_index`, and `trace_complete`. The people SSE sends `spot_clock` and `spot_snapshot`, with Home-frame angles and a monotonic deadline. Each fixture carries `last_move_trace_id` for its last applied MOVE. A superseded encoded command can remain in the diagnostic trace. Home draws the ray from the registered pivot and supplied aim through its normal surface intersection. The Full Home gateway maps browser controls to the local `/coordinator/virtual` routes. Resume names the current Stop counter.
+
+MOVE records carry the requested travel style, dim level when applicable, and fade. FC13 leaves dim level and fade unset and maps dim travel to dark. Preview release darkens immediately while the offline trace retains the requested fade.
 
 The trace is `days/<UTC date>/coordinator-fixture_calls.jsonl` in coordinator state. For a run spanning UTC days, replay its complete ordered rows from both files. For sofa acceptance, compare the last saved event index with the final snapshot and require `trace_complete: true`. Verify the actual sofa trace locally:
 

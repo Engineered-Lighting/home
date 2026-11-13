@@ -60,49 +60,91 @@ python -B -X utf8 tools\den-live\test_sofa_check.py
 
 ## Step 2: register the camera to your scan
 
-The markers draw in your scan's frame, so the camera has to be placed in it again after the re-aim. One paste and about 20 minutes, most of it clicking:
+The markers draw in your scan's frame, so the camera has to be placed in it. This is registration v2, with
+`REGISTER-LIVE-20261113.md` as its method. One paste, about 25 minutes, most of it clicking:
 
 ```powershell
 python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\register_now.py
 ```
 
-It needs the camera token (step 1's), Node on the PATH (the den simulation needs it too), and Python with numpy and Pillow.
+It needs the camera token (step 1's), Node on the PATH (the den simulation needs it too), and Python with numpy and
+Pillow. Before you paste: set the room light as for an evening's reading, keep the furniture where it is, don't touch
+the camera or its mount, and take two fresh tapes, as on 2026-11-11.
 
-1. **The empty den, 20 s.** It says "leave the den", waits 15 s, records 20 s, then says you can come back.
-2. **The depth check.** Since 2026-11-11 the camera service corrects its own depth (x0.889), and every frame says so. If any frame doesn't, for example after a re-flash, it stops here. den-live adds no factor of its own. `REGISTER-LIVE-20261111.md` has why and what's left over: about 2% at the floor and at the far wall, in opposite directions.
-3. **The floor guard.** It finds the floor in that depth and compares the lens's height with your 1.37 m tape. If they're more than 5% apart it stops here, before you click anything, and prints both numbers.
-4. **Six clicks on the camera's picture.** That's den-register's own click page. Pick features that are spread out, at different heights and depths, solid and matte: two floor-level corners, two at table height, two high up (a door frame, a shelf). Avoid glass, screens and black fabric. Prefer features in the middle of the room over ones on the far wall: the depth scale is least sure out there. Each click shows the depth it found. All six need a click with depth; if a spot has none, pick another feature for that row. Remember what each one is.
-5. **The same six in your scan.** Your scan opens on a local page, with the camera's picture beside it and your clicks numbered. For each row, orbit to the feature and click it once without dragging. Then Save.
-6. **The fit.** den-register fits with the 0.10 m gate and prints `REGISTERED den-oak@<date>.<n>` or `REFUSED` with each reason.
-7. **On a pass,** your scan opens again with the camera where the fit put it, and your six features as the camera sees them. Each dot should sit on its feature. Press Done.
+1. **Two tapes.** The paste asks for the lens's height above the floor and the lens to the facing wall, square to it,
+   in metres. They go into the private receipt only. Nothing prints them.
+2. **The empty den, 20 s.** It says "leave the den", waits 15 s, records 20 s, then says you can come back.
+3. **The camera's correction.** The camera service corrects its own depth (x0.889), and every frame says so. If any
+   frame doesn't, for example after a re-flash, it stops here.
+4. **The depth check.** On the take's per-pixel median depth, it finds the floor and the facing wall and compares each
+   with its tape. It prints `Depth check: floor +x.x%, wall +y.y%, bend z.z points:` and then one of:
+   - `no scale`: their mean is within 1.5%;
+   - `scale x0.97 applied`: den-live corrects the mean with one measured scale, within 0.90-1.10. It's kept in the
+     receipt, and den-live applies it to every depth plane before any lift;
+   - `STOP: the depth bends more than a scale can fix`: the floor and the wall disagree by more than 5 points. Nothing
+     was clicked. Tell an agent the summary block. The next step is the camera's own calibration, never moving it.
+5. **Nine clicks on the camera's picture.** That's den-register's own click page, on the take's median depth.
+   - f1 and f2 at floor level, left and right: inside corners where walls meet the floor, or skirting meets a door
+     frame.
+   - f3 and f4 at mid height: the inside corner of a door or window frame, or a corner of a switch plate.
+   - f5 and f6 high: the top inside corner of a frame, or where two walls meet the ceiling.
+   - c1, c2 and c3: fixed structure beside or behind the sofa, not the sofa itself.
 
-Tell an agent the summary block at the end, which is words and numbers only. Don't send the lines above it: they include the camera's place.
+   Fixed structure only: inside corners or flat marks, never an edge with background behind it. No furniture, rugs,
+   cushions, screens, glass or black fabric. Prefer middle depths over the far wall's corners. The edge guard then
+   names any click on a depth edge, and the page opens again for it.
+6. **The same nine in your scan.** Your scan opens on a local page, with the camera's picture beside it and your clicks
+   numbered. For each row, orbit to the feature and click it once without dragging. Then Save.
+7. **The distance check.** A rigid fit keeps distances, so all 36 pair distances are compared, camera against scan. A
+   feature that disagrees with the others by more than 6 cm (the median over its 8 pairs) is named, worst first, and
+   the paste stops.
+8. **The fit.** den-register fits with a 0.15 m gate, then each sofa check must be within 10 cm. It prints
+   `REGISTERED den-oak@<date>.<n>` or `REFUSED` with each reason.
+9. **The held-out take, 20 s.** "Leave the view again." Your scan's floor and upper walls, seen from the new
+   registration, are compared with this take's depth: at least 75% must be within noise, and no 1 m range bin's median
+   may be off by more than 10 cm.
+10. **On a pass,** your scan opens again with the camera where the fit put it, and your nine features as the camera
+    sees them. Each dot should sit on its feature. Press Done.
 
-**If the fit refuses,** it names the worst feature. Re-click it on the camera page, or re-pick it in the scan, then paste:
+Tell an agent the summary block at the end, and only that: it's words and numbers, and it never holds a pose, a
+coordinate or a tape. Its last line is `QUALIFIED: yes` or `QUALIFIED: no, because ...`. den-live starts only on a
+qualified registration.
+
+**If it names features,** re-click them on the camera page or re-pick them in the scan, then paste:
 
 ```powershell
 python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\register_now.py --again
 ```
 
-That keeps the take, your clicks and your picks, so you only change what's wrong. A paste without `--again` records a new take and starts the clicks and picks afresh.
+That keeps the take, its tapes, your clicks and your picks, opens both pages again, and fits again. After a refusal
+with named features, try that at most twice. A paste without `--again` asks for the tapes again, records a new take and
+starts the clicks and picks afresh. If the held-out check couldn't run, `--again` with nothing changed keeps the
+registration and takes the held-out take. After a pass, `--again` with nothing changed just says it's qualified
+already. `--packs <folder>` uses another content-pack folder for the scan page and the held-out check.
 
-The summary tells the two kinds of refusal apart:
-- It names the feature that sits furthest from the rest: re-click or re-pick that one.
-- It says every feature fits with the features' own scale: that's the depth scale, which re-clicking won't fix. Tell an agent.
-
-If an agent changes the depth scale in the method file, `--again` makes a new copy of the same take at the new scale and carries your clicks onto it. After a pass, `--again` with nothing changed just says it's already registered.
+If the distance check names most features and says every feature fits with their own scale, it's the depth scale or a
+tape, which re-clicking won't fix: check the tapes, then tell an agent.
 
 | Line | Means |
 |---|---|
 | `Depth corrected at the camera: x0.889 on all N frames.` | The camera service's correction is on; the paste goes on |
 | `stopped: the camera's depth isn't corrected at its source ...` | Some frame says the correction is off, or has no record. Nothing was clicked. Tell an agent the line |
-| `Floor guard: ... inside 5%` | The depth scale holds at the floor; the clicking goes on |
-| `stopped: floor guard: ...` | The depth scale is wrong, or the camera can't see enough floor. Nothing was clicked. Tell an agent the line |
-| `REGISTERED den-oak@...` | The camera is in your scan's frame again, written to the private `room-model.jsonl`. Step 3 reads it |
+| `Depth check: ... no scale` or `... scale x... applied` | The depth agrees with your tapes, or will once den-live's scale is applied; the clicking goes on |
+| `Depth check: ... STOP: ...` | The depth bends, or it's off by more than 10%, or the check can't find the floor or the facing wall. Tell an agent the summary block |
+| `Edge guard: f3 sits on a depth edge ...` | Click f3 a little inside one surface; the page opens again for it |
+| `Distance check: f4 disagrees with ...` | Re-pick f4 or re-click it, then paste with `--again` |
+| `REGISTERED den-oak@...` | den-register wrote the registration to the private `room-model.jsonl`. It still has to qualify |
 | `REFUSED` | The reasons name the features. Re-click or re-pick them and paste with `--again` |
-| `Features' own scale: ...` | A cross-check, printed only: what scale the six features themselves would pick. Near 1.000 is good |
+| `Held-out take: ...` | How well your scan, seen from the new registration, matches a fresh take of the empty den |
+| `QUALIFIED: yes` | Step 3 and the LA service will start on it |
 
-What's kept, all under `%USERPROFILE%\den-live\private\register\`: the take and its scaled copy (`takes\`), the camera's `/calibration` reply, the worksheet, your clicks, every `fit-N.json`, `room-model.jsonl`, and a `register-now-N.json` receipt per paste. Agents never open it. The scan page runs on 127.0.0.1 only, and reaches nothing beyond this PC.
+What's kept, all under `%USERPROFILE%\den-live\private\register\`: the takes (`takes\`: the take, its median copy
+`<take>-x<scale>-m` and the held-out take), the camera's `/calibration` reply, the worksheet, your clicks, every
+`fit-N.json`, `room-model.jsonl`, and a `register-now-N.json` receipt per paste. The receipt is
+`den-live-register-now-2`: your tapes, the depth check, `depth_scale`, the sofa checks, the held-out numbers and
+`qualified`. Agents never open the folder. The scan page runs on 127.0.0.1 only, and reaches nothing beyond this PC.
+Receipts from before v2 (`den-live-register-now-1`, method `REGISTER-LIVE-20261111.md`) still read, but nothing starts
+on them: register again.
 
 ### Tests
 
@@ -110,16 +152,22 @@ What's kept, all under `%USERPROFILE%\den-live\private\register\`: the take and 
 python -B -X utf8 tools\den-live\test_register_now.py
 ```
 
-- No camera, LA or ssh. A fake camera serves the den simulation's rendered marks take. den-register's own click session clicks where the simulation's fit clicked. The real scan page, on the authored room, is saved over HTTP with the simulation's room positions.
-- The end-to-end part covers ten cases. Among them:
-  - true depth registers;
-  - the floor guard stops a wrong scale before any click;
-  - the rigid fit refuses a scale the guard misses, and blames the scale;
-  - one fit point picked 0.8 m off is blamed on that point, not the scale;
-  - `--again` refits after one bad pick, makes a new copy when the scale changes, and says "already registered" when nothing changed;
-  - a fresh paste starts the picks afresh;
-  - a stopped click page, an unclicked feature and a den-register refusal each stop with their reason.
-- It needs Node and a prepared den-sim set. It takes about a minute.
+- No camera, LA or ssh. The depth check, the edge guard, the distance check and the held-out check run on synthetic
+  depth and synthetic rooms.
+- The end-to-end part runs on the den simulation's rendered marks take, through a fake camera, or a copy of it with its
+  depth scaled. den-register's own click session clicks nine features found on the render. The real scan page, on the
+  authored room, is saved over HTTP with their room positions, and the held-out check reads a points.ply made from the
+  render. Among the cases:
+  - a clean pass registers and qualifies, and prints the summary block in its exact shape, with no tape or coordinate;
+  - a 3% long depth is measured, scaled, registered and qualified;
+  - a 7-point bend stops before any click;
+  - two swapped scan picks are named by the distance check;
+  - a click on an outer edge is named and clicked again;
+  - a registration shifted by a few centimetres registers but doesn't qualify on the held-out take;
+  - a sofa check at 12 cm fails qualification while den-register's 0.15 m gate passes;
+  - `--again` keeps the take and the tapes, carries the clicks to a new scale, takes the held-out take again, and says
+    it's qualified already when nothing changed.
+- It needs Node and a prepared den-sim set. It takes about three minutes.
 
 ## Step 3: your marker, live, on this PC
 
@@ -132,7 +180,7 @@ python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\run_local.py
 Then open http://127.0.0.1:18190/ and walk around the den. Ctrl+C stops it. While it runs, this PC reads the camera continuously, and your paste is the go-ahead for that.
 
 It needs:
-- step 2's registration;
+- step 2's registration, with the receipt that qualified it (`QUALIFIED: yes`). A room model with no receipt, or one step 2 didn't qualify, stops it with one sentence;
 - the camera token;
 - the detector's venv;
 - Node;
@@ -149,7 +197,7 @@ It says which one is missing if it can't start.
 **What runs, all on this PC:**
 - `source.py` fetches the camera's newest frame about 5 times a second.
 - `detect_worker.py`, in the detector's venv with no network, runs YOLO26s and RTMPose-m on each frame.
-- `perceive.py` runs den-observe and den-track, unedited, on step 2's registration. It checks every frame says the camera corrected its depth.
+- `perceive.py` runs den-observe and den-track, unedited, on step 2's registration. It checks every frame says the camera corrected its depth, and multiplies every depth plane by step 2's depth scale before any lift (the live body's depth too); at 1.0 nothing changes.
 - The live body (`body.py`) runs in the same detector process on the exact retained bundle. `body_link.py` keeps one body request in flight. The people stream starts without waiting for body setup.
 - `stream.py` serves the people stream on 127.0.0.1:8111, and the body frames on their own path, `/body`.
 - `live_page.mjs` serves Home on 127.0.0.1:18190: this checkout when it holds the body layer (`claude/den-live-body`), else the `claude/den-live-home` worktree. It passes the streams through on the same paths step 4's gateway route will use.
@@ -248,7 +296,7 @@ Tell an agent those lines. They're words and numbers only: no address, hostname 
 
 ### 2. The install
 
-This needs step 2's registration, the camera token, the detector's venv with its models, and this branch committed: the release names its commit, so it refuses while `tools/den-live` has changes that aren't committed. An agent commits them first.
+This needs step 2's qualified registration, the camera token, the detector's venv with its models, and this branch committed: the release names its commit, so it refuses while `tools/den-live` has changes that aren't committed. An agent commits them first.
 
 ```powershell
 python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\install_la.py
@@ -282,7 +330,7 @@ ssh -t hav-ubuntu "sudo systemctl disable --now den-live"
 - It's held to `MemoryMax=3G` and `CPUQuota=150%`, and restarts 10 s after any stop.
 - It may reach only this host's loopback and the camera's one address.
 - The people stream binds 127.0.0.1:8111 only. The detector process still refuses Python sockets itself.
-- It refuses to start, with one sentence in its journal, when an input is missing or doesn't match. Then systemd doesn't restart it, because a restart can't mend that. That's a missing credential, a receipt that didn't register the room model's camera, another scan revision than step 2 picked on, or a camera that no longer fits the registration.
+- It refuses to start, with one sentence in its journal, when an input is missing or doesn't match. Then systemd doesn't restart it, because a restart can't mend that. That's a missing credential, a receipt that didn't register the room model's camera or didn't qualify it, another scan revision than step 2 picked on, or a camera that no longer fits the registration.
 - Every 60 s it writes one line of words and counts to its journal, the same line as step 3's: `ssh hav-ubuntu "journalctl -u den-live -n 5 -o cat"`.
 
 **What's kept on LA:** what step 3 keeps, in its state folder, `/var/lib/den-live/`: the tracker's method copy and the detector's log and caches. The log is rolled once past 10 MB. No frames and no tracks. The release, the venv and the models are under `/opt/den-live/`, and the settings and private inputs under `/etc/den-live/`.

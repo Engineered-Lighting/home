@@ -366,17 +366,46 @@ class DepthCheck(unittest.TestCase):
         self.assertNotIn('depth_scale', check)
 
     def test_more_than_ten_percent_off_stops_rather_than_clamping(self):
-        check = rn.scale_check(room_points(1.37, 11) * 1.15, TAPES, LIVE)
+        far = rn.scale_check(room_points(1.37, 11) * 1.15, TAPES, LIVE)
+        self.assertEqual(far['result'], 'stop')   # 15% long: the wall isn't within 10% of its tape at all
+        self.assertIn("can't find the facing wall within 10%", far['why'])
+        # the floor 13.9% long and the wall 9% long: a bend under 5 points, but a mean past what den-live will scale
+        check = rn.scale_check(room_points(1.37, 11), {'lens_height_m': HEIGHT_TAPE / 1.139, 'facing_wall_m': WALL_TAPE / 1.09}, LIVE)
         self.assertEqual(check['result'], 'stop')
         self.assertIn('more than den-live will scale', check['why'])
 
     def test_no_facing_wall_or_no_floor_says_so(self):
         points = room_points(1.37, 11)
         no_wall = points[points[:, 2] < 3.0]
-        self.assertEqual(rn.scale_check(no_wall, TAPES, LIVE)['why'], "the depth check can't find the facing wall in the camera's view")
+        self.assertEqual(rn.scale_check(no_wall, TAPES, LIVE)['why'], "the depth check can't find the facing wall within 10% of your wall tape")
         wall = np.column_stack((np.linspace(-2, 2, 500), np.linspace(0.4, 2, 500), np.full(500, 4.0)))
         self.assertEqual(rn.scale_check(wall, TAPES, LIVE)['why'], "the depth check can't find the floor in the camera's view")
         self.assertEqual(rn.depth_line({'result': 'stop', 'why': 'x'}), 'Depth check: STOP: x.')
+
+    def test_a_cabinet_front_with_more_support_doesnt_stand_in_for_the_wall(self):
+        """A wardrobe front 0.3 m in front of the wall, wider and taller in view, out-supports it. The wall is still the
+        farthest strong plane near the tape, so the check measures it, not the wardrobe."""
+        world = np.random.default_rng(7)
+        front = np.column_stack((world.uniform(-1.0, 1.0, 2400), world.uniform(0.3, 2.4, 2400), np.full(2400, 4.7)))
+        pitch = math.radians(11)   # room_points' camera: 1.37 m up, pitched 11 degrees down, the wall 5.0 m ahead
+        fwd, down = np.array([0, -math.sin(pitch), math.cos(pitch)]), np.array([0, -math.cos(pitch), -math.sin(pitch)])
+        rel = front - np.array([0, 1.37, 0])
+        cabinet = np.column_stack((rel[:, 0], rel @ down, rel @ fwd)) + world.normal(0, 0.004, rel.shape)
+        plain = room_points(1.37, 11)
+        behind = np.zeros(len(plain), bool)
+        behind[-3000:] = np.abs(plain[-3000:, 0]) < 1.0 * 5.0 / 4.7   # room_points' last 3000 are the wall: the front hides these
+        scene = np.vstack((plain[~behind], cabinet))
+        floor = rn.floor_plane(scene, LIVE)
+        wall_left = 3000 - int(behind.sum())
+        self.assertGreater(len(cabinet), wall_left, 'the wardrobe out-supports the wall')
+        self.assertGreaterEqual(wall_left, len(cabinet) / 2, 'and the wall is still strong')
+        wall = rn.wall_plane(scene, floor, WALL_TAPE, LIVE)
+        self.assertAlmostEqual(wall['distance_m'], WALL_TAPE, delta=0.03)
+        check = rn.scale_check(scene, TAPES, LIVE)
+        self.assertEqual(check['result'], 'none')
+        self.assertLess(abs(check['wall_pct']), 0.6)
+        # the control: with the wall out of the band, the wardrobe is what's left, 6% short of the tape
+        self.assertAlmostEqual(rn.wall_plane(scene, floor, 4.7, {**LIVE, 'wall_tape_band': 0.05})['distance_m'], 4.7, delta=0.03)
 
 
 class Floor(unittest.TestCase):

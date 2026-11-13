@@ -54,8 +54,10 @@ On top of that, the session measures what's left, with two fresh tapes typed at 
 the floor, and the lens to the facing wall, square to it. They're kept in the private receipt only and never printed.
 On the take's median depth, a RANSAC floor plane (the lowest strongly supported near-level plane, as v1's guard found
 it) gives the lens's height, and a RANSAC plane square to the floor and facing the camera, beyond
-`wall_search_fraction` of the wall tape, gives the wall's distance. Both are perpendicular distances, so the camera's
-pitch and yaw don't matter. Each is a signed percentage against its tape: floor % and wall %. Their difference is the
+`wall_search_fraction` of the wall tape, gives the wall's distance. Only planes within `wall_tape_band` (10%) of the
+wall tape count, and of those the farthest with at least half the best support wins, so a bookcase or wardrobe front in
+front of the wall can't stand in for it; with no such plane the paste stops and says so. Both are perpendicular
+distances, so the camera's pitch and yaw don't matter. Each is a signed percentage against its tape: floor % and wall %. Their difference is the
 bend, in points; their mean is the scale error.
 
 The rule:
@@ -124,6 +126,7 @@ floor_band_m = 0.03               # the floor's RANSAC inlier band
 floor_min_share = 0.10            # of the low points on the floor, or the check can't say where the floor is
 wall_min_above_floor_m = 0.25     # facing-wall candidates: at least this far above the floor
 wall_search_fraction = 0.75       # and at least this share of the wall tape ahead of the lens
+wall_tape_band = 0.10             # a facing-wall plane only within this share of the wall tape's distance
 wall_min_axis_cos = 0.7           # the wall's normal within about 45 degrees of the camera's axis
 wall_max_floor_cos = 0.25         # and within about 15 degrees of square to the floor
 wall_min_points = 300             # a facing wall needs this many inliers, or the check can't say where it is

@@ -74,7 +74,7 @@ PICK_PAGE = HERE / "scan_pick.mjs"
 LIVE_BLOCK = "den-live-v2"
 LIVE_KEYS = ("require_source_correction", "median_min_valid", "scale_none_pct", "scale_bend_max_pts",
              "floor_min_below_m", "floor_max_tilt_deg", "floor_band_m", "floor_min_share",
-             "wall_min_above_floor_m", "wall_search_fraction", "wall_min_axis_cos", "wall_max_floor_cos",
+             "wall_min_above_floor_m", "wall_search_fraction", "wall_tape_band", "wall_min_axis_cos", "wall_max_floor_cos",
              "wall_min_points", "edge_min_m", "edge_fraction", "edge_rounds", "distance_max_m", "sofa_check_max_m",
              "held_floor_band_m", "held_wall_min_z_m", "held_noise_min_m", "noise_a_m", "noise_b_per_m",
              "held_within_min", "held_bin_m", "held_bin_max_m", "held_bin_min_pixels", "held_min_pixels",
@@ -559,8 +559,11 @@ def refine_plane(points, normal, distance):
 
 
 def wall_plane(points, floor, wall_tape, live, tries=WALL_TRIES, seed=SEED):
-    """The facing wall: a plane square to the floor and facing the camera, among points well above the floor and at
-    least wall_search_fraction of the wall tape ahead. Its perpendicular distance from the lens, or None."""
+    """The facing wall: among planes square to the floor and facing the camera, found by RANSAC among points well above
+    the floor and at least wall_search_fraction of the wall tape ahead, only those within wall_tape_band of the tape's
+    distance; of those, the farthest whose support is at least half the best one's, refined. A bookcase or wardrobe front
+    in front of the wall can out-support it, but the wall is the farthest strong plane (floor_plane's rule, turned).
+    Its perpendicular distance from the lens, or None."""
     import numpy as np
     nf = np.array(floor["normal"])
     above = points @ nf + floor["height_m"]
@@ -568,8 +571,9 @@ def wall_plane(points, floor, wall_tape, live, tries=WALL_TRIES, seed=SEED):
     if len(candidates) < live["wall_min_points"]:
         return None
     tolerance = 0.015 + 0.006 * candidates[:, 2]
+    near_tape = lambda d: abs(d / wall_tape - 1) <= live["wall_tape_band"]
     rng = np.random.default_rng(seed)
-    best = None
+    found = []
     for _ in range(tries):
         a, b, c = candidates[rng.integers(len(candidates), size=3)]
         n = np.cross(b - a, c - a)
@@ -579,17 +583,22 @@ def wall_plane(points, floor, wall_tape, live, tries=WALL_TRIES, seed=SEED):
         n = n / length
         if abs(n[2]) < live["wall_min_axis_cos"] or abs(n @ nf) > live["wall_max_floor_cos"]:
             continue
-        count = int((np.abs(candidates @ n - n @ a) < tolerance).sum())
-        if best is None or count > best[0]:
-            best = (count, n, float(n @ a))
-    if best is None:
+        d = float(n @ a)
+        if d < 0:
+            n, d = -n, -d
+        if near_tape(d):
+            found.append((int((np.abs(candidates @ n - d) < tolerance).sum()), d, n))
+    if not found:
         return None
-    _, n, d = best
-    if d < 0:
-        n, d = -n, -d
+    best = max(count for count, _, _ in found)
+    strong = [item for item in found if item[0] >= best / 2]
+    farthest = max(d for _, d, _ in strong)
+    # The farthest group of strong planes, and the best-supported plane in it: the group's farthest member is just the
+    # wall's noise band tilted the furthest.
+    _, d, n = max((item for item in strong if item[1] >= farthest - 0.10), key=lambda item: item[0])
     n, d = refine_plane(candidates[np.abs(candidates @ n - d) < 0.15], n, d)
     inliers = int((np.abs(candidates @ n - d) < 0.015 + 0.006 * candidates[:, 2]).sum())
-    if inliers < live["wall_min_points"]:
+    if inliers < live["wall_min_points"] or not near_tape(d):
         return None
     return {"distance_m": d, "normal": [float(x) for x in n], "inliers": inliers,
             "share": inliers / len(candidates)}
@@ -602,7 +611,8 @@ def scale_check(points, tapes, live):
         return {"result": "stop", "why": "the depth check can't find the floor in the camera's view"}
     wall = wall_plane(points, floor, tapes["facing_wall_m"], live)
     if wall is None:
-        return {"result": "stop", "why": "the depth check can't find the facing wall in the camera's view"}
+        return {"result": "stop", "why": "the depth check can't find the facing wall within %.0f%% of your wall tape"
+                                         % (live["wall_tape_band"] * 100)}
     floor_pct = (floor["height_m"] / tapes["lens_height_m"] - 1) * 100
     wall_pct = (wall["distance_m"] / tapes["facing_wall_m"] - 1) * 100
     bend, mean = abs(floor_pct - wall_pct), (floor_pct + wall_pct) / 2

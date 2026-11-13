@@ -62,15 +62,23 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
         try { event = JSON.parse(message.data); } catch (_) { return; }
         if (!validPeopleEvent(event) || (event.home != null && event.home !== config.home)) return;
         latest = event; lastAt = performance.now(); events += 1;
-        if (sameScan(event)) layer?.update(event);
+        const matched = sameScan(event);
+        spots?.tracking(matched ? event.transform_id : null, matched ? event.content_revision : null);
+        if (matched) layer?.update(event);
         else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine); }
         render();
     }
     const isCurrent = () => engine && engine === denEngine() && scope === scene(engine);
     function open() {
-        const next = source = new EventSource(config.stream);
         openedAt = performance.now(); closedAt = 0;
+        spots?.connect(openedAt);
+        const next = source = new EventSource(config.stream);
         next.addEventListener('people', message => { if (source === next && isCurrent()) onPeople(message); });
+        if (spots) next.addEventListener('spot_clock', message => {
+            if (source !== next || !isCurrent()) return;
+            try { spots.anchor(JSON.parse(message.data)); }
+            catch (_) { spots.sourceLost(); }
+        });
         if (spots) next.addEventListener('spot_snapshot', message => {
             if (source !== next || !isCurrent()) return;
             try { spots.receive(JSON.parse(message.data)); }
@@ -78,9 +86,9 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
         });
         next.addEventListener('error', () => {
             if (source !== next) return;
+            next.close(); source = null; closedAt = performance.now();
             spots?.disconnect();
             panel?.pollNow();
-            if (next.readyState === EventSource.CLOSED) closedAt = performance.now();
         });
     }
     function clearBody(owned, reason) {
@@ -190,6 +198,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
         spots?.attach(null);
         disposeBody();
         latest = null; lastAt = 0;
+        closedAt = 0;
         panel?.pause();
         chip?.remove();
     }
@@ -205,8 +214,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
             layer = attachApartmentPeopleLayer(current);
         }
         const now = performance.now();
-        if (source && closedAt && now - closedAt > REOPEN_MS) { source.close(); source = null; }
-        if (!source) open();
+        if (!source && (!closedAt || now - closedAt > REOPEN_MS)) open();
         if (bodyKit && !body) void mountBody(current);
         if (body?.labels && !body.connection && now >= bodyRetryAt) openBody(body);
         spots?.check();

@@ -51,6 +51,7 @@ import coordinator_live  # noqa: E402  the den lighting coordinator (coordinator
 import ha_link  # noqa: E402  its Home Assistant link
 import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
+import preview  # noqa: E402
 import run_local as rl  # noqa: E402  the loop (serve), the scan's floor, the receipt's revision
 import sofa_check as sc  # noqa: E402  say, Stop, the pinned trees' markers
 import source  # noqa: E402
@@ -228,6 +229,29 @@ def coordinator_settings(config, fixed, *, credentials=None):
         return None, "the settings file doesn't set the coordinator up"
     if not isinstance(block, dict):
         return None, "the settings file's coordinator block isn't one"
+    if block.get("preview") is True:
+        fixtures, binding, seat = (block.get(key) for key in ("fixtures", "binding", "seat_mark"))
+        geometry = block.get("geometry")
+        if credentials is not None:
+            try:
+                geometry = json.loads((credentials / "virtual-fixtures.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return None, "the private registered geometry credential does not read"
+            if (not isinstance(geometry, dict) or geometry.get("schema") != "lighting-brain-geometry-1"
+                    or geometry.get("physical_commands") is not False):
+                return None, "the private registered geometry is not a virtual fixture export"
+        if isinstance(geometry, dict) and geometry.get("schema") == "lighting-brain-geometry-1":
+            try:
+                fixtures = {row["fixture_id"]: row for row in geometry["fixtures"]}
+                binding = {"transform_id": block["transform_id"], "scan_revision": geometry["binding"]["content_revision"],
+                           "equipment_revision": geometry["equipment_ref"]["revision"],
+                           "equipment_digest": geometry["equipment_ref"]["digest"]}
+                seat = geometry["zones"]["sofa"]["seat_m"] if seat is None else seat
+            except (KeyError, TypeError):
+                return None, "the registered geometry export is incomplete"
+        if not isinstance(fixtures, dict) or not fixtures or not isinstance(binding, dict):
+            return None, "preview needs the registered fixture geometry and binding"
+        return {"preview": True, "fixtures": fixtures, "binding": binding, "seat_mark": seat}, None
     virtual = block.get("mode") == "virtual"
     if fixed is None and not virtual:
         return None, "it needs the asks block's Home Assistant link (ha_url, and the ha-token.txt credential)"
@@ -276,18 +300,16 @@ def coordinator_settings(config, fixed, *, credentials=None):
 def coordinator_starter(settings, fixed, *, state, tree):
     """serve()'s coordinator: (service, stop), or None when it can't start. Its failure never stops the markers."""
     def start():
+        if settings.get("preview") is not True:
+            return None
         try:
-            core = coordinator_live.load_core(tree)
-            ha = None if fixed is None else ha_link.HaClient(fixed["ha_url"], fixed["token"], cafile=fixed.get("ha_ca_file"))
-            service = coordinator_live.CoordinatorService(
-                core, state_dir=state, lights=settings["lights"], fixtures=settings["fixtures"], ha=ha,
-                utc_offset_h=settings["utc_offset_h"], status_entity=settings["status_entity"],
-                switch_entity=settings["switch_entity"], virtual_binding=settings["virtual_binding"])
+            core, _learn = coordinator_live.load_core(tree)
+            service = preview.Preview(core, state=state, fixtures=settings["fixtures"],
+                                      binding=settings["binding"], seat_mark=settings["seat_mark"])
             service.start()
         except Exception as exc:   # a type name only: its text could hold the URL
             say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
             return None
-        say("Virtual Den coordinator is ready." if service.virtual else "The lighting coordinator follows Home Assistant.")
         return service, service.close
     return start
 
@@ -380,7 +402,12 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     elif isinstance(current, dict) and "coordinator" in current:
         config["coordinator"] = current["coordinator"]
     seed = settings.get("labels_seed") is True
-    for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"), (Path(dropin), dropin_text(address, packs, ha, seed))):
+    coordinator = config.get("coordinator") or {}
+    preview_geometry = isinstance(coordinator, dict) and coordinator.get("preview") is True
+    if preview_geometry:
+        config["coordinator"] = {"preview": True, "transform_id": coordinator.get("transform_id"), "hue_overlay": False}
+    for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"),
+                       (Path(dropin), dropin_text(address, packs, ha, seed, preview_geometry))):
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         part.write_text(text, encoding="utf-8", newline="\n")
@@ -389,7 +416,7 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     return config
 
 
-def dropin_text(address, packs, ha=None, labels_seed=False):
+def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=False):
     """The unit's local settings: the one camera address it may reach, and the content packs, read only. With the packs
     under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through.
     With the Qwen ask set up (ha: Home Assistant's address), that address too, and the Home Assistant token credential,
@@ -400,6 +427,8 @@ def dropin_text(address, packs, ha=None, labels_seed=False):
         lines += ["IPAddressAllow=%s" % ha, "LoadCredential=%s:/etc/den-live/private/%s" % (HA_TOKEN, HA_TOKEN)]
     if labels_seed:
         lines.append("LoadCredential=%s:/etc/den-live/private/%s" % (LABELS_SEED, LABELS_SEED))
+    if preview_geometry:
+        lines.append("LoadCredential=virtual-fixtures.json:/etc/den-live/private/virtual-fixtures.json")
     if packs.parts[1:2] in (("home",), ("root",)):
         lines.append("ProtectHome=tmpfs")
     return "\n".join(lines) + "\n"
@@ -512,7 +541,8 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     lighting, why = coordinator_settings(config, fixed, credentials=Path(env["CREDENTIALS_DIRECTORY"]) if env.get("CREDENTIALS_DIRECTORY") else None)
     if lighting is None:
         say("The lighting coordinator is off: %s." % why)
-    coordinator = None if lighting is None else coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"])
+    coordinator = (coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"])
+                   if lighting and lighting.get("preview") else None)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,
                     floor=None, packs=config["content_packs"], site=config["site"], picked_on=picked_on, state=live,

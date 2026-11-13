@@ -3,7 +3,7 @@
     GET /api/den-live/v1/homes/<home>/stream   text/event-stream: `event: people` per processed frame, `: heartbeat`
                                               every heartbeat_s, so a silent pipeline reads as offline in under 3 s
     GET /api/den-live/v1/homes/<home>/state    {"people": the newest event, or null}
-    GET /api/den-live/v1/homes/<home>/body     one body_clock, then den-live-body-2 ready or clear events
+    GET /api/den-live/v1/homes/<home>/body-v2  one body_clock, then den-live-body-2 ready or clear events
     GET /api/den-live/v1/homes/<home>/labels   the den's labels document (den-room-labels-1, room_labels.py)
     PUT /api/den-live/v1/homes/<home>/labels   saves the whole document: a compare-and-swap on its revision (200 with the
                                               new document, 409 with the current one, 400 with a reason). A JSON body
@@ -105,7 +105,7 @@ class PeopleStream:
                     return self.answer(200, {"people": stream.latest})
                 if path == BASE + stream.home + "/stream":
                     return self.sse()
-                if path == BASE + stream.home + "/body":
+                if path in (BASE + stream.home + "/body-v2", BASE + stream.home + "/body"):
                     if not stream.body_available:
                         return self.answer(503, {"ok": False, "error": "body_unavailable"})
                     return self.sse(body=True)
@@ -201,6 +201,7 @@ class PeopleStream:
                 if self.command == "HEAD":
                     return stream._drop(client)
                 try:
+                    spot_epoch = None
                     if body:
                         self.connection.settimeout(2.0)
                         self.wfile.write(_sse("body_clock", {"server_ts": stream.body_time(stream.clock())}))
@@ -217,8 +218,11 @@ class PeopleStream:
                             pending = list(client.events)
                             client.events.clear()
                             spot, client.spot = client.spot, None
-                        if spot is not None and spot["expires_at_ms"] > time.time() * 1000:
-                            self.wfile.write(b"event: spot_snapshot\ndata: %s\n\n" % json.dumps(spot, separators=(",", ":")).encode())
+                        if spot is not None:
+                            if spot_epoch != spot["epoch"]:
+                                spot_epoch = spot["epoch"]
+                                self.wfile.write(_sse("spot_clock", {"epoch": spot_epoch, "server_mono": stream.clock()}))
+                            self.wfile.write(_sse("spot_snapshot", spot))
                         if not pending and spot is None:
                             self.wfile.write(b": heartbeat\n\n")
                         for event in pending:

@@ -58,8 +58,14 @@ class HaClient:
             raise
         return {"state": got.get("state"), "attributes": got.get("attributes") or {}} if isinstance(got, dict) else None
 
-    def call(self, domain, service, data):
-        self._request("/api/services/%s/%s" % (domain, service), data)
+    def call(self, domain, service, data, *, response=False):
+        suffix = "?return_response" if response else ""
+        result = self._request("/api/services/%s/%s%s" % (domain, service, suffix), data)
+        if response:
+            value = result.get("service_response") if isinstance(result, dict) else None
+            if not isinstance(value, dict):
+                raise HaError("Home Assistant did not confirm the service result")
+            return value
 
 
 class Poller(threading.Thread):

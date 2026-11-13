@@ -125,6 +125,24 @@ async function following(initial, { configure = () => {}, ...options } = {}) {
 }
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `${a} != ${b}`);
 
+test('the legacy follower writes only ambient channels when the Den snapshot owns the spotlight', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    configure(room) {
+      room.overlay.denSpotSnapshotOwned = true;
+      const set = room.overlay.setVirtualFixtureState;
+      room.overlay.setVirtualFixtureState = (id, patch) => {
+        assert.equal(Object.hasOwn(patch, 'spotlight'), false);
+        return set(id, patch);
+      };
+    },
+  });
+  try {
+    await f.t.advance(10000);
+    assert.equal(f.room.calls.aim, 0);
+    assert.ok(f.room.calls.set > 0, 'the legacy follower still applies ambient');
+  } finally { f.wired.dispose(); }
+});
+
 test('authored reading observations pass through the real publisher/brain into moving Home virtual aims',async()=>{
   const run=spawnSync(process.env.PYTHON||'python',['tools/fixtures/den-reading-coordinator.py'],{
     cwd:fileURLToPath(new URL('../',import.meta.url)),encoding:'utf8',timeout:15000,windowsHide:true});

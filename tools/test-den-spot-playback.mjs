@@ -1,100 +1,105 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { createSpotPlayback } from '../app/src/home-den-spot-playback.mjs';
 
-const binding = { content_revision: 'den-r1', registration_version: 1,
-    manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
-const fixture = fixture_id => ({ fixture_id, pan_deg: -14, tilt_deg: 45, on: true, level: .6, cct_k: 3000, why: 'reading', trace_id: 'trace-1' });
+const { snapshot: lit, stopped_snapshot: stopped } = JSON.parse(readFileSync(
+    new URL('./den-live/fixtures/preview-f3.json', import.meta.url), 'utf8'));
+const fixture = 'F3', { binding } = lit;
 
 function setup() {
-    let at = 0, last = null;
-    const scope = { generation: 1, binding, equipment_revision: 3, equipment_digest: 'd'.repeat(64), fixture_ids: ['a', 'b'] };
-    const overlay = { coordinatorSpotScope: () => scope, applyCoordinatorSpots(rows) { last = rows; return true; } };
-    const player = createSpotPlayback({ home: 'den', site: 'victoria', clock: () => at });
-    const controls = (patch = {}, rtt = 0) => player.observeControl({ epoch: 'one', control_revision: 1, enabled: true,
-        stopped: false, server_time_ms: 10_000 + at, ...patch }, at - rtt, at);
-    const sample = (seq, patch = {}) => player.receive({ schema: 'den-virtual-spots-1', home: 'den', site: 'victoria', epoch: 'one', seq,
-        control_revision: 1, enabled: true, stopped: false, binding, equipment_revision: 3, equipment_digest: scope.equipment_digest,
-        fixtures: scope.fixture_ids.map(fixture), sampled_at_ms: 10_000 + at, expires_at_ms: 10_100 + at, ...patch });
+    let at = 1000, alarm = null, drawn = null;
+    const scope = { generation: 1, binding: { content_revision: binding.scan_revision },
+        equipment_revision: binding.equipment_revision, equipment_digest: binding.equipment_digest, fixture_ids: [fixture] };
+    const overlay = { coordinatorSpotScope: () => scope, applyCoordinatorSpots(rows) { drawn = rows; return true; } };
+    const player = createSpotPlayback({ home: 'den', site: 'victoria', clock: () => at,
+        later(callback) { alarm = callback; return 1; }, cancel() { alarm = null; } });
     player.attach(overlay);
-    return { player, overlay, scope, controls, sample, advance: ms => { at += ms; }, last: () => last };
+    const connect = (epoch = lit.epoch) => {
+        player.connect(at);
+        player.anchor({ epoch, server_mono: 10 });
+        player.tracking(binding.transform_id, binding.scan_revision);
+    };
+    connect();
+    return { player, overlay, scope, connect, drawn: () => drawn, advance(ms) { at += ms; alarm?.(); } };
 }
 
-test('spot starts dark and only complete, bound, current producer snapshots can light it', t => {
-    const s = setup(); t.after(() => s.player.attach(null));
-    assert.equal(s.last(), null);
-    s.sample(1);
-    assert.equal(s.last(), null, 'first snapshot waits for the producer clock');
-    s.controls();
-    assert.deepEqual(s.last(), [fixture('a'), fixture('b')]);
-    assert.equal(s.player.current().fixtures[0].trace_id, 'trace-1');
-    s.sample(2, { fixtures: [fixture('a'), fixture('a')] });
-    assert.equal(s.last(), null, 'a missing row cannot leave its previously lit spot on');
-    s.sample(3, { binding: { ...binding, registration_version: 2 } });
-    assert.equal(s.last(), null);
-    s.sample(4);
-    assert.ok(s.last());
-    s.scope.generation++;
-    s.player.check();
-    assert.equal(s.last(), null, 'an overlay rebuild retires the applied generation');
-    s.sample(4);
-    assert.equal(s.last(), null, 'the same sample never lights a rebuilt overlay');
+test('uses golden MOVE aim and trace, and starts dark until the registered geometry and clock match', () => {
+    const { player, drawn, scope } = setup();
+    player.tracking(null, null);
+    player.receive(lit);
+    assert.equal(drawn(), null);
+    player.tracking(binding.transform_id, binding.scan_revision);
+    player.receive({ ...lit, seq: 2 });
+    assert.deepEqual(drawn(), [{ fixture_id: fixture, ...lit.fixtures.F3 }]);
+    assert.equal(player.current().fixtures[0].keep_lit_token, 7);
+    scope.generation += 1;
+    player.check();
+    assert.equal(drawn(), null);
+    player.receive({ ...lit, seq: 2 });
+    assert.equal(drawn(), null, 'a replay does not relight a rebuilt overlay');
 });
 
-test('expiry and reconnect never extend a delayed lease', t => {
-    const s = setup(); t.after(() => s.player.attach(null));
-    s.controls(); s.sample(1);
-    s.advance(101); s.player.check();
-    assert.equal(s.last(), null);
-    s.sample(2, { sampled_at_ms: 10_000, expires_at_ms: 10_100 });
-    assert.equal(s.last(), null);
-    s.sample(3);
-    assert.ok(s.last());
-    s.advance(20); s.player.disconnect();
-    s.sample(4, { sampled_at_ms: 10_101, expires_at_ms: 10_201 });
-    s.controls();
-    assert.equal(s.last(), null, 'a pre-disconnect sample is withheld even when its lease is still valid');
-    s.sample(5);
-    assert.ok(s.last());
+test('connect time bounds a delayed snapshot and replay cannot extend the lease', () => {
+    const { player, connect, drawn, advance } = setup();
+    advance(1499);
+    player.receive(lit);
+    assert.equal(drawn()[0].on, true);
+    player.receive(lit);
+    advance(1);
+    assert.equal(drawn(), null);
+    connect();
+    advance(1500);
+    player.receive(lit);
+    assert.equal(drawn(), null, 'the first event can already be expired at receipt');
 });
 
-test('a crossed resume acknowledgment cannot release a newer stop, and Off stays independent', t => {
-    const s = setup(); t.after(() => s.player.attach(null));
-    s.controls(); s.sample(1);
-    const earlier = s.player.block('stop');
-    const later = s.player.block('stop');
-    s.player.release('stop', earlier, 2);
-    s.controls({ control_revision: 2 }); s.sample(2, { control_revision: 2 });
-    assert.equal(s.last(), null);
-    assert.equal(s.player.holds().stop, later);
-    s.player.acknowledge('stop', later, 3);
-    s.sample(3, { control_revision: 3, stopped: true });
-    assert.equal(s.last(), null);
-    s.player.block('off');
-    s.sample(4, { control_revision: 4, stopped: true, enabled: false });
-    s.sample(5, { control_revision: 5, enabled: false });
-    assert.equal(s.last(), null, 'resuming does not turn automation on');
-    s.sample(6, { control_revision: 6 });
-    assert.ok(s.last());
+test('Stop survives reconnect, rejects an older counter and retains the last MOVE link', () => {
+    const { player, connect, drawn } = setup();
+    player.receive(lit);
+    player.block('stop');
+    assert.equal(drawn(), null);
+    connect('preview-b');
+    player.receive({ ...lit, epoch: 'preview-b' });
+    assert.equal(drawn(), null);
+    player.receive({ ...stopped, epoch: 'preview-b' });
+    assert.equal(drawn()[0].on, false);
+    assert.equal(drawn()[0].last_move_trace_id, lit.fixtures.F3.last_move_trace_id);
+    player.receive({ ...lit, epoch: 'preview-b', seq: 3, stop_counter: 0 });
+    assert.equal(drawn()[0].on, false);
+    player.receive({ ...lit, epoch: 'preview-b', seq: 4, stop_counter: 1 });
+    assert.equal(drawn()[0].on, true);
 });
 
-test('the authoritative dark snapshot carries the trace for the stopped fixture', t => {
-    const s = setup(); t.after(() => s.player.attach(null));
-    s.controls(); s.sample(1);
-    const dark = s.scope.fixture_ids.map(id => ({ ...fixture(id), on: false, level: 0, why: 'Stopped', trace_id: 'stop-1' }));
-    s.sample(2, { control_revision: 2, stopped: true, fixtures: dark });
-    assert.deepEqual(s.last(), dark);
-    assert.equal(s.player.current().fixtures[0].trace_id, 'stop-1');
+test('a stale Resume cannot release a newer local Stop and Off stays independent', () => {
+    const { player, drawn } = setup();
+    player.receive(lit);
+    const earlier = player.block('stop');
+    const later = player.block('stop');
+    player.release('stop', earlier);
+    player.receive({ ...lit, seq: 2 });
+    assert.equal(player.holds().stop, later);
+    assert.equal(drawn(), null);
+    player.acknowledge('stop', later, { stopped: true, stop_counter: 1 });
+    player.receive({ ...stopped, seq: 3 });
+    player.block('off');
+    player.receive({ ...stopped, seq: 4, on: false });
+    player.receive({ ...stopped, seq: 5, on: false, stopped: false });
+    assert.equal(drawn()[0].on, false);
+    player.receive({ ...lit, seq: 6, stop_counter: 1 });
+    assert.equal(drawn()[0].on, true);
 });
 
-test('an unknown Stop holds through remount and waits for authoritative Stop then Resume', t => {
-    const s = setup(); t.after(() => s.player.attach(null));
-    s.controls(); s.sample(1);
-    s.player.block('stop');
-    s.player.disconnect(); s.player.attach(null); s.player.attach(s.overlay);
-    s.controls({ epoch: 'two' }); s.sample(2, { epoch: 'two' });
-    assert.equal(s.last(), null);
-    s.sample(3, { epoch: 'two', control_revision: 2, stopped: true });
-    s.sample(4, { epoch: 'two', control_revision: 3 });
-    assert.ok(s.last());
+test('wrong geometry and an invalid or incomplete snapshot clear the whole preview', () => {
+    const { player, drawn } = setup();
+    player.receive(lit);
+    player.receive({ ...lit, seq: 2, binding: { ...binding, transform_id: 'other-camera' } });
+    assert.equal(drawn(), null);
+    player.receive({ ...lit, seq: 3 });
+    assert.equal(drawn()[0].on, true);
+    player.receive({ ...lit, seq: 4, fixtures: {} });
+    assert.equal(drawn(), null);
+    player.receive({ ...lit, seq: 5, fixtures: { F3: { ...lit.fixtures.F3, keep_lit_token: 9 } } });
+    player.receive({ ...lit, seq: 4 });
+    assert.equal(drawn(), null, 'a malformed later revision does not let an older event relight');
 });

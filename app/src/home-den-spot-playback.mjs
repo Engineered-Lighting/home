@@ -1,140 +1,135 @@
-/* One lease for the coordinator's complete, scene-bound spot snapshot. The
- * control readback supplies producer time and generation, never fixture state. */
-const MAX_LEASE_MS = 3000;
-const CLOCK_MAX_AGE_MS = 10000;
-const CLOCK_MAX_RTT_MS = 1000;
-const BINDING_KEYS = ['content_revision', 'registration_version', 'manifest_digest', 'frame_digest', 'canonical_collision_digest'];
+const SCHEMA = 'den-virtual-spots-1';
+const finite = Number.isFinite;
 const revision = value => Number.isSafeInteger(value) && value >= 0;
-const identifier = value => typeof value === 'string' && value.length > 0 && value.length <= 160;
-const optionalText = (value, max) => value == null || typeof value === 'string' && value.length <= max;
-const inRange = (value, min, max) => Number.isFinite(value) && value >= min && value <= max;
+const text = value => typeof value === 'string' && value.length > 0;
+const object = value => value != null && typeof value === 'object' && !Array.isArray(value);
+const sequence = value => Number.isInteger(value) && value >= 0 && value <= 65535;
+const point = value => Array.isArray(value) && value.length === 3 && value.every(finite);
 
-export function createSpotPlayback({ home, site, clock = () => performance.now(), onChange = () => {} }) {
-    let overlay = null, applied = null, candidate = null, authority = null, clockAnchor = null, floor = null, reconnectAt = null;
+function validRow(row) {
+    return object(row) && typeof row.on === 'boolean' && finite(row.level) && row.level >= 0 && row.level <= 1
+        && (row.on ? row.level > 0 && finite(row.cct_k) : row.level === 0)
+        && finite(row.pan_deg) && finite(row.tilt_deg) && (row.target_m == null || point(row.target_m))
+        && text(row.reason) && text(row.motion_phase)
+        && (row.last_move_trace_id == null
+            ? row.move_sequence == null && row.move_decision_id == null
+            : text(row.last_move_trace_id) && sequence(row.move_sequence) && text(row.move_decision_id))
+        && (row.on ? sequence(row.keep_lit_token) && row.keep_lit_token === row.move_sequence : row.keep_lit_token == null);
+}
+
+function validSnapshot(value, home, site) {
+    if (!object(value) || value.schema !== SCHEMA || value.home !== home || (value.site != null && value.site !== site)
+        || !text(value.epoch) || !revision(value.seq) || !object(value.binding)
+        || !text(value.binding.transform_id) || !text(value.binding.scan_revision)
+        || !revision(value.binding.equipment_revision) || !text(value.binding.equipment_digest)
+        || !finite(value.sampled_mono) || typeof value.on !== 'boolean' || typeof value.stopped !== 'boolean'
+        || !revision(value.stop_counter) || !object(value.fixtures)) return false;
+    const rows = Object.values(value.fixtures);
+    if (!rows.every(validRow) || ((!value.on || value.stopped) && rows.some(row => row.on))) return false;
+    if (value.valid_until_mono == null) return rows.every(row => !row.on && row.motion_phase === 'settled');
+    return finite(value.valid_until_mono) && value.valid_until_mono >= value.sampled_mono;
+}
+
+export function createSpotPlayback({ home, site, clock = () => performance.now(), onChange = () => {},
+    later = setTimeout, cancel = clearTimeout }) {
+    let overlay = null, applied = null, candidate = null, control = null, controlVersion = 0;
+    let anchor = null, openedAt = null, transform = null, scan = null, highestSeq = -1, stopCounter = -1, timer = null;
     const hold = { off: null, stop: null };
-    let controlFloor = -1, timer = null;
 
-    function clear(force = false) {
-        clearTimeout(timer); timer = null;
-        if (!applied && !force) return;
+    function clear() {
+        if (timer !== null) cancel(timer);
+        timer = null;
+        candidate = null;
+        if (!applied) return;
         applied = null;
         overlay?.applyCoordinatorSpots?.(null);
-        onChange(null);
+        onChange();
     }
     function attach(nextOverlay) {
         if (overlay === nextOverlay) return;
-        clear(); overlay = nextOverlay; candidate = null; authority = null; clockAnchor = null;
-        overlay?.applyCoordinatorSpots?.(null);
-    }
-    function block(kind) {
-        const entry = { after: Math.max(controlFloor, authority?.control_revision ?? -1, floor?.control_revision ?? -1) };
-        hold[kind] = entry;
-        clear(true);
-        return entry;
-    }
-    function release(kind, entry, controlRevision) {
-        if (!revision(controlRevision)) return;
-        if (entry && hold[kind] === entry) entry.releasedAt = controlRevision;
-        controlFloor = Math.max(controlFloor, controlRevision);
-        clear();
-    }
-    function acknowledge(kind, entry, controlRevision) {
-        if (!revision(controlRevision)) return;
-        if (entry && hold[kind] === entry) entry.blockedAt = controlRevision;
-        controlFloor = Math.max(controlFloor, controlRevision);
-    }
-    function reconcileHolds(value) {
-        for (const [kind, isBlocked] of [['off', !value.enabled], ['stop', value.stopped]]) {
-            const entry = hold[kind];
-            if (entry && (isBlocked && value.control_revision > entry.after || value.control_revision > (entry.blockedAt ?? Infinity)
-                || value.control_revision >= (entry.releasedAt ?? Infinity))) hold[kind] = null;
-        }
-    }
-    function sourceLost() {
-        candidate = null;
-        clear();
+        disconnect();
+        overlay = nextOverlay;
     }
     function disconnect() {
-        reconnectAt = clock(); authority = null; clockAnchor = null;
-        sourceLost();
+        openedAt = null; anchor = null; transform = null; scan = null; highestSeq = -1;
+        clear();
     }
-    function observeControl(value, sentAt, receivedAt = clock()) {
-        if (!identifier(value?.epoch) || !revision(value.control_revision) || !revision(value.server_time_ms)
-            || typeof value.enabled !== 'boolean' || typeof value.stopped !== 'boolean'
-            || !inRange(receivedAt - sentAt, 0, CLOCK_MAX_RTT_MS) || reconnectAt != null && sentAt < reconnectAt) return;
-        if (value.control_revision < controlFloor || floor && value.control_revision < floor.control_revision) return;
-        if (authority?.epoch === value.epoch && value.control_revision === authority.control_revision
-            && (value.enabled !== authority.enabled || value.stopped !== authority.stopped)) { sourceLost(); return; }
-        if (authority?.epoch !== value.epoch) {
+    function observeControl(value, version = controlVersion) {
+        if (version !== controlVersion || !revision(value?.stop_counter) || value.stop_counter < stopCounter
+            || typeof value.on !== 'boolean' || typeof value.stopped !== 'boolean') return;
+        const changed = control?.on !== value.on || control?.stopped !== value.stopped || control?.stop_counter !== value.stop_counter;
+        stopCounter = value.stop_counter;
+        control = { on: value.on, stopped: value.stopped, stop_counter: value.stop_counter };
+        if (changed) { controlVersion += 1; onChange(); }
+    }
+    function block(kind) {
+        const entry = { after: stopCounter };
+        hold[kind] = entry;
+        clear();
+        onChange();
+        return entry;
+    }
+    function acknowledge(kind, entry, value) {
+        if (entry && hold[kind] === entry && kind === 'stop' && value.stopped) entry.confirmed = value.stop_counter;
+    }
+    function release(kind, entry) {
+        if (entry && hold[kind] !== entry) return;
+        if (hold[kind]) {
+            hold[kind] = null;
+            // A write confirms the control only; a new sample supplies the aim.
             clear();
-            if (candidate?.epoch !== value.epoch) candidate = null;
         }
-        const received = receivedAt;
-        const upperNow = value.server_time_ms + (receivedAt - sentAt);
-        clockAnchor = { upperNow, received };
-        const sinceReconnect = reconnectAt != null ? value.server_time_ms - (receivedAt - reconnectAt) : null;
-        reconnectAt = null;
-        if (sinceReconnect != null && candidate && candidate.sampled_at_ms < sinceReconnect) candidate = null;
-        authority = { epoch: value.epoch, control_revision: value.control_revision, enabled: value.enabled, stopped: value.stopped };
-        reconcileHolds(value);
-        if (!value.enabled || value.stopped || applied && value.control_revision > applied.control_revision) clear();
-        applyCandidate();
     }
     function check() {
-        const scope = overlay?.coordinatorSpotScope?.();
-        if (applied && (!scope || applied.generation !== scope.generation || clock() >= applied.deadline)) clear();
-    }
-    function receive(value) {
-        if (!value || value.schema !== 'den-virtual-spots-1' || value.home !== home || value.site !== site
-            || !identifier(value.epoch) || !revision(value.seq) || !revision(value.control_revision)
-            || !revision(value.sampled_at_ms) || !revision(value.expires_at_ms)
-            || !inRange(value.expires_at_ms - value.sampled_at_ms, 1, MAX_LEASE_MS)
-            || typeof value.enabled !== 'boolean' || typeof value.stopped !== 'boolean'
-            || !Array.isArray(value.fixtures)) { sourceLost(); return; }
-        if (floor?.epoch === value.epoch && value.seq <= floor.seq) return;
-        if (value.control_revision < controlFloor || floor && value.control_revision < floor.control_revision) return;
-        if (candidate?.epoch === value.epoch && value.seq <= candidate.seq) return;
-        candidate = value;
+        if (applied && (clock() >= applied.deadline || overlay?.coordinatorSpotScope()?.generation !== applied.generation)) clear();
         applyCandidate();
     }
     function applyCandidate() {
-        const value = candidate;
-        if (!value || !authority || !clockAnchor) return;
-        if (value.epoch !== authority.epoch) { clear(); return; }
-        const now = clock(), elapsed = now - clockAnchor.received, upperNow = clockAnchor.upperNow + elapsed;
-        if (elapsed >= CLOCK_MAX_AGE_MS || value.expires_at_ms <= upperNow || value.sampled_at_ms > upperNow + 1) {
-            sourceLost(); return;
-        }
-        if (value.control_revision < authority.control_revision) { sourceLost(); return; }
-        if (value.control_revision === authority.control_revision && (value.enabled !== authority.enabled || value.stopped !== authority.stopped)) {
-            sourceLost(); return;
-        }
-        const scope = overlay?.coordinatorSpotScope?.();
-        if (!scope?.binding || value.equipment_revision !== scope.equipment_revision || value.equipment_digest !== scope.equipment_digest
-            || !value.binding || !BINDING_KEYS.every(key => value.binding[key] === scope.binding[key])
-            || value.fixtures.length !== scope.fixture_ids.length) { sourceLost(); return; }
-        const expected = new Set(scope.fixture_ids);
-        if (!value.fixtures.every(row => row && expected.delete(row.fixture_id) && typeof row.on === 'boolean'
-            && inRange(row.pan_deg, -180, 180) && inRange(row.tilt_deg, -90, 90) && inRange(row.level, 0, 1)
-            && Number.isFinite(row.cct_k) && optionalText(row.why, 320) && optionalText(row.trace_id, 160))) {
-            sourceLost(); return;
-        }
+        const value = candidate, scope = overlay?.coordinatorSpotScope?.();
+        if (!value || !scope) return;
+        const deadline = value.valid_until_mono == null ? Infinity : openedAt + (value.valid_until_mono - anchor.server) * 1000;
+        if (clock() >= deadline) { clear(); return; }
+        if (transform === null || scan === null) return;
+        const binding = value.binding;
+        if (binding.transform_id !== transform || binding.scan_revision !== scan || binding.scan_revision !== scope.binding?.content_revision
+            || binding.equipment_revision !== scope.equipment_revision || binding.equipment_digest !== scope.equipment_digest
+            || Object.keys(value.fixtures).length !== scope.fixture_ids.length
+            || !scope.fixture_ids.every(id => Object.hasOwn(value.fixtures, id))) { clear(); return; }
+
         candidate = null;
-        floor = { epoch: value.epoch, seq: value.seq, control_revision: value.control_revision };
-        authority = { epoch: value.epoch, control_revision: value.control_revision, enabled: value.enabled, stopped: value.stopped };
-        reconcileHolds(value);
-        if (hold.off || hold.stop || (!value.enabled || value.stopped) && value.fixtures.some(row => row.on)) {
-            clear(); return;
-        }
-        if (!overlay.applyCoordinatorSpots(value.fixtures, scope.generation)) {
+        if (!value.on) hold.off = null;
+        const stop = hold.stop;
+        if (stop && value.stopped && value.stop_counter >= (stop.confirmed ?? stop.after + 1)) stop.observed = value.stop_counter;
+        if (stop && !value.stopped && stop.observed != null && value.stop_counter >= stop.observed) hold.stop = null;
+        observeControl(value);
+        if ((hold.off || hold.stop) && value.on && !value.stopped) { clear(); return; }
+        const fixtures = scope.fixture_ids.map(id => ({ fixture_id: id, ...value.fixtures[id] }));
+        if (!overlay.applyCoordinatorSpots(fixtures, scope.generation)) {
             overlay.applyCoordinatorSpots(null); clear(); return;
         }
-        clearTimeout(timer);
-        const deadline = now + Math.min(value.expires_at_ms - upperNow, CLOCK_MAX_AGE_MS - elapsed);
-        applied = { ...value, generation: scope.generation, deadline };
-        timer = setTimeout(check, Math.ceil(deadline - now));
-        onChange(applied);
+        if (timer !== null) cancel(timer);
+        applied = { ...value, fixtures, generation: scope.generation, deadline };
+        timer = deadline === Infinity ? null : later(check, Math.ceil(deadline - clock()));
+        onChange();
     }
-    return { attach, block, release, acknowledge, sourceLost, disconnect, observeControl, receive, check,
-        control: () => authority, holds: () => ({ off: hold.off, stop: hold.stop }), current: () => applied };
+
+    return { attach, block, acknowledge, release, disconnect, observeControl, check, sourceLost: clear,
+        connect(start) { disconnect(); openedAt = start; },
+        tracking(value, revision) { transform = value ?? null; scan = revision ?? null; if (!scan) clear(); else applyCandidate(); },
+        anchor(value) {
+            if (openedAt === null || !text(value?.epoch) || !finite(value.server_mono) || value.epoch === anchor?.epoch) return;
+            if (anchor) { clear(); highestSeq = -1; }
+            anchor = { epoch: value.epoch, server: value.server_mono };
+        },
+        receive(value) {
+            if (!anchor) return;
+            if (value?.epoch !== anchor.epoch) { clear(); return; }
+            if (revision(value.seq) && value.seq <= highestSeq) return;
+            if (revision(value.seq)) highestSeq = value.seq;
+            if (!validSnapshot(value, home, site)) { clear(); return; }
+            if (value.stop_counter < stopCounter) return;
+            candidate = value;
+            applyCandidate();
+        },
+        controlVersion: () => controlVersion, control: () => control, holds: () => ({ ...hold }), current: () => applied };
 }

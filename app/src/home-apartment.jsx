@@ -5335,8 +5335,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // is never involved. Timing diagnostics are explicit and stay off normally.
   useEffect(() => {
     const engine = engineRef.current, Follower = window.HomeLightingBrainFollower, Client = window.HomeLightingBrainClient;
-    if (window.HomeDenLive?.virtual === true && engine?.siteId === window.HomeDenLive.site
-        || !open || phase !== "ready" || !virtualFixtureBindingKey || rehearsalIsolated || !Follower || !Client
+    if (!open || phase !== "ready" || !virtualFixtureBindingKey || rehearsalIsolated || !Follower || !Client
         || !engine?.overlay?.setVirtualFixtureState || typeof window.fetch !== "function") {
       setLightingBrain(null); return undefined;
     }

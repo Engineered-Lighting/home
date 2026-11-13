@@ -14,6 +14,7 @@ export const DEN_LIVE_WRITE_MAX_BYTES = 65536;
 
 const HOME = "/v1/homes/den";
 export const DEN_LIVE_BODY_PATH = DEN_LIVE_PREFIX + HOME + "/body";
+export const DEN_LIVE_BODY_UPSTREAM_PATH = DEN_LIVE_BODY_PATH + "-v2";
 const COORDINATOR = HOME + "/coordinator";
 const READ = new Set([HOME + "/state", HOME + "/stream", HOME + "/labels"]);
 const COORDINATOR_WRITES = new Set(["switch", "settings", "learned/clear", "desk", "stop", "resume"]
@@ -59,7 +60,7 @@ export function denLiveEnabled(env = process.env) {
 }
 
 export function denLiveUpstreamSuffix(suffix, kind, { bodyV2, virtual, serve }) {
-  if (kind === "body") return bodyV2 ? suffix : null;
+  if (kind === "body") return bodyV2 ? DEN_LIVE_BODY_UPSTREAM_PATH.slice(DEN_LIVE_PREFIX.length) : null;
   if (kind !== "coordinator" && kind !== "coordinator-write") return suffix;
   if (virtual) {
     if (suffix === COORDINATOR + "/desk") return null;

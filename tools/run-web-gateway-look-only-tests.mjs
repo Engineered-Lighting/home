@@ -10,7 +10,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
+import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_UPSTREAM_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
   denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind, denLiveWriteRefusal } from "../web-gateway/den-live-route.mjs";
 import { isTailnetAddress, lookOnlyKind, lookOnlyPackIndex } from "../web-gateway/look-only.mjs";
 import { REGISTRATION_ROUTE, initRegistration, readActiveBinding } from "../web-gateway/equipment-registration.mjs";
@@ -197,12 +197,12 @@ function fakeUpstreams() {
     req.on("data", chunk => { body += chunk; });
     req.on("end", () => {
       seen.push({ method: req.method, url: req.url, headers: req.headers, body });
-      if (req.url === DEN_LIVE_BODY_PATH) {
-        const { status = 200, mime = "text/event-stream; charset=utf-8", schema = DEN_LIVE_BODY_SCHEMA } = mode.bodyResponse;
+      if (req.url === DEN_LIVE_BODY_UPSTREAM_PATH) {
+        const { status = 200, mime = "text/event-stream; charset=utf-8", schema = DEN_LIVE_BODY_SCHEMA, frameSchema = schema ?? "den-live-body-1" } = mode.bodyResponse;
         const headers = { "Content-Type": mime, "Cache-Control": "public, max-age=900", "Set-Cookie": "irrelevant=fixture" };
         if (schema) headers[DEN_LIVE_BODY_SCHEMA_HEADER] = schema;
         res.writeHead(status, headers);
-        const frame = { schema: schema ?? "den-live-body-1", home: "den", run_id: "fixture", track_epoch: 1,
+        const frame = { schema: frameSchema, home: "den", run_id: "fixture", track_epoch: 1,
           content_revision: "r1", transform_id: "fixture", seq: 1, mode: "rgb", status: "clear", reason: "empty" };
         res.write('event: body_clock\ndata: {"server_ts":1000}\n\nevent: body\ndata: ' + JSON.stringify(frame) + "\n\n");
         setTimeout(() => res.end(), 1500);
@@ -383,7 +383,7 @@ async function fullServeTests(base, upstream, temp, fake) {
     assert("tailnet body GET without a session streams v2 unbuffered", r.status === 200
       && r.body.includes("event: body_clock") && r.body.includes(DEN_LIVE_BODY_SCHEMA)
       && /cache-control: no-store/i.test(r.head) && /x-accel-buffering: no/i.test(r.head) && !/set-cookie:/i.test(r.head)
-      && upstream.seen.at(-1)?.url === DEN_LIVE_BODY_PATH, r.head);
+      && upstream.seen.at(-1)?.url === DEN_LIVE_BODY_UPSTREAM_PATH, r.head);
     const basic = `Basic ${Buffer.from(`${USER}:${PASSWORD}`).toString("base64")}`;
     r = await exchange(port, { client: null, url: "/", headers: { Authorization: basic } });
     const cookie = /\r\nset-cookie: ([^;\r\n]+)/i.exec(r.head)?.[1];
@@ -404,7 +404,8 @@ async function fullServeTests(base, upstream, temp, fake) {
     }
     r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH, body: "x" });
     assert("body GET rejects a payload before proxying", r.status === 400 && upstream.seen.length === beforeDenied, r.status);
-    for (const invalid of [{ schema: null }, { schema: "den-live-body-1" }, { mime: "application/json" }, { status: 206 }]) {
+    for (const invalid of [{ status: 404, schema: null }, { schema: null, frameSchema: DEN_LIVE_BODY_SCHEMA },
+      { schema: "den-live-body-1" }, { mime: "application/json" }, { status: 206 }]) {
       upstream.mode.bodyResponse = invalid;
       r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH });
       assert("invalid body upstream response is rejected before streaming bytes", r.status === 503

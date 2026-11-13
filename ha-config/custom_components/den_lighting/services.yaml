@@ -1,0 +1,105 @@
+resume_automatic:
+  name: Resume automatic Den lighting
+  description: Clear manual holds for selected Den fixtures, or all four when omitted.
+  fields:
+    entity_id:
+      name: Fixtures
+      description: Omit to resume the whole Den.
+      selector:
+        entity:
+          multiple: true
+          filter:
+            - domain: light
+coordinator_claim:
+  name: Claim coordinator publisher
+  description: Start publishing under the current Home Assistant authority and clear the old overlay.
+  fields:
+    epoch:
+      name: Authority epoch
+      required: true
+      selector:
+        text:
+    publisher:
+      name: Publisher boot ID
+      required: true
+      selector:
+        text:
+    claim_revision:
+      name: Current claim revision
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 1000000000
+coordinator_plan:
+  name: Coordinator plan
+  description: >-
+    Replace or renew the coordinator's room-light overlay under the current Home Assistant authority.
+    Lights left out follow the incumbent policy. An exact retry does not extend the lease.
+  fields:
+    epoch:
+      name: Authority epoch
+      required: true
+      selector:
+        text:
+    publisher:
+      name: Publisher boot ID
+      required: true
+      selector:
+        text:
+    plan_id:
+      name: Plan id
+      required: true
+      selector:
+        text:
+    generation:
+      name: Generation
+      description: Rises with every update, including renewals. An older or conflicting generation is refused.
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 1000000000
+    valid_for_s:
+      name: Valid for (seconds)
+      required: true
+      selector:
+        number:
+          min: 5
+          max: 120
+    transition_s:
+      name: Transition (seconds)
+      selector:
+        number:
+          min: 0
+          max: 10
+    situation:
+      name: Situation
+      description: For the logs, for example sitting/evening.
+      selector:
+        text:
+    scenes:
+      name: Scenes
+      description: "{entity_id: {on, brightness, kelvin}} for this den's room lights. Empty keeps only the situation."
+      required: true
+      selector:
+        object:
+    release:
+      name: Release overlay
+      description: Clear the overlay and its situation. Requires empty scenes.
+      selector:
+        boolean:
+coordinator_clear:
+  name: Clear coordinator overlay
+  description: Clear the overlay and report the correction watermark while preserving manual holds.
+  fields:
+    epoch:
+      name: Authority epoch
+      required: true
+      selector:
+        text:
+    publisher:
+      name: Publisher boot ID
+      required: true
+      selector:
+        text:

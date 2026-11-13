@@ -143,7 +143,9 @@ def main(argv=None):
             say(bodies.handle(header, kept))
             continue
         kept = (header.get("id"), data, header.get("frame_key"))
-        ring.keep(header.get("id"), data)
+        identity = {"frame_key": header["frame_key"]} if "frame_key" in header else {}
+        if identity:
+            ring.keep(header["frame_key"], data)
         try:
             _meta, nv12 = detector.check.read_bundle(data, with_rgb=True)
             plane = np.frombuffer(nv12, np.uint8).reshape(detect.HEIGHT * 3 // 2, detect.WIDTH)
@@ -154,9 +156,9 @@ def main(argv=None):
             row = detector.row_of(result, capture_ts=t, available_ts=t + float(header["delay_s"]) + compute_s, rgb_seq=seq,
                                   width=detect.WIDTH, height=detect.HEIGHT, boxes_version="yolo26s-8.4.0",
                                   keypoints_version=detector.pose.manifest["model_version"])
-            say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1)})
+            say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1), **identity})
         except Exception as exc:  # one bad frame is a reply, not the end; a type name only, never its text
-            say({"id": header.get("id"), "error": type(exc).__name__})
+            say({"id": header.get("id"), "error": type(exc).__name__, **identity})
 
 
 if __name__ == "__main__":

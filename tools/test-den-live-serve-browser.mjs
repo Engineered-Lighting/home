@@ -8,6 +8,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import os from 'node:os';
 import path from 'node:path';
+import { createInterface } from 'node:readline';
 import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
@@ -22,6 +23,7 @@ const ca = fs.readFileSync(path.join(certDir, 'ca.pem'));
 const denBase = '/api/den-live/v1/homes/den';
 const relayCredential = 'a'.repeat(64);
 const haToken = 'authored-server-ha-credential';
+const golden = JSON.parse(fs.readFileSync(new URL('./den-live/fixtures/preview-f3.json', import.meta.url), 'utf8'));
 const listen = server => new Promise((resolve, reject) => {
   server.once('error', reject);
   server.listen(0, '127.0.0.1', () => resolve(server.address().port));
@@ -29,10 +31,11 @@ const listen = server => new Promise((resolve, reject) => {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 let folder, upstream, relay, gateway, browser, origin, den, scene, ordinaryPort, servePort;
+let previewPort = null;
 const relaySockets = new Set();
 const fake = { streams: new Set(), bodies: new Set(), sockets: new Set(), actions: [], ws: [], labels: null,
   bodyAvailable: true, bodyStreaming: true, bodySeq: 0, haOffline: false,
-  control: { enabled: false, stopped: false, control_revision: 0 }, epoch: 'fixture-epoch', seq: 0 };
+  control: { on: false, stopped: false, stop_counter: 0 }, epoch: 'fixture-epoch', seq: 0 };
 
 function json(res, value, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -45,15 +48,17 @@ function labelDocument() {
       on_wall: false, made_by: 'owner', status: 'confirmed', updated_at: null }] };
 }
 function spotEvent() {
-  const now = Date.now();
-  const on = fake.control.enabled && !fake.control.stopped;
-  return { schema: 'den-virtual-spots-1', home: 'den', site: 'victoria', epoch: fake.epoch, seq: ++fake.seq,
-    sampled_at_ms: now, expires_at_ms: now + 1700, ...fake.control, binding: scene.binding,
-    equipment_revision: scene.revision, equipment_digest: scene.digest,
-    fixtures: scene.equipment.filter(row => row.kind === 'mount' && row.position_m != null).map(mount => ({
-      fixture_id: scene.equipment.find(row => row.kind === 'fixture' && row.mounted_at_ref === mount.id)?.id ?? `${mount.id}-virtual-fixture`,
-      pan_deg: 10, tilt_deg: 25, on,
-      level: on ? .6 : 0, cct_k: 3000, why: on ? 'Reading' : 'Stopped', trace_id: on ? 'authored-trace' : null })) };
+  const now = performance.now() / 1000;
+  const on = fake.control.on && !fake.control.stopped;
+  const row = on ? golden.snapshot.fixtures.F3 : golden.stopped_snapshot.fixtures.F3;
+  const ids = scene.equipment.filter(item => item.kind === 'mount' && item.position_m != null).map(mount =>
+    scene.equipment.find(item => item.kind === 'fixture' && item.mounted_at_ref === mount.id)?.id ?? `${mount.id}-virtual-fixture`);
+  return { ...golden.snapshot, site: 'victoria', epoch: fake.epoch, seq: ++fake.seq,
+    sampled_mono: now, valid_until_mono: now + 1.5, ...fake.control,
+    binding: { transform_id: 'authored-transform', scan_revision: den.revision,
+      equipment_revision: scene.revision, equipment_digest: scene.digest },
+    fixtures: Object.fromEntries(ids.map(fixture => [fixture, { ...row,
+      last_move_trace_id: `${fake.epoch}/${fixture}/trace-1` }])) };
 }
 function openEvents(res, clients, write, headers = {}, first = '') {
   res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', ...headers });
@@ -68,18 +73,31 @@ async function upstreamRequest(req, res) {
   for await (const part of req) text += part;
   const body = text ? JSON.parse(text) : null;
   const { pathname } = new URL(req.url, 'http://fixture.local');
+  if (previewPort && (pathname === denBase + '/stream' || pathname.startsWith(denBase + '/coordinator/virtual'))) {
+    if (req.method === 'POST') fake.actions.push({ path: pathname, body, headers: req.headers });
+    const host = '127.0.0.1:' + previewPort;
+    const request = http.request({ hostname: '127.0.0.1', port: previewPort, path: pathname, method: req.method,
+      headers: { host, ...(text ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text) } : {}) } },
+    response => { res.writeHead(response.statusCode, response.headers); response.pipe(res); });
+    request.on('error', () => res.destroy());
+    res.on('close', () => request.destroy());
+    request.end(text);
+    return;
+  }
   if (pathname === denBase + '/stream') return openEvents(res, fake.streams, out => {
     const now = Date.now() / 1000;
     const people = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform',
       content_revision: den.revision, capture_ts: now, emitted_ts: now, mode: 'rgb', camera: { status: 'ok' },
       tracks: [{ track_id: 'authored-person', state: 'confirmed', xy_m: [1.2, 1.5], sigma_m: .1, age_s: 0 }] };
-    out.write('event: people\ndata: ' + JSON.stringify(people) + '\n\nevent: spot_snapshot\ndata: ' + JSON.stringify(spotEvent()) + '\n\n');
-  });
-  if (pathname === denBase + '/body' && fake.bodyAvailable) return openEvents(res, fake.bodies, out => {
+    out.write('event: people\ndata: ' + JSON.stringify(people) + '\n\n');
+    if (fake.spotStreaming !== false) out.write('event: spot_snapshot\ndata: ' + JSON.stringify(spotEvent()) + '\n\n');
+  }, {}, 'event: spot_clock\ndata: ' + JSON.stringify({ epoch: fake.epoch, server_mono: performance.now() / 1000 }) + '\n\n');
+  if (pathname === denBase + '/body-v2' && fake.bodyAvailable) return openEvents(res, fake.bodies, out => {
     if (fake.bodyStreaming) emitBody(out);
   }, { 'X-Home-Den-Body-Schema': 'den-live-body-2' },
   'event: body_clock\ndata: ' + JSON.stringify({ server_ts: Date.now() / 1000 }) + '\n\n');
   if (pathname === denBase + '/body') return json(res, { schema: 'den-live-body-1', private_fixture: true });
+  if (pathname === denBase + '/body-v2') return json(res, { error: 'not_served' }, 404);
   if (pathname === denBase + '/labels') {
     if (req.method === 'GET') return json(res, fake.labels);
     fake.actions.push({ path: pathname, body, headers: req.headers });
@@ -88,17 +106,16 @@ async function upstreamRequest(req, res) {
     return json(res, fake.labels);
   }
   const virtual = denBase + '/coordinator/virtual';
-  if (pathname === virtual) return json(res, { ...fake.control, on: fake.control.enabled, epoch: fake.epoch,
-    server_time_ms: Date.now(), settings: {}, home_assistant: {}, counts: {} });
+  if (pathname === virtual) return json(res, { ...fake.control, snapshot: spotEvent(), settings: {} });
   if (pathname.startsWith(virtual + '/')) {
     fake.actions.push({ path: pathname, body, headers: req.headers });
     const command = pathname.slice(virtual.length + 1);
-    if ((command === 'resume' || body.on === true) && body.expected_control_revision !== fake.control.control_revision) {
-      return json(res, { error: 'control_revision_changed' }, 409);
+    if (command === 'resume' && body.stop_counter !== fake.control.stop_counter) {
+      return json(res, { error: 'stop_counter_changed' }, 409);
     }
-    fake.control.control_revision += 1;
-    if (command === 'switch') fake.control.enabled = body.on;
-    else fake.control.stopped = command === 'stop';
+    if (command === 'switch') fake.control.on = body.on;
+    if (command === 'stop') { fake.control.stop_counter += 1; fake.control.stopped = true; }
+    if (command === 'resume') fake.control.stopped = false;
     return json(res, { ok: true, ...fake.control });
   }
   if (pathname.startsWith('/internal/home/serve-lighting/')) {
@@ -108,6 +125,7 @@ async function upstreamRequest(req, res) {
     return json(res, { version: 1, result: { version: 1, status: 'done', operation_id: body.operation_id,
       results: ['echo', 'victoria'].map(site_id => ({ site_id, name: 'Reading lamp', operation: 'on', brightness: null, status: 'succeeded' })) } });
   }
+  if (pathname.startsWith('/api/services/')) fake.actions.push({ path: pathname, body, headers: req.headers });
   if (pathname === '/api/states') return json(res, []);
   return json(res, { error: 'fixture_unavailable' }, 404);
 }
@@ -265,6 +283,33 @@ async function openHome(mobile) {
   return { page, context };
 }
 
+async function startPreview(config) {
+  const child = spawn(process.env.PYTHON || 'python', ['-B', 'tools/den-live/test_sofa_browser_backend.py'],
+    { cwd: root, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+  let stderr = '';
+  child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-8000); });
+  const lines = createInterface({ input: child.stdout });
+  const command = value => child.stdin.write(JSON.stringify(value) + '\n');
+  const closed = new Promise(resolve => child.once('close', resolve));
+  child.stdin.on('error', () => {});
+  command(config);
+  try {
+    for await (const line of lines) {
+      if (!line.startsWith('{')) continue;
+      const ready = JSON.parse(line);
+      if (Number.isInteger(ready.port)) {
+        return { port: ready.port, command, closed, stop: async () => {
+          command({ command: 'close' });
+          const timeout = setTimeout(() => child.kill(), 5000);
+          try { await closed; } finally { clearTimeout(timeout); }
+        } };
+      }
+    }
+  } catch (error) { stderr += '\n' + error.message; }
+  child.kill();
+  throw Error('Python preview did not start\n' + stderr);
+}
+
 test('full Serve shell and managed HA WebSocket on a fresh desktop and phone', { timeout: 90000 }, async () => {
   for (const mobile of [false, true]) {
     const { page, context } = await openHome(mobile);
@@ -292,6 +337,7 @@ test('full Serve shell and managed HA WebSocket on a fresh desktop and phone', {
 });
 
 test('label CAS, exact virtual controls and body rollback gate through the browser origin', { timeout: 90000 }, async () => {
+  const initial = { ...fake.control };
   const { page, context } = await openHome(false);
   try {
     const results = await page.evaluate(async base => {
@@ -303,10 +349,11 @@ test('label CAS, exact virtual controls and body rollback gate through the brows
       const call = (command, body) => fetch(base + '/coordinator/' + command, { method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Home-Den-Live-CSRF': '1' }, body: JSON.stringify(body) });
       const save = await put(), stale = await put();
-      const on = await call('switch', { on: true, expected_control_revision: 0 });
+      const on = await call('switch', { on: true });
       const stop = await call('stop', {});
-      const rejected = await call('resume', { expected_control_revision: 1 });
-      const resumed = await call('resume', { expected_control_revision: 2 });
+      const stopped = await stop.json();
+      const rejected = await call('resume', { stop_counter: stopped.stop_counter - 1 });
+      const resumed = await call('resume', { stop_counter: stopped.stop_counter });
       const off = await call('switch', { on: false });
       return [save.status, stale.status, on.status, stop.status, rejected.status, resumed.status, off.status];
     }, denBase);
@@ -316,7 +363,7 @@ test('label CAS, exact virtual controls and body rollback gate through the brows
     const downgraded = await page.evaluate(async path => { const r = await fetch(path + '/body'); return [r.status, await r.text()]; }, denBase);
     assert.equal(downgraded[0], 503);
     assert.ok(!downgraded[1].includes('den-live-body-1'));
-  } finally { fake.bodyAvailable = true; await context.close(); }
+  } finally { fake.bodyAvailable = true; fake.control = initial; await context.close(); }
 });
 
 test('cross-home card works during HA outage and recovers a lost reply on reload', { timeout: 90000 }, async () => {
@@ -375,6 +422,7 @@ test('cross-home card works during HA outage and recovers a lost reply on reload
 
 test('the mobile Den draws a face-free figure, and Stop holds the visible spot through replay, restart and reload', { timeout: 140000 }, async () => {
   const initial = { ...fake.control }, initialEpoch = fake.epoch;
+  const firstAction = fake.actions.length;
   const { page, context } = await openHome(true);
   const panel = page.locator('[data-den-coordinator]');
   const button = command => panel.locator(`[data-den-coordinator-${command}]`);
@@ -411,11 +459,22 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
     await button('switch').click();
     await waitForSpot(true);
     assert.ok((await readDrawn()).every(on => on === true));
-    assert.match(await panel.locator('[data-den-coordinator-why]').innerText(), /authored-trace/);
+    assert.match(await panel.locator('[data-den-coordinator-why]').innerText(), /wrists.*trace-1/);
+    const lit = (await live()).spot.fixtures[0];
+    assert.deepEqual([lit.pan_deg, lit.tilt_deg, lit.level, lit.keep_lit_token, lit.move_decision_id],
+      [-45, 30, 200 / 254, 7, golden.decision_id]);
+    fake.spotStreaming = false;
+    await page.waitForFunction(() => {
+      const status = window.HomeDenLiveView?.status();
+      const rows = window.__APT_ENGINE?.overlay?.virtualFixturesReadback()?.fixtures || [];
+      return !status?.spot && status?.layer?.tracks === 1 && rows.length && rows.every(row => !row.state.spotlight.on);
+    });
+    fake.spotStreaming = true;
+    await waitForSpot(true);
     const preStop = spotEvent();
     await button('stop').click();
     await waitForSpot(false);
-    for (const stream of fake.streams) stream.write('event: spot_snapshot\ndata: ' + JSON.stringify({ ...preStop, seq: fake.seq + 200 }) + '\n\n');
+    for (const stream of fake.streams) stream.write('event: spot_snapshot\ndata: ' + JSON.stringify({ ...preStop, seq: ++fake.seq }) + '\n\n');
     await delay(400);
     assert.ok((await readDrawn()).every(on => on === false));
     fake.epoch = 'fixture-restarted';
@@ -423,17 +482,38 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.spot?.epoch === 'fixture-restarted', null, { timeout: 60000 });
     assert.ok((await readDrawn()).every(on => on === false));
-    await panel.locator('summary').click();
+    await panel.locator('summary').evaluate(summary => {
+      if (!summary.parentElement.open) summary.click();
+    });
+    const other = await context.newPage();
+    try {
+      await other.goto(page.url(), { waitUntil: 'domcontentloaded' });
+      await other.waitForFunction(() => window.HomeDenLiveView?.status()?.spot?.stopped === true);
+      const observed = await other.evaluate(() => window.HomeDenLiveView.status().spot.stop_counter);
+      const repeatedStop = page.waitForResponse(response => response.url().endsWith('/coordinator/stop') && response.ok());
+      await button('stop').click();
+      await repeatedStop;
+      const staleResume = await other.evaluate(async ({ url, stop_counter }) => {
+        const response = await fetch(url + '/resume', { method: 'POST', headers: {
+          'Content-Type': 'application/json', 'X-Home-Den-Live-CSRF': '1',
+        }, body: JSON.stringify({ stop_counter }) });
+        return response.status;
+      }, { url: denBase + '/coordinator', stop_counter: observed });
+      assert.equal(staleResume, 409, 'a second tab cannot resume past a newer Stop');
+      assert.ok((await readDrawn()).every(on => on === false));
+    } finally { await other.close(); }
     await button('resume').click();
     await waitForSpot(true);
     await button('switch').click();
     await waitForSpot(false);
     assert.ok((await readDrawn()).every(on => on === false));
     assert.equal(await panel.locator('[data-den-coordinator-desk]').count(), 0);
+    assert.deepEqual(fake.actions.slice(firstAction).map(row => row.path), ['switch', 'stop', 'stop', 'resume', 'resume', 'switch']
+      .map(operation => denBase + '/coordinator/virtual/' + operation));
   } catch (error) {
     error.message += '\nDen state: ' + JSON.stringify(await page.evaluate(() => window.HomeDenLiveView?.status() || null));
     throw error;
-  } finally { fake.control = initial; fake.epoch = initialEpoch; fake.bodyStreaming = true; await context.close(); }
+  } finally { fake.control = initial; fake.epoch = initialEpoch; fake.bodyStreaming = true; fake.spotStreaming = true; await context.close(); }
 });
 
 test('the normal Den label editor saves a label and keeps a draft across a revision conflict', { timeout: 110000 }, async () => {
@@ -458,4 +538,106 @@ test('the normal Den label editor saves a label and keeps a draft across a revis
     error.message += '\nLabel state: ' + JSON.stringify(await page.evaluate(() => window.HomeDenLabelsView?.status() || null));
     throw error;
   } finally { fake.labels = initial; await context.close(); }
+});
+
+test('the real coordinator trace, virtual spot and Stop agree through Full Home Serve', { timeout: 150000 }, async () => {
+  const firstAction = fake.actions.length;
+  const { page, context } = await openHome(false);
+  let preview = null;
+  const traceRoot = path.join(folder, 'actual-preview');
+  const traceRows = () => {
+    const days = path.join(traceRoot, 'days');
+    return fs.existsSync(days) ? fs.readdirSync(days).flatMap(day =>
+      fs.readFileSync(path.join(days, day, 'coordinator-fixture_calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)) : [];
+  };
+  const button = name => page.locator(`[data-den-coordinator-${name}]`);
+  async function waitForDark() {
+    await page.waitForFunction(() => {
+      const rows = window.__APT_ENGINE?.overlay?.virtualFixturesReadback()?.fixtures || [];
+      return rows.length > 0 && rows.every(row => !row.state.spotlight.on);
+    });
+  }
+  async function waitForLit() {
+    await page.waitForFunction(() => {
+      const sample = window.HomeDenLiveView?.status()?.spot;
+      return sample?.fixtures?.some(row => row.on && row.motion_phase === 'settled');
+    });
+    return page.evaluate(() => window.HomeDenLiveView.status().spot.fixtures.find(row => row.on));
+  }
+  try {
+    await page.waitForFunction(() => !!window.__APT_ENGINE?.overlay?.coordinatorSpotScope(), null, { timeout: 60000 });
+    const geometry = await page.evaluate(() => {
+      const overlay = window.__APT_ENGINE.overlay, scope = overlay.coordinatorSpotScope();
+      return Object.fromEntries(scope.fixture_ids.map(id => {
+        const d = overlay.virtualFixtureInteractionDescriptor(id);
+        return [id, { aim_origin_m: d.display_origin_m, horizontal_world_reference: d.horizontal_world_reference,
+          initial_cdeg: [0, -4500] }];
+      }));
+    });
+    preview = await startPreview({ state_dir: traceRoot, fixtures: geometry,
+      binding: { transform_id: 'authored-transform', scan_revision: den.revision,
+        equipment_revision: scene.revision, equipment_digest: scene.digest },
+      target_m: [1.2, 1.38, .65], facing: [0, 1] });
+    previewPort = preview.port;
+    for (const stream of fake.streams) stream.end();
+    await page.waitForFunction(() => window.HomeDenLiveView?.markers()?.some(row => row.track_id === 'synthetic-owner')
+      || window.HomeDenLiveView?.status()?.spot?.epoch?.length === 32, null, { timeout: 20000 });
+    await waitForDark();
+    preview.command({ scene: 'reading' });
+    const row = await waitForLit();
+    const beam = await page.evaluate(id => {
+      const root = window.__APT_ENGINE.overlay.virtualFixturesGroup.children.find(node => node.userData.fixture_id === id);
+      return root.getObjectByName('robotic-spotlight').userData;
+    }, row.fixture_id);
+    assert.ok(beam.beam_origin_m?.length === 3 && beam.direction_unit?.length === 3);
+    const rayError = point => {
+      const vector = point.map((n, i) => n - beam.beam_origin_m[i]);
+      const depth = vector.reduce((sum, n, i) => sum + n * beam.direction_unit[i], 0);
+      return Math.hypot(...vector.map((n, i) => n - depth * beam.direction_unit[i]));
+    };
+    const error = rayError(row.target_m);
+    assert.ok(error < .005, `rendered ray should cross the task target, got ${error} m`);
+    assert.ok(rayError([row.target_m[0] + .5, ...row.target_m.slice(1)]) > .3, 'a nearby offset target misses the rendered ray');
+    assert.equal(row.keep_lit_token, row.move_sequence);
+    preview.command({ scene: 'standing' });
+    await waitForDark();
+    preview.command({ scene: 'reading' });
+    await waitForLit();
+    await page.locator('[data-den-coordinator] summary').evaluate(summary => {
+      if (!summary.parentElement.open) summary.click();
+    });
+    await button('stop').click();
+    await waitForDark();
+    await page.waitForFunction(() => window.HomeDenLiveView?.status()?.spot?.stopped === true);
+    let receipt, traces;
+    for (let attempt = 0; attempt < 30; attempt++) {
+      receipt = JSON.parse((await request('http://127.0.0.1:' + preview.port + denBase + '/test/receipt')).data);
+      traces = traceRows();
+      if (receipt.trace_event_index === traces.length
+          && traces.filter(trace => trace.action === 'stop' && trace.outcome === 'encoded_only').length === Object.keys(geometry).length) break;
+      await delay(40);
+    }
+    assert.deepEqual(receipt.writes, []);
+    assert.equal(receipt.stopped, true);
+    assert.equal(receipt.trace_complete, true);
+    assert.equal(receipt.trace_event_index, traces.length);
+    assert.equal(traces.filter(trace => trace.action === 'stop' && trace.outcome === 'encoded_only').length, Object.keys(geometry).length);
+    await button('resume').click();
+    await waitForLit();
+    await button('switch').click();
+    await waitForDark();
+    assert.deepEqual(fake.actions.slice(firstAction).map(action => action.path), ['stop', 'resume', 'switch']
+      .map(action => denBase + '/coordinator/virtual/' + action));
+    traces = traceRows();
+    assert.ok(traces.some(trace => trace.trace_id === row.last_move_trace_id && trace.outcome === 'encoded_only'));
+    assert.ok(traces.some(trace => trace.action === 'stop' && trace.outcome === 'encoded_only'));
+    assert.ok(traces.some(trace => trace.action === 'resume' && trace.outcome === 'encoded_only'));
+  } catch (error) {
+    error.message += '\nDen state: ' + JSON.stringify(await page.evaluate(() => window.HomeDenLiveView?.status() || null));
+    throw error;
+  } finally {
+    await context.close();
+    previewPort = null;
+    await preview?.stop();
+  }
 });

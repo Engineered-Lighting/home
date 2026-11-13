@@ -428,7 +428,7 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 **The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
 
 **What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
-- Three stills from the last 3 s, made into JPEGs in the detector's process (`stills.py`).
+- Two or three stills from a continuously supported subject window, made into JPEGs in the detector's process (`stills.py`).
 - Today's Lab question, with three changes:
   - "hobby" and "craft" are added;
   - the old camera placement is removed;
@@ -444,12 +444,14 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 - the labels fields.
 
 **What it gives.**
-- **The stream:** `health.qwen {state, why, last_reply_at, reply_s_median, asks_per_min, backoff_level}` on every event.
-  - Each track it asked about gets `activity {word, close_up, at}` for 30 s, but only when den-track was sure, through the stills' window, whose answer it was.
-  - The state reads `unavailable` after 3 failed questions in a row, or 3 sets of pictures that didn't come.
-- **In-process:** each answer goes to `Asker.on_reply` hooks as `{"fact": <la-fact-log-1 line>, "ask": <the log line>}`.
-  - The log line carries `association {safe, status, since_at}`: whether den-track held the asked track confident through the stills' window, and since before it.
-  - The end-to-end plan's person state holds a reply that isn't safe.
+- The people stream shows Qwen health and activity for the one currently bound track until the evidence expires.
+- The in-process coordinator consumes a typed reply with ordered frame keys, camera epoch, track ID, association and
+  eligibility revisions, and a deadline ten seconds after the newest input still. A reply that cannot bind remains
+  diagnostic evidence. The coordinator can use the live output in virtual-only mode without sending fixture or Hue calls.
+
+**Offline replay.** From the checkout root, run `python -B -m unittest discover -s tools/den-live -p test_evidence.py`.
+The fixture generates its own RGB/depth bundles and uses the pinned observe and tracker code. It requires no prepared
+takes or camera access.
 
 **Turning it on (inference plan, step 3).**
 

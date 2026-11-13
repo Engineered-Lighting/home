@@ -35,9 +35,17 @@ const PACKS = packRoot(home, { room: ROOM, refsRoot: ROOT, packs: option('packs'
 
 /* The loop's stream, passed through as it comes: the page reaches it on its own origin. */
 function pass(req, res, pathname) {
-  const upstream = http.request({ host: HOST, port: STREAM_PORT, path: pathname, method: 'GET',
+  const body = pathname === STREAM + 'body';
+  const upstream = http.request({ host: HOST, port: STREAM_PORT, path: body ? `${pathname}-v2` : pathname, method: 'GET',
     headers: { Host: `${HOST}:${STREAM_PORT}`, Accept: req.headers.accept || '*/*' } }, up => {
-    res.writeHead(up.statusCode, { 'Content-Type': up.headers['content-type'] || 'application/json', 'Cache-Control': 'no-store' });
+    const mime = up.headers['content-type']?.split(';', 1)[0].trim().toLowerCase();
+    const schema = up.headers['x-home-den-body-schema'];
+    if (body && (up.statusCode !== 200 || mime !== 'text/event-stream' || schema !== 'den-live-body-2')) {
+      up.destroy();
+      return send(res, 503, { ok: false, error: 'body_unavailable' });
+    }
+    res.writeHead(up.statusCode, { 'Content-Type': up.headers['content-type'] || 'application/json', 'Cache-Control': 'no-store',
+      ...(body ? { 'X-Home-Den-Body-Schema': schema } : {}) });
     res.flushHeaders();
     up.pipe(res);
   });
@@ -78,7 +86,7 @@ async function routes(req, res, url) {
 }
 
 const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__denLive={stream:${JSON.stringify(STREAM + 'stream')},site:${JSON.stringify(home.site)}};`
-  + (ROOM === 'real' ? `window.HomeDenLive=Object.freeze({...window.__denLive,home:'den',body:${JSON.stringify(STREAM + 'body')}});` : '')
+  + (ROOM === 'real' ? `window.HomeDenLive=Object.freeze({...window.__denLive,home:'den',body:${JSON.stringify(STREAM + 'body')},bodySchema:'den-live-body-2'});` : '')
   + `window.HomeDenLabels=Object.freeze({site:${JSON.stringify(home.site)},labels:${JSON.stringify(STREAM + 'labels')}});`
   + `try{localStorage.setItem('apartment3d.site',${JSON.stringify(home.site)});localStorage.setItem('home.perf.backgroundWarmup','off');localStorage.setItem('apartment3d.prewarm','off');}catch(_){}</script>`;
 // --labels-only (run_local.py's): no camera loop runs, so the markers' panel would only say the stream stopped.

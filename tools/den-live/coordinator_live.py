@@ -60,6 +60,7 @@ def load_core(tree):
     sys.path.insert(0, folder)
     try:
         dc, learn = importlib.import_module("den_coordinator"), importlib.import_module("learn")
+        dc.need_v1 = importlib.import_module("need_v1")
         for name in CORE_MODULES:
             if name in sys.modules:
                 sys.modules["den_core." + name] = sys.modules.pop(name)

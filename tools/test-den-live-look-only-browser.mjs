@@ -125,7 +125,7 @@ function startUpstream() {
       req.on('close', () => { clearInterval(timer); fake.streams.delete(res); });
       return;
     }
-    if (req.method === 'GET' && req.url === BODY) {
+    if (req.method === 'GET' && req.url === `${BODY}-v2`) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Home-Den-Body-Schema': 'den-live-body-2' });
       res.write(`event: body_clock\ndata: ${JSON.stringify({ server_ts: Date.now() / 1000 })}\n\n`);
       fake.bodies.add(res); fake.bodiesOpened += 1;

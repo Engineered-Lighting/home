@@ -4,10 +4,12 @@ import time
 import unittest
 import urllib.error
 import urllib.request
+from collections import deque
 from types import SimpleNamespace
 
 from body_input import BodyInput, bundle_frame_key, qualified
 from body_link import BodyLink
+from contracts import TrackingSnapshot
 from perceive import Perceiver, body_person
 from stream import BODY_SCHEMA, BASE, PeopleStream
 
@@ -153,9 +155,9 @@ class PipelineTests(unittest.TestCase):
     def pipeline_process(self, mode, provider):
         calls = []
         detector = SimpleNamespace(next_id=42)
-        detector.detect = lambda bundle, delay, **key: calls.append(("detect", key)) or {"luma": 0, "row": {}}
-        camera = SimpleNamespace(check_frame=lambda _: None)
-        observation = dict(kind="keypoints", obs_id="current-pose", validity="valid")
+        detector.detect = lambda bundle, delay, **key: calls.append(("detect", key)) or {"luma": 100 if mode == "rgb" else 0, "row": {}}
+        camera = SimpleNamespace(check_frame=lambda _: None, error_bound_m=.1)
+        observation = dict(kind="keypoints", obs_id="current-pose", validity="valid", score=.9)
         track = SimpleNamespace(id=1, obs_ids={"current-pose"}, heading_as_of=None, last_seen=100)
         track_record = dict(track_id="one", position=dict(x=0, y=1, cov=[[0.1, 0], [0, 0.1]]), heading=None,
                             association=dict(status="confident", since_ts=99.0))
@@ -169,20 +171,27 @@ class PipelineTests(unittest.TestCase):
         perceiver.t, perceiver.camera, perceiver.detector = tools, camera, detector
         perceiver.home, perceiver.scope = "den", SCOPE
         perceiver.last_t_host, perceiver.last_capture, perceiver.session, perceiver.sessions = 99.0, 99.0, "camera", 3
-        perceiver.counts, perceiver.arrivals, perceiver.lags = {"frames": 0, "observations": 0}, [], []
+        perceiver.counts = {"frames": 0, "observations": 0, "weak_only_hidden": 0}
+        perceiver.arrivals, perceiver.lags, perceiver.drops = [], [], []
+        perceiver.run_id, perceiver.frame_id, perceiver.retired, perceiver.last_seq = "synthetic-run", 0, set(), 6
+        perceiver.clock_reset_candidate = perceiver.last_input_mono = perceiver.calibration_id = None
+        perceiver.associations, perceiver.hops = {}, {}
+        perceiver.labels, perceiver.now = None, lambda: 1000
+        perceiver.snapshot = TrackingSnapshot(perceiver.run_id, 3, 1, None, "starting", None, "unknown", ())
         perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})
         perceiver.core, perceiver.strong = SimpleNamespace(step=lambda *args: [(track, "confirmed")]), set()
         perceiver.clock = SimpleNamespace(add=lambda *_: None, offset=lambda: 0)
         perceiver._transit = lambda *_: None
         perceiver.require_source_correction = False
         perceiver.mode, perceiver.light_since, perceiver.dark_since = mode, None, 99
-        perceiver.event = lambda ago, tracks, camera, now: {**camera, "capture_ts": 123.0, "tracks": tracks}
-        perceiver.body_input = lambda *_, **data: calls.append(("provider", data)) or provider(data)
+        perceiver.event = lambda ago, tracks, camera, now: {**camera, "camera": {"why": None, **camera},
+                                                            "seq": 2, "capture_ts": 123.0, "tracks": tracks}
+        perceiver.body_provider = lambda *_, **data: calls.append(("provider", data)) or provider(data)
         perceiver._body_request = lambda value: {"frame_key": value.frame_key, "mode": value.mode}
         perceiver.body = SimpleNamespace(submit=lambda frame_id, **kwargs: calls.append(("submit", frame_id, kwargs)),
                                          clear=lambda reason: calls.append(("clear", reason)))
         bundle = SimpleNamespace(data=b"fake", session="camera", rgb_seq=7, t_host=100.0,
-                                 arrival_mono=100.1, arrival_unix=1000)
+                                 arrival_mono=100.1, arrival_unix=1000, fetch_s=0, parse_s=0)
         return calls, perceiver.process(bundle, {}, 100.2)
 
     def pipeline_input(self, data, *, key=None):
@@ -192,20 +201,20 @@ class PipelineTests(unittest.TestCase):
 
     def test_rgb_provider_runs_after_current_track_association(self):
         calls, event = self.pipeline_process("rgb", self.pipeline_input)
-        key = ["camera", 7, 20]
-        self.assertEqual(calls[0], ("detect", {"frame_key": key}))
+        key = ["synthetic-run", 3, 1]
+        self.assertEqual(calls[0], ("detect", {}))
         kind, data = calls[1]
         self.assertEqual((kind, data["mode"]), ("provider", "rgb"))
         self.assertEqual(data["observations"][0]["obs_id"], "current-pose")
         self.assertEqual(data["tracks"], event["tracks"])
         self.assertEqual(data["supported"], [{"current-pose"}])
-        self.assertEqual(data["association"], {"e3-one": ("confident", 99.0)})
+        self.assertEqual(data["association"], {"synthetic-run-e3-one": ("confident", 99.0)})
         self.assertEqual(calls[2], ("submit", 42, {"frame_key": key, "mode": "rgb"}))
 
     def test_ir_body_submission_survives_legacy_rgb_darkness(self):
         calls, event = self.pipeline_process("none", self.pipeline_input)
-        key = ["camera", 7, 20]
-        self.assertEqual(calls, [("detect", {"frame_key": key}),
+        key = ["synthetic-run", 3, 1]
+        self.assertEqual(calls, [("detect", {}),
                                  ("provider", {"frame_key": key, "mode": "none", "observations": (), "tracks": (),
                                                "supported": (), "association": {}}),
                                  ("submit", 42, {"frame_key": key, "mode": "infrared"})])
@@ -214,7 +223,7 @@ class PipelineTests(unittest.TestCase):
     def test_wrong_provider_key_clears_body_without_changing_markers(self):
         calls, event = self.pipeline_process("rgb", lambda data: self.pipeline_input(data, key=["camera", 7, 19]))
         self.assertEqual(calls[-1], ("clear", "unavailable"))
-        self.assertEqual(event["tracks"][0]["track_id"], "e3-one")
+        self.assertEqual(event["tracks"][0]["track_id"], "synthetic-run-e3-one")
 
 
 def read_event(response):
@@ -243,7 +252,7 @@ class StreamTests(unittest.TestCase):
     def test_capture_deadline_and_clear_replay_with_independent_markers(self):
         self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
         self.assertTrue(self.stream.publish_body(SCOPE, frame={**FRAME, "head": "must never be forwarded"}, capture_mono=99.5))
-        with urllib.request.urlopen(self.base + "body", timeout=3) as response:
+        with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
             self.assertEqual(response.headers["X-Home-Den-Body-Schema"], BODY_SCHEMA)
             self.assertEqual(read_event(response), ("body_clock", {"server_ts": 1000}))
             name, first = read_event(response)
@@ -251,11 +260,11 @@ class StreamTests(unittest.TestCase):
             self.assertEqual(first["expires_ts"] - first["capture_ts"], 1)
             self.assertNotIn("head", first)
         self.now += 0.2
-        with urllib.request.urlopen(self.base + "body", timeout=3) as response:
+        with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
             read_event(response)
             self.assertEqual(read_event(response), ("body", first))
         self.now += 0.4
-        with urllib.request.urlopen(self.base + "body", timeout=3) as response:
+        with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
             read_event(response)
             name, cleared = read_event(response)
             self.assertEqual((name, cleared["status"], cleared["reason"]), ("body", "clear", "stale"))
@@ -280,10 +289,10 @@ class StreamTests(unittest.TestCase):
     def test_missing_provider_leaves_people_and_spot_routes_available(self):
         self.stream.body_available = False
         self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
-        spot = {"expires_at_ms": (time.time() + 5) * 1000, "seq": 10}
+        spot = {"epoch": "synthetic-preview", "valid_until_mono": self.now + 5, "seq": 10}
         self.stream.publish_spot(spot)
         with self.assertRaises(urllib.error.HTTPError) as missing:
-            urllib.request.urlopen(self.base + "body", timeout=3)
+            urllib.request.urlopen(self.base + "body-v2", timeout=3)
         with missing.exception as error:
             self.assertEqual(error.code, 503)
             self.assertEqual(json.load(error)["error"], "body_unavailable")

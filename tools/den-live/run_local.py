@@ -266,7 +266,7 @@ def start_body(perceiver, out, detector, body_input):
     """Attach the link now. Its first qualified bundle schedules worker setup without a wait."""
     link = body_link.BodyLink(detector, stream=out)
     perceiver.body = link
-    perceiver.body_input = body_input
+    perceiver.body_provider = body_input
     return link
 
 
@@ -335,12 +335,11 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                 say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
                 lighting = None
             if lighting is not None:
-                lighting[0].attach_stream(out, revision, site)
+                lighting[0].site = site
+                lighting[0].connect(out.publish_spot)
                 out.routes.update(lighting[0].routes())
-                if asker:
-                    asker[0].on_reply.append(lighting[0].on_ask_reply)
-        observers = ([asker[0].observe] if asker else []) + ([lighting[0].observe] if lighting else [])
-        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observers)
+        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None)
+        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observer)
         out.start()
         src.start()
         loop.start()
@@ -380,6 +379,25 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
             out.close()
         if cleanup is not None:
             cleanup()
+
+
+def evidence_observer(asker, lighting):
+    """Deliver current typed tracking before any reply tied to that snapshot."""
+    def observe(event, snapshot):
+        if asker is not None:
+            try:
+                event = asker.observe(event, snapshot)
+            finally:
+                if lighting is not None:
+                    current = asker.snapshot
+                    lighting.offer_snapshot(current if current is not None and current.seq == snapshot.seq else snapshot)
+            reply = asker.pop_reply()
+            if lighting is not None and reply is not None:
+                lighting.offer_inference(reply)
+        elif lighting is not None:
+            lighting.offer_snapshot(snapshot)
+        return event
+    return observe
 
 
 def main(argv=None, *, root=None, camera_url=None, token_file=None, venv=sc.VENV_PY, console=sc.has_console, **kw):

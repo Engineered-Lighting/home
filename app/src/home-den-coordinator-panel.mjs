@@ -219,9 +219,10 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         if (!stronger && (!state || action === 'resume' && !state.stopped)) return;
         const entry = stronger ? spots.block(scope) : spots.holds()[scope];
         const path = action === 'on' || turningOff ? 'switch' : action;
-        const payload = action === 'on' ? { on: true, expected_control_revision: state.control_revision }
-            : turningOff ? { on: false } : stopping ? {} : { expected_control_revision: state.control_revision };
+        const payload = action === 'on' || turningOff ? { on: !turningOff }
+            : stopping ? {} : { stop_counter: state.stop_counter };
         const serial = ++controlSerial[scope];
+        const version = spots.controlVersion();
         controlProblem = stronger ? 'Keeping the spots dark while den-live confirms' : 'Waiting for den-live';
         posts += 1; render();
         try {
@@ -229,11 +230,12 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
                 headers: { 'Content-Type': 'application/json', Accept: 'application/json', [CSRF_HEADER]: '1' }, body: JSON.stringify(payload) });
             const answer = await response.json().catch(() => null);
             if (serial !== controlSerial[scope]) return;
-            if (!response.ok || answer?.ok !== true || !Number.isSafeInteger(answer.control_revision) || answer.control_revision < 0) {
+            if (!response.ok || answer?.ok !== true || !Number.isSafeInteger(answer.stop_counter) || answer.stop_counter < 0) {
                 controlProblem = response.status === 409 ? 'Control changed on another device; check its current state' : 'Control outcome is unknown';
             } else {
-                if (stronger) spots.acknowledge(scope, entry, answer.control_revision);
-                else spots.release(scope, entry, answer.control_revision);
+                if (stronger) spots.acknowledge(scope, entry, answer);
+                else spots.release(scope, entry);
+                spots.observeControl(answer, version);
                 controlProblem = '';
             }
         } catch (_) {
@@ -246,7 +248,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         }
     }
     switchButton.addEventListener('click', () => {
-        if (spots) void control(spots.control()?.enabled !== false && !spots.holds().off ? 'off' : 'on');
+        if (spots) void control(spots.control()?.on !== false && !spots.holds().off ? 'off' : 'on');
         else if (state) void post('switch', { on: !state.on }, state.on ? 'Turning it off' : 'Turning it on');
     });
     stopButton.addEventListener('click', () => { void control('stop'); });
@@ -324,14 +326,14 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         root.hidden = kind === 'none' || kind === 'absent';
         root.dataset.state = kind;
         const controlState = spots?.control();
-        const shownOn = spots ? controlState?.enabled === true && !spots.holds().off : state?.on === true;
+        const shownOn = spots ? controlState?.on === true && !spots.holds().off : state?.on === true;
         const shownStop = spots ? controlState?.stopped === true || !!spots.holds().stop : state?.stopped === true;
         const applied = spots?.current();
         const shown = state && { ...state, on: shownOn, stopped: shownStop };
         setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown));
         setText(error, controlProblem || problem);
         if (spots) {
-            fillList(why, applied?.fixtures.map(row => `${row.fixture_id} · ${row.why ? reasonWords(row.why) : row.on ? 'lighting' : 'dark'}${row.trace_id ? ` · Trace ${row.trace_id}` : ''}`)
+            fillList(why, applied?.fixtures.map(row => `${row.fixture_id} · ${reasonWords(row.reason)}${row.target_basis ? ` · ${words(row.target_basis)}` : ''}${row.last_move_trace_id ? ` · Trace ${row.last_move_trace_id}` : ''}`)
                 || ['No fresh spot snapshot']);
             why.title = '';
             stopButton.disabled = false;
@@ -377,7 +379,8 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
     async function poll() {
         if (pollRequest || paused) return;
         const request = pollRequest = new AbortController();
-        const sentAt = lastPoll = clock(); polls += 1;
+        lastPoll = clock(); polls += 1;
+        const version = spots?.controlVersion();
         try {
             const response = await fetchImpl(url, { credentials: 'same-origin', cache: 'no-store', signal: request.signal, headers: { Accept: 'application/json' } });
             if (request !== pollRequest) return;
@@ -386,7 +389,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
             if (request !== pollRequest) return;
             if (!response.ok || !answer || typeof answer !== 'object') throw new Error(`HTTP ${response.status}`);
             state = answer; kind = 'running';
-            spots?.observeControl(answer, sentAt, clock());
+            spots?.observeControl(answer, version);
         } catch (failure) {
             if (request !== pollRequest) return;
             kind = 'unreachable';
@@ -413,7 +416,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
             void poll();
         },
         refresh: render,
-        status: () => ({ kind, on: spots ? spots.control()?.enabled ?? null : state ? state.on === true : null, situation: state ? situationWords(state.situation) : null,
+        status: () => ({ kind, on: spots ? spots.control()?.on ?? null : state ? state.on === true : null, situation: state ? situationWords(state.situation) : null,
             polls, posts, problem: controlProblem || problem, hidden: root.hidden, open: root.open, buttons: !lookOnly }),
     };
 }

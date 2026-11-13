@@ -1180,6 +1180,7 @@ export function createOverlay(apartmentRoot) {
         setVirtualFixtures: virtualFixtures.setDocument,
         setVirtualFixtureState: virtualFixtures.setFixtureState,
         coordinatorSpotScope: virtualFixtures.coordinatorSpotScope,
+        get denSpotSnapshotOwned() { return virtualFixtures.coordinatorSpotScope() !== null; },
         applyCoordinatorSpots: virtualFixtures.applyCoordinatorSpots,
         setVirtualFixturesVisible: virtualFixtures.setVisible,
         virtualFixturesReadback: virtualFixtures.readback,

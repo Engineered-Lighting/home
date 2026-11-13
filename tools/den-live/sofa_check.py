@@ -154,7 +154,12 @@ def archive(tools_root, key, pins=None):
     ref_name = TREES[key][0]
     if archived(tools_root, key, pins):
         return tree
-    done = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar", sha, *paths], capture_output=True)
+    checkout = subprocess.run(["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True)
+    if checkout.returncode:
+        raise Stop("the git checkout for pinned tools is unavailable")
+    done = subprocess.run(["git", "-C", checkout.stdout.strip(), "archive", "--format=tar", sha, *paths],
+                          capture_output=True)
     if done.returncode:
         raise Stop("git archive of %s at %s failed" % (ref_name, sha))
     shutil.rmtree(tree, ignore_errors=True)

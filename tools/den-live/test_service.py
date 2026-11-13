@@ -480,8 +480,7 @@ class ServiceLive(unittest.TestCase):
         self.assertEqual(kept, ['METHOD-den-track-floor.md', 'detector.log'], 'nothing but what run_local keeps')
         self.assertFalse(any(p.suffix == '.npz' for p in service.state.rglob('*')), 'no frame kept')
         shapes = (r'^Floor: ', r'^Registration den-virtual@\S+; the camera', r'^Starting the detector',
-                  r"^The live body is on, in the detector's process\. It learns the empty room",
-                  r"^The live body is off: [a-z '(),:0-9]+\. The markers go on\.$",
+                  r'^The measured body output is awaiting night-depth and head-exclusion qualification\.$',
                   r"^The Qwen ask is off: [A-Za-z '(),:0-9_./<>-]+\.$",
                   r"^The lighting coordinator is off: [A-Za-z '(),:0-9_./<>-]+\.$",
                   r'^camera [a-z]+(: [a-z ]+)? \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames')

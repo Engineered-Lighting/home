@@ -17,7 +17,7 @@
 #     the Qwen ask set up (settings.json's asks block), the drop-in also allows Home Assistant's one address and loads
 #     its token as a credential.
 #  6. Installs the three private inputs root-only in /etc/den-live/private/, and the unit. With the Qwen ask set up, a
-#     fourth: ha-token.txt; without it, an old one is removed.
+#     fourth: ha-token.txt; without it, an old one is removed. A supplied Home preview geometry is root-only too.
 #  7. Points /opt/den-live/current at this release and (re)starts den-live, then waits for its stream to answer.
 # It prints words only, never a token or a coordinate, and ends with its undo lines. Any stop, an unexpected one too
 # (the ERR trap), prints why, the undo lines and, once this run has switched releases, the line back to the old one.
@@ -130,6 +130,11 @@ if "${python}" -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1], e
 elif [[ -e "${here}/room-labels.json" ]]; then
   refuse "room-labels.json is beside install.sh, but settings.json doesn't bring labels"
 fi
+if "${python}" -c 'import json, sys; block = json.load(open(sys.argv[1], encoding="utf-8")).get("coordinator"); sys.exit(0 if isinstance(block, dict) and block.get("preview") is True else 1)' "${here}/settings.json"; then
+  [[ -s "${here}/virtual-fixtures.json" ]] || refuse "settings.json enables the preview, but the private Home geometry is missing"
+elif [[ -e "${here}/virtual-fixtures.json" ]]; then
+  refuse "the private Home geometry is present, but settings.json does not enable the preview"
+fi
 work="$(mktemp -d)"
 say "The tarball matches its sha256 (${want:0:12})."
 
@@ -230,6 +235,10 @@ if [[ -s "${here}/room-labels.json" ]]; then
   say "Your labels: brought from the PC. den-live takes them only if it has none yet."
 else
   rm -f -- "${etc}/private/room-labels.json"
+fi
+if [[ -s "${here}/virtual-fixtures.json" ]]; then
+  install -m 0600 -o root -g root -- "${here}/virtual-fixtures.json" "${etc}/private/virtual-fixtures.json"
+  say "Virtual preview: private Home geometry installed root-only."
 fi
 
 # ---- 7. this release, live -------------------------------------------------------------------------------------

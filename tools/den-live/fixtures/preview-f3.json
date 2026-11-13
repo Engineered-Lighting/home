@@ -1,0 +1,87 @@
+{
+  "epoch": "preview-a",
+  "initial_sequence": 7,
+  "fixture_id": "F3",
+  "decision_id": "spot-golden-7",
+  "geometry": {"aim_origin_m": [0, 0, 1.5], "horizontal_world_reference": [1, 0, 0]},
+  "profile": {"label": "fictional-v2", "range": {"pan": [-175, 175], "tilt": [-85, 85]}, "lit_motion": true},
+  "move": {
+    "start_cdeg": [4000, -2500],
+    "target_cdeg": [4500, -3000],
+    "range_cdeg": [[-17000, 17000], [-8000, 8000]],
+    "level": 0.7874015748031497,
+    "cct_k": 2700,
+    "travel": "lit",
+    "lit_motion": true,
+    "fade_s": 1.0,
+    "valid_ms": 0,
+    "velocity_cdeg_s": [0, 0],
+    "profile_id": "fictional-v2"
+  },
+  "frames": [
+    {"action": "aim_move", "sequence": 7, "command": 0, "payload_hex": "070009941148f4c87201000000000000"},
+    {"action": "keep_lit", "sequence": 8, "command": 1, "move_token": 7, "payload_hex": "08000700"},
+    {"action": "stop", "sequence": 9, "command": 2, "payload_hex": "0900"},
+    {"action": "resume", "sequence": 10, "command": 3, "payload_hex": "0a00"}
+  ],
+  "snapshot": {
+    "schema": "den-virtual-spots-1",
+    "home": "den",
+    "epoch": "preview-a",
+    "seq": 1,
+    "binding": {"transform_id": "synthetic-transform", "scan_revision": "synthetic-scan", "equipment_revision": 1, "equipment_digest": "synthetic-equipment"},
+    "sampled_mono": 10.0,
+    "valid_until_mono": 11.5,
+    "on": true,
+    "stopped": false,
+    "stop_counter": 0,
+    "fixtures": {
+      "F3": {
+        "on": true,
+        "level": 0.7874015748031497,
+        "cct_k": 2700,
+        "pan_deg": -45,
+        "tilt_deg": 30,
+        "target_m": [1.0, 1.0, 0.683503419072274],
+        "target_basis": "wrists",
+        "reason": "task",
+        "motion_phase": "settled",
+        "last_move_trace_id": "preview-a/F3/trace-1",
+        "move_sequence": 7,
+        "move_decision_id": "spot-golden-7",
+        "keep_lit_token": 7
+      }
+    }
+  },
+  "stopped_snapshot": {
+    "schema": "den-virtual-spots-1",
+    "home": "den",
+    "epoch": "preview-a",
+    "seq": 2,
+    "binding": {"transform_id": "synthetic-transform", "scan_revision": "synthetic-scan", "equipment_revision": 1, "equipment_digest": "synthetic-equipment"},
+    "sampled_mono": 11.0,
+    "valid_until_mono": 12.5,
+    "on": true,
+    "stopped": true,
+    "stop_counter": 1,
+    "fixtures": {
+      "F3": {
+        "on": false,
+        "level": 0,
+        "cct_k": 2700,
+        "pan_deg": -45,
+        "tilt_deg": 30,
+        "target_m": null,
+        "target_basis": null,
+        "reason": "stopped",
+        "motion_phase": "settled",
+        "last_move_trace_id": "preview-a/F3/trace-1",
+        "move_sequence": 7,
+        "move_decision_id": "spot-golden-7",
+        "keep_lit_token": null
+      }
+    }
+  },
+  "firmware_v2a_move_ack_hex": "0700080000",
+  "route_refusal": {"start_cdeg": [17000, -3000], "target_cdeg": [-17000, -3000], "reason": "travel_exceeds_180_degrees"}
+}

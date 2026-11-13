@@ -247,7 +247,9 @@ class Perceiving(unittest.TestCase):
         last = events[-1]['tracks'][0]
         self.assertLess(math.dist(last['xy_m'], truth(READING)), 0.3, last['xy_m'])
         self.assertEqual(last['state'], 'confirmed')
-        self.assertEqual(set(last), {'track_id', 'state', 'xy_m', 'sigma_m', 'heading_deg', 'age_s', 'near'}, 'no joints, no image, no name')
+        self.assertEqual(set(last), {'track_id', 'state', 'xy_m', 'sigma_m', 'heading_deg', 'age_s', 'near', 'service_run_id',
+                                     'camera_epoch', 'association_revision'}, 'no joints, no image, no name')
+        self.assertEqual((last['service_run_id'], last['camera_epoch']), (p.run_id, 1))
         self.assertIsNone(last['near'], 'no labels, no phrase')
         self.assertEqual(events[-1]['schema'], 'den-live-people-1')
         self.assertTrue(all(t['state'] in ('confirmed', 'coasting') for e in events for t in e['tracks']), 'never a tentative one')

@@ -34,8 +34,8 @@ Numbers this phase sets, with where they come from:
   fitted on. The figure's depth gets the same scale in the detector's process (body.py). The Perceiver refuses a scale
   other than the one the registration's own take was made at (its name says, <take>-x0.971-m). At 1.0 nothing changes.
 
-An event holds tracks' floor positions in your scan's frame, their spread, heading and age: no joints, no image, no
-name. Only confirmed and coasting tracks go out, and only once a pose or a person box at 0.5 or more has supported
+An event holds tracks' floor positions in your scan's frame, their spread, heading and age, and the person binding
+(service_run_id, camera_epoch, association_revision beside the track_id): no joints, no image, no name. Only confirmed and coasting tracks go out, and only once a pose or a person box at 0.5 or more has supported
 them (plan L3). Track ids carry the epoch (e1-trk-1), so a camera restart's new tracks never take an old marker over.
 Each track also carries near: what's near it from your confirmed labels (room_labels.near_phrase, for example "at the
 desk, beside the 3D printer"), or null with no labels, none near, or labels placed on another scan revision. Home
@@ -793,6 +793,8 @@ class Perceiver:
                                           basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
                                           revision, since, MappingProxyType(stereo), marker.get("near"),
                                           seated=self.seated.update(track_id, revision, capture_mono, stereo)))
+            # The people projection carries the person binding (contract 2): run, epoch, track id, revision.
+            marker.update(service_run_id=self.run_id, camera_epoch=self.sessions, association_revision=revision)
             if safe and stereo and ref.depth is not None:
                 depth_mono = ref.depth.host_s + offset
                 if (abs(ref.depth.host_s - ref.rgb.host_s) <= RGB_PAIR_S + 1e-9

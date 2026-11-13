@@ -155,6 +155,21 @@ class EvidenceTests(unittest.TestCase):
         self.assertTrue(again.seated.state)
         self.assertGreater(again.seated.since_mono, 104.2, "a new hold, after the bump")
 
+    def test_the_people_event_carries_the_person_binding(self):
+        """The people projection (den-live-people-1) adds service_run_id, camera_epoch and association_revision to each
+        marker: the binding every consumer matches, the same as the snapshot's."""
+        self.confirmed()
+        event = self.advance(103.4, 17)
+        marker, = event["tracks"]
+        track, = self.p.snapshot.tracks
+        self.assertEqual(marker["track_id"], track.track_id)
+        self.assertEqual((marker["service_run_id"], marker["camera_epoch"], marker["association_revision"]),
+                         (self.p.run_id, self.p.snapshot.camera_epoch, track.association_revision))
+        self.assertEqual(json.loads(json.dumps(event))["tracks"][0]["association_revision"], track.association_revision)
+        moved = self.advance(103.6, 18, extra=True), self.advance(103.8, 19, extra=True)
+        marker = next(m for m in moved[-1]["tracks"] if m["track_id"] == track.track_id)
+        self.assertEqual(marker["association_revision"], track.association_revision + 1)
+
     def test_late_worker_result_expires_even_for_empty_detection(self):
         bundle, reply = self.scene.sample(100, 1, empty=True)
         prepared = self.p.prepare(bundle, 100)

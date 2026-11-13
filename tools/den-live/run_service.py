@@ -13,7 +13,8 @@ Its inputs, all from systemd:
 - $CREDENTIALS_DIRECTORY (LoadCredential: root-only files on LA that install_la.py copies from this PC's private
   folder): room-model.jsonl (step 2's registration), camera-token.txt (the camera's bearer token) and
   register-receipt.json (the step 2 receipt that registered and qualified it, den-live-register-now-2, which says
-  the scan revision its picks were made on).
+  the scan revision its picks were made on and the camera's depth correction its take was made on: a frame with
+  another factor or calibration hash is refused, and the status line says to register again).
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
   its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot,
   numbers only, with a mono-and-wall anchor; person_state.py), beside the ask's asks.jsonl, both kept 14 days. No

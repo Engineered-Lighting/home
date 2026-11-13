@@ -314,11 +314,13 @@ class Perceiving(unittest.TestCase):
         self.now = 0.0   # seconds on a fake wall clock that starts after the set's registration
         self.wall = 0.0  # a step in that wall clock, as time sync makes one
 
-    def perceiver(self, take, floor=(-3.0, -3.5, 3.0, 2.5), require=False, room_model=None, luma=120.0, gate=0.10, change=None):
+    def perceiver(self, take, floor=(-3.0, -3.5, 3.0, 2.5), require=False, room_model=None, luma=120.0, gate=0.10, change=None,
+                  source_correction=None):
         copy = perceive.track_method_copy(self.tools, list(floor), scratch('den-live-method-'))
         return perceive.Perceiver(self.tools, room_model_path=room_model or FIT / 'room-model.jsonl', camera_id='den-virtual',
                                   max_error_bound_m=gate, track_method_path=copy, detector=RecordedDetector(take, luma, change),
-                                  home='den', require_source_correction=require, now=lambda: 1_800_000_000.0 + self.now)
+                                  home='den', require_source_correction=require, now=lambda: 1_800_000_000.0 + self.now,
+                                  source_correction=source_correction)
 
     def run_take(self, perceiver, frames):
         events = []
@@ -392,6 +394,38 @@ class Perceiving(unittest.TestCase):
         p = self.perceiver(READING, require=True)
         events = self.run_take(p, frames)
         self.assertEqual(p.counts['refused_depth'], 0)
+        self.assertTrue(events[-1]['tracks'])
+
+    def test_frames_on_another_correction_than_the_receipts_are_refused(self):
+        """The review's case: a camera release re-measures its factor, and den-live would stack the receipt's scale on
+        another correction. Every frame must say applied with the receipt's factor and calibration hash, whatever the
+        scale; one with another is refused and counted, and the status and why say register again. The control: the
+        receipt's own correction goes on."""
+        import test_register_now as tr
+        receipt = (tr.CORRECTED['factor'], tr.CORRECTED['calibration_sha256'])
+
+        def corrected(**changes):
+            record = dict(tr.CORRECTED, **changes)
+            return [source.Bundle(tr.with_metadata(b.data, lambda m: m.update(depth_correction=record)), b.session,
+                                  b.rgb_seq, b.t_host, b.arrival_unix, b.arrival_mono) for b in bundles(READING)[:12]]
+        cases = [(require, corrected(**changes)) for require in (True, False)
+                 for changes in ({'factor': 0.901}, {'calibration_sha256': 'd' * 64})]
+        cases += [(False, corrected(applied=False)), (False, bundles(READING)[:12])]   # not required, yet not this one
+        for require, frames in cases:
+            with self.subTest(require=require):
+                p = self.perceiver(READING, require=require, source_correction=receipt)
+                events = self.run_take(p, frames)
+                self.assertEqual(p.counts['refused_depth'], 12)
+                self.assertEqual(len(events), 12)
+                self.assertTrue(all(e['tracks'] == [] for e in events))
+                self.assertEqual({(e['perception_status'], e['camera']['why']) for e in events},
+                                 {('refused', perceive.CORRECTION_CHANGED)})
+                self.assertIn('register again', perceive.CORRECTION_CHANGED)
+                self.assertIn('12 refused for depth', rl.status_line(p, events[-1]))
+                self.assertIn('register again', rl.status_line(p, events[-1]))
+        p = self.perceiver(READING, require=True, source_correction=receipt)
+        events = self.run_take(p, corrected())
+        self.assertEqual(p.counts['refused_depth'], 0, 'the control: the receipt\'s own correction goes on')
         self.assertTrue(events[-1]['tracks'])
 
     def test_time_going_back_is_a_new_epoch_and_a_small_step_back_is_skipped(self):
@@ -647,9 +681,23 @@ class Qualified(unittest.TestCase):
         return str(caught.exception)
 
     def test_a_qualified_receipt_gives_its_scan_and_depth_scale(self):
-        self.assertEqual(rl.qualified_registration(qualified_receipt(), FIT_TRANSFORM), {'scan_revision': 'rev-1', 'depth_scale': 1.0})
+        none = {'correction_factor': None, 'calibration_sha256': None}
+        self.assertEqual(rl.qualified_registration(qualified_receipt(), FIT_TRANSFORM),
+                         {'scan_revision': 'rev-1', 'depth_scale': 1.0, **none})
         scaled = qualified_receipt(depth_scale=0.971, take='20261113-200000-x0.971-m')
-        self.assertEqual(rl.qualified_registration(scaled, FIT_TRANSFORM), {'scan_revision': 'rev-1', 'depth_scale': 0.971})
+        self.assertEqual(rl.qualified_registration(scaled, FIT_TRANSFORM), {'scan_revision': 'rev-1', 'depth_scale': 0.971, **none})
+
+    def test_the_receipts_camera_correction_comes_with_it(self):
+        """source_correction as register_now.check_source records it: every frame applied, one factor, one hash."""
+        found = {'frames': 98, 'applied': 98, 'factors': [0.889], 'calibrations': ['c' * 64], 'why': []}
+        got = rl.qualified_registration(qualified_receipt(source_correction=found), FIT_TRANSFORM)
+        self.assertEqual((got['correction_factor'], got['calibration_sha256']), (0.889, 'c' * 64))
+        for other in (None, dict(found, applied=97), dict(found, factors=[0.889, 0.901]), dict(found, factors=[]),
+                      dict(found, calibrations=['None']), dict(found, calibrations=['c' * 64, 'd' * 64]),
+                      dict(found, frames=0, applied=0), dict(found, factors=[1.7])):
+            with self.subTest(other=other):
+                got = rl.qualified_registration(qualified_receipt(source_correction=other), FIT_TRANSFORM)
+                self.assertEqual((got['correction_factor'], got['calibration_sha256']), (None, None))
 
     def test_every_other_receipt_is_refused_in_words(self):
         v1 = {'schema': 'den-live-register-now-1', 'fit': {'result': 'registered', 'transform_id': FIT_TRANSFORM}, 'scan_revision': 'rev-1'}
@@ -782,7 +830,7 @@ class RunLocalScale(unittest.TestCase):
     """run_local.py hands step 2's depth scale to the live loop, and refuses a receipt whose scale the room model's
     registration wasn't made at, before the detector starts."""
 
-    def run_local(self, receipt, model):
+    def run_local(self, receipt, model, require=False, seen=None):
         root = scratch('den-live-root-')
         work = root / 'private' / 'register'
         work.mkdir(parents=True)
@@ -795,14 +843,37 @@ class RunLocalScale(unittest.TestCase):
 
         def detector(*args, **kw):
             raise perceive.Stop('the test stops here, at the detector')
+
+        def perceiver(*args, real=perceive.Perceiver, **kw):
+            made = real(*args, **kw)
+            if seen is not None:
+                seen.append(made)
+            return made
         out = io.StringIO()
         with contextlib.redirect_stdout(out), \
                 unittest.mock.patch.object(rl.sc, 'archive', lambda tools_root, key, real=sc.archive: real(TOOLS, key)), \
-                unittest.mock.patch.object(rl.perceive, 'DetectorWorker', detector):
+                unittest.mock.patch.object(rl.perceive, 'DetectorWorker', detector), \
+                unittest.mock.patch.object(rl.perceive, 'Perceiver', perceiver):
             code = rl.main([], root=root, console=lambda: True, camera_url='http://127.0.0.1:9', token_file=root / 'token.txt',
                            venv=Path(sys.executable), app=app, room_model=work / 'room-model.jsonl', camera_id='den-virtual',
-                           floor=[-2.5, -3.0, 2.5, 2.0], require_correction=False, until=lambda: True)
+                           floor=[-2.5, -3.0, 2.5, 2.0], require_correction=require, until=lambda: True)
         return code, out.getvalue()
+
+    def test_the_receipts_correction_reaches_the_perceiver_and_a_receipt_naming_none_is_refused(self):
+        """The camera's correction the take was made on goes to the Perceiver. With the correction required, a receipt
+        that names none (one from before source_correction, say) is refused before the detector starts."""
+        found = {'frames': 98, 'applied': 98, 'factors': [0.889], 'calibrations': ['c' * 64], 'why': []}
+        seen = []
+        code, text = self.run_local(qualified_receipt(source_correction=found), FIT / 'room-model.jsonl', require=True, seen=seen)
+        self.assertIn('live: stopped: the test stops here, at the detector', text)
+        self.assertEqual([p.source_correction for p in seen], [(0.889, 'c' * 64)])
+        seen = []
+        code, text = self.run_local(qualified_receipt(), FIT / 'room-model.jsonl', require=True, seen=seen)
+        self.assertEqual((code, seen), (2, []))
+        self.assertEqual(text.strip(), "live: stopped: step 2's receipt for %s doesn't name the camera's depth correction its "
+                                       "take was made on: register again with step 2's register_now.py" % FIT_TRANSFORM)
+        code, text = self.run_local(qualified_receipt(), FIT / 'room-model.jsonl', require=False, seen=seen)
+        self.assertEqual([p.source_correction for p in seen], [None], 'not required (den-sim\'s renders): nothing to hold to')
 
     def test_a_qualified_scale_reaches_the_perceiver(self):
         code, text = self.run_local(qualified_receipt(depth_scale=0.971, take='20261113-200000-x0.971-m'), model_made_at(0.971))

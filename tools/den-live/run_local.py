@@ -170,9 +170,28 @@ def revision_of(receipt, transform_id):
     return False, None
 
 
+def registered_correction(found):
+    """(factor, calibration_sha256) of the camera's own depth correction step 2's take was made on, from its receipt's
+    source_correction (register_now.check_source's record: frames, applied, factors, calibrations), or (None, None)
+    when it names no single one: every frame applied, one factor, one calibration hash. body_rgb.py reads the same."""
+    if not isinstance(found, dict):
+        return None, None
+    frames, factors, calibrations = found.get("frames"), found.get("factors"), found.get("calibrations")
+    if (type(frames) is not int or frames <= 0 or found.get("applied") != frames or not isinstance(factors, list)
+            or len(factors) != 1 or not isinstance(calibrations, list) or len(calibrations) != 1):
+        return None, None
+    factor, calibration = factors[0], calibrations[0]
+    if (type(factor) not in (int, float) or not 0.5 <= factor <= 1.5 or not isinstance(calibration, str)
+            or not re.fullmatch("[0-9a-f]{64}", calibration)):
+        return None, None
+    return factor, calibration
+
+
 def qualified_registration(receipt, transform_id):
-    """{scan_revision, depth_scale} from a step 2 receipt that registered transform_id and qualified it (contract 1,
-    den-live-register-now-2), or ValueError whose words say why not, for the caller's one-sentence refusal."""
+    """{scan_revision, depth_scale, correction_factor, calibration_sha256} from a step 2 receipt that registered
+    transform_id and qualified it (contract 1, den-live-register-now-2), or ValueError whose words say why not, for the
+    caller's one-sentence refusal. The correction's two are None when the receipt names no single correction its take
+    was made on; serve() refuses that when the camera's correction is required."""
     receipt = receipt if isinstance(receipt, dict) else {}
     if not revision_of(receipt, transform_id)[0]:
         raise ValueError("step 2's receipt didn't register %s" % transform_id)
@@ -188,7 +207,9 @@ def qualified_registration(receipt, transform_id):
     if take_scale(receipt.get("take")) != scale:
         raise ValueError("step 2's receipt for %s asks for depth x%g, but its take was made at x%g"
                          % (transform_id, scale, take_scale(receipt.get("take"))))
-    return {"scan_revision": revision, "depth_scale": float(scale)}
+    factor, calibration = registered_correction(receipt.get("source_correction"))
+    return {"scan_revision": revision, "depth_scale": float(scale), "correction_factor": factor,
+            "calibration_sha256": calibration}
 
 
 def receipt_registration(work, transform_id):
@@ -341,7 +362,9 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
     """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator.
 
     registration(transform_id) is what step 2's qualified receipt says about the room model's registration,
-    {scan_revision, depth_scale}, or a Refusal: no receipt, or none qualified, starts nothing.
+    {scan_revision, depth_scale, correction_factor, calibration_sha256}, or a Refusal: no receipt, or none qualified,
+    starts nothing. The camera's correction its take was made on goes to the Perceiver, which refuses any frame with
+    another; with the correction required, a receipt that names none is refused here.
     person_log: a state folder whose days/ get each snapshot as den-person-state-1 (person_state.py), beside the ask's
     log; None keeps nothing, as run_local.py does."""
     R = rn.den_register(trees["register"])
@@ -365,11 +388,18 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
     if revision is not None and registered_on != revision:
         raise Refusal("the camera was registered on scan revision %s, but the active scan is %s: register again with step 2"
                       % (registered_on, revision))
+    require = bool(live["require_source_correction"] if require_correction is None else require_correction)
+    source_correction = registered.get("correction_factor"), registered.get("calibration_sha256")
+    if None in source_correction:
+        if require:
+            raise Refusal("step 2's receipt for %s doesn't name the camera's depth correction its take was made on: "
+                          "register again with step 2's register_now.py" % transform_id)
+        source_correction = None   # nothing to hold frames to: the correction isn't required (den-sim's renders)
     try:
         method_copy = perceive.track_method_copy(t, perceive.padded(bounds), state)
         perceiver = perceive.Perceiver(t, room_model_path=room_model, camera_id=camera_id, max_error_bound_m=m["gate_m"],
                                        track_method_path=method_copy, home="den", content_revision=revision,
-                                       require_source_correction=bool(live["require_source_correction"] if require_correction is None else require_correction),
+                                       require_source_correction=require, source_correction=source_correction,
                                        depth_scale=registered["depth_scale"])   # every depth plane, before any lift
     except perceive.Stop as exc:
         raise Refusal(str(exc)) from None

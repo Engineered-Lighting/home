@@ -76,7 +76,8 @@ Pillow. Before you paste: set the room light as for an evening's reading, keep t
 the camera or its mount, and take two fresh tapes, as on 2026-11-11.
 
 1. **Two tapes.** The paste asks for the lens's height above the floor and the lens to the facing wall, square to it,
-   in metres. They go into the private receipt only. Nothing prints them.
+   in metres. They're kept privately: beside the take (`<take>.tapes.json`) as soon as it's recorded, and in the
+   receipt. Nothing prints them, and `--again` reads them from beside the take.
 2. **The empty den, 20 s.** It says "leave the den", waits 15 s, records 20 s, then says you can come back.
 3. **The camera's correction.** The camera service corrects its own depth (x0.889), and every frame says so. If any
    frame doesn't, for example after a re-flash, it stops here.
@@ -145,11 +146,11 @@ tape, which re-clicking won't fix: check the tapes, then tell an agent.
 | `Held-out take: ...` | How well your scan, seen from the new registration, matches a fresh take of the empty den. It must be on the registration take's camera correction, or nothing qualifies |
 | `QUALIFIED: yes` | Step 3 and the LA service will start on it |
 
-What's kept, all under `%USERPROFILE%\den-live\private\register\`: the takes (`takes\`: the take, its median copy
-`<take>-x<scale>-m` and the held-out take), the camera's `/calibration` reply, the worksheet, your clicks, every
-`fit-N.json`, `room-model.jsonl`, and a `register-now-N.json` receipt per paste. The receipt is
-`den-live-register-now-2`: your tapes, the depth check, `depth_scale`, the sofa checks, the held-out numbers and
-`qualified`. Agents never open the folder. The scan page runs on 127.0.0.1 only, and reaches nothing beyond this PC.
+What's kept, all under `%USERPROFILE%\den-live\private\register\`: the takes (`takes\`: the take, its tapes
+`<take>.tapes.json`, its median copy `<take>-x<scale>-m` and the held-out take), the camera's `/calibration` reply,
+the worksheet, your clicks, every `fit-N.json`, `room-model.jsonl`, and a `register-now-N.json` receipt per paste. The
+receipt is `den-live-register-now-2`: your tapes, the depth check, `depth_scale`, the sofa checks, the held-out numbers
+and `qualified`. Agents never open the folder. The scan page runs on 127.0.0.1 only, and reaches nothing beyond this PC.
 Receipts from before v2 (`den-live-register-now-1`, method `REGISTER-LIVE-20261111.md`) still read, but nothing starts
 on them: register again.
 
@@ -245,7 +246,7 @@ The owner qualification uses one short tailnet phone run in room light and one w
 - **The association:** each track's `association_revision` moves only once its safe or unsafe state has held for two frames in a row. One unsafe frame still reads ambiguous, so the ask skips it.
 - **The binding:** each marker carries `service_run_id`, `camera_epoch` and `association_revision` beside its `track_id`: the person binding every consumer matches.
 - **Seated:** worked out once per track per frame (`seated.Published`, the coordinator's `body.seated()` rule), with the capture time its 2 s hold began (`since_mono`) and whether hips or the head decided it. It starts again when the association revision moves. The ask and the lighting preview read it and never work it out themselves.
-- **Person state:** the LA service logs each snapshot as `den-person-state-1` beside the ask's log, in `days/<UTC date>/person-state.jsonl`, numbers only (no image, name or words: the snapshot's reason and the near phrase stay out), with one mono-and-wall anchor per run per day file. It's kept 14 days like the ask's log, and the two stop at 300 MB a day together ("What's kept on LA", step 4). `run_local.py` keeps nothing.
+- **Person state:** the LA service logs each snapshot as `den-person-state-1` beside the ask's log, in `days/<UTC date>/person-state.jsonl`, numbers only (no image, name or words: the snapshot's reason and the near phrase stay out), with one mono-and-wall anchor per run per day file. Every snapshot with someone in view goes in; with nobody in view, about one a second, and any change of status or presence at once. It's kept 14 days like the ask's log, and each of the two has its own day's cap ("What's kept on LA", step 4). `run_local.py` keeps nothing.
 - **The replay check (plan 02-3):** `replay_person_state_check.py "<your sofa replays folder>"` replays each take, in den-sim's prepared format, through the Perceiver, the ask and the lighting preview on this PC, and prints three lines: the seated since's difference between the ask and the preview (should be 0), seated latency per trial from its begin cue (2.5 s or less) and revision bumps while sitting (0). Never a coordinate. Its docstring says what it assumes about the replays.
 - **The scan revision:** it must be the one step 2 picked on. If the active scan changed since, it stops and asks you to register again.
 - **The camera's correction:** every frame must say the correction step 2's take was made on, the receipt's factor and calibration hash. After a camera release that changes either, every frame is refused, and the status says to paste `register_now.py` without `--again`, which records a new take. On LA it adds: then paste `install_la.py` again.
@@ -348,8 +349,9 @@ ssh -t hav-ubuntu "sudo systemctl disable --now den-live"
 
 **What's kept on LA:** in its state folder, `/var/lib/den-live/`:
 - the tracker's method copy and the detector's log and caches. The log is rolled once past 10 MB.
-- `days/<UTC date>/asks.jsonl`, one line per Qwen ask, and `days/<UTC date>/person-state.jsonl`, one `den-person-state-1` line per snapshot: each track's floor position, its supported joints and its seated state. Both are numbers only, with no image, name or words, and kept 14 days. A person-state line is about 0.6 KB with nobody in view and 1.7 KB with one person, at about 5 a second: roughly 0.1-0.75 GB a day.
-- A day's two files together stop at 300 MB. Past it, that day's lines are skipped and counted, and the status line ends `, N lines not kept: the day's files are at their cap`. A busy day stops early; the next UTC day starts afresh.
+- `days/<UTC date>/asks.jsonl`, one line per Qwen ask, and `days/<UTC date>/person-state.jsonl`, `den-person-state-1` lines: each track's floor position, its supported joints and its seated state. Both are numbers only, with no image, name or words, and kept 14 days.
+- Person state's rate: every snapshot with someone in view, at about 5 a second, about 1.7 KB a line with one person. With nobody in view, about one line a second (0.6 KB), plus one at once on any change of status or presence. That's about 50 MB for an empty den's day, and about 30 MB more for each person-hour.
+- Each file has its own day's cap: `asks.jsonl` 50 MB, `person-state.jsonl` 300 MB, so person state filling its day never stops an ask. Past a file's cap, that day's lines for it are skipped and counted, and the status line ends `, N lines not kept today: the day's person-state.jsonl is at its cap` (or `asks.jsonl`). Person state stops early only after about 9 person-hours in a day; the next UTC day starts afresh, its count too.
 - With the lighting preview on, its fixture-call trace, `days/<UTC date>/coordinator-fixture_calls.jsonl`, sits beside them, outside the cap.
 
 No frames and no stills. The release, the venv and the models are under `/opt/den-live/`, and the settings and private inputs under `/etc/den-live/`.
@@ -520,7 +522,7 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 
   `test_ask.py` holds the rest to the Lab's pinned `qwen_scene.py`.
 
-**What it keeps.** One line per ask in `days/<UTC date>/asks.jsonl` in the service's state folder, kept 14 days, under the day's 300 MB cap with `person-state.jsonl`. It holds:
+**What it keeps.** One line per ask in `days/<UTC date>/asks.jsonl` in the service's state folder, kept 14 days, under its own day's cap of 50 MB (`person-state.jsonl` has its own). It holds:
 - words and numbers only: no image and no reply text;
 - each still's capture and arrival times;
 - when the ask was decided, sent and answered;

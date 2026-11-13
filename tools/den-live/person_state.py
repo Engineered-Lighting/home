@@ -4,7 +4,7 @@ In <state>/days/<UTC date>/person-state.jsonl, beside the ask's asks.jsonl and k
 every published snapshot with someone in view (a track, or presence present), at about 5 a second, and with nobody
 in view at most one a second (IDLE_EVERY_S), plus one at once on any change of status, presence, epoch or run, or a
 track coming or going. A line is about 0.6 KB with nobody in view and 1.7 KB with one person: about 50 MB for an empty
-den's day, and about 25 MB more for each person-hour. The file has its own cap, CAP_BYTES (300 MB) a UTC day, apart
+den's day, and about 30 MB more for each person-hour. The file has its own cap, CAP_BYTES (300 MB) a UTC day, apart
 from the ask's 50 MB: past it, the day's lines are skipped and counted, and the status line says so, naming the file.
 The LA service writes it; run_local.py keeps nothing.
 

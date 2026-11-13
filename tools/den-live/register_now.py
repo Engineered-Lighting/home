@@ -822,9 +822,11 @@ def feature_pairs(R, work, take_dir, m):
     return out
 
 
-def distance_check(pairs, live):
-    """Every pair's distance in the camera against the scan. Each feature's median difference over its pairs; a
-    feature over distance_max_m is named, worst first."""
+def distance_check(pairs, live, gate):
+    """Every pair's distance in the camera against the scan. Each feature's median difference over its pairs. A feature
+    over den-register's own gate is named, worst first, and stops the paste: no fit could pass it. One over
+    distance_max_m but within the gate is only noted: a far feature's few centimetres of range error, or the depth's
+    bend, are inside what the owner allows."""
     import statistics
     ids = [pid for pid in IDS if pid in pairs]
     diffs = {pid: [] for pid in ids}
@@ -835,12 +837,15 @@ def distance_check(pairs, live):
             diffs[a].append(diff)
             diffs[b].append(diff)
             every.append(diff)
-    limit = live["distance_max_m"]
+    note = live["distance_max_m"]
     median = {pid: statistics.median(values) for pid, values in diffs.items() if values}
-    over = {pid: sum(d > limit for d in values) for pid, values in diffs.items()}
-    named = sorted((pid for pid in median if median[pid] > limit), key=lambda pid: -median[pid])
+    worst_first = sorted(median, key=lambda pid: -median[pid])
+    named = [pid for pid in worst_first if median[pid] > gate]
+    noted = [pid for pid in worst_first if note < median[pid] <= gate]
+    over = {pid: sum(d > (gate if pid in named else note) for d in values) for pid, values in diffs.items()}
     return {"features": len(ids), "pairs": len(every), "median_m": {pid: round(v, 4) for pid, v in median.items()},
-            "over": over, "named": named, "pair_median_m": round(statistics.median(every), 4) if every else None}
+            "over": over, "named": named, "noted": noted, "gate_m": gate,
+            "pair_median_m": round(statistics.median(every), 4) if every else None}
 
 
 def distance_line(found, live):
@@ -850,8 +855,12 @@ def distance_line(found, live):
                          % (pid, found["over"][pid], found["features"] - 1, found["median_m"][pid] * 100) for pid in worst)
         return ("Distance check: %s: re-pick %s or re-click %s, then paste with --again."
                 % (each, names(worst), "it" if len(worst) == 1 else "them"))
-    return "Distance check: all %s agree within %.0f cm." % ("nine" if found["features"] == 9 else found["features"],
-                                                             live["distance_max_m"] * 100)
+    count = "nine" if found["features"] == 9 else found["features"]
+    if found.get("noted"):
+        return ("Distance check: all %s agree within %.0f cm. A note, no stop: %s." % (count, found["gate_m"] * 100, "; ".join(
+            "%s is %.0f cm off the others (median over its %d pairs)" % (pid, found["median_m"][pid] * 100, found["features"] - 1)
+            for pid in found["noted"])))
+    return "Distance check: all %s agree within %.0f cm." % (count, live["distance_max_m"] * 100)
 
 
 # ---- 9. the features' own scale ---------------------------------------------------------------------------------------
@@ -1339,7 +1348,7 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
 
     # 8: the distance check
     pairs = feature_pairs(R, work, scaled, m)
-    distance = distance_check(pairs, live)
+    distance = distance_check(pairs, live, m["gate_m"])
     receipt["distance_check"] = distance
     say(distance_line(distance, live))
     if distance["named"]:

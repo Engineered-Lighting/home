@@ -76,6 +76,7 @@ def method_copy(folder, **numbers):
 
 
 LIVE = rn.read_live(rn.METHOD_FILE.read_text(encoding='utf-8'))
+GATE = 0.15   # the method file's gate_m: the distance check stops only past it
 
 
 # ---- the method file ------------------------------------------------------------------------------------------
@@ -498,7 +499,7 @@ def nine_pairs(seed=4, noise=0.0, scale=1.0):
 
 class DistanceCheck(unittest.TestCase):
     def test_nine_features_that_agree(self):
-        found = rn.distance_check(nine_pairs(noise=0.01), LIVE)
+        found = rn.distance_check(nine_pairs(noise=0.01), LIVE, GATE)
         self.assertEqual((found['features'], found['pairs'], found['named']), (9, 36, []))
         self.assertLess(found['pair_median_m'], 0.03)
         self.assertEqual(rn.distance_line(found, LIVE), 'Distance check: all nine agree within 6 cm.')
@@ -506,7 +507,7 @@ class DistanceCheck(unittest.TestCase):
     def test_two_swapped_scan_picks_are_named_worst_first(self):
         pairs = nine_pairs()
         pairs['f2'], pairs['f5'] = (pairs['f2'][0], pairs['f5'][1]), (pairs['f5'][0], pairs['f2'][1])
-        found = rn.distance_check(pairs, LIVE)
+        found = rn.distance_check(pairs, LIVE, GATE)
         self.assertEqual(sorted(found['named']), ['f2', 'f5'])
         self.assertGreaterEqual(found['median_m'][found['named'][0]], found['median_m'][found['named'][1]])
         line = rn.distance_line(found, LIVE)
@@ -517,14 +518,44 @@ class DistanceCheck(unittest.TestCase):
     def test_one_wrong_feature_leaves_the_others_clear(self):
         pairs = nine_pairs()
         pairs['c1'] = (pairs['c1'][0], [v + 0.5 for v in pairs['c1'][1]])
-        self.assertEqual(rn.distance_check(pairs, LIVE)['named'], ['c1'])
+        self.assertEqual(rn.distance_check(pairs, LIVE, GATE)['named'], ['c1'])
 
     def test_a_wrong_depth_scale_names_most_and_the_features_own_scale_says_why(self):
         pairs = nine_pairs(scale=0.83)
-        found = rn.distance_check(pairs, LIVE)
+        found = rn.distance_check(pairs, LIVE, GATE)
         self.assertGreater(len(found['named']), 4)
         own = rn.own_scale([{'id': pid, 'camera_xyz_m': c, 'room_xyz_m': r} for pid, (c, r) in pairs.items()])
         self.assertTrue(rn.depth_scale_to_blame(own, LIVE, 0.15))
+
+    def test_a_far_feature_10_cm_long_is_noted_not_stopped(self):
+        """The farthest feature's depth 10 cm long along its own ray: inside the owner's 15 cm gate, so a note in
+        centimetres, and the paste goes on."""
+        pairs = nine_pairs()
+        far = max(pairs, key=lambda pid: np.linalg.norm(pairs[pid][0]))
+        camera = np.array(pairs[far][0])
+        pairs[far] = (list(camera * (1 + 0.10 / np.linalg.norm(camera))), pairs[far][1])
+        found = rn.distance_check(pairs, LIVE, GATE)
+        self.assertEqual((found['named'], found['noted']), ([], [far]))
+        self.assertGreater(found['median_m'][far], LIVE['distance_max_m'])
+        self.assertEqual(rn.distance_line(found, LIVE), 'Distance check: all nine agree within 15 cm. A note, no stop: %s is %.0f '
+                         'cm off the others (median over its 8 pairs).' % (far, found['median_m'][far] * 100))
+
+    def test_errors_the_owner_allows_rarely_stop_the_paste(self):
+        """The review's cases on 200 synthetic layouts each: one far feature 10 cm long, or a +-2% range bend with
+        perfect clicks. At a 6 cm stop most of them stopped; at the 15 cm gate none does."""
+        stops = {'far': 0, 'bend': 0}
+        for seed in range(200):
+            pairs = nine_pairs(seed=seed)
+            far = max(pairs, key=lambda pid: np.linalg.norm(pairs[pid][0]))
+            camera = np.array(pairs[far][0])
+            long = dict(pairs, **{far: (list(camera * (1 + 0.10 / np.linalg.norm(camera))), pairs[far][1])})
+            stops['far'] += bool(rn.distance_check(long, LIVE, GATE)['named'])
+            ranges = {pid: np.linalg.norm(c) for pid, (c, _) in pairs.items()}
+            near, deep = min(ranges.values()), max(ranges.values())
+            bent = {pid: (list(np.array(c) * (1 - 0.02 + 0.04 * (ranges[pid] - near) / (deep - near))), r)
+                    for pid, (c, r) in pairs.items()}
+            stops['bend'] += bool(rn.distance_check(bent, LIVE, GATE)['named'])
+        self.assertEqual(stops, {'far': 0, 'bend': 0})
 
 
 # ---- the held-out check -----------------------------------------------------------------------------------------
@@ -1303,7 +1334,7 @@ class OnRenders(unittest.TestCase):
             for phi in np.linspace(0, 2 * math.pi, 24, endpoint=False):
                 d = np.array([math.sin(theta) * math.cos(phi), math.sin(theta) * math.sin(phi), math.cos(theta)])
                 trial = dict(pairs, c2=(pairs['c2'][0], list(np.array(pairs['c2'][1]) + 0.12 * d)))
-                median = rn.distance_check(trial, LIVE)['median_m']['c2']
+                median = rn.distance_check(trial, LIVE, GATE)['median_m']['c2']
                 if best is None or median < best[0]:
                     best = (median, list(np.array(self.room['c2']) + 0.12 * d))
         self.assertLess(best[0], LIVE['distance_max_m'], 'the distance check passes it')

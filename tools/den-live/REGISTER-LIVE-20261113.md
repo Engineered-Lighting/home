@@ -33,9 +33,11 @@ Two real-room fits were refused under v1. Most of the cause was the method, then
   1.5 cm a pixel, so a raw spread would name a good floor-level corner (on the den simulation's renders it named the
   set's own floor-level click), while a step between two surfaces is left whole.
 - **The distance check,** after the scan picks and before the fit. A rigid fit keeps distances, so all 36 pair
-  distances are compared, camera against scan. A feature whose median difference over its 8 pairs is over
-  `distance_max_m` is a wrong click or pick. It's named, worst first, in centimetres, and the paste stops. `--again`
-  keeps everything and opens both pages again.
+  distances are compared, camera against scan. A feature whose median difference over its 8 pairs is over `gate_m`
+  (0.15 m) is a wrong click or pick, which no fit could pass. It's named, worst first, in centimetres, and the paste
+  stops. `--again` keeps everything and opens both pages again. Between `distance_max_m` (6 cm) and the gate, the
+  feature is only noted in one line: a far feature's few centimetres of range error, or the depth's bend, are within
+  what the owner allows, and on synthetic layouts a 6 cm stop caught them most of the time.
 - **The depth check replaces the one-tape floor guard.** See "The depth scale".
 - **The gate.** den-register gates every fit residual, leave-one-out error and check at `gate_m` 0.15 m. Then
   `register_now.py` requires each sofa check, c1-c3, within `sofa_check_max_m` 0.10 m. The owner's ruling of
@@ -133,7 +135,7 @@ wall_min_points = 300             # a facing wall needs this many inliers, or th
 edge_min_m = 0.04                 # edge guard: a click's window spread (p90 - p10) over max(this,
 edge_fraction = 0.02              #   this x its depth) sits on a depth edge
 edge_rounds = 3                   # the click page opens at most this often in one paste
-distance_max_m = 0.06             # distance check: a feature's median pair difference over this is named
+distance_max_m = 0.06             # distance check: a feature's median pair difference over this is noted; over gate_m it stops
 sofa_check_max_m = 0.10           # each sofa check, c1-c3, after den-register's gate passes
 held_floor_band_m = 0.05          # held-out: scan points within this of z = 0 are floor
 held_wall_min_z_m = 1.8           # and scan points above this are upper wall (or ceiling)

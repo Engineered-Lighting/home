@@ -21,14 +21,15 @@ register again.
 
 ## The depth scale
 
-On 2026-11-11 the den camera's raw depth read long against two tapes: the lens is 1.37 m above the floor, and the wall
-it faces is 4.27 m away, square. The same day, the camera service took the correction on itself:
+On 2026-11-11 the den camera's raw depth read long against two tapes: the lens's height above the floor, and its
+distance to the wall it faces, square. (The tapes are kept privately, never in this repository.) The same day, the
+camera service took the correction on itself:
 - Release `pilot-20261111-depth` (pull request 425) multiplies `depth_mm` by 0.889 before serving it. 0 stays 0.
 - Every bundle's metadata, and `/calibration`, carry `depth_correction`:
   - `{factor, measured, calibration_sha256, applied}` when the correction is on;
   - `applied: false` with a reason when the camera's calibration isn't the one the factor was measured on, for
     example after a re-flash or with another camera. Then depth is raw again.
-- Its check on served depth: the floor 1.395 m below the lens (+1.8%), the wall 4.171 m (−2.3%). The floor moves about
+- Its check on served depth: the floor read +1.8% against its tape, and the wall −2.3%. The floor moves about
   ±2% with the light. The floor and the wall bend about 4.5° from square, which no single factor can fix.
 
 So den-live applies no factor of its own: `depth_scale` is 1.0. A factor here as well would correct twice and read
@@ -95,8 +96,7 @@ mount_min_reach_m = 3.0           # closed at its proposal
 ```den-live-v1
 depth_scale = 1.0                 # the camera service corrects depth itself since 2026-11-11 (x0.889); none here
 require_source_correction = 1     # 1: every frame's depth_correction must say applied, or the paste stops
-lens_height_tape_m = 1.37         # the lens above the floor, by tape, 2026-11-11
-floor_guard_fraction = 0.05       # about 7 cm at 1.37 m: served depth reads +1.8% at the floor and drifts about 2%
+floor_guard_fraction = 0.05       # served depth reads +1.8% at the floor and drifts about 2%; the lens tape is private
 floor_min_below_m = 0.3           # floor candidates: at least this far below the lens, in the camera's frame
 floor_max_tilt_deg = 35           # the floor's normal, from straight up in the camera's frame
 floor_band_m = 0.03               # RANSAC inlier band

@@ -210,7 +210,10 @@ class RgbBodyTests(unittest.TestCase):
         arguments = serve.call_args.kwargs
         self.assertIsNone(arguments["body_input"])
         self.assertEqual(arguments["body_profile"], f.provider.profile)
-        self.assertEqual(arguments["registration"](f.block["transform_id"]), {"scan_revision": REVISION, "depth_scale": 1.0})
+        registration = arguments["registration"](f.block["transform_id"])
+        self.assertEqual({key: registration[key] for key in ("scan_revision", "depth_scale")}, {"scan_revision": REVISION, "depth_scale": 1.0})
+        # The receipt's own depth correction comes along too, so the live loop can refuse frames under another one.
+        self.assertTrue({"correction_factor", "calibration_sha256"} <= set(registration), registration.keys())
 
     def test_profile_refuses_a_different_registration(self):
         f = self.f

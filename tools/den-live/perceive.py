@@ -508,7 +508,11 @@ class Perceiver:
 
     def idle(self, camera_state, now_mono):
         """A snapshot with no frame, saying why. It keeps the epoch and the tracker: a late or missing frame is only
-        stale, and the next fresh frame within EPOCH_GAP_S goes on with the same tracks (prepare's gap check)."""
+        stale, and the next fresh frame within EPOCH_GAP_S goes on with the same tracks (prepare's gap check). Once
+        EPOCH_GAP_S has passed with no fresh frame, the next epoch starts here, once per gap: the stale snapshots of a
+        long outage carry it, not the epoch before."""
+        if self.last_capture is not None and now_mono - self.last_capture >= EPOCH_GAP_S:
+            self._epoch()   # _new_core forgets last_capture, so neither a later idle nor the next frame bumps again
         self.body_input = None
         status = camera_state.get("status")
         if status not in ("starting", "offline", "refused"):

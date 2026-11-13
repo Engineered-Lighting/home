@@ -94,6 +94,23 @@ class EvidenceTests(unittest.TestCase):
                 if epoch == 2:
                     self.assertNotIn(track.track_id, [t.track_id for t in self.p.snapshot.tracks])
 
+    def test_a_long_gap_moves_the_epoch_while_idle_once(self):
+        """With no frame at all, the loop only idles: the epoch moves once EPOCH_GAP_S has passed, once for the whole
+        gap, and the next fresh frame goes on in that epoch. A shorter idle keeps it."""
+        track = self.confirmed()
+        last = self.p.snapshot.frame.capture_mono
+        self.p.idle({"status": "offline", "why": "no new frame"}, last + perceive.EPOCH_GAP_S - 0.1)
+        self.assertEqual((self.p.sessions, self.p.snapshot.camera_epoch), (1, 1))
+        self.p.idle({"status": "offline", "why": "no new frame"}, last + perceive.EPOCH_GAP_S)
+        self.assertEqual((self.p.sessions, self.p.snapshot.camera_epoch), (2, 2))
+        self.assertEqual(self.p.snapshot.status, "offline")
+        for later in (5.0, 60.0, 600.0):   # minutes of outage: still the one new epoch
+            self.p.idle({"status": "offline", "why": "no new frame"}, last + later)
+        self.assertEqual((self.p.sessions, self.p.snapshot.camera_epoch), (2, 2))
+        self.advance(last + 600.2, 17)
+        self.assertEqual((self.p.sessions, self.p.snapshot.frame.camera_epoch), (2, 2))
+        self.assertNotIn(track.track_id, [t.track_id for t in self.p.snapshot.tracks])
+
     def test_one_unsafe_frame_keeps_the_revision_but_marks_the_frame_ambiguous(self):
         track = self.confirmed()
         self.advance(103.4, 17, extra=True)   # a second person box at 0.88: this frame isn't safe

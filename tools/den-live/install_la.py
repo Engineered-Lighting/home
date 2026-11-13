@@ -45,6 +45,7 @@ REMOTE = "/dev/shm/den-live-install"
 # The Qwen ask's two private files, saved once beside the camera token: the den-live user's long-lived token (the same
 # admin user and token the coordinator's link uses) and the den home's Home Assistant address as LA reaches it.
 HA_TOKEN_FILE, HA_URL_FILE = "den-live-ha-token.txt", "den-live-ha-url.txt"
+BODY_PROFILE_FILE = "den-live-body-rgb.json"
 PREVIEW_GEOMETRY = "virtual-fixtures.json"
 INSTALL_SH = Path("stack") / "services" / "den-live" / "install.sh"
 
@@ -133,6 +134,20 @@ def labels_seed(root):
     return path, len(doc["labels"])
 
 
+def body_profile(path, receipt):
+    """Read the optional owner-qualified profile before copying any release files."""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        block = json.loads(path.read_text(encoding="utf-8-sig"))
+        registration = json.loads(Path(receipt).read_text(encoding="utf-8"))
+        rs.RgbBodyProfile.from_config(block, registration)
+    except (OSError, TypeError, KeyError, ValueError, OverflowError):
+        raise Stop("the RGB figure profile does not match the camera registration") from None
+    return block
+
+
 def preview_geometry_export(path, site):
     """Validate the export envelope and keep the original bytes for the service credential."""
     try:
@@ -152,7 +167,7 @@ def undo_lines(host):
 
 
 def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID,
-        ha_token_file=None, ha_url_file=None, preview_geometry=None):
+        ha_token_file=None, ha_url_file=None, preview_geometry=None, body_profile_file=None):
     site = rl.den_site()
     geometry = None if preview_geometry is None else preview_geometry_export(preview_geometry, site)
     tools_dir = root / "tools"
@@ -166,6 +181,7 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
     rs.camera_address(camera_url)
     private = Path(token_file).parent
     ha_token, ha_url = ha_inputs(ha_token_file or private / HA_TOKEN_FILE, ha_url_file or private / HA_URL_FILE)
+    figure = body_profile(body_profile_file or private / BODY_PROFILE_FILE, receipt)
     say("Step 2's registration %s, from %s." % (transform_id, receipt.name))
     say("The Qwen ask: %s" % ("on, with Home Assistant's token and address." if ha_token else
                               "off. To turn it on, save %s and %s first (README, \"The Qwen ask\")." % (HA_TOKEN_FILE, HA_URL_FILE)))
@@ -186,6 +202,8 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         shutil.copyfile(token_file, outbox / "camera-token.txt")
         shutil.copyfile(receipt, outbox / "register-receipt.json")
         settings = {"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url, "site": site}
+        if figure is not None:
+            settings["body_rgb"] = figure
         if ha_token:
             settings["asks"] = {"ha_url": ha_url, "ha_entity": rs.FRIGATE_ENTITY}
             (outbox / rs.HA_TOKEN).write_text(ha_token + "\n", encoding="utf-8", newline="\n")

@@ -1,15 +1,15 @@
 """Submit the exact frame retained by the detector and fence late body replies."""
 import math
 import threading
-import time
 
+from body_clock import lease_clock
 from stream import BODY_LEASE_S
 
 MIN_INTERVAL_S = 0.3
 
 
 class BodyLink:
-    def __init__(self, detector, *, stream, min_interval_s=MIN_INTERVAL_S, clock=time.monotonic):
+    def __init__(self, detector, *, stream, min_interval_s=MIN_INTERVAL_S, clock=lease_clock):
         self.detector, self.stream, self.clock = detector, stream, clock
         self.min_interval_s = min_interval_s
         self.lock = threading.Lock()
@@ -156,15 +156,28 @@ class BodyLink:
                 header = {"kind": "body", "id": frame_id, "request_id": self.request_id, "now": capture_mono,
                           "frame_key": frame_key, "binding": binding, "observation": observation, "person": person,
                           "reset_learning": self.reset_learning}
+                previous_sent = self.last_sent
                 self.pending = {**header, "generation": self.generation, "capture_mono": capture_mono}
                 self.reset_learning = False
                 self.last_sent = now
                 self.counts["sent"] += 1
         try:
-            self.detector.send_alone(header)
+            admitted = self.detector.send_alone(header)
         except Exception:
             with self.lock:
                 self._off()
+            return False
+        if admitted is False:
+            with self.lock:
+                self.counts["skipped_busy"] += 1
+                if header["kind"] == "setup_body":
+                    self.setting_up = None
+                elif self.pending is not None and self.pending["request_id"] == header["request_id"]:
+                    if self.pending["generation"] == self.generation:
+                        self.last_sent = previous_sent
+                    self.reset_learning |= header["reset_learning"]
+                    self.pending = None
+                    self.counts["sent"] -= 1
             return False
         return header["kind"] == "body"
 

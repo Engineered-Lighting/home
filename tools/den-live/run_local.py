@@ -41,6 +41,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import body_link  # noqa: E402  the live body, made in the detector's process and never waited for
+import body_rgb  # noqa: E402
 import perceive  # noqa: E402
 import register_now as rn  # noqa: E402  the method file's numbers: the gate, and whether the camera's correction is required
 import room_labels  # noqa: E402  the den's labels, kept and served beside the stream
@@ -264,7 +265,7 @@ def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="
 
 def start_body(perceiver, out, detector, body_input):
     """Attach the link now. Its first qualified bundle schedules worker setup without a wait."""
-    link = body_link.BodyLink(detector, stream=out)
+    link = body_link.BodyLink(detector, stream=out, clock=out.body_clock)
     perceiver.body = link
     perceiver.body_provider = body_input
     return link
@@ -272,7 +273,7 @@ def start_body(perceiver, out, detector, body_input):
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          labels=None, asks=None, coordinator=None, body_input=None):
+          labels=None, asks=None, coordinator=None, body_input=None, body_profile=None):
     """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
@@ -302,6 +303,9 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
     perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits
     say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
                                                           "required" if perceiver.require_source_correction else "not required"))
+    if (body_input is None and body_profile is not None and body_profile.scan_revision == revision
+            and body_profile.transform_id == perceiver.camera.transform_id):
+        body_input = body_rgb.RgbBodyInput(body_profile, perceiver.camera)
     detector = out = src = loop = cleanup = link = asker = lighting = None
     try:
         say("Starting the detector (about half a minute)...")

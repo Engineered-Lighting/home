@@ -55,6 +55,7 @@ import preview  # noqa: E402
 import run_local as rl  # noqa: E402  the loop (serve), the scan's floor, the receipt's revision
 import sofa_check as sc  # noqa: E402  say, Stop, the pinned trees' markers
 import source  # noqa: E402
+from body_rgb import RgbBodyProfile  # noqa: E402
 
 say, Stop, Refusal = sc.say, sc.Stop, rl.Refusal
 RELEASE = HERE.parents[1]          # /opt/den-live/releases/<id>: tools/, trees/, models/
@@ -397,6 +398,9 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     config = {"schema": CONFIG_SCHEMA, "camera_url": settings["camera_url"], "content_packs": str(packs), "site": site,
               "venv_python": str(venv_python), "models": str(models), "stream_port": int(stream_port),
               **({"asks": block} if block else {})}
+    body_rgb = settings.get("body_rgb", current.get("body_rgb") if isinstance(current, dict) else None)
+    if body_rgb is not None:
+        config["body_rgb"] = body_rgb
     if "coordinator" in settings:
         config["coordinator"] = settings["coordinator"]
     elif isinstance(current, dict) and "coordinator" in current:
@@ -509,13 +513,19 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
         receipt = json.loads(paths["receipt"].read_text(encoding="utf-8"))
     except (OSError, ValueError):
         raise Refusal("the service's receipt credential doesn't read: paste install_la.py again") from None
+    body_profile = None
+    if body_input is None and config.get("body_rgb") is not None:
+        try:
+            body_profile = RgbBodyProfile.from_config(config["body_rgb"], receipt)
+        except (TypeError, KeyError, ValueError, OverflowError):
+            say("The RGB figure profile is unavailable or does not match this registration. Markers remain available.")
     take = rl.den_take(trees["observe"])
     try:
         token = take.read_token(paths["token"])
     except take.Refused:
         raise Refusal("the service's camera token credential doesn't read: paste install_la.py again") from None
     try:
-        camera = source.camera_client(take, config["camera_url"], token)
+        camera = source.camera_client(take, config["camera_url"], token, body_timing=body_profile is not None)
     except take.Refused as exc:
         raise Refusal(str(exc)) from None
 
@@ -550,7 +560,7 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
                     status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say),
-                    asks=starter, coordinator=coordinator, body_input=body_input)
+                    asks=starter, coordinator=coordinator, body_input=body_input, body_profile=body_profile)
 
 
 def stopping(_signum, _frame):

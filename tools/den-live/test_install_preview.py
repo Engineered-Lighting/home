@@ -1,5 +1,6 @@
 """Exercise the owner preview install packet with a fake transport and no private data."""
 
+from dataclasses import asdict
 import json
 from pathlib import Path
 import tempfile
@@ -8,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 import install_la as install
+from body_head import HeadProfile
 
 SITE = "synthetic-den"
 
@@ -28,6 +30,14 @@ class PreviewInstallTest(unittest.TestCase):
             tarball = root / "tarball"
             for path in (token, model, receipt, tarball):
                 path.write_bytes(b"synthetic")
+            receipt.write_text(json.dumps({"fit": {"result": "registered", "transform_id": "test-transform"},
+                                           "scan_revision": "test-scan", "source_correction": {
+                                               "calibrations": ["a" * 64], "factors": [1.0], "frames": 1, "applied": 1,
+                                           }}), encoding="utf-8")
+            profile = {"qualification_id": "fixture-profile", "clock_evidence_id": "fixture-clock",
+                       "transform_id": "test-transform", "scan_revision": "test-scan", "min_valid_depth_fraction": 0.2,
+                       "head": asdict(HeadProfile(0.13, 0.055, 0.35, 1.0, 0.006, 0.5, 0.085))}
+            (root / install.BODY_PROFILE_FILE).write_text(json.dumps(profile), encoding="utf-8")
             transport = SimpleNamespace(shell=lambda *args, **kwargs: 0, copied={})
 
             def copy(paths, remote):
@@ -51,6 +61,7 @@ class PreviewInstallTest(unittest.TestCase):
             settings = json.loads(transport.copied["settings.json"])
             self.assertEqual(settings["coordinator"],
                              {"preview": True, "transform_id": "test-transform", "hue_overlay": False})
+            self.assertEqual(settings["body_rgb"], profile)
             self.assertNotIn(b"0.1234", transport.copied["settings.json"])
             self.assertEqual(transport.copied[install.PREVIEW_GEOMETRY], geometry.read_bytes())
             self.assertFalse((root / "private" / "release" / "outbox").exists())

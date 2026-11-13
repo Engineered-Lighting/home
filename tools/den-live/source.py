@@ -14,10 +14,15 @@ it; /frame.npz is a prebuilt latest bundle with request slots of its own. Allowe
 those two paths, refusing any other before a request is made. Every den-live tool that reads the camera gets its client
 from camera_client(): the sofa check, step 2's take, the live loop and the service.
 """
+import http.client
+import json
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass
+from functools import partial
+
+from body_clock import AGE_HEADER, lease_clock
 
 ALLOWED_PATHS = ("/frame.npz", "/calibration")
 
@@ -30,8 +35,9 @@ class AllowedCamera:
     """den-take's Camera, held to ALLOWED_PATHS: any other path is refused here, before a connection is opened. It has
     no health(): den-take's /health check is a path this client doesn't ask for."""
 
-    def __init__(self, camera):
+    def __init__(self, camera, *, read_body_bundle=None):
         self._camera = camera
+        self._read_body_bundle = read_body_bundle
         self.host, self.port = camera.host, camera.port
 
     def __repr__(self):
@@ -43,9 +49,40 @@ class AllowedCamera:
         return self._camera.get(path, timeout=timeout)
 
 
-def camera_client(take, url, token):
-    """den-take's GET client for the camera at url, with the token, held to ALLOWED_PATHS."""
-    return AllowedCamera(take.Camera(url, token))
+    def get_bundle(self, timeout=5.0):
+        """Read the latest bundle and its optional same-response exposure receipt."""
+        if self._read_body_bundle is None:
+            status, body = self.get("/frame.npz", timeout)
+            return status, body, None
+        return self._read_body_bundle(timeout)
+
+
+def _get_body_bundle(camera, max_body, token, timeout):
+    connection = http.client.HTTPConnection(camera.host, camera.port, timeout=timeout)
+    try:
+        headers = {"Authorization": "Bearer " + token} if token else {}
+        connection.request("GET", "/frame.npz", headers=headers)
+        response = connection.getresponse()
+        body = response.read(max_body + 1)
+        if len(body) > max_body:
+            raise http.client.HTTPException("response too large")
+        if response.length:
+            raise http.client.IncompleteRead(body, response.length)
+        values = [value for key, value in response.getheaders() if key.casefold() == AGE_HEADER.casefold()]
+        try:
+            receipt = json.loads(values[0]) if len(values) == 1 and len(values[0]) <= 2048 else None
+        except (ValueError, RecursionError):
+            receipt = None
+        return response.status, body, receipt
+    finally:
+        connection.close()
+
+
+def camera_client(take, url, token, *, body_timing=False):
+    """den-take's client held to the den-live paths, with optional frame-age receipts."""
+    camera = take.Camera(url, token)
+    read_body_bundle = partial(_get_body_bundle, camera, take.MAX_BODY, token) if body_timing else None
+    return AllowedCamera(camera, read_body_bundle=read_body_bundle)
 
 
 @dataclass(frozen=True)
@@ -58,6 +95,9 @@ class Bundle:
     arrival_mono: float    # this PC's monotonic clock then
     fetch_s: float | None = None
     parse_s: float | None = None
+    request_mono: float | None = None
+    capture_age_receipt: dict | None = None
+    receipt_arrival_mono: float | None = None
 
 
 class Mailbox:
@@ -105,11 +145,13 @@ class CameraSource(threading.Thread):
         while not self.halt.is_set():
             started = clock()
             self.polls += 1
+            request_mono = lease_clock()
             try:
-                status, body = self.camera.get("/frame.npz")
+                status, body, age = self.camera.get_bundle()
                 why = None
             except (OSError, self.take.http.client.HTTPException) as exc:
-                status, body, why = None, b"", "the camera did not answer (%s)" % type(exc).__name__
+                status, body, age, why = None, b"", None, "the camera did not answer (%s)" % type(exc).__name__
+            receipt_arrival = lease_clock()
             arrival_mono, arrival_unix = clock(), time.time()
             fresh = False
             if status == 200:
@@ -127,7 +169,9 @@ class CameraSource(threading.Thread):
                         self.camera_session = meta["session"]
                         self.status, self.why = "ok", None
                         self.mailbox.put(Bundle(body, meta["session"], meta["rgb_seq"], meta["t_host"], arrival_unix,
-                                                arrival_mono, arrival_mono - started, clock() - arrival_mono))
+                                                arrival_mono, fetch_s=arrival_mono - started, parse_s=clock() - arrival_mono,
+                                                request_mono=request_mono, capture_age_receipt=age,
+                                                receipt_arrival_mono=receipt_arrival))
                         fresh, last_new = True, arrival_mono
             elif status in (401, 403):
                 self.errors += 1

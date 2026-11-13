@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 from collections import deque
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from body_input import BodyInput, bundle_frame_key, qualified
 from body_link import BodyLink
@@ -73,6 +74,17 @@ class LinkTests(unittest.TestCase):
         self.detector.reply()
         self.assertEqual(self.events[-1], (SCOPE, dict(frame=FRAME, capture_mono=99.9)))
         self.assertFalse(self.submit(frame_id=9))
+
+    def test_busy_shared_worker_retries_setup_and_preserves_learning_reset(self):
+        with patch.object(self.detector, "send_alone", return_value=False):
+            self.assertFalse(self.submit())
+        self.setup_worker()
+        with patch.object(self.detector, "send_alone", return_value=False):
+            self.assertFalse(self.submit())
+        self.assertTrue(self.submit())
+        self.assertTrue(self.detector.headers[-1]["reset_learning"])
+        self.assertEqual(self.link.counts["skipped_busy"], 2)
+        self.assertEqual(self.link.counts["sent"], 1)
 
     def test_expiry_and_mismatched_key(self):
         self.setup_worker()
@@ -161,7 +173,8 @@ class PipelineTests(unittest.TestCase):
         track = SimpleNamespace(id=1, obs_ids={"current-pose"}, heading_as_of=None, last_seen=100)
         track_record = dict(track_id="one", position=dict(x=0, y=1, cov=[[0.1, 0], [0, 0.1]]), heading=None,
                             association=dict(status="confident", since_ts=99.0))
-        meta = dict(session="camera", rgb_seq=7, depth_seq=20)
+        meta = dict(session="camera", rgb_seq=7, depth_seq=20,
+                    raw={"frames": {"depth": {"sequence": 20, "host_monotonic_timestamp_seconds": 100.0}}})
         tools = SimpleNamespace(takes=SimpleNamespace(read_frame=lambda _: (meta, None)),
                                 roommodel=SimpleNamespace(RegistrationRefused=ValueError),
                                 observe=SimpleNamespace(observe=lambda *_, **__: [observation]),
@@ -191,7 +204,7 @@ class PipelineTests(unittest.TestCase):
         perceiver.body = SimpleNamespace(submit=lambda frame_id, **kwargs: calls.append(("submit", frame_id, kwargs)),
                                          clear=lambda reason: calls.append(("clear", reason)))
         bundle = SimpleNamespace(data=b"fake", session="camera", rgb_seq=7, t_host=100.0,
-                                 arrival_mono=100.1, arrival_unix=1000, fetch_s=0, parse_s=0)
+                                 arrival_mono=100.1, arrival_unix=1000, fetch_s=0, parse_s=0, receipt_arrival_mono=100.1)
         return calls, perceiver.process(bundle, {}, 100.2)
 
     def pipeline_input(self, data, *, key=None):
@@ -245,14 +258,17 @@ def read_event(response):
 class StreamTests(unittest.TestCase):
     def setUp(self):
         self.now = 100.0
-        self.stream = PeopleStream(port=0, clock=lambda: self.now, wall_clock=lambda: 1000.0, heartbeat_s=0.05).start()
+        self.stream = PeopleStream(port=0, clock=lambda: 10.0, body_clock=lambda: self.now,
+                                   wall_clock=lambda: 1000.0, heartbeat_s=0.05).start()
         self.addCleanup(self.stream.close)
         self.base = f"http://127.0.0.1:{self.stream.port}{BASE}den/"
 
     def test_capture_deadline_and_clear_replay_with_independent_markers(self):
         self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
+        spot = {"epoch": "synthetic-preview", "valid_until_mono": 15, "seq": 10}
+        self.stream.publish_spot(spot)
         self.assertTrue(self.stream.publish_body(SCOPE, frame={**FRAME, "head": "must never be forwarded"}, capture_mono=99.5))
-        with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
+        with urllib.request.urlopen(self.base + "body", timeout=3) as response:
             self.assertEqual(response.headers["X-Home-Den-Body-Schema"], BODY_SCHEMA)
             self.assertEqual(read_event(response), ("body_clock", {"server_ts": 1000}))
             name, first = read_event(response)
@@ -271,6 +287,8 @@ class StreamTests(unittest.TestCase):
             self.assertGreater(cleared["seq"], first["seq"])
             self.assertNotIn("points", cleared)
         with urllib.request.urlopen(self.base + "stream", timeout=3) as response:
+            self.assertEqual(read_event(response), ("spot_clock", {"epoch": spot["epoch"], "server_mono": 10.0}))
+            self.assertEqual(read_event(response), ("spot_snapshot", spot))
             self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])
 
     def test_slow_ready_expiry_preserves_newer_ready_and_clear_precedes_recovery(self):
@@ -289,7 +307,7 @@ class StreamTests(unittest.TestCase):
     def test_missing_provider_leaves_people_and_spot_routes_available(self):
         self.stream.body_available = False
         self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
-        spot = {"epoch": "synthetic-preview", "valid_until_mono": self.now + 5, "seq": 10}
+        spot = {"epoch": "synthetic-preview", "valid_until_mono": 15, "seq": 10}
         self.stream.publish_spot(spot)
         with self.assertRaises(urllib.error.HTTPError) as missing:
             urllib.request.urlopen(self.base + "body-v2", timeout=3)
@@ -298,6 +316,7 @@ class StreamTests(unittest.TestCase):
             self.assertEqual(json.load(error)["error"], "body_unavailable")
             self.assertIsNone(error.headers.get("X-Home-Den-Body-Schema"))
         with urllib.request.urlopen(self.base + "stream", timeout=3) as response:
+            self.assertEqual(read_event(response), ("spot_clock", {"epoch": spot["epoch"], "server_mono": 10.0}))
             self.assertEqual(read_event(response), ("spot_snapshot", spot))
             self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])
 

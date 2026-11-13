@@ -48,7 +48,8 @@ from pathlib import Path
 
 import room_labels
 from body import head_exclusion
-from body_input import qualified as qualified_body_input
+from body_clock import receipt_arrival
+from body_input import bundle_frame_key, qualified as qualified_body_input
 from contracts import FIGURE_S, PERCEPTION_S, RGB_PAIR_S, FrameRef, PlaneRef, TrackEvidence, TrackingSnapshot
 
 SCHEMA = "den-live-people-1"
@@ -396,6 +397,7 @@ class Perceiver:
         self.associations = {}
 
     def _epoch(self, *, clock_reset=False):
+        self._clear_body("scope_changed")
         self.sessions += 1
         self._new_core()
         self.dark_since = self.light_since = None
@@ -477,30 +479,34 @@ class Perceiver:
 
     def idle(self, camera_state, now_mono):
         self.body_input = None
-        self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
         status = camera_state.get("status")
         if status not in ("starting", "offline", "refused"):
             status = "stale"
         if self.last_capture is not None:
             self._epoch()
+        self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
         return self._snapshot(self.event(None, [], camera_state, now_mono), status=status)
 
     def _clear_body(self, reason):
         if self.body is not None:
             self.body.clear(reason)
 
-    def _submit_body(self, bundle, meta, depth, frame_key, *, observations=(), tracks=(), supported=(), association=None):
+    def _submit_body(self, prepared, *, observations=(), tracks=(), supported=(), association=None):
         if self.body is None or self.body_provider is None:
             return
-        if frame_key is None:
+        ref, bundle, meta, depth = prepared.ref, prepared.bundle, prepared.meta, prepared.depth
+        if bundle_frame_key(bundle, meta) != [ref.camera_session, ref.rgb.seq, getattr(ref.depth, "seq", None)]:
             self._clear_body("unavailable")
             return
+        frame_key = list(ref.key)
         try:
             value = self.body_provider(bundle, meta, depth, frame_key=frame_key, mode=self.mode,
                                     observations=observations, tracks=tracks, supported=supported,
                                     association={} if association is None else association)
+            arrival = receipt_arrival(bundle)
             if (qualified_body_input(value, self.scope) and value.frame_key == frame_key
-                    and value.capture_earliest_mono <= bundle.arrival_mono):
+                    and value.run_id == ref.service_run_id and value.track_epoch == ref.camera_epoch
+                    and arrival is not None and value.capture_earliest_mono <= arrival):
                 request = self._body_request(value)
                 if request is not None:
                     self.body.submit(self.detector.next_id, **request)
@@ -651,6 +657,8 @@ class Perceiver:
         self.problem = None
         previous_mode = self.mode
         luma = reply.get("luma")
+        if type(luma) not in (int, float) or not math.isfinite(luma):
+            luma = None
         self._mode(luma, capture_mono)
         if previous_mode != self.mode:
             self._epoch()
@@ -661,7 +669,10 @@ class Perceiver:
                 dark_since, light_since = self.dark_since, self.light_since
                 self._epoch()
                 self.dark_since, self.light_since = dark_since, light_since
-            self._submit_body(prepared.bundle, meta, depth, list(ref.key))
+            if self.mode == "none" and ref.camera_epoch == self.sessions:
+                self._submit_body(prepared)
+            else:
+                self._clear_body("pose_unavailable")
             return self._snapshot(self.event(now_mono - capture_mono, [], dict(camera_state, why="too dark"), now_mono),
                                   status="degraded")
         self.last_capture = capture_mono
@@ -753,9 +764,7 @@ class Perceiver:
         self.associations = {e.track_id: self.associations[e.track_id] for e in evidence}
         possible_person = any(o["kind"] in ("person_box", "keypoints") for o in observations)
         presence = "present" if candidates else "unknown" if possible_person or tracks else "empty"
-        if self.body is not None:
-            self._submit_body(prepared.bundle, meta, depth, list(ref.key), observations=observations,
-                              tracks=tracks, supported=supported, association=association)
+        self._submit_body(prepared, observations=observations, tracks=tracks, supported=supported, association=association)
         snapshot_event = self._snapshot(event, ref=ref, status="fresh", presence=presence, tracks=evidence)
         return snapshot_event
 

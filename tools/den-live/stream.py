@@ -22,6 +22,8 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from body_clock import lease_clock
+
 BASE = "/api/den-live/v1/homes/"
 LABELS_MAX_BYTES = 65536
 BACKLOG = 8
@@ -48,14 +50,15 @@ class _Client:
 
 class PeopleStream:
     def __init__(self, *, home="den", host="127.0.0.1", port=8111, max_clients=16, heartbeat_s=2.0, labels=None,
-                 body_available=True, clock=time.monotonic, wall_clock=time.time):
+                 body_available=True, clock=time.monotonic, body_clock=lease_clock, wall_clock=time.time):
         self.home, self.host, self.max_clients, self.heartbeat_s = home, host, max_clients, heartbeat_s
         self.labels = labels   # a room_labels.Store, or None: then the labels paths answer 503
         self.latest, self.clients, self.lock, self.closing = None, set(), threading.Lock(), threading.Event()
         self.body_latest, self.body_clients = None, set()
         self.body_available, self.spot_latest = body_available, None
         self.body_run, self.body_seq = None, 0
-        self.clock, self.body_time_offset = clock, wall_clock() - clock()
+        self.clock, self.body_clock = clock, body_clock
+        self.body_time_offset = wall_clock() - body_clock()
         self.served = self.refused = 0
         self.routes = {}   # {(method, "/suffix"): handler(body) -> (status, json)}
         stream = self
@@ -204,7 +207,7 @@ class PeopleStream:
                     spot_epoch = None
                     if body:
                         self.connection.settimeout(2.0)
-                        self.wfile.write(_sse("body_clock", {"server_ts": stream.body_time(stream.clock())}))
+                        self.wfile.write(_sse("body_clock", {"server_ts": stream.body_time(stream.body_clock())}))
                     else:
                         self.wfile.write(b"retry: 2000\n\n")
                     self.wfile.flush()
@@ -304,21 +307,21 @@ class PeopleStream:
     def _expire_body(self):
         if self.body_latest is not None:
             event, deadline, _ = self.body_latest
-            if deadline is not None and self.clock() >= deadline:
+            if deadline is not None and self.body_clock() >= deadline:
                 self._set_body({key: event[key] for key in BODY_SCOPE}, reason="stale")
 
     def body_wait(self):
         with self.lock:
             self._expire_body()
             deadline = self.body_latest[1] if self.body_latest is not None else None
-            return self.heartbeat_s if deadline is None else max(0, min(self.heartbeat_s, deadline - self.clock()))
+            return self.heartbeat_s if deadline is None else max(0, min(self.heartbeat_s, deadline - self.body_clock()))
 
     def body_for_write(self, packet, client):
         event, deadline, data = packet
         with self.lock:
             if client.retired or event["run_id"] != self.body_run:
                 return None
-            if deadline is not None and self.clock() >= deadline:
+            if deadline is not None and self.body_clock() >= deadline:
                 if packet is self.body_latest:
                     self._expire_body()
                 return None
@@ -331,7 +334,7 @@ class PeopleStream:
         scope = {key: scope[key] for key in BODY_SCOPE}
         with self.lock:
             if frame is not None:
-                now = self.clock()
+                now = self.body_clock()
                 if not capture_mono <= now < capture_mono + BODY_LEASE_S:
                     return False
                 frame = {key: frame[key] for key in BODY_FIELDS}

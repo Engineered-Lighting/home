@@ -23,8 +23,8 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveEnabled, denLiveHeaders, denLiveRouteKind,
-  denLiveRuntime } from "./den-live-route.mjs";
+import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
+  denLabelsSaveProblem, denLiveEnabled, denLiveHeaders, denLiveRouteKind, denLiveRuntime } from "./den-live-route.mjs";
 import { REDACTED, hasBody, lookOnlyClient, lookOnlyEnabled, lookOnlyKind, lookOnlyPackIndex, lookOnlyRuntime } from "./look-only.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -32,6 +32,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Look-only also needs the Serve listener: HOME_WEB_SERVE_PORT, the loopback port Tailscale Serve forwards to with
 // --proxy-protocol=1 (docs/TAILSCALE-WEB.md). Without it there's no look-only.
 const DEN_LIVE_ENABLED = denLiveEnabled(process.env);
+const DEN_LIVE_BODY_ENABLED = DEN_LIVE_ENABLED && /^(1|true|yes|on)$/i.test(String(process.env.HOME_WEB_DEN_LIVE_BODY ?? "1").trim());
 const SERVE_PORT = /^\d{1,5}$/.test(String(process.env.HOME_WEB_SERVE_PORT || "")) ? Number(process.env.HOME_WEB_SERVE_PORT) : 0;
 const LOOK_ONLY_ENABLED = lookOnlyEnabled(process.env) && SERVE_PORT > 0 && SERVE_PORT < 65536;
 // At most this many den-live streams per look-only device, and in all: den-live serves 16, and signed-in Home needs some.
@@ -1248,7 +1249,10 @@ function sendIndex(req, res, filePath, { lookOnly = false } = {}) {
     const haProxyRuntime = haTokenProxy.enabled
       ? `window.__HOME_WEB_HA_TOKEN_PROXY=true;window.__HOME_WEB_HA_TOKEN=${jsString(HA_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}${DEN_LIVE_ENABLED ? denLiveRuntime() + denLabelsRuntime() : ""}${lookOnly ? lookOnlyRuntime() : ""}</script>`;
+    const denRuntime = DEN_LIVE_ENABLED
+      ? denLiveRuntime({ body: DEN_LIVE_BODY_ENABLED && lookOnlyClient(req) !== null }) + denLabelsRuntime()
+      : "";
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}${denRuntime}${lookOnly ? lookOnlyRuntime() : ""}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -1636,6 +1640,7 @@ function proxyHttp(req, res, route) {
     return;
   }
   const client = targetUrl.protocol === "https:" ? https : http;
+  const denBody = route.prefix === DEN_LIVE_PREFIX && req.url === DEN_LIVE_BODY_PATH;
   let receivedResponse = false;
   let responseTimer = null;
   const upstream = client.request(targetUrl, {
@@ -1644,6 +1649,25 @@ function proxyHttp(req, res, route) {
   }, (upstreamRes) => {
     receivedResponse = true;
     if (responseTimer) clearTimeout(responseTimer);
+    if (denBody) {
+      const mime = String(upstreamRes.headers["content-type"] || "").split(";", 1)[0].trim().toLowerCase();
+      if (upstreamRes.statusCode !== 200 || mime !== "text/event-stream"
+          || upstreamRes.headers[DEN_LIVE_BODY_SCHEMA_HEADER] !== DEN_LIVE_BODY_SCHEMA) {
+        upstreamRes.destroy();
+        sendJson(res, 503, { ok: false, error: "den_body_unavailable" });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+        [DEN_LIVE_BODY_SCHEMA_HEADER]: DEN_LIVE_BODY_SCHEMA,
+      });
+      res.flushHeaders();
+      upstreamRes.on("error", () => res.destroy());
+      upstreamRes.pipe(res);
+      return;
+    }
     let headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
     if (route.transformResponseHeaders) {
@@ -2047,6 +2071,21 @@ const server = http.createServer({
   }
   if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {
     await handleAuthRoute(req, res, parsed);
+    return;
+  }
+  if (parsed.pathname === DEN_LIVE_BODY_PATH) {
+    if (req.method !== "GET" || req.url !== DEN_LIVE_BODY_PATH) {
+      sendJson(res, 404, { ok: false, error: "route_not_found" });
+    } else if (lookOnlyClient(req) === null) {
+      sendJson(res, 403, { ok: false, error: "tailnet_required" });
+    } else if (!DEN_LIVE_BODY_ENABLED) {
+      sendCapabilityDisabled(res, "den_live_body");
+    } else if (hasBody(req)) {
+      req.resume();
+      sendJson(res, 400, { ok: false, error: "unexpected_body" });
+    } else {
+      proxyHttp(req, res, route);
+    }
     return;
   }
   // A look-only device reading a listed path. Anything else it asks falls through to the rules below, unchanged.

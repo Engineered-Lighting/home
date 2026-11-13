@@ -3,6 +3,7 @@
 //
 // - Reads, for one home, "den": the latest state, the server-sent event stream, and the den's labels document.
 // - A signed-in session reads them, and so does a look-only tailnet device (look-only.mjs).
+// - The body stream uses the trusted tailnet listener and requires the measured-body protocol upstream.
 // - One write: signed-in Home saves the labels document (PUT .../labels, den-room-labels-1), with the
 //   x-home-den-labels header, a JSON body of at most 64 KB, and nothing else. Look-only never writes.
 // - No caller credential or cookie reaches den-live: only Accept, Last-Event-ID and User-Agent pass, plus a save's
@@ -13,13 +14,14 @@ import { REGISTRATION_ROUTE } from "./equipment-registration.mjs";
 
 export const DEN_LIVE_PREFIX = "/api/den-live";
 export const DEN_LIVE_HOME = "den";
+export const DEN_LIVE_BODY_PATH = `${DEN_LIVE_PREFIX}/v1/homes/${DEN_LIVE_HOME}/body`;
+export const DEN_LIVE_BODY_SCHEMA_HEADER = "x-home-den-body-schema";
+export const DEN_LIVE_BODY_SCHEMA = "den-live-body-2";
 export const DEN_SITE = /^\/api\/apartment\/v1\/sites\/([a-z0-9][a-z0-9-]{0,63})\//.exec(REGISTRATION_ROUTE)[1];
 export const DEN_LABELS_CSRF_HEADER = "x-home-den-labels";
 export const DEN_LABELS_MAX_BYTES = 65536;
 
 const READ = /^\/v1\/homes\/den\/(?:state|stream|labels)$/;
-// The live body (den-live-body-1 frames) has a path of its own, so it can stay with signed-in Home: look-only.mjs
-// passes "read" only, never "body".
 const BODY = /^\/v1\/homes\/den\/body$/;
 const LABELS = /^\/v1\/homes\/den\/labels$/;
 
@@ -56,11 +58,12 @@ export function denLiveHeaders(reqHeaders, target, method = "GET") {
   return headers;
 }
 
-// The page shell's line telling Home where the den's markers, and for signed-in Home its body, come from.
-export function denLiveRuntime() {
+// The page shell names the body only when the request can open the body stream.
+export function denLiveRuntime({ body = false } = {}) {
   const base = `${DEN_LIVE_PREFIX}/v1/homes/${DEN_LIVE_HOME}/`;
   return `window.HomeDenLive=Object.freeze({home:${JSON.stringify(DEN_LIVE_HOME)},site:${JSON.stringify(DEN_SITE)},`
-    + `state:${JSON.stringify(base + "state")},stream:${JSON.stringify(base + "stream")},body:${JSON.stringify(base + "body")}});`;
+    + `state:${JSON.stringify(base + "state")},stream:${JSON.stringify(base + "stream")}`
+    + (body ? `,body:${JSON.stringify(DEN_LIVE_BODY_PATH)}` : "") + "});";
 }
 
 // The page shell's line telling Home where the den's labels are (home-den-labels-view.mjs). Look-only gets it too:

@@ -11,6 +11,7 @@
 //   only reads as stopped; markers return when events do.
 //   node --test tools/test-den-live-look-only-browser.mjs
 // DEN_LIVE_SCREENSHOTS=<folder> also saves each run's view there.
+// HOME_DEN_BODY_BACKENDS=webgl,webgpu adds the native WebGPU proof on a machine with an available adapter.
 import test, { after, before } from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
@@ -27,6 +28,7 @@ import { lookOnlyKind } from '../web-gateway/look-only.mjs';
 import { initRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { SITES } from '../web-gateway/home-location.mjs';
 import { authoredDocument, installPack } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
 
 const require = createRequire(import.meta.url), { chromium } = require('playwright');
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -35,6 +37,7 @@ const USER = 'owner', PASSWORD = 'correct-horse-battery-staple';
 const TAILNET_CLIENT = '100.101.102.103';
 const STREAM = `${DEN_LIVE_PREFIX}/v1/homes/den/stream`, STATE = `${DEN_LIVE_PREFIX}/v1/homes/den/state`;
 const BODY = `${DEN_LIVE_PREFIX}/v1/homes/den/body`;
+const LABELS = `${DEN_LIVE_PREFIX}/v1/homes/den/labels`;
 const TARGETS = ['HOME_WEB_HA_TARGET', 'HOME_WEB_METRICS_TARGET', 'HOME_WEB_VLLM_TARGET', 'HOME_WEB_VISION_TARGET',
   'HOME_WEB_INTELLIGENCE_TARGET', 'HOME_WEB_SUPERVISOR_TARGET', 'HOME_WEB_S2S_TARGET', 'HOME_WEB_TRACKER_TARGET',
   'HOME_WEB_VIDEO_LABELER_TARGET', 'HOME_WEB_FRIGATE_TARGET', 'HOME_WEB_AGENT_BFF_TARGET'];
@@ -45,7 +48,14 @@ const freePort = () => new Promise(resolve => {
 
 let run, den, upstream, gateway, relay, origin, browser;
 // What the fake den-live sends: live | other-scan | camera-offline | too-dark | heartbeats-only.
-const fake = { scenario: 'live', seq: 0, streams: new Set(), opened: 0, bodies: new Set(), bodiesOpened: 0, seen: [] };
+const fake = { scenario: 'live', seq: 0, streams: new Set(), opened: 0, bodies: new Set(), bodiesOpened: 0, bodySeq: 0, bodyReplay: null, seen: [] };
+
+function bodyData(event) { return `id: ${event.seq}\nevent: body\ndata: ${JSON.stringify(event)}\n\n`; }
+function emitBody(options = {}) {
+  const event = measuredBodyEvent({ revision: den.revision, captured: Date.now() / 1000 - 0.05, seq: ++fake.bodySeq, ...options });
+  for (const client of fake.bodies) client.write(bodyData(event));
+  return event;
+}
 
 function peopleEvent() {
   const now = Date.now() / 1000, base = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform-1',
@@ -76,15 +86,17 @@ function startUpstream() {
       return;
     }
     if (req.method === 'GET' && req.url === BODY) {
-      // The live body's own stream (signed-in only). No frames: this test is about who opens it and when it closes.
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
-      res.write('retry: 1000\n\n');
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Home-Den-Body-Schema': 'den-live-body-2' });
+      res.write(`event: body_clock\ndata: ${JSON.stringify({ server_ts: Date.now() / 1000 })}\n\n`);
+      if (fake.bodyReplay) res.write(bodyData(fake.bodyReplay));
       fake.bodies.add(res); fake.bodiesOpened += 1;
       req.on('close', () => fake.bodies.delete(res));
       return;
     }
-    const body = req.url === STATE ? { people: peopleEvent() } : { ok: false, error: 'not_served_by_fake' };
-    res.writeHead(req.url === STATE ? 200 : req.url.startsWith('/api/lighting-brain/') ? 503 : 404, { 'Content-Type': 'application/json' });
+    const body = req.url === STATE ? { people: peopleEvent() } : req.url === LABELS
+      ? { schema: 'den-room-labels-1', home: 'den', room_id: 'den', content_revision: den.revision, revision: 0, saved_at: null, labels: [] }
+      : { ok: false, error: 'not_served_by_fake' };
+    res.writeHead(req.url === STATE || req.url === LABELS ? 200 : req.url.startsWith('/api/lighting-brain/') ? 503 : 404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
@@ -106,9 +118,12 @@ function browserOptions() {
   const installed = fs.existsSync(chromium.executablePath());
   assert.ok(installed || process.platform === 'win32', 'pinned Chromium must exist on Linux');
   const args = ['--disable-background-networking', '--renderer-process-limit=2', '--js-flags=--max-old-space-size=512'];
-  if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
+  const native = (process.env.HOME_DEN_BODY_BACKENDS || '').split(',').includes('webgpu');
+  if (native) args.push('--enable-unsafe-webgpu', '--ignore-gpu-blocklist');
+  else if (process.platform === 'win32') args.unshift('--use-angle=d3d11');
   else if (process.platform === 'linux') args.unshift('--use-angle=swiftshader', '--enable-unsafe-swiftshader');
-  return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
+  const channel = !installed && process.platform === 'win32' ? 'msedge' : native || process.platform === 'linux' ? 'chromium' : undefined;
+  return { headless: true, args, channel };
 }
 
 before(async () => {
@@ -149,7 +164,7 @@ after(async () => {
   await browser?.close();
   gateway?.kill();
   relay?.close();
-  for (const res of fake.streams) res.destroy();
+  for (const res of [...fake.streams, ...fake.bodies]) res.destroy();
   upstream?.closeAllConnections?.(); upstream?.close();
   if (run) fs.rmSync(run, { recursive: true, force: true });
 });
@@ -214,16 +229,17 @@ async function screenshot(page, name) {
 }
 /* Nothing but GETs, all on the gateway's look-only list, none refused. */
 function assertLookOnlyTraffic(seen, name) {
+  const kindOf = request => request.method === 'GET' && request.url === BODY ? 'den-live-body' : lookOnlyKind(request.method, request.url);
   const kinds = {};
   for (const request of seen.requests) {
-    const kind = lookOnlyKind(request.method, request.url) || 'OFF THE LIST', at = request.url.replace(/\?.*$/, '');
+    const kind = kindOf(request) || 'OFF THE LIST', at = request.url.replace(/\?.*$/, '');
     (kinds[kind] ||= new Set()).add(kind === 'static' ? at.replace(/[^/]+$/, '*') : at);
   }
   process.stdout.write(`# ${name}: ${seen.requests.length} requests, by look-only kind\n` + Object.entries(kinds)
     .map(([kind, urls]) => `#   ${kind}: ${[...urls].sort().join(' ')}\n`).join(''));
   const writes = seen.requests.filter(request => request.method !== 'GET');
   assert.deepEqual(writes, [], 'a look-only page sends no non-GET request');
-  const off = [...new Set(seen.requests.filter(request => lookOnlyKind(request.method, request.url) === null).map(request => request.url))];
+  const off = [...new Set(seen.requests.filter(request => kindOf(request) === null).map(request => request.url))];
   assert.deepEqual(off, [], 'every request is on the gateway look-only list');
   assert.deepEqual(seen.responses.filter(response => response.status === 401), [], 'no 401');
   assert.deepEqual(seen.sockets, [], 'no WebSocket');
@@ -253,6 +269,8 @@ test('look-only: the den view opens in Lighting with live markers, no write cont
     assert.match(view.chip, /2 people · 0\.50 s behind/);
     await page.locator('[aria-label="Lighting"][aria-pressed="true"]').waitFor({ timeout: 20000 });
     assert.equal(fake.streams.size, 1, 'one stream');
+    await page.waitForFunction(() => window.HomeDenLiveView.status().body?.stream === 'open');
+    assert.equal(fake.bodies.size, 1, 'a no-session tailnet client opens the separate body stream');
     await screenshot(page, 'look-only');
 
     // A press on a fixture's label or body selects nothing and opens nothing.
@@ -297,6 +315,106 @@ test('look-only: the den view opens in Lighting with live markers, no write cont
   await sleep(500);
   assert.equal(fake.streams.size, 0, 'closing the page closes its stream');
 });
+
+const bodyBackends = (process.env.HOME_DEN_BODY_BACKENDS || 'webgl').split(',');
+for (const backend of bodyBackends) {
+  test(`${backend}: measured body draws, clears, expires and stays out of transitions`, { timeout: 170000 }, async () => {
+    fake.scenario = 'live';
+    const { context, page } = await openHome({ url: `/?renderer=${backend}` });
+    const waitForBody = async (reason = null) => page.waitForFunction(expected => {
+      const state = window.HomeDenLiveView?.status().body;
+      const root = window.__APT_ENGINE?.apartmentRoot.getObjectByName('home-apartment-body-owned');
+      if (expected !== null) return state?.reason === expected && state.layer?.points === 0;
+      const recording = root?.getObjectByName(window.__APT_ENGINE.rendererBackend === 'webgl' ? 'body-recording' : 'body-recording-webgpu');
+      return state?.last_paint_age_s != null && (recording?.isSprite ? recording.count : recording?.geometry?.drawRange.count) > 0;
+    }, reason);
+    try {
+      await waitForMarkers(page);
+      await page.waitForFunction(() => window.HomeDenLiveView.status().body?.stream === 'open');
+      assert.equal(await page.evaluate(() => window.__APT_ENGINE.rendererBackend), backend === 'webgpu-webgl' ? 'webgpu-webgl2' : backend);
+      const canvas = page.locator('[data-home-apartment-view] canvas').first();
+      await canvas.screenshot({ animations: 'disabled' });
+      const frame = emitBody();
+      await waitForBody();
+      assert.equal((await denLive(page)).body.layer.points, frame.points.count);
+      const pixelProof = await page.evaluate(async () => {
+        const engine = window.__APT_ENGINE;
+        const node = engine.apartmentRoot.getObjectByName('home-apartment-body-owned');
+        const camera = engine.camera, renderer = engine.renderer, pose = new camera.constructor().copy(camera, false), render = renderer.render;
+        // Pin both readbacks to the same camera; only this test's first capture opts the body in.
+        renderer.render = function (scene, activeCamera) { return render.call(this, scene, activeCamera === camera ? pose : activeCamera); };
+        try {
+          node.userData.excludeFromApartmentCapture = false;
+          const drawn = await engine.captureFrame({ scale: 1 });
+          node.userData.excludeFromApartmentCapture = true;
+          const empty = await engine.captureFrame({ scale: 1 });
+          if (!drawn?.pixels || !empty?.pixels || drawn.pixels.length !== empty.pixels.length) return -1;
+          let changed = 0;
+          for (let i = 0; i < drawn.pixels.length; i += 4) {
+            if (Math.abs(drawn.pixels[i] - empty.pixels[i]) + Math.abs(drawn.pixels[i + 1] - empty.pixels[i + 1]) + Math.abs(drawn.pixels[i + 2] - empty.pixels[i + 2]) > 5) changed += 1;
+          }
+          return changed;
+        } finally { node.userData.excludeFromApartmentCapture = true; renderer.render = render; }
+      });
+      assert.ok(pixelProof > 12, `the renderer draws the measured figure into the canvas (${pixelProof} changed pixels)`);
+      await screenshot(page, `measured-body-${backend}`);
+      // Keep the camera fixed. Mark the apartment capture's draw so the next live render cannot skew the assertion.
+      const captureWhileVisible = await page.evaluate(async () => {
+        const engine = window.__APT_ENGINE;
+        const node = engine.apartmentRoot.getObjectByName('home-apartment-body-owned');
+        let drawn = 0, captureDraw = false;
+        const recording = node.getObjectByName(engine.rendererBackend === 'webgl' ? 'body-recording' : 'body-recording-webgpu');
+        const before = recording.onBeforeRender, render = engine.renderer.render;
+        const evidence = [];
+        engine.renderer.render = function (scene, camera) {
+          if (scene === engine.scene && camera === engine.camera) evidence.push(node.visible);
+          captureDraw = scene === engine.scene && camera === engine.camera && node.visible === false;
+          try { return render.apply(this, arguments); } finally { captureDraw = false; }
+        };
+        recording.onBeforeRender = function (...args) {
+          if (captureDraw) drawn += 1;
+          before.apply(this, args);
+        };
+        try { return { ok: !!(await engine.captureFrame({ scale: 0.25 })), drawn, hiddenForCapture: evidence.includes(false), restored: node.visible }; }
+        finally { recording.onBeforeRender = before; engine.renderer.render = render; }
+      });
+      assert.deepEqual(captureWhileVisible, { ok: true, drawn: 0, hiddenForCapture: true, restored: true });
+      const zoomed = await page.evaluate(() => {
+        const { rig } = window.__APT_ENGINE;
+        return rig.stepZoom(1, 0).accepted;
+      });
+      assert.equal(zoomed, true, 'the close view is reachable from room zoom');
+      await waitForBody('stale');
+      emitBody();
+      await waitForBody();
+      await screenshot(page, `measured-body-${backend}-close`);
+      emitBody({ reason: 'ambiguous' });
+      await waitForBody('ambiguous');
+      assert.equal((await denLive(page)).layer.tracks, 2, 'a body clear leaves anonymous markers');
+
+      const earlier = emitBody({ epoch: 2 });
+      await waitForBody();
+      await waitForBody('stale');
+      fake.bodyReplay = earlier;
+      const connections = fake.bodiesOpened;
+      for (const res of fake.bodies) res.destroy();
+      await page.waitForFunction(() => window.HomeDenLiveView.status().body?.stream === 'none');
+      await page.waitForFunction(() => window.HomeDenLiveView.status().body?.stream === 'open');
+      assert.ok(fake.bodiesOpened > connections);
+      assert.equal((await denLive(page)).body.layer.points, 0, 'replaying an expired frame cannot restore it');
+      emitBody({ epoch: 2 });
+      await waitForBody();
+      emitBody({ epoch: 2, captured: Date.now() / 1000 + 2 });
+      await waitForBody('stale');
+      emitBody({ epoch: 2, revision: `${den.revision}-old` });
+      await waitForBody('scope_changed');
+      assert.equal((await denLive(page)).layer.tracks, 2);
+    } finally {
+      fake.bodyReplay = null;
+      await context.close();
+    }
+  });
+}
 
 test('look-only at phone size: the den view, markers and chip fit 390x844 beside Home\'s controls', { timeout: 170000 }, async () => {
   fake.scenario = 'live';

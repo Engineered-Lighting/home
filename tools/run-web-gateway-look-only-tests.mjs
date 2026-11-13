@@ -9,7 +9,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind } from "../web-gateway/den-live-route.mjs";
+import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
+  denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind } from "../web-gateway/den-live-route.mjs";
 import { isTailnetAddress, lookOnlyKind, lookOnlyPackIndex } from "../web-gateway/look-only.mjs";
 import { REGISTRATION_ROUTE, initRegistration, readActiveBinding } from "../web-gateway/equipment-registration.mjs";
 import { SITES } from "../web-gateway/home-location.mjs";
@@ -75,8 +76,8 @@ function unitTests() {
   assert("den-live's body path is its own kind, GET only", denLiveRouteKind("GET", "/v1/homes/den/body") === "body"
     && denLiveRouteKind("HEAD", "/v1/homes/den/body") === null && denLiveRouteKind("GET", "/v1/homes/den/body?x") === null
     && denLiveRouteKind("GET", "/v1/homes/den/body/x") === null);
-  assert("look-only reads the markers but never the body", lookOnlyKind("GET", "/api/den-live/v1/homes/den/stream") === "den-live"
-    && lookOnlyKind("GET", "/api/den-live/v1/homes/den/body") === null);
+  assert("the body is handled apart from the look-only marker allowlist", lookOnlyKind("GET", "/api/den-live/v1/homes/den/stream") === "den-live"
+    && lookOnlyKind("GET", DEN_LIVE_BODY_PATH) === null);
   const headers = denLiveHeaders({ cookie: "home_web_auth=x", authorization: "Bearer abc", accept: "text/event-stream",
     "last-event-id": "4", "x-forwarded-for": "1.2.3.4" }, "http://127.0.0.1:8111/api/den-live");
   assert("den-live gets no cookie, credential or forwarding header", JSON.stringify(Object.keys(headers).sort())
@@ -151,11 +152,22 @@ const json = response => { try { return JSON.parse(response.body.replace(/^[0-9a
 
 function fakeUpstreams() {
   const seen = [];
+  const bodyResponse = { status: 200, mime: "text/event-stream; charset=utf-8", schema: DEN_LIVE_BODY_SCHEMA };
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", chunk => { body += chunk; });
     req.on("end", () => {
       seen.push({ method: req.method, url: req.url, headers: req.headers, body });
+      if (req.url === DEN_LIVE_BODY_PATH) {
+        const headers = { "Content-Type": bodyResponse.mime, "Cache-Control": "public, max-age=900" };
+        if (bodyResponse.schema) headers[DEN_LIVE_BODY_SCHEMA_HEADER] = bodyResponse.schema;
+        res.writeHead(bodyResponse.status, headers);
+        const clock = 'event: body_clock\ndata: {"server_ts":1000}\n\n';
+        const frame = `event: body\ndata: ${JSON.stringify({ schema: bodyResponse.schema, status: "clear", reason: "empty" })}\n\n`;
+        res.write(clock + frame);
+        setTimeout(() => res.end(), 1500);
+        return;
+      }
       if (req.url === `${DEN_LIVE_PREFIX}/v1/homes/den/stream`) {
         res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store" });
         res.write("retry: 2000\n\nid: 1\nevent: people\ndata: {\"schema\":\"den-live-people-1\",\"tracks\":[]}\n\n");
@@ -166,7 +178,7 @@ function fakeUpstreams() {
       res.end(JSON.stringify({ ok: true, url: req.url }));
     });
   });
-  return { server, seen };
+  return { server, seen, bodyResponse };
 }
 
 async function startGateway(port, env) {
@@ -197,7 +209,7 @@ async function integrationTests() {
     HOME_WEB_ENABLE_LEGACY_HA_PROXY: "1", HOME_WEB_ASSET_VERSION: "", HOME_CONTENT_PACKS_DIR: packs,
     HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: "1", HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot,
     HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: `http://${HOST}`, HOME_WEB_DEN_LIVE_TARGET: `${fake}${DEN_LIVE_PREFIX}`,
-    HOME_WEB_LIGHTING_BRAIN_TARGET: `${fake}/api/lighting-brain` };
+    HOME_WEB_LIGHTING_BRAIN_TARGET: `${fake}/api/lighting-brain`, HOME_WEB_DEN_LIVE_BODY: "1" };
   const port = await freePort(), servePort = await freePort();
   const gateway = await startGateway(port, { ...base, HOME_WEB_PORT: String(port), HOME_WEB_SERVE_PORT: String(servePort),
     HOME_WEB_DEN_LIVE: "1", HOME_WEB_LOOK_ONLY: "1" });
@@ -289,6 +301,42 @@ async function integrationTests() {
     r = await exchange(servePort, { url: "/", headers: { Authorization: basic } });
     assert("a signed-in shell names den-live but isn't look-only", r.status === 200 && r.body.includes("window.HomeDenLive=")
       && !r.body.includes("window.HomeLookOnly="));
+    const cookie = /\r\nset-cookie: ([^;\r\n]+)/i.exec(r.head)?.[1];
+    assert("signed-in shell gives the test a Home session cookie", !!cookie);
+    assert("both tailnet shells name the body endpoint", r.body.includes(DEN_LIVE_BODY_PATH)
+      && (await exchange(servePort, { url: "/" })).body.includes(DEN_LIVE_BODY_PATH));
+    r = await exchange(port, { client: null, url: "/", headers: { Cookie: cookie } });
+    assert("a signed-in ordinary port shell omits the body endpoint", r.status === 200 && !r.body.includes(DEN_LIVE_BODY_PATH), r.status);
+
+    upstream.seen.length = 0;
+    r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH, until: "event: body\ndata:" });
+    assert("tailnet body streams v2 without a session and with caching and buffering off", r.status === 200
+      && /content-type: text\/event-stream/i.test(r.head) && /cache-control: no-store/i.test(r.head)
+      && /x-accel-buffering: no/i.test(r.head) && r.body.includes("event: body_clock")
+      && r.body.includes("event: body\ndata:"), r.head);
+    r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH, headers: { Cookie: cookie }, until: "event: body\ndata:" });
+    assert("a signed-in tailnet request reads body without forwarding credentials", r.status === 200
+      && !upstream.seen.at(-1)?.headers.cookie, upstream.seen.at(-1)?.headers);
+    const beforeDenied = upstream.seen.length;
+    for (const [listener, client] of [[servePort, "203.0.113.9"], [port, TAILNET_CLIENT]]) {
+      r = await exchange(listener, { client, url: DEN_LIVE_BODY_PATH, headers: { Cookie: cookie } });
+      assert("off-tailnet or untrusted ingress cannot read body with a valid Home cookie", r.status === 403, r.status);
+    }
+    for (const [method, url] of [["HEAD", DEN_LIVE_BODY_PATH], ["GET", `${DEN_LIVE_BODY_PATH}?x`],
+      ["GET", DEN_LIVE_BODY_PATH.replace("/den/body", "/den/./body")]]) {
+      r = await exchange(servePort, { method, url, headers: { Cookie: cookie } });
+      assert("body only accepts the exact body GET", r.status === 404, r.status);
+    }
+    r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH, body: "x" });
+    assert("body GET with a payload is refused before proxying", r.status === 400 && upstream.seen.length === beforeDenied, r.status);
+
+    for (const bad of [{ schema: null }, { schema: "den-live-body-1" }, { mime: "application/json" }, { status: 206 }]) {
+      Object.assign(upstream.bodyResponse, { status: 200, mime: "text/event-stream", schema: DEN_LIVE_BODY_SCHEMA }, bad);
+      r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH });
+      assert("gateway rejects legacy or invalid body response before sending SSE bytes",
+        r.status === 503 && !r.body.includes("event: body") && json(r)?.error === "den_body_unavailable", r.head);
+    }
+    Object.assign(upstream.bodyResponse, { status: 200, mime: "text/event-stream", schema: DEN_LIVE_BODY_SCHEMA });
     r = await exchange(servePort, { url: "/content-packs/index.json", headers: { Authorization: basic } });
     assert("a signed-in device still sees every pack", json(r)?.packs?.length === 2, json(r));
     upstream.seen.length = 0;
@@ -321,6 +369,22 @@ async function integrationTests() {
       && !saved.headers.authorization && !saved.headers.cookie && !saved.headers["x-home-den-labels"], saved);
   } finally {
     gateway.child.kill();
+  }
+
+  const rollbackPort = await freePort(), rollbackServePort = await freePort();
+  const rollback = await startGateway(rollbackPort, { ...base, HOME_WEB_PORT: String(rollbackPort),
+    HOME_WEB_SERVE_PORT: String(rollbackServePort), HOME_WEB_DEN_LIVE: "1", HOME_WEB_LOOK_ONLY: "1", HOME_WEB_DEN_LIVE_BODY: "0" });
+  try {
+    assert("gateway starts with only the body route off", rollback.ready);
+    let r = await exchange(rollbackServePort, { url: "/" });
+    assert("body rollback omits its URL and keeps the marker mount", r.status === 200
+      && !r.body.includes(DEN_LIVE_BODY_PATH) && r.body.includes("window.HomeDenLive="));
+    r = await exchange(rollbackServePort, { url: DEN_LIVE_BODY_PATH });
+    assert("body rollback disables the exact route", r.status === 404 && json(r)?.capability === "den_live_body", r.status);
+    r = await exchange(rollbackServePort, { url: `${DEN_LIVE_PREFIX}/v1/homes/den/stream`, until: "event: people" });
+    assert("people markers continue during body rollback", r.status === 200 && r.body.includes("event: people"), r.status);
+  } finally {
+    rollback.child.kill();
   }
 
   const offPort = await freePort();

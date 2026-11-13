@@ -71,7 +71,9 @@ export function createBodySprites({ B, shared, body, held }) {
         return sprite;
     }
 
-    const sprites = [[body, false, 'body-recording-webgpu', 20], [held, true, 'body-held-object-webgpu', 21]].map(([uniforms, heldObject, name, order]) => {
+    const passes = [[body, false, 'body-recording-webgpu', 20]];
+    if (held) passes.push([held, true, 'body-held-object-webgpu', 21]);
+    const sprites = passes.map(([uniforms, heldObject, name, order]) => {
         const s = new THREE.Sprite(material(uniforms, heldObject));
         s.name = name; s.count = 0; s.frustumCulled = false; s.renderOrder = order;
         s.raycast = () => {};
@@ -82,7 +84,7 @@ export function createBodySprites({ B, shared, body, held }) {
         objects: sprites,
         /* The first n points of B are this frame's. */
         update(n) {
-            for (const a of Object.values(attrs)) { a.needsUpdate = true; a.addUpdateRange?.(0, n * a.itemSize); }
+            if (n > 0) for (const a of Object.values(attrs)) { a.needsUpdate = true; a.addUpdateRange?.(0, n * a.itemSize); }
             for (const s of sprites) s.count = n;
         },
         dispose() { for (const s of sprites) s.material.dispose(); },   // a Sprite's quad is three's own, shared

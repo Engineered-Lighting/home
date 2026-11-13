@@ -497,6 +497,35 @@ class Perceiving(unittest.TestCase):
         self.assertEqual(health, {'timings_ms': {}, 'fps_in': None, 'dropped_per_min': 0, 'lag_s_median': None, 'transit_s_median': None},
                          'nothing old speaks for now')
 
+    def test_idle_keeps_the_epoch_while_a_fresh_frame_is_at_the_detector(self):
+        """The review's case: after a 2.6 s stall, a frame captured 2.9 s after the last fresh one is at the detector
+        when an idle tick passes 3.0 s. The epoch stays, and finish takes the frame. The control: the same idle tick
+        with no frame at the detector starts the next epoch."""
+        state = {'status': 'ok', 'why': None}
+        frames = bundles(READING)
+        for pending in (True, False):
+            with self.subTest(pending=pending):
+                p = self.perceiver(READING)
+                self.run_take(p, frames[:1])
+                start = p.last_capture
+                for at in (1.5, 2.5):
+                    p.idle(state, start + at)
+                self.assertEqual(p.sessions, 1)
+                late = frames[1]
+                t_host = frames[0].t_host + 2.9   # captured 2.9 s after the last fresh frame, on the same clock offset
+                late = source.Bundle(late.data, late.session, late.rgb_seq, t_host, late.arrival_unix + 2.0,
+                                     t_host + (frames[0].arrival_mono - frames[0].t_host))
+                prepared = p.prepare(late, start + 3.0) if pending else None
+                p.idle(state, start + 3.5)
+                if not pending:
+                    self.assertEqual(p.sessions, 2, 'the control: no frame at the detector, so 3.5 s is a new epoch')
+                    continue
+                self.assertAlmostEqual(prepared.ref.capture_mono, start + 2.9, places=6)
+                self.assertEqual(p.sessions, 1, 'a fresh frame at the detector holds the epoch')
+                event = p.finish(prepared, p.detector.detect(late, 0.7), state, start + 3.6)
+                self.assertIsNotNone(event, 'finish took the frame')
+                self.assertEqual((event['perception_status'], p.sessions, p.counts['expired']), ('fresh', 1, 0))
+
     def test_the_transit_is_on_the_health_line_and_the_trackers_clock_is_unchanged(self):
         """Plan L1, step 4: arrival less captured_unix_ns, its median, only between 0 and 5 s. The tracker's clock stays
         arrival-anchored, so its lag is the same with the Jetson's clock right or wrong."""

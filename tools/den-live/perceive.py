@@ -421,6 +421,7 @@ class Perceiver:
         self.core = self.t.records.tracker_core.TrackerCore(self.track_method.tracker, exits=room["exits_m"], floor=room["floor_m"])
         self.strong = set()   # tracks a pose or a person box at PERSON_MIN or more has ever supported
         self.last_capture = None
+        self.pending_capture = None   # the capture time of the frame prepare handed on, until finish takes it
         self.body_input = None
         self.associations = {}
         self.seated = seated_rule.Published()   # contract 2's seated, once per track per frame
@@ -510,8 +511,10 @@ class Perceiver:
         """A snapshot with no frame, saying why. It keeps the epoch and the tracker: a late or missing frame is only
         stale, and the next fresh frame within EPOCH_GAP_S goes on with the same tracks (prepare's gap check). Once
         EPOCH_GAP_S has passed with no fresh frame, the next epoch starts here, once per gap: the stale snapshots of a
-        long outage carry it, not the epoch before."""
-        if self.last_capture is not None and now_mono - self.last_capture >= EPOCH_GAP_S:
+        long outage carry it, not the epoch before. A frame prepare has handed on, still within FRESH_S of its capture,
+        is no outage: prepare measured its gap capture to capture, and it's at the detector, so the epoch waits for it."""
+        pending = self.pending_capture is not None and now_mono < self.pending_capture + FRESH_S
+        if self.last_capture is not None and not pending and now_mono - self.last_capture >= EPOCH_GAP_S:
             self._epoch()   # _new_core forgets last_capture, so neither a later idle nor the next frame bumps again
         self.body_input = None
         status = camera_state.get("status")
@@ -671,6 +674,7 @@ class Perceiver:
                        self._plane(frames.get("right"), 640, 400), self._plane(frames.get("depth"), 640, 400),
                        calibration, self.scope["transform_id"], self.scope["content_revision"], capture_mono,
                        bundle.arrival_mono, self.now() - (now_mono - capture_mono))
+        self.pending_capture = capture_mono
         return Prepared(ref, meta, depth, bundle)
 
     def scaled(self, depth):
@@ -694,6 +698,7 @@ class Perceiver:
 
     def finish(self, prepared, reply, camera_state, now_mono):
         self.body_input = None
+        self.pending_capture = None
         ref, meta, depth = prepared.ref, prepared.meta, prepared.depth
         capture_mono = ref.capture_mono
         if ref.camera_epoch != self.sessions or now_mono >= capture_mono + FRESH_S:

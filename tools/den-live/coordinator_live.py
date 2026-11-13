@@ -12,6 +12,7 @@ Out:
 - bulb plans: den_lighting.coordinator_plan, through Home Assistant;
 - fixture calls: to a real fixture's Home Assistant services when its row names them, else written down only
   (fixture_calls.jsonl, `sent: false`), for the end-to-end plan's Computed stop;
+- offline C12 preview: no Home Assistant calls, exact FC13 bytes in fixture_calls.jsonl and current spot state;
 - Decisions, plans, corrections and kept marks: one day file each under <state>/days/<UTC date>/, kept 14 days like
   den-live's other words; learned.json and settings.json under <state>/coordinator/.
 Routes (stream.py, behind the gateway: GET look-only, POST signed in only):
@@ -30,6 +31,7 @@ import threading
 import time
 from pathlib import Path
 
+import c12_preview
 import ha_link
 
 STATUS_ENTITY = "sensor.den_lighting_control"
@@ -90,7 +92,7 @@ def ha_event(snapshot, status_entity=STATUS_ENTITY, switch_entity=SWITCH_ENTITY)
 
 class CoordinatorService:
     def __init__(self, core, *, state_dir, lights, fixtures=None, ha=None, utc_offset_h=0.0, seat_mark=None,
-                 status_entity=STATUS_ENTITY, switch_entity=SWITCH_ENTITY, clock=time.time):
+                 status_entity=STATUS_ENTITY, switch_entity=SWITCH_ENTITY, clock=time.time, preview=False):
         self.dc, self.learn = core
         self.state = Path(state_dir)
         self.folder = self.state / "coordinator"
@@ -99,23 +101,128 @@ class CoordinatorService:
         self.ha, self.clock = ha, clock
         self.status_entity, self.switch_entity = status_entity, switch_entity
         self.lock = threading.RLock()
+        rows = c12_preview.fixture_rows(fixtures or {}) if preview else fixtures or {}
         self.coordinator = self.dc.make_policy({
-            "fixtures": fixtures or {}, "lights": list(lights), "utc_offset_h": utc_offset_h, "seat_mark": seat_mark,
+            "fixtures": rows, "lights": [] if preview else list(lights), "utc_offset_h": utc_offset_h, "seat_mark": seat_mark,
             "settings": self._read_json(self.settings_path) or {}, "learner": self.learn.load(str(self.learned_path))})
         self.latest_decision = self.latest_plan = None
         self.ha_seen_at, self.problem = None, None
         self.counts = {"decisions": 0, "plans_sent": 0, "send_failed": 0, "fixture_calls": 0, "learned": 0, "lines_too_long": 0}
         self.halt, self.ticker, self.poller = threading.Event(), None, None
+        self.preview = None
+        if preview:
+            self.preview = c12_preview.Preview(
+                rows, profile_hash=self.dc.profile_sha256, move_time=self.dc.scurve.move_time,
+                write=lambda record, t: self._log("fixture_calls", record, t))
+            self.preview_stop_path = self.folder / "c12-preview.stop"
+            self.preview_tracks = {}
+            self.coordinator.stopped = self.preview_stop_path.exists()
+            self.coordinator.ha["on"] = True
+            for fid, row in rows.items():
+                self.coordinator.spots[fid]["joints"] = tuple(x / 100 for x in row["start_joints_cdeg"])
 
     # ---- in ---------------------------------------------------------------------------------------------------------
 
     def handle(self, kind, data=None, t=None):
         t = self.clock() if t is None else t
         with self.lock:
+            if self.preview:
+                if kind == "people":
+                    data = self._preview_people(data or {}, t)
+                elif kind == "person_state":
+                    tid = (data or {}).get("track_id")
+                    track = self.preview_tracks.get(tid)
+                    if track is None or data.get("capture_epoch") != track["capture_epoch"]:
+                        return []
+                    previous = self.coordinator.states.get(tid) or {}
+                    if (c12_preview.finite(previous.get("observed_at")) and c12_preview.finite(data.get("observed_at"))
+                            and data["observed_at"] < previous["observed_at"]):
+                        return []
+                elif kind == "fixture":
+                    # The preview uses its registered fixture file for the whole run.
+                    return []
+                elif kind == "stop":
+                    self.preview_stop_path.touch()
+                elif kind == "resume":
+                    self.preview_stop_path.unlink(missing_ok=True)
+                for tid in list(self.coordinator.states):
+                    if self._preview_evidence_until(tid, t) is None:
+                        del self.coordinator.states[tid]
+                if kind == "person_state":
+                    # Apply a stop/idle result immediately, and let the new receipt qualify this tick.
+                    self.coordinator.states[tid] = data
+                self.preview.advance(t, self._preview_evidence_until, self._preview_invalidate, stopping=kind == "stop")
+                if kind == "person_state" and self._preview_evidence_until(tid, t) is None:
+                    self.coordinator.states.pop(tid, None)
+                    kind = "tick"
+                if kind == "resume":
+                    # den-core emits Resume only for real fixtures.
+                    for fid in self.preview.fixtures:
+                        self._preview_call(dict(action="resume", fixture_id=fid, source="hand"), t)
             out = self.coordinator.handle({"kind": kind, "t": t, "data": data or {}})
             for record in out:
                 self._dispatch(record, t)
         return out
+
+    def _preview_people(self, data, t):
+        tracks = [row for row in data.get("tracks", []) if row.get("confirmed") and row.get("capture_epoch") is not None
+                  and c12_preview.finite(row.get("capture_ts")) and row["capture_ts"] <= t]
+        current = {}
+        for row in tracks:
+            tid = row["track_id"]
+            previous = self.preview_tracks.get(tid)
+            same_epoch = previous is not None and row["capture_epoch"] == previous["capture_epoch"]
+            if same_epoch and row["capture_ts"] < previous["capture_ts"]:
+                row = previous
+            current[tid] = dict(row, first_capture_ts=previous["first_capture_ts"] if same_epoch else row["capture_ts"])
+        for tid, previous in self.preview_tracks.items():
+            latest = current.get(tid)
+            if latest is None or latest["capture_epoch"] != previous["capture_epoch"]:
+                self.coordinator.tracks.pop(tid, None)
+                self.coordinator.states.pop(tid, None)
+        if len(current) != 1:
+            self.coordinator.states.clear()
+        self.preview_tracks = current
+        return {"tracks": list(current.values())}
+
+    def _preview_evidence_until(self, tid, t):
+        track = self.preview_tracks.get(tid)
+        state = self.coordinator.states.get(tid) or {}
+        if len(self.preview_tracks) != 1 or track is None or state.get("capture_epoch") != track["capture_epoch"]:
+            return None
+        engagement = state.get("focused_engagement") or {}
+        support = (state.get("field_support") or {}).get("focused_engagement") or {}
+        captured = support.get("last_support_capture_ts")
+        valid_until = state.get("activity_valid_until")
+        if (engagement.get("state") not in ("engaged", "ending") or engagement.get("kind") not in self.dc.TASK_KINDS
+                or support.get("support_status") != "observed" or not c12_preview.finite(captured)
+                or not track["first_capture_ts"] <= captured <= t or not c12_preview.finite(valid_until)):
+            return None
+        expiry = min(track["capture_ts"] + self.dc.POSE_MAX_AGE_S, captured + self.dc.SUPPORT_TTL_S, valid_until)
+        return expiry if t < expiry else None
+
+    def _preview_invalidate(self, fid):
+        joints = self.preview.spots[fid]["joints_cdeg"]
+        self.coordinator.spots[fid].update(job=None, on=False, level=0.0, joints=tuple(x / 100 for x in joints))
+
+    def _preview_call(self, intent, t):
+        fid, action = intent["fixture_id"], intent["action"]
+        spot = self.coordinator.spots[fid]
+        if action == "aim_move":
+            job = spot.get("job") or {}
+            who = job.get("who")
+            intent = dict(intent, motion_style=self.coordinator.settings["move_style"])
+            if intent["motion_style"] == "dim":
+                intent["level_during_move"] = self.coordinator.settings["move_dim_level"]
+        elif action == "stop":
+            intent = dict(intent, source="hand")
+            who = None
+        else:
+            who = self.preview.spots[fid]["who"]
+        expiry = self._preview_evidence_until(who, t)
+        encoded = self.preview.apply(intent, t, who=who, evidence_until=expiry, stopped=self.coordinator.stopped)
+        if action == "stop" or (action == "aim_move" and not encoded):
+            self._preview_invalidate(fid)
 
     def observe(self, event, frame):
         """perceive.Loop's observer: each processed frame's confirmed tracks, with their joints, to the coordinator."""
@@ -123,14 +230,17 @@ class CoordinatorService:
             return event
         poses = frame.get("poses") or {}
         tracks = [{"track_id": t["track_id"], "confirmed": True, "joints3d": joints3d(poses.get(t["track_id"])),
-                   "capture_ts": frame.get("capture_ts")}
+                   "capture_ts": frame.get("capture_ts"), "capture_epoch": frame.get("session")}
                   for t in event.get("tracks") or [] if t.get("state") == "confirmed"]
         self.handle("people", {"tracks": tracks})
         return event
 
     def on_ha(self, snapshot):
         self.ha_seen_at = self.clock()
-        self.handle("ha", ha_event(snapshot, self.status_entity, self.switch_entity))
+        data = ha_event(snapshot, self.status_entity, self.switch_entity)
+        if self.preview:
+            data = {"occupied": data["occupied"], "game_running": data["game_running"]}
+        self.handle("ha", data)
 
     def person_state(self, record):
         self.handle("person_state", record)
@@ -146,7 +256,8 @@ class CoordinatorService:
         elif kind == "bulb_plan":
             self.latest_plan = data
             self._log("plans", data, t)
-            self._send(*data["service"].split(".", 1), data["data"])
+            if not self.preview:
+                self._send(*data["service"].split(".", 1), data["data"])
         elif kind == "intent":
             self._fixture_call(data, t)
         elif kind == "learned":
@@ -158,6 +269,8 @@ class CoordinatorService:
             self._log("kept", data, t)
 
     def _send(self, domain, service, data):
+        if self.preview:
+            return False
         if self.ha is None:
             self.problem = "no Home Assistant link: the settings file has no asks block with ha_url"
             return False
@@ -174,6 +287,10 @@ class CoordinatorService:
     def _fixture_call(self, intent, t):
         """A real fixture's call goes to the Home Assistant service its row names for the action; every call is written
         down, sent or not (the end-to-end plan's fixture_calls.jsonl)."""
+        if self.preview:
+            self.counts["fixture_calls"] += 1
+            self._preview_call(intent, t)
+            return
         row = self.coordinator.fixtures.get(intent.get("fixture_id")) or {}
         service = (row.get("services") or {}).get(intent.get("action")) if row.get("real") else None
         sent = False
@@ -186,7 +303,8 @@ class CoordinatorService:
 
     def _log(self, name, data, t):
         line = json.dumps(data, separators=(",", ":"), default=str)
-        if len(line) > MAX_LINE:
+        complete = len(line) <= MAX_LINE
+        if not complete:
             self.counts["lines_too_long"] += 1
             line = json.dumps({"too_long": True, "kind": name, "at": t, "decision_id": data.get("decision_id")})
         day = datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%d")
@@ -197,6 +315,8 @@ class CoordinatorService:
                 handle.write(line + "\n")
         except OSError:
             self.problem = "a day file didn't write"
+            return False
+        return complete
 
     @staticmethod
     def _read_json(path):
@@ -208,28 +328,55 @@ class CoordinatorService:
     # ---- routes -----------------------------------------------------------------------------------------------------
 
     def routes(self):
-        return {("GET", "/coordinator"): self.route_state,
+        routes = {("GET", "/coordinator"): self.route_state,
                 ("POST", "/coordinator/switch"): self.route_switch,
                 ("POST", "/coordinator/settings"): self.route_settings,
                 ("POST", "/coordinator/learned/clear"): self.route_clear,
                 ("POST", "/coordinator/desk"): self.route_desk}
+        if self.preview:
+            routes[("POST", "/coordinator/stop")] = self.route_stop
+            routes[("POST", "/coordinator/resume")] = self.route_resume
+        return routes
 
     def route_state(self, _body=None):
         with self.lock:
             c = self.coordinator
-            age = None if self.ha_seen_at is None else round(self.clock() - self.ha_seen_at, 1)
-            return 200, {"on": c.ha["on"], "stopped": c.stopped, "desk_until": c.desk_until,
+            t = self.clock()
+            age = None if self.ha_seen_at is None else round(t - self.ha_seen_at, 1)
+            state = {"on": c.ha["on"], "stopped": c.stopped, "desk_until": c.desk_until,
                          "situation": (self.latest_decision or {}).get("situation"), "decision": self.latest_decision,
                          "plan": self.latest_plan, "learned": c.learner.entries, "settings": c.settings,
                          "home_assistant": {"age_s": age, "fresh": age is not None and age <= HA_STALE_S,
                                             "problem": self.problem or (self.poller.problem if self.poller else None)},
                          "counts": dict(self.counts)}
+            if self.preview:
+                self.preview.advance(t, self._preview_evidence_until, self._preview_invalidate)
+                state["c12_preview"] = self.preview.snapshot(t, self._preview_evidence_until)
+            return 200, state
 
     def route_switch(self, body):
         if not isinstance(body, dict) or type(body.get("on")) is not bool:
             return 400, {"ok": False, "error": "send {\"on\": true} or {\"on\": false}"}
+        if self.preview:
+            with self.lock:
+                t = self.clock()
+                if not body["on"]:
+                    self.preview.advance(t, self._preview_evidence_until, self._preview_invalidate)
+                    for fid in self.preview.fixtures:
+                        self.preview.darken(fid, "disabled", t)
+                        self._preview_invalidate(fid)
+                self.handle("ha", {"on": body["on"]}, t)
+            return 200, {"ok": True}
         ok = self._send("switch", "turn_on" if body["on"] else "turn_off", {"entity_id": self.switch_entity})
         return (200, {"ok": True}) if ok else (502, {"ok": False, "error": self.problem})
+
+    def route_stop(self, _body):
+        self.handle("stop")
+        return 200, {"ok": True}
+
+    def route_resume(self, _body):
+        self.handle("resume")
+        return 200, {"ok": True}
 
     def route_settings(self, body):
         if not isinstance(body, dict):
@@ -264,6 +411,8 @@ class CoordinatorService:
         return 200, {"ok": True, "kept_as": "learned-%s.json" % stamp}
 
     def route_desk(self, body):
+        if self.preview:
+            return 409, {"ok": False, "error": "desk transport is unavailable in C12 preview"}
         if not isinstance(body, dict) or type(body.get("on")) is not bool:
             return 400, {"ok": False, "error": "send {\"on\": true} or {\"on\": false}"}
         t = self.clock()
@@ -273,7 +422,7 @@ class CoordinatorService:
     # ---- running ----------------------------------------------------------------------------------------------------
 
     def start(self, poll_entities=True):
-        if self.ha is not None and poll_entities:
+        if self.ha is not None and poll_entities and not self.preview:
             self.poller = ha_link.Poller(self.ha, [self.status_entity, self.switch_entity], self.on_ha)
             self.poller.start()
         self.ticker = threading.Thread(target=self._tick, daemon=True, name="den-live-coordinator-tick")

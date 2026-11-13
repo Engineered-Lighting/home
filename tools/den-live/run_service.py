@@ -186,11 +186,14 @@ def coordinator_settings(config, fixed):
         return None, "the settings file doesn't set the coordinator up"
     if not isinstance(block, dict):
         return None, "the settings file's coordinator block isn't one"
-    if fixed is None:
+    preview = block.get("preview", False)
+    if type(preview) is not bool:
+        return None, "its preview setting must be true or false"
+    if fixed is None and not preview:
         return None, "it needs the asks block's Home Assistant link (ha_url, and the ha-token.txt credential)"
-    lights = block.get("lights")
-    if not (isinstance(lights, list) and lights and all(isinstance(e, str) and LIGHT.match(e) for e in lights)
-            and len(set(lights)) == len(lights)):
+    lights = [] if preview else block.get("lights")
+    if not preview and not (isinstance(lights, list) and lights and all(isinstance(e, str) and LIGHT.match(e) for e in lights)
+                            and len(set(lights)) == len(lights)):
         return None, "its lights must be den_lighting's room lights, light.<name>, each once"
     offset = block.get("utc_offset_h", 0)
     if type(offset) not in (int, float) or not -14 <= offset <= 14:
@@ -206,7 +209,14 @@ def coordinator_settings(config, fixed):
             return None, "its fixtures_file doesn't read"
         if not isinstance(fixtures, dict):
             return None, "its fixtures_file isn't an object of fixture rows"
-    return {"lights": lights, "utc_offset_h": float(offset), "fixtures": fixtures,
+    if preview and not fixtures:
+        return None, "C12 preview needs registered fixtures"
+    seat_mark = block.get("seat_mark")
+    if seat_mark is not None and (not isinstance(seat_mark, list) or len(seat_mark) != 3
+                                  or not all(coordinator_live.c12_preview.finite(v) for v in seat_mark)):
+        return None, "its seat_mark must be a room point"
+    return {"lights": lights, "utc_offset_h": float(offset), "fixtures": fixtures, "preview": preview,
+            "seat_mark": seat_mark,
             "status_entity": block.get("status_entity") or coordinator_live.STATUS_ENTITY,
             "switch_entity": block.get("switch_entity") or coordinator_live.SWITCH_ENTITY}, None
 
@@ -216,16 +226,20 @@ def coordinator_starter(settings, fixed, *, state, tree):
     def start():
         try:
             core = coordinator_live.load_core(tree)
-            ha = ha_link.HaClient(fixed["ha_url"], fixed["token"], cafile=fixed.get("ha_ca_file"))
+            preview = settings["preview"]
+            ha = None if preview else ha_link.HaClient(fixed["ha_url"], fixed["token"], cafile=fixed.get("ha_ca_file"))
             service = coordinator_live.CoordinatorService(
                 core, state_dir=state, lights=settings["lights"], fixtures=settings["fixtures"], ha=ha,
                 utc_offset_h=settings["utc_offset_h"], status_entity=settings["status_entity"],
-                switch_entity=settings["switch_entity"])
+                switch_entity=settings["switch_entity"], seat_mark=settings["seat_mark"], preview=preview)
             service.start()
         except Exception as exc:   # a type name only: its text could hold the URL
             say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
             return None
-        say("The lighting coordinator is on: it follows the \"Den lighting coordinator\" switch in Home Assistant.")
+        if preview:
+            say("The lighting coordinator is running offline C12 preview.")
+        else:
+            say("The lighting coordinator is on: it follows the \"Den lighting coordinator\" switch in Home Assistant.")
         return service, service.close
     return start
 

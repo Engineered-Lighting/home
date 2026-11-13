@@ -7,17 +7,22 @@ Stand-ins only: no camera, no Home Assistant, no fixture. The coordinator's core
 of tools/den-core and the lighting brain at refs.json's den-coordinator pin).
 """
 import http.client
+import io
 import json
+import os
 import shutil
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import coordinator_live as cl  # noqa: E402
+import c12_fc13  # noqa: E402
+import c12_replay  # noqa: E402
 import ha_link  # noqa: E402
 import release  # noqa: E402
 import run_local as rl  # noqa: E402
@@ -50,6 +55,11 @@ class FakeHa:
 
     def state(self, entity):
         return self.states.get(entity)
+
+
+class NoHa:
+    def call(self, *_args):
+        raise AssertionError("C12 preview made a Home Assistant service call")
 
 
 def den_status(occupancy="on", automatic=True, correction=None, gaming=False, signal="unknown", gaming_enabled=True):
@@ -126,6 +136,127 @@ class ServiceTest(unittest.TestCase):
 
     def service(self, **kw):
         return cl.CoordinatorService(CORE, state_dir=self.state, lights=LIGHTS, ha=self.ha, clock=self.clock, **kw)
+
+    def preview_service(self):
+        fixture = json.loads((HERE / "fixtures" / "c12-preview-golden.json").read_text())
+        profile = dict(fixture["profile"], axes=[{"v_max": 90, "a_max": 300, "j_max": 1200}] * 2)
+        rows = {"F3": dict(profile=profile, start_joints_cdeg=[0, -3000], aim_origin_m=[1.8, 0.2, 2.5],
+                           horizontal_world_reference=[0, 1, 0], registration_revision="synthetic",
+                           real=True, services={"aim_move": "c12_fixture.aim_move", "stop": "c12_fixture.stop"})}
+        self.ha = NoHa()
+        s = self.service(fixtures=rows, preview=True)
+        s.route_settings({"pre_aim": False, "shift_hold_s": 0})
+        return s
+
+    def preview_person(self, s, track="reader", epoch=1, seconds=0.25, capture=None):
+        for _ in range(round(seconds * 4)):
+            self.clock.t += 0.25
+            s.observe({"tracks": [{"track_id": track, "state": "confirmed"}]},
+                      {"session": epoch, "capture_ts": self.clock.t if capture is None else capture,
+                       "poses": {track: seated_pose()}})
+
+    def reading(self, s, track="reader", epoch=1):
+        s.person_state({"track_id": track, "capture_epoch": epoch, "observed_at": self.clock.t,
+                        "activity_valid_until": self.clock.t + 10,
+                        "focused_engagement": {"state": "engaged", "kind": "reading"},
+                        "field_support": {"focused_engagement": {
+                            "support_status": "observed", "last_support_capture_ts": self.clock.t}}})
+
+    def preview_row(self, s):
+        return s.route_state()[1]["c12_preview"]["fixtures"]["F3"]
+
+    def test_preview_is_local_and_stop_survives_restart(self):
+        s = self.preview_service()
+        s.on_ha(den_status())
+        self.preview_person(s, seconds=3)
+        self.reading(s)
+        self.preview_person(s, seconds=2)
+        self.assertGreater(self.preview_row(s)["spot_level"], 0)
+        self.assertEqual(s.route_stop({})[0], 200)
+        self.assertEqual(self.preview_row(s)["spot_level"], 0)
+        restarted = self.preview_service()
+        self.assertTrue(restarted.route_state()[1]["stopped"])
+        self.assertNotEqual(s.preview.run_id, restarted.preview.run_id)
+        self.assertEqual(restarted.route_switch({"on": False})[0], 200)
+        self.assertEqual(restarted.route_switch({"on": True})[0], 200)
+        self.assertTrue(restarted.route_state()[1]["stopped"])
+        self.assertEqual(restarted.route_resume({})[0], 200)
+        self.assertFalse(restarted.route_state()[1]["stopped"])
+        self.assertEqual(restarted.route_desk({"on": True})[0], 409)
+        self.assertEqual(self.preview_row(restarted)["spot_level"], 0)
+        self.assertTrue(all(not row.get("sent") for row in self.lines("fixture_calls")))
+
+    def test_preview_rebinds_at_same_aim_after_lapse_and_rejects_replacement(self):
+        s = self.preview_service()
+        self.preview_person(s, seconds=3)
+        self.reading(s)
+        self.preview_person(s, seconds=2)
+        first = self.preview_row(s)["move_seq"]
+        s.handle("tick")
+        renew = self.lines("fixture_calls")[-1]
+        self.assertEqual((renew["action"], renew["move_seq"]), ("keep_lit", first))
+        self.preview_person(s, seconds=3.25)  # fresh posture with no renewal ticks
+        self.assertTrue(any(row["action"] == "expired" for row in self.lines("fixture_calls")))
+        self.preview_person(s, seconds=2)
+        self.assertNotEqual(self.preview_row(s)["move_seq"], first)
+        self.preview_person(s, track="replacement")
+        self.assertEqual(self.preview_row(s)["spot_level"], 0)
+        self.reading(s, epoch=2, track="replacement")
+        self.assertEqual(self.preview_row(s)["spot_level"], 0)
+        self.assertNotIn("replacement", s.coordinator.states)
+
+    def test_preview_with_frozen_pose_does_not_light_on_late_arrival(self):
+        s = self.preview_service()
+        self.preview_person(s, seconds=3)
+        self.reading(s)
+        # Advance past both model arrival and the lease without sampling intermediate state.
+        self.clock.t += 4
+        self.assertEqual(self.preview_row(s)["spot_level"], 0)
+        self.assertTrue(any(row["action"] == "expired" for row in self.lines("fixture_calls")))
+
+    def test_preview_recovers_after_refusal_without_consuming_a_sequence(self):
+        s = self.preview_service()
+        self.preview_person(s, seconds=3)
+        with patch.object(c12_fc13, "encode", side_effect=c12_fc13.Refusal("test_refusal")):
+            self.reading(s)
+        self.assertEqual(self.lines("fixture_calls")[-1]["status"], "refused")
+        self.assertIsNone(self.preview_row(s)["move_seq"])
+        self.preview_person(s, seconds=2)
+        self.assertEqual(self.preview_row(s)["move_seq"], 0)
+        self.assertGreater(self.preview_row(s)["spot_level"], 0)
+
+    def test_preview_reports_incomplete_trace_when_the_append_fails(self):
+        s = self.preview_service()
+        self.preview_person(s, seconds=3)
+        with patch.object(s.preview, "write", return_value=False):
+            self.reading(s)
+        self.assertFalse(s.route_state()[1]["c12_preview"]["trace_complete"])
+
+    @unittest.skipUnless(os.environ.get("C12_TEST_FIRMWARE_ZIP"), "local pinned firmware ZIP not supplied")
+    def test_preview_sender_trace_replays_with_pinned_firmware(self):
+        s = self.preview_service()
+        self.preview_person(s, seconds=3)
+        self.reading(s)
+        self.preview_person(s, seconds=2)
+        s.handle("tick")
+        displayed = self.preview_row(s)
+        s.route_stop({})
+        s.route_resume({})
+        trace = self.lines("fixture_calls")
+        move = trace[displayed["move_event_index"] - 1]
+        self.assertEqual(move["frame"]["seq"], displayed["move_seq"])
+        self.assertEqual(move["decision_id"], displayed["move_decision_id"])
+        self.assertEqual(move["effective"]["spot_level"], displayed["spot_level"])
+        end = s.route_state()[1]["c12_preview"]
+        self.assertTrue(end["trace_complete"])
+        self.assertEqual(end["event_index"], trace[-1]["event_index"])
+        data = io.BytesIO("".join(json.dumps(row) + "\n" for row in trace).encode())
+        codec, _ = c12_replay.firmware_codec(os.environ["C12_TEST_FIRMWARE_ZIP"])
+        counts, groups = c12_replay.verify_trace(data, codec, collect_sim=True)
+        self.assertGreaterEqual(counts["encoded_only"], 4)
+        executable, digest = os.environ.get("C12_TEST_SIM"), os.environ.get("C12_TEST_SIM_SHA256")
+        if executable and digest:
+            self.assertEqual(c12_replay.replay_simulator(executable, digest, groups), counts["encoded_only"])
 
     def someone_seated(self, s):
         """One person, seated for 3 s: learning needs exactly one person in the den."""
@@ -274,6 +405,25 @@ class SettingsBlockTest(unittest.TestCase):
                              ({"lights": LIGHTS, "utc_offset_h": 99}, self.FIXED), ({"lights": LIGHTS * 2}, self.FIXED)):
             self.assertIsNone(run_service.coordinator_settings({"coordinator": block}, fixed)[0], block)
         self.assertIsNone(run_service.coordinator_settings({}, self.FIXED)[0])
+
+    def test_preview_starter_needs_no_ha_credentials_or_client(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "fixtures.json"
+            fixture = json.loads((HERE / "fixtures" / "c12-preview-golden.json").read_text())
+            profile = dict(fixture["profile"], axes=[{"v_max": 90, "a_max": 300, "j_max": 1200}] * 2)
+            path.write_text(json.dumps({"F3": dict(profile=profile, start_joints_cdeg=[0, 0],
+                aim_origin_m=[0, 0, 2], horizontal_world_reference=[1, 0, 0], registration_revision="synthetic")}))
+            settings, why = run_service.coordinator_settings(
+                {"coordinator": {"preview": True, "fixtures_file": str(path)}}, None)
+            self.assertIsNone(why)
+            with patch.object(ha_link, "HaClient", side_effect=AssertionError("preview initialized HA")):
+                start = run_service.coordinator_starter(settings, None, state=Path(tmp), tree=sc.archive(TREES, "coordinator"))
+                service, close = start()
+                try:
+                    self.assertIsNotNone(service.preview)
+                    self.assertIsNone(service.ha)
+                finally:
+                    close()
 
 
 class ReleaseScanTest(unittest.TestCase):

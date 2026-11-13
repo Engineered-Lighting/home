@@ -514,11 +514,10 @@ class Asker:
         self.reply_s.append(answered_mono - ask["sent_mono"])
         self.last_reply_at = round(answered_at, 3)
         outcome = "completed"
-        if not self._usable(now, ask) or (facts and facts["people_visible"] != "one"):
+        if not self._usable(now, ask):
             self.counts["unbound"] += 1
             outcome = "unbound"
-            reason = ("evidence_expired" if now >= ask["valid_until_mono"] else
-                      "model_subject_unbound" if facts and facts["people_visible"] != "one" else "evidence_changed")
+            reason = "evidence_expired" if now >= ask["valid_until_mono"] else "evidence_changed"
         elif facts:
             latest, track = ask["frames"][-1], ask["track"]
             self.reply = InferenceReply(
@@ -538,10 +537,16 @@ class Asker:
                             "dispatch": round((ask["sent_mono"] - ask["stills_mono"]) * 1000, 1),
                             "model_http": round((answered_mono - ask["sent_mono"]) * 1000, 1),
                             "reply_to_handoff": round((now - answered_mono) * 1000, 1)})
-            self.prior = facts, ask["valid_until_mono"]
-            self.activity = (track.track_id, ask["valid_until_mono"],
-                             {"word": facts["activity_hypothesis"], "close_up": scene.close_up(facts),
-                              "at": round(answered_at, 3)})
+            if facts["people_visible"] == "one":
+                self.prior = facts, ask["valid_until_mono"]
+                self.activity = (track.track_id, ask["valid_until_mono"],
+                                 {"word": facts["activity_hypothesis"], "close_up": scene.close_up(facts),
+                                  "at": round(answered_at, 3)})
+            else:
+                # The coordinator needs the current negative observation to revoke support.
+                self.counts["unbound"] += 1
+                outcome, reason = "unbound", "model_subject_unbound"
+                self.activity = self.prior = None
         self._done(now, ask)
         self._record(ask, outcome=outcome, reason=reason, facts=facts, model=model, usage=tokens,
                      answered_mono=answered_mono, answered_at=answered_at)

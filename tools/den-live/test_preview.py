@@ -7,10 +7,12 @@ import os
 import tempfile
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 import coordinator_live
+from contracts import FrameRef, InferenceReply, PlaneRef
 import preview
 import run_service
 import sofa_check
@@ -62,15 +64,21 @@ class PreviewTest(unittest.TestCase):
                                      "eligible_track_id": "t1" if seated and not more else None,
                                      "tracks": [track, track] if more else [track]})
 
-    def read(self, *, at=None, start=None, kind="reading", **facts):
+    def read(self, *, at=None, start=None, kind="reading", frames=None, safe=True, **facts):
         at = self.now if at is None else at
         start = at if start is None else start
-        self.preview.offer_inference({"service_run_id": "run", "camera_epoch": 1, "track_id": "t1",
-                                      "association_revision": 2, "eligibility_revision": 1, "request_id": str(at),
-                                      "association": {"window_start_mono": start, "window_end_mono": at},
-                                      "observation": {"status": "valid", "facts": {
-                                          "people_visible": "one", "activity_hypothesis": kind, **facts}},
-                                      "observed_mono": at, "available_mono": self.now, "valid_until_mono": at + 10})
+        if frames is None:
+            frames = (self.frame(at),) if start == at else (self.frame(start), self.frame(at))
+        self.preview.offer_inference(InferenceReply(
+            str(at), "synthetic", "run", 1, "t1", 2, 1, frames,
+            {"status": "valid", "facts": {"people_visible": "one", "activity_hypothesis": kind, **facts}},
+            {"safe": safe, "status": "confident", "window_start_mono": start, "window_end_mono": at},
+            {}, {}, at, self.now, at + 10, {}))
+
+    def frame(self, capture):
+        seq = round(capture * 100)
+        return FrameRef("run", 1, seq, "synthetic", "rgb", PlaneRef(seq, capture, capture, 640, 360),
+                        None, None, None, BINDING["transform_id"], BINDING["scan_revision"], capture, capture, capture)
 
     def seat(self):
         for _ in range(5):
@@ -152,6 +160,46 @@ class PreviewTest(unittest.TestCase):
             self.track()
             self.read(kind=kind, **({"book_state": "closed"} if i == 3 else {}))
         self.assertFalse(self.preview.episode.need.engaged)
+
+    def test_reply_checks_its_attached_stills_and_association(self):
+        self.seat()
+        frame = self.frame(self.now)
+        for frames, safe in (((), True), ((replace(frame, camera_epoch=2),), True),
+                             ((replace(frame, scan_revision="another_scan"),), True),
+                             ((self.frame(self.preview.episode.started - .1), frame), True), ((frame,), False)):
+            with self.subTest(frames=frames, safe=safe):
+                self.read(frames=frames, safe=safe)
+                self.assertIsNone(self.preview.episode.last_observed)
+        self.read(frames=(frame,))
+        self.assertEqual(self.preview.episode.need.playing, 1)
+
+    def test_visible_contradictions_break_the_reading_streak(self):
+        self.seat()
+        for cue in ("book_closed", "phone_screen_toward_face", "hands_on_keyboard"):
+            self.now += .5
+            self.track()
+            self.read()
+            self.now += .5
+            self.track()
+            self.read(visible_basis=[cue])
+            self.assertFalse(self.preview.episode.need.engaged)
+
+    def test_multiple_people_in_the_stills_revokes_current_support(self):
+        self.light()
+        self.read(people_visible="multiple")
+        self.assertFalse(self.row()["on"])
+        self.assertIsNone(self.row()["keep_lit_token"])
+
+    def test_dim_travel_records_the_requested_level_before_dark_fallback(self):
+        self.light()
+        self.preview.configure({"move_dim_level": .35})
+        row = self.preview.rows["F3"]
+        target = (row["current"][0] + 100, row["current"][1])
+        self.preview._move("F3", row, target, .7, "dim", self.now, self.preview.track, "task")
+        record = self.encoded[-1]
+        self.assertEqual(record["requested"]["dim_level"], .35)
+        self.assertEqual(record["effective"]["travel"], "dark")
+        self.assertIsNone(record["effective"]["dim_level"])
 
     def test_phone_patience_does_not_restart(self):
         self.light()

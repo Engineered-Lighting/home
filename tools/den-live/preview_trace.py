@@ -51,7 +51,7 @@ def _frame(fixture_id, action, seq, decision_id, move_token, move):
     effective = frame["effective"]
     effective.update(target_cdeg=list(target), display_cct_k=intent["cct_k"],
                      travel="none" if effective["motion_style"] == "stationary" else effective["motion_style"],
-                     fade_s=None, effective_valid_ms=effective["valid_ms"] or wire.DEFAULT_VALID_MS)
+                     fade_s=None, dim_level=None, effective_valid_ms=effective["valid_ms"] or wire.DEFAULT_VALID_MS)
     return frame
 
 

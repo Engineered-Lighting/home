@@ -7,8 +7,11 @@ status line counts the lines skipped. The LA service writes it; run_local.py kee
 
 Numbers only, by the contract: the snapshot's fields, with times, positions and joints as numbers, ids as opaque strings
 and states as closed words. No image, no name and no free text, so two fields stay out: the snapshot's reason (words),
-and each track's near phrase (the labels' words; xy_m and the labels make it again). Room metres are kept to the
-millimetre and seconds to the millisecond.
+and each track's near phrase (the labels' words). Room metres are kept to the millimetre and seconds to the millisecond.
+near can be had again offline: room_labels.Store.put writes every save, with its revision and its saved_at (to the
+second), to room-labels-history.jsonl beside the labels, which holds the last 100 saves (HISTORY_KEEP). The save in
+force at a line's frame capture_ts, its confirmed labels (when placed on the frame's scan_revision) and the track's
+xy_m give room_labels.near_phrase again, right to about a second around each save.
 
 The anchor: before a run's first snapshot in each day's file it writes one line
     {"schema": "den-person-state-1", "service_run_id": <run>,

@@ -15,6 +15,7 @@ from body_link import BodyLink
 from body_rgb import RgbBodyInput, RgbBodyProfile
 import install_la
 from perceive import Perceiver, Tools, track_method_copy
+import run_local
 import run_service
 from sofa_check import archive
 from source import Bundle, camera_client
@@ -120,7 +121,8 @@ class Fixture:
         prepared = self.perceiver.prepare(item, self.clock())
         self.detector.next_id += 1
         self.kept = (self.detector.next_id, item.data, list(prepared.ref.key))
-        return self.perceiver.finish(prepared, self.reply, {"status": "ok"}, self.clock())
+        with patch("perceive.time.monotonic", self.clock):
+            return self.perceiver.finish(prepared, self.reply, {"status": "ok"}, self.clock())
 
 
 class RgbBodyTests(unittest.TestCase):
@@ -213,6 +215,43 @@ class RgbBodyTests(unittest.TestCase):
         f = self.f
         with self.assertRaises(ValueError):
             RgbBodyProfile.from_config(dict(f.block, scan_revision="other"), f.receipt)
+
+    def test_local_preview_passes_the_qualified_profile_and_same_pack_to_home(self):
+        f = self.f
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            room_model = root / "room-model.jsonl"
+            room_model.write_bytes(f.model.read_bytes())
+            receipt = root / "register-now-1.json"
+            receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
+            profile = root / "body.json"
+            profile.write_text(json.dumps(f.block), encoding="utf-8-sig")
+            renderer = root / "app" / "src" / "home-3d" / "apartment-people-layer.mjs"
+            renderer.parent.mkdir(parents=True)
+            renderer.touch()
+            (renderer.parent.parent / "home-den-live-view.mjs").touch()
+            packs = root / "packs"
+            take = SimpleNamespace(inside_checkout=lambda _: False, in_onedrive=lambda _: False)
+            args = dict(root=root, camera_url="http://127.0.0.1:1", token_file=root / "token.txt",
+                        venv=sys.executable, app=root, packs=packs, room_model=room_model,
+                        body_profile_file=profile, open_page=lambda _: None)
+            with (patch.object(run_local.sc, "archive", return_value=root),
+                  patch.object(run_local.perceive, "Tools", return_value=f.tools),
+                  patch.object(run_local, "scan_floor", return_value=(None, "other-scan")) as scan,
+                  patch.object(run_local, "den_take", return_value=take),
+                  patch.object(run_local.sc, "open_camera") as camera,
+                  patch.object(run_local, "serve") as serve,
+                  patch.object(run_local, "page", return_value=(None, "http://127.0.0.1:1/")) as page):
+                with self.assertRaisesRegex(run_local.Stop, "active scan"):
+                    run_local.run(**args)
+                camera.assert_not_called()
+                scan.return_value = (None, REVISION)
+                run_local.run(**args)
+                self.assertTrue(camera.call_args.kwargs["body_timing"])
+                self.assertEqual(serve.call_args.kwargs["body_profile"], f.provider.profile)
+                self.assertEqual(serve.call_args.kwargs["packs"], packs)
+                serve.call_args.kwargs["after_start"]()
+                self.assertEqual(page.call_args.args[2], ("--packs", str(packs)))
 
     def test_installer_reads_only_a_registration_bound_profile(self):
         f = self.f

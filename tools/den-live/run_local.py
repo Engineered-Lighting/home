@@ -198,9 +198,30 @@ def den_take(observe_tree):
     return take
 
 
+def local_body_profile(profile_file, room_model, roommodel, camera_id, scan_revision):
+    """Read a commissioned profile against this model and the scan the local page will use."""
+    try:
+        transform = roommodel.current_transform_id(roommodel.load(room_model), camera_id)
+    except roommodel.RegistrationRefused:
+        raise Stop("the RGB figure needs a usable camera registration") from None
+    receipt = registering_receipt(Path(room_model).parent, transform)
+    if receipt is None:
+        raise Stop("the RGB figure needs the matching successful registration receipt")
+    try:
+        profile = body_rgb.RgbBodyProfile.from_config(
+            json.loads(Path(profile_file).read_text(encoding="utf-8-sig")),
+            json.loads(receipt.read_text(encoding="utf-8")),
+        )
+    except (OSError, TypeError, KeyError, ValueError, OverflowError):
+        raise Stop("the RGB figure profile does not match the camera registration") from None
+    if profile.scan_revision != scan_revision:
+        raise Stop("the RGB figure profile does not match the active scan in the selected packs")
+    return profile
+
+
 def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id=CAMERA_ID, page_room="real",
         open_page=webbrowser.open, until=None, status_every_s=STATUS_EVERY_S, floor=None, require_correction=None,
-        page_extra=(), page_port=PAGE_PORT, stream_port=STREAM_PORT, body_input=None):
+        page_extra=(), page_port=PAGE_PORT, stream_port=STREAM_PORT, body_input=None, body_profile_file=None):
     trees = {key: sc.archive(root / "tools", key) for key in TREES}
     if not Path(room_model).is_file():
         raise Stop("no registration yet: paste step 2's line (register_now.py) first")
@@ -208,8 +229,19 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
         raise Stop("the detector's venv is not at %s" % venv)
     if not (Path(app) / "app" / "src" / "home-3d" / "apartment-people-layer.mjs").is_file():
         raise Stop("the Home checkout with the people layer isn't at %s" % app)
+    if page_room == "real" and packs is not None:
+        page_extra = ("--packs", str(packs), *page_extra)
+    body_profile = None
+    if body_profile_file is not None:
+        if page_room != "real" or floor is not None or body_input is not None or packs is None:
+            raise Stop("local RGB figure preview needs the registered room and its content packs")
+        if not (Path(app) / "app" / "src" / "home-den-live-view.mjs").is_file():
+            raise Stop("local RGB figure preview needs the Home checkout with the measured figure renderer")
+        _, scan_revision = scan_floor(packs, den_site())
+        tools = perceive.Tools(trees["observe"], trees["track"])
+        body_profile = local_body_profile(body_profile_file, room_model, tools.roommodel, camera_id, scan_revision)
     take = den_take(trees["observe"])
-    camera = sc.open_camera(take, camera_url, token_file, trees["observe"])
+    camera = sc.open_camera(take, camera_url, token_file, trees["observe"], body_timing=body_profile is not None)
     state = (root / "private" / "live").resolve()
     if take.inside_checkout(state) or take.in_onedrive(state):
         raise Stop("the data root is inside a git checkout or OneDrive")
@@ -232,7 +264,8 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
                                 "--state", str(root / "state" / "detector")],
                  stream_port=stream_port, busy="is another run_local.py still open?", until=until,
                  status_every_s=status_every_s, require_correction=require_correction, after_start=open_live_page,
-                 labels=room_labels.Store(root / "private" / "labels", say=say), body_input=body_input)
+                 labels=room_labels.Store(root / "private" / "labels", say=say), body_input=body_input,
+                 body_profile=body_profile)
 
 
 def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="real", page_extra=(), page_port=PAGE_PORT,
@@ -407,14 +440,21 @@ def evidence_observer(asker, lighting):
 def main(argv=None, *, root=None, camera_url=None, token_file=None, venv=sc.VENV_PY, console=sc.has_console, **kw):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--labels-only", action="store_true", help="only the labels store and the page, to label the den")
+    parser.add_argument("--body-profile", type=Path, help="private commissioned RGB figure profile for the local preview")
+    parser.add_argument("--app", type=Path, help="Home checkout for the local page")
+    parser.add_argument("--packs", type=Path, help="content packs shared by the local page and live loop")
     args = parser.parse_args(argv)
+    if args.labels_only and (args.body_profile is not None or args.packs is not None):
+        parser.error("--body-profile and --packs apply to the live view")
     if not console():
         say("live: refused, no console. Paste the line into PowerShell yourself.")
         return 2
     root = Path(root) if root else sc.data_root()
+    app = kw.pop("app", APP)
+    app = args.app if args.app is not None else app
     if args.labels_only:
         try:
-            labels_only(root=root, app=kw.pop("app", APP), **kw)
+            labels_only(root=root, app=app, **kw)
             return 0
         except Stop as exc:
             say("labels: stopped: %s" % exc)
@@ -426,8 +466,11 @@ def main(argv=None, *, root=None, camera_url=None, token_file=None, venv=sc.VENV
         observe_tree = sc.archive(root / "tools", "observe")
         sys.path.insert(0, str(observe_tree / "tools" / "den-take"))
         import take
+        default_packs = kw.pop("packs", None)
+        packs = args.packs or default_packs or content_packs()
         run(root=root, camera_url=camera_url or take.DEFAULT_CAMERA, token_file=token_file or take.DEFAULT_TOKEN_FILE,
-            venv=venv, app=kw.pop("app", APP), packs=kw.pop("packs", None) or content_packs(),
+            venv=venv, app=app, packs=packs,
+            body_profile_file=args.body_profile,
             room_model=kw.pop("room_model", root / "private" / "register" / "room-model.jsonl"), **kw)
         return 0
     except Stop as exc:

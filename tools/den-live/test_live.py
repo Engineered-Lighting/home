@@ -551,7 +551,7 @@ class Live(unittest.TestCase):
         # and times. The control: a line holding a position would match none of them.
         shapes = (r'^Starting the detector', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
                   r'^camera ok(?:: camera clock moved back)? \| [\d.-]+ frames a second \| \d+ people \| '
-                  r'[\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames(?:, \d+ out of order)?$')
+                  r'[\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames(?:, \d+ out of order)?(?:, \d+ too late)?$')
         self.assertIsNone(result['body'])
         known = lambda line: any(re.search(shape, line) for shape in shapes)
         self.assertTrue(all(known(line) for line in text.splitlines() if line.strip()), text)

@@ -198,7 +198,7 @@ def token_refusal(exc, token_file, tree):
             "the token anywhere.\n%s" % (exc, token_file, "\n".join(lines)))
 
 
-def open_camera(take, url, token_file, tree):
+def open_camera(take, url, token_file, tree, *, body_timing=False):
     """den-take's client for the camera, held to /frame.npz and /calibration (source.AllowedCamera). A token file that
     doesn't read stops with the three lines that save it (token_refusal)."""
     import source
@@ -207,7 +207,7 @@ def open_camera(take, url, token_file, tree):
     except take.Refused as exc:
         raise Stop(token_refusal(exc, token_file, tree)) from None
     try:
-        return source.camera_client(take, url, token)
+        return source.camera_client(take, url, token, body_timing=body_timing)
     except take.Refused as exc:
         raise Stop(str(exc)) from None
 

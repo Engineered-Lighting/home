@@ -173,6 +173,96 @@ class Stream(unittest.TestCase):
         self.assertEqual(refused.exception.code, 501)
 
 
+# ---- den-person-state-1: the snapshot on disk, numbers only (contract 2) -------------------------------------------
+
+class PersonStateLog(unittest.TestCase):
+    SNAPSHOT_KEYS = {'schema', 'service_run_id', 'camera_epoch', 'seq', 'frame', 'status', 'presence', 'tracks',
+                     'eligible_track_id', 'eligibility_revision'}
+    FRAME_KEYS = {'service_run_id', 'camera_epoch', 'frame_id', 'capture_mono', 'arrival_mono', 'capture_ts',
+                  'transform_id', 'scan_revision', 'depth_calibration_sha256'}
+    TRACK_KEYS = {'track_id', 'state', 'xy_m', 'sigma_m', 'position_basis', 'current_obs_ids', 'association',
+                  'supported_pose', 'seated'}
+    WORDS = {'den-person-state-1', 'confirmed', 'coasting', 'stereo', 'plane', 'coast', 'confident', 'ambiguous',
+             'supported', 'hips', 'head', 'fresh', 'stale', 'starting', 'offline', 'refused', 'degraded', 'present',
+             'empty', 'unknown'}
+
+    @staticmethod
+    def snapshot(run='a' * 32, seq=7):
+        from contracts import FrameRef, PlaneRef, SeatedState, TrackEvidence, TrackingSnapshot
+        frame = FrameRef(run, 2, 41, 'camera-session', 'rgb', PlaneRef(9, 1.0, 1.0, 640, 360), None, None, 'c' * 64,
+                         'den-oak@2026-11-13.1', 'scan-r4', 1234.56789, 1234.6789, 1_800_000_000.123456)
+        pose = {'left_hip': ((1.0, 2.0, 0.5), 'supported'), 'nose': ((1.0, 2.1, 1.12345), 'supported')}
+        track = TrackEvidence(f'{run}-e2-trk-1', 'confirmed', (1.23456, -0.5), 0.1234, 'stereo', ('o-den-oak-1234567-0',),
+                              'confident', 3, 1230.5, pose, near='on the sofa', seated=SeatedState(True, 1231.25, 'hips'))
+        return TrackingSnapshot(run, 2, seq, frame, 'fresh', 'too dark', 'present', (track,), track.track_id, 4)
+
+    def test_each_snapshot_is_one_numbers_only_line_with_the_contracts_fields_and_an_anchor(self):
+        import dataclasses
+        import person_state
+        state = scratch('den-live-person-state-')
+        monos = iter([500.0, 500.5, 501.0])
+        log = person_state.Log(state, clock=lambda: next(monos), wall=lambda: 1_800_000_000.0)
+
+        class Asker:   # the ask's eligibility on the snapshot is what's logged, as the coordinator gets it
+            snapshot = None
+
+            def observe(self, event, snapshot):
+                self.snapshot = dataclasses.replace(snapshot, eligibility_revision=9)
+                return event
+
+            def pop_reply(self):
+                return None
+        observe = rl.evidence_observer(Asker(), None, log)
+        event = {'schema': 'den-live-people-1', 'tracks': []}
+        self.assertIs(observe(event, self.snapshot()), event)
+        observe(event, self.snapshot(seq=8))
+        observe(event, self.snapshot(run='b' * 32, seq=1))   # another run: its own anchor
+        path = state / 'days' / '2027-01-15' / 'person-state.jsonl'   # beside the ask's asks.jsonl
+        text = path.read_text(encoding='utf-8')
+        lines = [json.loads(line) for line in text.splitlines()]
+        self.assertEqual([('anchor' in line, line['service_run_id']) for line in lines],
+                         [(True, 'a' * 32), (False, 'a' * 32), (False, 'a' * 32), (True, 'b' * 32), (False, 'b' * 32)])
+        self.assertEqual(lines[0], {'schema': 'den-person-state-1', 'service_run_id': 'a' * 32,
+                                    'anchor': {'mono': 500.0, 'ts': 1_800_000_000.0}})
+        self.assertEqual(lines[3]['anchor']['mono'], 501.0)
+        line = lines[1]
+        self.assertEqual(set(line), self.SNAPSHOT_KEYS)
+        self.assertEqual(set(line['frame']), self.FRAME_KEYS)
+        track, = line['tracks']
+        self.assertEqual(set(track), self.TRACK_KEYS)
+        self.assertEqual(track['association'], {'status': 'confident', 'revision': 3, 'since_mono': 1230.5})
+        self.assertEqual(track['seated'], {'state': True, 'since_mono': 1231.25, 'basis': 'hips'})
+        self.assertEqual((track['xy_m'], track['supported_pose']['nose']), ([1.235, -0.5], [[1.0, 2.1, 1.123], 'supported']))
+        self.assertEqual((line['frame']['capture_mono'], line['frame']['depth_calibration_sha256']), (1234.568, 'c' * 64))
+        self.assertEqual((line['eligibility_revision'], line['seq']), (9, 7))
+        # Numbers only: every word is a closed state or one of the snapshot's own ids; no reason, no near phrase.
+        ids = {'a' * 32, 'a' * 32 + '-e2-trk-1', 'o-den-oak-1234567-0', 'den-oak@2026-11-13.1', 'scan-r4', 'c' * 64}
+
+        def leaves(value):
+            if isinstance(value, dict):
+                for item in value.values():
+                    yield from leaves(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from leaves(item)
+            else:
+                yield value
+        for value in leaves(line):
+            self.assertTrue(value is None or type(value) in (bool, int, float) or value in self.WORDS | ids, value)
+        self.assertNotIn('on the sofa', text)
+        self.assertNotIn('too dark', text)
+        self.assertNotIn('camera-session', text)
+
+    def test_a_log_that_cant_write_never_stops_the_loop(self):
+        import person_state
+        blocked = scratch('den-live-person-state-') / 'not-a-folder'
+        blocked.write_text('x', encoding='utf-8')
+        log = person_state.Log(blocked)
+        event = {'tracks': []}
+        self.assertIs(rl.evidence_observer(None, None, log)(event, self.snapshot()), event)
+        self.assertEqual(log.failed, 1)
+
+
 # ---- the perceiver, on recorded rows -----------------------------------------------------------------------------
 
 class RecordedDetector:

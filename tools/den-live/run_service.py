@@ -15,7 +15,9 @@ Its inputs, all from systemd:
   register-receipt.json (the step 2 receipt that registered and qualified it, den-live-register-now-2, which says
   the scan revision its picks were made on).
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
-  its caches and TEMP. That's all it keeps, as run_local does: no frames, no tracks.
+  its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot,
+  numbers only, with a mono-and-wall anchor; person_state.py), beside the ask's asks.jsonl, both kept 14 days. No
+  frames and no stills.
 - --config, the settings file install.sh writes (/etc/den-live/config.json): camera_url, content_packs (the gateway's
   content-pack folder), site (the den's site, as the gateway names it), venv_python, models and stream_port.
 
@@ -558,7 +560,8 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
                     status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say),
-                    asks=starter, coordinator=coordinator, body_input=body_input, body_profile=body_profile)
+                    asks=starter, coordinator=coordinator, body_input=body_input, body_profile=body_profile,
+                    person_log=state)   # den-person-state-1, in state/days/<UTC date>/ beside the ask's asks.jsonl
 
 
 def stopping(_signum, _frame):

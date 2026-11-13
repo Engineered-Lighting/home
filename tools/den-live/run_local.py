@@ -43,6 +43,7 @@ sys.path.insert(0, str(HERE))
 import body_link  # noqa: E402  the live body, made in the detector's process and never waited for
 import body_rgb  # noqa: E402
 import perceive  # noqa: E402
+import person_state  # noqa: E402  contract 2's den-person-state-1 log, the LA service's only
 import register_now as rn  # noqa: E402  the method file's numbers: the gate, and whether the camera's correction is required
 import room_labels  # noqa: E402  the den's labels, kept and served beside the stream
 import sofa_check as sc  # noqa: E402  the data root, the pinned archives, the venv, say
@@ -336,11 +337,13 @@ def start_body(perceiver, out, detector, body_input):
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, registration, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          labels=None, asks=None, coordinator=None, body_input=None, body_profile=None):
+          labels=None, asks=None, coordinator=None, body_input=None, body_profile=None, person_log=None):
     """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator.
 
     registration(transform_id) is what step 2's qualified receipt says about the room model's registration,
-    {scan_revision, depth_scale}, or a Refusal: no receipt, or none qualified, starts nothing."""
+    {scan_revision, depth_scale}, or a Refusal: no receipt, or none qualified, starts nothing.
+    person_log: a state folder whose days/ get each snapshot as den-person-state-1 (person_state.py), beside the ask's
+    log; None keeps nothing, as run_local.py does."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None
@@ -413,7 +416,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
                 lighting[0].site = site
                 lighting[0].connect(out.publish_spot)
                 out.routes.update(lighting[0].routes())
-        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None)
+        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None,
+                                     None if person_log is None else person_state.Log(person_log))
         loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observer)
         out.start()
         src.start()
@@ -456,21 +460,29 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
             cleanup()
 
 
-def evidence_observer(asker, lighting):
-    """Deliver current typed tracking before any reply tied to that snapshot."""
+def evidence_observer(asker, lighting, person_log=None):
+    """Deliver current typed tracking before any reply tied to that snapshot. person_log (a person_state.Log) gets the
+    same snapshot the coordinator gets, the ask's eligibility on it, and never stops the loop."""
     def observe(event, snapshot):
-        if asker is not None:
-            try:
-                event = asker.observe(event, snapshot)
-            finally:
-                if lighting is not None:
-                    current = asker.snapshot
-                    lighting.offer_snapshot(current if current is not None and current.seq == snapshot.seq else snapshot)
-            reply = asker.pop_reply()
-            if lighting is not None and reply is not None:
-                lighting.offer_inference(reply)
-        elif lighting is not None:
-            lighting.offer_snapshot(snapshot)
+        current = snapshot
+        try:
+            if asker is not None:
+                try:
+                    event = asker.observe(event, snapshot)
+                finally:
+                    decorated = asker.snapshot
+                    if decorated is not None and decorated.seq == snapshot.seq:
+                        current = decorated
+                    if lighting is not None:
+                        lighting.offer_snapshot(current)
+                reply = asker.pop_reply()
+                if lighting is not None and reply is not None:
+                    lighting.offer_inference(reply)
+            elif lighting is not None:
+                lighting.offer_snapshot(snapshot)
+        finally:
+            if person_log is not None:
+                person_log.write(current)
         return event
     return observe
 

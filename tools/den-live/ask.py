@@ -168,10 +168,11 @@ def local_label(wall, zone=None):
 # ---- the log -------------------------------------------------------------------------------------------------------
 
 class AskLog:
-    """One line per ask, words and numbers only, in <state>/days/<UTC date>/asks.jsonl; days past RETENTION_DAYS go."""
+    """One line per ask, words and numbers only, in <state>/days/<UTC date>/asks.jsonl; days past RETENTION_DAYS go.
+    name: another day file beside it, kept the same way (person_state.py's person-state.jsonl)."""
 
-    def __init__(self, state):
-        self.days, self.today = Path(state) / "days", None
+    def __init__(self, state, name="asks.jsonl"):
+        self.days, self.today, self.name = Path(state) / "days", None, name
         self.lock = threading.Lock()
 
     def write(self, line, wall):
@@ -179,7 +180,7 @@ class AskLog:
         with self.lock:
             folder = self.days / day
             folder.mkdir(parents=True, exist_ok=True)
-            with open(folder / "asks.jsonl", "a", encoding="utf-8", newline="\n") as out:
+            with open(folder / self.name, "a", encoding="utf-8", newline="\n") as out:
                 out.write(json.dumps(line, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n")
             if day != self.today:
                 self.today = day

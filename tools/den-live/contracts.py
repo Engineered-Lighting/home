@@ -43,7 +43,7 @@ class FrameRef:
     rgb: PlaneRef
     right: PlaneRef | None
     depth: PlaneRef | None
-    calibration_id: str | None
+    depth_calibration_sha256: str | None   # the camera's EEPROM hash, depth_correction's calibration_sha256
     transform_id: str
     scan_revision: str | None
     capture_mono: float

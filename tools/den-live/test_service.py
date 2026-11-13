@@ -569,6 +569,14 @@ class ServiceAsks(unittest.TestCase):
         lines = [json.loads(line) for path in (service.state / 'days').rglob('asks.jsonl')
                  for line in path.read_text(encoding='utf-8').splitlines()]
         self.assertTrue(lines and lines[0]['outcome'] == 'completed', lines)
+        # Contract 2's person state, beside the ask's log: an anchor, then one numbers-only line per snapshot.
+        files = sorted((service.state / 'days').glob('*/person-state.jsonl'))
+        states = [json.loads(line) for path in files for line in path.read_text(encoding='utf-8').splitlines()]
+        self.assertTrue(files and all(set(json.loads(path.read_text(encoding='utf-8').splitlines()[0])['anchor']) == {'mono', 'ts'}
+                                      for path in files), 'each day file starts with the run anchor')
+        self.assertTrue(all(line['schema'] == 'den-person-state-1' for line in states))
+        self.assertTrue(any(track['seated'] and track['seated']['state'] for line in states for track in line.get('tracks', ())),
+                        'the reader was seated')
         self.assertFalse(any(p.suffix in ('.npz', '.jpg') for p in service.state.rglob('*')), 'no frame or still kept')
         self.assertNotIn('tok3n', text)
 

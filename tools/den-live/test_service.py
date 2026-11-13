@@ -1112,7 +1112,9 @@ class FirstCheckRemote(unittest.TestCase):
 
     def test_the_pull_counts_new_bundles_and_keeps_none(self):
         got = fr.pull(self.camera.url, self.token, 2.0)
-        self.assertGreaterEqual(got['new_frames'], 7)
+        # A poll every 0.2 s against a new bundle every 0.2 s: two polls in one bundle's span, by a few ms of jitter,
+        # count it once. 10 is the ideal; 6 came up in 2 of 25 runs at 7, so at least 5.
+        self.assertGreaterEqual(got['new_frames'], 5)
         self.assertLessEqual(got['new_frames'], 11)
         self.assertEqual(set(got['bytes']), {len(b'bundle 000000 ') + 1000})
         self.assertEqual(set(got['statuses']), {'200'})

@@ -404,8 +404,8 @@ function buildFixture(item, state, depth, reducedMotion) {
     spotEmitter.position.y = -.015; spotEmitter.rotation.x = Math.PI / 2;
     const spotBeam = beam(roboticGroup);
 
-    // Dedicated, forgiving housing targets never make the beam volume or its
-    // receiver patch clickable. Invisible materials remain raycastable.
+    // Keep selection and direct aiming picks separate. The visible receiver
+    // can be grabbed for aiming without becoming a generic selection target.
     const pick = new THREE.Mesh(new THREE.SphereGeometry(.13, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
     pick.name = 'virtual-fixture-pick'; pick.position.z = -TUBE_HEIGHT / 2; root.add(pick);
     pick.userData = { interaction_role: 'fixture', fixture_id: item.id, mount_id: item.mountId };
@@ -594,7 +594,7 @@ function buildFixture(item, state, depth, reducedMotion) {
     root.traverse(node => { if (node !== root) node.userData = { ...metadata, ...node.userData, fixture_id: item.id, mount_id: item.mountId, origin_role: item.originRole, aim_source: item.aimSource, optical_origin_m: null }; });
     update(state);
     return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving || !!sweep,
-        pick, handlePick, setSelected(value) { selected = value; handle.visible = value; } };
+        pick, handlePick, spotPool: spotBeam.disc, setSelected(value) { selected = value; handle.visible = value; } };
 }
 
 export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) {
@@ -608,7 +608,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
     const visibilityDocument = globalThis.document;
     let disposed = false, signature = null, scopeIdentity = null, status = 'empty', reason = null, omitted = [], revision = null, digest = null;
     let fixtures = [], views = new Map(), states = new Map(), targets = new Map(), generation = 0, selectedId = null;
-    let presentationActive = false;
+    let presentationActive = false, coordinatorOwned = false;
     const snapPresentation = nowMs => {
         for (const view of views.values()) view.snapPresentation(nowMs);
         presentationActive = false;
@@ -639,39 +639,68 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             state: states.get(item.id), target: targets.get(item.id) || null,
             truth_role: 'virtual_preview', physical_commands: false });
     };
-    const setDocument = document => {
+    const setDocument = (document, { coordinator = false } = {}) => {
         if (disposed) throw Error('equipment_preview_disposed');
         if (document == null) { clear(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; status = 'empty'; reason = null; return readback(); }
         try {
             const next = prepare(document, expectedBinding);
             const nextScope = JSON.stringify(next.binding);
-            const nextSignature = JSON.stringify({ revision: next.revision, digest: next.digest, binding: next.binding,
+            const nextSignature = JSON.stringify({ revision: next.revision, digest: next.digest, binding: next.binding, coordinator,
                 fixtures: next.fixtures.map(item => ({ id: item.id, mountId: item.mountId, label: item.label, anchor: item.anchor.toArray(),
                     reference: item.reference.toArray(), pan: item.initialPan, tilt: item.initialTilt,
                     floor: [item.floor.normal.toArray(), item.floor.constant], walls: item.walls.map(wall => [wall.normal.toArray(), wall.offset]),
                     displayOnly: item.displayOnly, originRole: item.originRole, aimSource: item.aimSource })), omitted: next.omitted });
             if (signature !== nextSignature) {
                 const nextStates = new Map(next.fixtures.map(item => [item.id, nextScope === scopeIdentity && states.has(item.id) ? states.get(item.id) : initialState(item)]));
-                const nextTargets = new Map(next.fixtures.filter(item => nextScope === scopeIdentity && targets.has(item.id)
+                const nextTargets = new Map(next.fixtures.filter(item => !coordinator && nextScope === scopeIdentity && targets.has(item.id)
                     && fixtures.find(previous => previous.id === item.id)?.anchor.distanceTo(item.anchor) < 1e-9)
                     .map(item => [item.id, targets.get(item.id)]));
                 const nextViews = new Map();
                 try { for (const item of next.fixtures) {
+                    const state = nextStates.get(item.id);
+                    if (coordinator) nextStates.set(item.id, nextState(state, { spotlight: { on: false, brightness: 0 } }));
                     const view = buildFixture(item, nextStates.get(item.id), depth, reducedMotion);
+                    view.root.userData.coordinator_spot = coordinator;
                     view.update(nextStates.get(item.id), nextTargets.get(item.id)); view.setSelected(item.id === selectedId); nextViews.set(item.id, view);
                 } }
                 catch (error) { for (const view of nextViews.values()) disposeChildren(view.root); throw error; }
                 clear(); states = nextStates; targets = nextTargets; views = nextViews; fixtures = next.fixtures;
                 root.add(...[...views.values()].map(view => view.root)); signature = nextSignature; scopeIdentity = nextScope;
             }
-            revision = next.revision; digest = next.digest; omitted = next.omitted;
+            revision = next.revision; digest = next.digest; omitted = next.omitted; coordinatorOwned = coordinator;
             status = next.fixtures.length ? 'ready' : 'empty'; reason = null;
         } catch (error) {
             clear(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; status = 'unavailable'; reason = error.message;
         }
         return readback();
     };
-    return { root, setDocument, readback, interactionDescriptor,
+    function coordinatorSpotScope() {
+        if (!coordinatorOwned || status !== 'ready' || !scopeIdentity) return null;
+        return { generation, binding: JSON.parse(scopeIdentity), equipment_revision: revision, equipment_digest: digest,
+            fixture_ids: fixtures.map(item => item.id) };
+    }
+    function applyCoordinatorSpots(rows, expectedGeneration = generation) {
+        if (!coordinatorOwned || disposed || status !== 'ready' || expectedGeneration !== generation) return false;
+        try {
+            if (rows && (rows.length !== states.size || new Set(rows.map(row => row.fixture_id)).size !== states.size)) return false;
+            const next = rows ? rows.map(row => [row.fixture_id, nextState(states.get(row.fixture_id), {
+                pan_deg: row.pan_deg, tilt_deg: row.tilt_deg,
+                spotlight: { on: row.on, brightness: row.on ? row.level : 0, color_temp_kelvin: row.cct_k },
+            })]) : [...states].map(([id, state]) => [id, nextState(state, { spotlight: { on: false, brightness: 0 } })]);
+            for (const [id, state] of next) {
+                views.get(id).update(state);
+                states.set(id, state);
+            }
+            return true;
+        } catch (_) {
+            if (rows) applyCoordinatorSpots(null);
+            else {
+                clear(); states.clear(); targets.clear(); status = 'unavailable'; reason = 'coordinator_spot_clear_failed';
+            }
+            return false;
+        }
+    }
+    return { root, setDocument, readback, interactionDescriptor, coordinatorSpotScope, applyCoordinatorSpots,
         advancePresentation(nowMs) {
             // The settled RAF path creates no arrays, iterators or snapshots.
             if (disposed || !presentationActive || !finite(nowMs)) return false;
@@ -687,6 +716,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
          * bounce re-bake waits for the Set sweep to land). */
         presentationActive() { return !disposed && presentationActive; },
         pickObjects() { return disposed || !root.visible ? [] : [...views].flatMap(([id, view]) => id === selectedId ? [view.pick, view.handlePick] : [view.pick]); },
+        aimPickObjects() { return disposed || !root.visible ? [] : [...views.values()].map(view => view.spotPool).filter(pool => pool.visible); },
         setSelected(fixtureId) {
             selectedId = views.has(fixtureId) ? fixtureId : null;
             for (const [id, view] of views) view.setSelected(id === selectedId);
@@ -696,6 +726,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
          * other caller, such as a live preview following a target, moves the
          * beam at once exactly as before. */
         aimAtTarget(fixtureId, target, { expectedGeneration = generation, sweep = false } = {}) {
+            if (coordinatorOwned) return { ok: false, reason: 'equipment_preview_coordinator_owned' };
             const descriptor = interactionDescriptor(fixtureId);
             if (!descriptor) return { ok: false, reason: disposed ? 'equipment_preview_disposed' : 'equipment_preview_fixture_missing' };
             if (expectedGeneration !== generation) return { ok: false, reason: 'equipment_preview_generation_changed' };
@@ -714,6 +745,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             return { ok: true, descriptor: interactionDescriptor(fixtureId), physical_commands: false };
         },
         restoreAim(fixtureId, snapshot) {
+            if (coordinatorOwned) return { ok: false, reason: 'equipment_preview_coordinator_owned' };
             if (!snapshot || snapshot.fixture_id !== fixtureId || snapshot.generation !== generation || !states.has(fixtureId)) return { ok: false, reason: 'equipment_preview_generation_changed' };
             try {
                 const state = nextState(states.get(fixtureId), { ...snapshot.state,
@@ -729,6 +761,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
             if (expectedGeneration !== generation) return { ok: false, reason: 'equipment_preview_generation_changed' };
             if (!states.has(fixtureId)) return { ...readback(), ok: false, reason: 'equipment_preview_fixture_missing' };
             try {
+                if (coordinatorOwned && patch && ('spotlight' in patch || 'pan_deg' in patch || 'tilt_deg' in patch))
+                    return { ok: false, reason: 'equipment_preview_coordinator_owned' };
                 const state = nextState(states.get(fixtureId), patch);
                 if ('pan_deg' in patch || 'tilt_deg' in patch) targets.delete(fixtureId);
                 // Property presence preserves inherited/mixed-patch semantics:

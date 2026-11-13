@@ -36,7 +36,8 @@
         "HOME_AGENT_READINESS_MIGRATION": "0047_personal_pref_authority_v1",
         "HOME_AGENT_STORAGE_MONITOR_PATH": "/storage-monitor/durable",
         "HOME_AGENT_ERASURE_LEDGER_HEAD_PATH": "/erasure-ledger/ledger.head.json",
-        "HOME_AGENT_LIGHTING_PROFILE_FILE": "/config/listener.json"
+        "HOME_AGENT_LIGHTING_PROFILE_FILE": "/config/listener.json",
+        "HOME_AGENT_SERVE_LIGHTING_CORE_CREDENTIAL_FILE": "${HOME_AGENT_SERVE_LIGHTING_CORE_FILE:-}"
       },
       "volumes": [
         {

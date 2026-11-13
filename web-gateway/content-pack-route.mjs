@@ -16,7 +16,8 @@ function unlinkedRoot(root) {
   }
 }
 
-export function createContentPackHandler({ contentPacksDir, authenticate } = {}) {
+// indexFilter, when given, narrows the packs index before it's sent (the look-only view sends the den's packs only).
+export function createContentPackHandler({ contentPacksDir, authenticate, indexFilter = null } = {}) {
   if (!path.isAbsolute(contentPacksDir || '')) throw new Error('content_pack_root_invalid');
   const root = path.resolve(contentPacksDir);
   return function handleContentPack(req, res) {
@@ -36,7 +37,9 @@ export function createContentPackHandler({ contentPacksDir, authenticate } = {})
     }
     try {
       unlinkedRoot(root);
-      if (pathname === '/content-packs/index.json') { json(200, readPackIndex(root)); return true; }
+      if (pathname === '/content-packs/index.json') {
+        json(200, indexFilter ? indexFilter(readPackIndex(root)) : readPackIndex(root)); return true;
+      }
       const file = resolveServedPackFile(root, pathname.slice('/content-packs/'.length));
       if (!file) { json(404, { ok: false, error: 'content_pack_not_found' }); return true; }
       const before = fs.statSync(file);

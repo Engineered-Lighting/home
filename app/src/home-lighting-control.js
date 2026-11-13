@@ -13,6 +13,11 @@
   // /api/home/location: device network, then phone zone), else the last home
   // acted on. That choice is a default target, never an authority.
   let active=null,located=null;
+  let serveReceipts;
+  const restored = new Set();
+  const RECEIPTS_KEY = "home.serveLighting.pending.v1";
+  const RECEIPT_TTL_MS = 24 * 60 * 60 * 1000;
+  const OPERATION_ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
   const LAST_SITE="home.lastActedSite",LOCATION_TTL_MS=30000,LOCATION_TIMEOUT_MS=1500;
   // The card works out of sight; it appears only when the owner is needed: an
   // unconfirmed result to look up, or no answer within REVEAL_MS (for example
@@ -82,6 +87,127 @@
     return `${head} ${results.map(line).join("; ")}.`;
   }
 
+  function pendingReceipts() {
+    if (serveReceipts) return serveReceipts;
+    serveReceipts = new Map();
+    try {
+      const saved = JSON.parse(root.sessionStorage.getItem(RECEIPTS_KEY) || "[]");
+      for (const receipt of Array.isArray(saved) ? saved : []) {
+        if (receipt && typeof receipt.id === "string" && OPERATION_ID.test(receipt.id) &&
+            Number.isFinite(receipt.at) && Date.now() - receipt.at < RECEIPT_TTL_MS) {
+          serveReceipts.set(receipt.id, { id: receipt.id, at: receipt.at });
+        }
+      }
+    } catch { /* This tab can still look up a live card. */ }
+    return serveReceipts;
+  }
+
+  function saveReceipts() {
+    try { root.sessionStorage.setItem(RECEIPTS_KEY, JSON.stringify([...serveReceipts.values()])); }
+    catch { /* Storage may be disabled. */ }
+  }
+
+  function clearReceipt(id) {
+    pendingReceipts().delete(id);
+    saveReceipts();
+  }
+
+  function startServeCard(emit, parsed, home, receipt) {
+    const card = root.document.createElement("div");
+    const message = root.document.createElement("p");
+    message.setAttribute("role", "status");
+    const check = root.document.createElement("button");
+    check.type = "button";
+    check.textContent = "Check outcome";
+    check.hidden = !!parsed;
+    message.textContent = parsed ? "Switching lights…" : "The lighting result is not confirmed yet.";
+    card.append(message, check);
+    let busy = false;
+
+    async function request(operation, payload) {
+      if (busy) return;
+      busy = true;
+      check.disabled = true;
+      try {
+        const response = await root.fetch("/api/home/lighting/" + operation, {
+          method: "POST", cache: "no-store", credentials: "omit", redirect: "error",
+          headers: { "Content-Type": "application/json", "X-Home-Lighting-CSRF": "1" },
+          body: JSON.stringify(payload),
+        });
+        const body = await response.json();
+        if (!response.ok) {
+          const definite = {
+            409: "This lighting request ID was already used for another change.",
+            413: "The lighting request was too large.",
+            422: "The lighting request was refused.",
+            429: "Lighting is busy. Nothing was sent.",
+          }[response.status];
+          if (definite && operation === "action") {
+            clearReceipt(receipt.id);
+            message.textContent = definite;
+            check.hidden = true;
+            return;
+          }
+          if (response.status === 404 && operation === "outcome") {
+            message.textContent = "No lighting receipt is available yet.";
+            check.hidden = false;
+            return;
+          }
+          if (body?.error === "home_lighting_unavailable") {
+            message.textContent = "Home lighting is unavailable.";
+            check.hidden = operation === "action";
+            if (operation === "action") clearReceipt(receipt.id);
+            return;
+          }
+          throw new Error("lighting outcome unavailable");
+        }
+        const result = body?.version === 1 ? body.result : null;
+        if (result?.status === "clarify" && result.clarification) {
+          const wording = clarification(result.clarification);
+          if (!wording) throw new Error("invalid lighting clarification");
+          message.textContent = wording;
+          clearReceipt(receipt.id);
+          check.hidden = true;
+          return;
+        }
+        if (result?.operation_id === receipt.id &&
+            ["done", "partial", "failed"].includes(result.status) && Array.isArray(result.results)) {
+          message.textContent = summary(result.status, result.results) + (parsed?.inferred ? homeNote(home) : "");
+          const sites = new Set(result.results.filter(row => row.status === "succeeded").map(row => row.site_id));
+          if (sites.size === 1) remember([...sites][0]);
+          clearReceipt(receipt.id);
+          check.hidden = true;
+          return;
+        }
+        throw new Error("lighting outcome pending");
+      } catch {
+        message.textContent = "The lighting result is not confirmed yet.";
+        check.hidden = false;
+      } finally {
+        busy = false;
+        check.disabled = false;
+      }
+    }
+
+    const lookup = { version: 1, operation_id: receipt.id };
+    check.addEventListener("click", () => void request("outcome", lookup));
+    emit({ kind: "personal-memory-review", text: "Lighting", mountReview(container) {
+      if (container) container.appendChild(card);
+      return () => { if (card.parentNode === container) card.remove(); };
+    } });
+    if (parsed) void request("action", { ...parsed.request, ...lookup });
+  }
+
+  function restorePending(addEvent) {
+    if (root.HomeServe?.active !== true || typeof addEvent !== "function") return;
+    for (const receipt of pendingReceipts().values()) {
+      if (restored.has(receipt.id)) continue;
+      restored.add(receipt.id);
+      startServeCard(event => addEvent({ ...event, privateMemoryContext: true, ephemeralLighting: true }),
+        null, null, receipt);
+    }
+  }
+
   // Returns false when the command is not for this path, true when handled, or
   // a Promise of either while the default home is worked out.
   function run(text,options) {
@@ -105,6 +231,20 @@
     if(parsed.clarify) {emit({kind:"home",text:parsed.message});return true;}
     if(!root.HG_WEB_MODE) {
       emit({kind:"home",text:"Lighting in both homes currently requires authenticated Home web."});return true;
+    }
+    if (root.HomeServe?.active === true) {
+      const receipt = { id: root.crypto.randomUUID(), at: Date.now() };
+      const pending = pendingReceipts();
+      for (const [id, saved] of pending) {
+        if (receipt.at - saved.at >= RECEIPT_TTL_MS) pending.delete(id);
+      }
+      if (pending.size >= 32) pending.delete(pending.keys().next().value);
+      pending.set(receipt.id, receipt);
+      restored.add(receipt.id);
+      saveReceipts();
+      startServeCard(event => options.addEvent({ ...event, privateMemoryContext: true, ephemeralLighting: true }),
+        parsed, home, receipt);
+      return true;
     }
     let origin;
     try {
@@ -208,5 +348,5 @@
     return true;
   }
   root.addEventListener("pagehide",reset);
-  root.HomeLightingControl=Object.freeze({run,reset,resolveHome});
+  root.HomeLightingControl=Object.freeze({run,reset,resolveHome,restorePending});
 })(window);

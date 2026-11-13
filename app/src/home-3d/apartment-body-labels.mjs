@@ -46,7 +46,8 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
         WebkitBackdropFilter: 'blur(14px) saturate(1.3)', color: S.fg, font: `400 12.5px/1.5 ${S.sans}`, boxShadow: '0 8px 30px rgba(0,0,0,0.35)' });
     host.appendChild(canvas); host.appendChild(card);
     const ctx = canvas.getContext('2d');
-    const state = createBodyAnnotationState(), smooth = smoother(), v = new THREE.Vector3();
+    const state = createBodyAnnotationState(), v = new THREE.Vector3();
+    let smooth = smoother();
     let disposed = false, rafId = null, last = null, cardOpen = false, tapStart = null, hit = null, shown = null;
 
     function project(p) {
@@ -106,11 +107,11 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
             const l = project([cx + R * Math.cos(az + 0.07), cy + R * Math.sin(az + 0.07), z]), r = project([cx + R * Math.cos(az - 0.07), cy + R * Math.sin(az - 0.07), z]);
             ctx.fillStyle = 'rgba(184,216,255,0.95)'; ctx.beginPath(); ctx.moveTo(tip[0], tip[1]); ctx.lineTo(l[0], l[1]); ctx.lineTo(r[0], r[1]); ctx.closePath(); ctx.fill();
             if (st.detail >= 2 && st.eye && st.facing) {
-                const f = st.facing, G = 0.75, rot = (u, a) => [u[0] * Math.cos(a) - u[1] * Math.sin(a), u[0] * Math.sin(a) + u[1] * Math.cos(a), u[2]];
-                const e = project(st.eye), gl = rot(f, 0.3), gr = rot(f, -0.3);
+                const f = st.facing, G = 0.4, rot = (u, a) => [u[0] * Math.cos(a) - u[1] * Math.sin(a), u[0] * Math.sin(a) + u[1] * Math.cos(a), u[2]];
+                const e = project(st.eye), gl = rot(f, 0.16), gr = rot(f, -0.16);
                 const pl = project(st.eye.map((x, k) => x + gl[k] * G)), pr = project(st.eye.map((x, k) => x + gr[k] * G));
                 const g = ctx.createLinearGradient(e[0], e[1], (pl[0] + pr[0]) / 2, (pl[1] + pr[1]) / 2);
-                g.addColorStop(0, 'rgba(184,216,255,0.32)'); g.addColorStop(1, 'rgba(184,216,255,0)');
+                g.addColorStop(0, 'rgba(184,216,255,0.2)'); g.addColorStop(1, 'rgba(184,216,255,0)');
                 ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(e[0], e[1]); ctx.lineTo(pl[0], pl[1]); ctx.lineTo(pr[0], pr[1]); ctx.closePath(); ctx.fill();
             }
         }
@@ -147,6 +148,13 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
         card.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
     }
 
+    function clear() {
+        hit = null; shown = null; tapStart = null; cardOpen = false;
+        card.style.display = 'none'; card.textContent = '';
+        state.reset(); smooth = smoother();
+        ctx.resetTransform(); ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
     function tick(dt) {
         if (disposed) return;
         const w = host.clientWidth, h = host.clientHeight, dpr = Math.min(2, doc.defaultView?.devicePixelRatio || 1);
@@ -155,17 +163,19 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
         const snap = layer.snapshot(), J = snap.joints;
         if (!snap.centroid || snap.presence < 0.05 || !(w > 0 && h > 0)) { hit = null; card.style.display = 'none'; shown = null; return; }
         parent.updateWorldMatrix(true, false); camera.updateMatrixWorld();
-        const headTop = J.nose && J.left_ear && J.right_ear ? [(J.left_ear[0] + J.right_ear[0]) / 2, (J.left_ear[1] + J.right_ear[1]) / 2, Math.max(J.left_ear[2], J.right_ear[2]) + 0.17]
+        const anchor = snap.torso ? snap.torso.shoulder || snap.centroid
+            : J.nose && J.left_ear && J.right_ear ? [(J.left_ear[0] + J.right_ear[0]) / 2, (J.left_ear[1] + J.right_ear[1]) / 2, Math.max(J.left_ear[2], J.right_ear[2]) + 0.17]
             : [snap.centroid[0], snap.centroid[1], snap.centroid[2] + 0.75];
-        const head = project(headTop);
+        const screenAnchor = project(anchor);
         v.set(...snap.centroid); parent.localToWorld(v); const cw = new THREE.Vector3(); camera.getWorldPosition(cw);
         const zoomT = zoomRatio(cw.distanceTo(v));
-        const st = state.step({ now: now(), dt, joints: J, centroid: snap.centroid, activity: activity(), object: snap.object, headScreenX: head[0], width: w, zoomT });
+        const st = state.step({ now: now(), dt, joints: J, centroid: snap.centroid, torso: snap.torso,
+            activity: activity(), object: snap.object, headScreenX: screenAnchor[0], width: w, zoomT });
         shown = st;
         const who = person(), houseLine = house(), lines = captionLines(who, st, houseLine);
         ctx.globalAlpha = Math.min(1, snap.presence * 1.2);
         ring(st, snap.centroid, dt);
-        hit = head[2] ? caption(st, lines, head, w, h, dt, zoomT) : null;
+        hit = screenAnchor[2] ? caption(st, lines, screenAnchor, w, h, dt, zoomT) : null;
         if (st.object && st.detail >= 1 && snap.objectPoints.length) objectTag(st, snap.objectPoints, dt);
         ctx.globalAlpha = 1;
         showCard(st, who, houseLine, hit?.[0], w);
@@ -177,6 +187,7 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
     }
     return {
         tick,
+        clear,
         state: () => shown && { ...shown },
         cardOpen: () => cardOpen,
         setCardOpen(open) { cardOpen = !!open; },

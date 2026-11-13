@@ -6,7 +6,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.lighting_api import PREFIX, create_lighting_ingress
+from app.lighting_api import PREFIX, SERVE_PREFIX, create_lighting_ingress
 from app.personal_memory_api import PersonalMemoryBinding
 
 from .test_lighting_service import Harness, authority
@@ -24,7 +24,7 @@ def proposal():
             "targets": ["kitchen"], "operation": "off", "brightness": None}
 
 
-def build(tmp_path, **kwargs):
+def build(tmp_path, *, serve_credential=None, **kwargs):
     """Compose like lighting_server: the journal is opened inside the serving lifespan."""
     holder = {}
 
@@ -32,7 +32,7 @@ def build(tmp_path, **kwargs):
     async def lifespan(app):
         harness = holder["harness"] = Harness(tmp_path, **kwargs)
         private = create_lighting_ingress(binding=PersonalMemoryBinding("home-assistant:echo", CREDENTIAL),
-                                          service=harness.service)
+                                          service=harness.service, serve_credential=serve_credential)
         app.router.routes.extend(private.routes)
         try:
             yield
@@ -113,3 +113,52 @@ def test_missing_consent_maps_to_a_typed_refusal(tmp_path):
 def test_the_ingress_is_echo_only():
     with pytest.raises(TypeError):
         create_lighting_ingress(binding=PersonalMemoryBinding("home-assistant:victoria", CREDENTIAL), service=None)
+
+
+SERVE_CREDENTIAL = b"f" * 64
+SERVE_AUTH = {**AUTH, "authorization": "Bearer " + SERVE_CREDENTIAL.decode()}
+
+
+def test_serve_actions_use_only_their_own_credential_and_journal(tmp_path):
+    app, holder = build(tmp_path, serve_credential=SERVE_CREDENTIAL, current=authority(granted=()))
+    with TestClient(app, base_url="https://core.internal") as client:
+        action = proposal()
+        operation = {"version": 1, "operation_id": action["operation_id"]}
+        assert client.post(SERVE_PREFIX + "action", json=action, headers=AUTH).status_code == 401
+        assert client.post(PREFIX + "propose", json=envelope(action), headers=SERVE_AUTH).status_code == 401
+        assert client.post(SERVE_PREFIX + "action", json=action,
+                           headers={**SERVE_AUTH, "cookie": "session=value"}).status_code == 403
+        assert client.post(SERVE_PREFIX + "action", json=envelope(action), headers=SERVE_AUTH).status_code == 422
+        first = client.post(SERVE_PREFIX + "action", json=action, headers=SERVE_AUTH)
+        assert first.status_code == 200 and first.json()["result"]["status"] == "done"
+        assert client.post(SERVE_PREFIX + "action", json=action, headers=SERVE_AUTH).json() == first.json()
+        assert client.post(SERVE_PREFIX + "outcome", json=operation, headers=SERVE_AUTH).json() == first.json()
+        assert client.post(SERVE_PREFIX + "action", json={**action, "operation": "on"},
+                           headers=SERVE_AUTH).status_code == 409
+        calls = [sent for home in holder["harness"].homes.values() for sent in home.executed]
+        assert len(calls) == 2
+        assert {call["request_id"] for call in calls} != {action["operation_id"]}
+        assert len({call["request_id"] for call in calls}) == 1
+
+    reopened, holder = build(tmp_path, serve_credential=SERVE_CREDENTIAL)
+    with TestClient(reopened, base_url="https://core.internal") as client:
+        assert client.post(SERVE_PREFIX + "outcome", json=operation, headers=SERVE_AUTH).json() == first.json()
+        assert client.post(SERVE_PREFIX + "action", json=action, headers=SERVE_AUTH).json() == first.json()
+        assert all(not home.executed for home in holder["harness"].homes.values())
+
+
+def test_serve_clarification_retains_the_request_identity_without_sending(tmp_path):
+    app, holder = build(tmp_path, serve_credential=SERVE_CREDENTIAL)
+    with TestClient(app, base_url="https://core.internal") as client:
+        action = {**proposal(), "targets": ["unknown room"]}
+        result = client.post(SERVE_PREFIX + "action", json=action, headers=SERVE_AUTH).json()
+        assert result["result"]["status"] == "clarify"
+        operation = {"version": 1, "operation_id": action["operation_id"]}
+        assert client.post(SERVE_PREFIX + "outcome", json=operation, headers=SERVE_AUTH).json() == result
+        assert client.post(SERVE_PREFIX + "action", json=proposal(), headers=SERVE_AUTH).status_code == 409
+        assert all(not home.executed for home in holder["harness"].homes.values())
+
+
+def test_serve_routes_do_not_exist_without_their_credential(ingress):
+    client, _ = ingress
+    assert client.post(SERVE_PREFIX + "action", json=proposal(), headers=SERVE_AUTH).status_code == 404

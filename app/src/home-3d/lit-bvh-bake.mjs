@@ -939,7 +939,7 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
         } catch (error) { post({ type: 'warning', message: String(error?.message || error) }); }
         finally { refreshing = false; }
     }
-    const signatureOf = light => [light.mode, ...light.origin, ...light.direction, light.cosOuter, light.cosInner].map(v => (typeof v === 'number' ? v.toFixed(5) : v)).join(',');
+    const signatureOf = light => [light.mode, !!light.directOnly, ...light.origin, ...light.direction, light.cosOuter, light.cosInner].map(v => (typeof v === 'number' ? v.toFixed(5) : v)).join(',');
     const unitLight = light => packLights([{ ...light, candela: 1, color: [1, 1, 1] }]).data;
     const stale = (message, keys) => {
         if (disposed || !scene || scene.seq !== message.scene) return true;
@@ -1044,6 +1044,10 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
         }
         for (const light of spots) {
             const keys = [[light.key, signatureOf(light)]], check = () => { if (stale(message, keys)) throw ABORT; };
+            if (light.directOnly) {
+                layers.set(light.key, { signature: keys[0][1], data: null, light, version: ++layerVersion });
+                continue;
+            }
             const t0 = now(), packed = unitLight(light);
             let firstMs = null;
             const onPass = async (irradiance, pass) => {

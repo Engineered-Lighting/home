@@ -2,6 +2,7 @@
  * pointer ownership and lifecycle testable without React, WebGL or a network. */
 export function createDirectAimGestureController({ element, windowTarget = element?.ownerDocument?.defaultView || globalThis,
     pickFixture, surfaceHit, captureSnapshot, previewTarget, restoreSnapshot, getIdentity,
+    captureElement = element,
     onSelect = () => {}, onPreview = () => {}, onCommit = () => {}, isEnabled = () => true,
     requestFrame = callback => globalThis.requestAnimationFrame(callback),
     cancelFrame = id => globalThis.cancelAnimationFrame(id), thresholdPx = 5 } = {}) {
@@ -17,7 +18,7 @@ export function createDirectAimGestureController({ element, windowTarget = eleme
         target: clone(gesture.target), truth_role: 'virtual_preview', physical_commands: false, ...extra });
     const unschedule = () => { if (frame != null) cancelFrame(frame); frame = null; };
     const release = gesture => {
-        try { if (element.hasPointerCapture?.(gesture.pointerId)) element.releasePointerCapture(gesture.pointerId); } catch (_) { /* detached host */ }
+        try { if (captureElement.hasPointerCapture?.(gesture.pointerId)) captureElement.releasePointerCapture(gesture.pointerId); } catch (_) { /* detached host */ }
     };
     function cancel(status = 'canceled') {
         if (!active) return;
@@ -34,22 +35,27 @@ export function createDirectAimGestureController({ element, windowTarget = eleme
         frame = null;
         if (!current() || !active.dragging) return;
         const gesture = active;
+        gesture.valid = false;
         let hit;
         try { hit = surfaceHit(gesture.last.x, gesture.last.y, gesture.fixture_id); }
         catch (error) { report(gesture, 'surface_unavailable', { reason: error.message }); return; }
         if (!hit) { report(gesture, 'surface_unavailable'); return; }
         let result;
-        try { result = previewTarget(gesture.fixture_id, hit, clone(gesture.before)); }
+        try { result = previewTarget(gesture.fixture_id, hit, clone(gesture.before), gesture.last); }
         catch (error) { report(gesture, 'preview_unavailable', { reason: error.message }); return; }
         if (result?.ok === false) { report(gesture, 'preview_unavailable', { reason: result.reason || 'target_refused' }); return; }
         gesture.target = clone({ point: hit.point, normal: hit.normal, ...(hit.surface_id ? { surface_id: hit.surface_id } : {}), ...(hit.kind ? { kind: hit.kind } : {}) });
         gesture.after = clone(captureSnapshot(gesture.fixture_id));
+        gesture.valid = true;
         report(gesture, 'preview', { descriptor: clone(result?.descriptor) });
     }
     function down(event) {
-        if (disposed || active || !isEnabled() || event.button !== 0 || event.isPrimary === false
-            || event.target?.closest?.('button,input,select,textarea,a,[data-aim-ignore]')) return;
-        const picked = pickFixture(event.clientX, event.clientY);
+        if (active && event.pointerId !== active.pointerId) { consume(event); cancel(); return; }
+        if (disposed || active || !isEnabled() || event.button !== 0 || event.isPrimary === false || event.defaultPrevented
+            || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+        const control = event.target?.closest?.('button,input,select,textarea,a,[data-aim-ignore]');
+        if (control && !control.matches?.('[data-apt-fixture-label],[data-apt-aim-reticle]')) return;
+        const picked = pickFixture(event.clientX, event.clientY, event.target);
         const fixture_id = typeof picked === 'string' ? picked : picked?.fixture_id;
         if (!fixture_id) return;
         const before = captureSnapshot(fixture_id);
@@ -58,9 +64,9 @@ export function createDirectAimGestureController({ element, windowTarget = eleme
         active = { fixture_id, before: clone(before), identity: identity(), pointerId: event.pointerId,
             start: { x: event.clientX, y: event.clientY }, last: { x: event.clientX, y: event.clientY },
             dragging: false, target: null, after: null };
-        try { element.setPointerCapture(event.pointerId); }
+        try { captureElement.setPointerCapture(event.pointerId); }
         catch (_) { active = null; return; }
-        onSelect(fixture_id);
+        if (onSelect(fixture_id) === false) cancel();
     }
     function move(event) {
         if (!active || active.pointerId !== event.pointerId) return;
@@ -76,11 +82,11 @@ export function createDirectAimGestureController({ element, windowTarget = eleme
         unschedule(); process();
         if (!active) return;
         const gesture = active; active = null; release(gesture);
-        if (gesture.dragging && gesture.target && gesture.after) {
+        if (gesture.dragging && gesture.valid && gesture.target && gesture.after) {
             report(gesture, 'draft');
             onCommit({ fixture_id: gesture.fixture_id, before: clone(gesture.before), after: clone(gesture.after),
                 target: clone(gesture.target), truth_role: 'virtual_preview', physical_commands: false });
-        }
+        } else if (gesture.dragging) { restoreSnapshot(gesture.fixture_id, clone(gesture.before)); report(gesture, 'invalid_drop'); }
     }
     const pointerCancel = event => { if (active?.pointerId === event.pointerId) { consume(event); cancel(); } };
     const key = event => { if (event.key === 'Escape' && active) { consume(event); cancel(); } };

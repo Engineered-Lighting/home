@@ -8,7 +8,7 @@ import { QualifiedHaAuth } from "./qualified-ha-auth.mjs";
 import { EchoLinkReview } from "./echo-link-review.mjs";
 import { EchoLinkStart } from "./echo-link-start.mjs";
 import { PersonalMemoryClient } from "./personal-memory-client.mjs";
-import { LightingClient, LIGHTING_OPERATIONS } from "./lighting-client.mjs";
+import { LightingClient, LIGHTING_OPERATIONS, ServeLightingClient, SERVE_LIGHTING_TIMEOUT_MS } from "./lighting-client.mjs";
 import { SharedSessionRevocationOutbox } from "./shared-session-revocation-outbox.mjs";
 
 const COOKIE_NAME = "__Host-home_agent";
@@ -1874,14 +1874,14 @@ class SessionStore {
   }
 }
 
-async function readBody(req) {
+async function readBody(req, limit = MAX_BODY_BYTES) {
   const declared = Number(req.headers["content-length"] || 0);
-  if (declared > MAX_BODY_BYTES) throw Object.assign(new Error("body too large"), { status: 413 });
+  if (declared > limit) throw Object.assign(new Error("body too large"), { status: 413 });
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > MAX_BODY_BYTES) throw Object.assign(new Error("body too large"), { status: 413 });
+    if (size > limit) throw Object.assign(new Error("body too large"), { status: 413 });
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -2053,7 +2053,12 @@ async function readBoundedCoreResponse(response) {
   }
 }
 
-function createBff(config, { fetchImpl = fetch, store, attestationStore, linkReview, linkStart, personalMemory, lighting } = {}) {
+function createBff(config, { fetchImpl = fetch, store, attestationStore, linkReview, linkStart, personalMemory, lighting,
+  serveLighting, serveLightingRelayCredential } = {}) {
+  if (serveLighting !== undefined && (!(serveLighting instanceof ServeLightingClient) ||
+      !/^[a-f0-9]{64}$/.test(serveLightingRelayCredential || ""))) {
+    throw new Error("Serve lighting requires a separately provisioned relay credential");
+  }
   if (store && (store.haIssuerId !== LEGACY_HA_ISSUER_ID || store.siteId !== LEGACY_SITE_ID)) {
     throw new Error("legacy BFF requires Echo sessions");
   }
@@ -2113,6 +2118,36 @@ function createBff(config, { fetchImpl = fetch, store, attestationStore, linkRev
     let url;
     try { url = new URL(req.url, "http://bff.internal"); }
     catch { return json(res, 400, { error: "invalid_url", request_id: requestId }); }
+
+    if (url.pathname.startsWith("/internal/home/serve-lighting/")) {
+      const route = /^\/internal\/home\/serve-lighting\/(action|outcome)$/.exec(req.url);
+      if (!route || req.method !== "POST") return json(res, 404, { error: "not_found" });
+      if (!serveLighting) return json(res, 503, { error: "home_lighting_unavailable" });
+      const authorization = req.headers.authorization;
+      if (req.headers.origin !== undefined || req.headers.cookie !== undefined ||
+          Object.keys(req.headers).some(name => name.startsWith("x-authenticated-")) ||
+          typeof authorization !== "string" || !/^Bearer [a-f0-9]{64}$/.test(authorization) ||
+          !crypto.timingSafeEqual(Buffer.from(authorization.slice(7)), Buffer.from(serveLightingRelayCredential))) {
+        return json(res, 401, { error: "unauthorized" });
+      }
+      if (req.headers["content-type"] !== "application/json" || req.headers["content-encoding"] ||
+          req.headers["transfer-encoding"] || !/^\d{1,4}$/.test(req.headers["content-length"] || "")) {
+        return json(res, 422, { error: "invalid_request" });
+      }
+      let input;
+      try {
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(await readBody(req, 2048));
+        if (jsonHasDuplicateObjectKeys(text)) throw new Error("invalid JSON object");
+        input = JSON.parse(text);
+      } catch (error) {
+        if (!res.destroyed) json(res, error.status === 413 ? 413 : 422, { error: "invalid_request" });
+        return;
+      }
+      res.setTimeout(SERVE_LIGHTING_TIMEOUT_MS + 2_000);
+      const answer = await serveLighting.request(route[1], input);
+      if (!res.destroyed) json(res, answer.status, answer.body);
+      return;
+    }
 
     if (url.pathname === "/healthz") {
       return json(res, config.ready ? 200 : 503, {

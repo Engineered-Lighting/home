@@ -92,9 +92,14 @@ def load_profile(path):
         {site: Home(home.origin, bytes.fromhex(home.secret.decode())) for site, home in homes.items()})
 
 
-def build_listener(core_application, profile):
+def build_listener(core_application, profile, *, serve_credential=None):
     if type(profile) is not LightingProfile:
         raise TypeError("validated lighting profile required")
+    if serve_credential is not None and serve_credential in {
+        profile.binding.credential, profile.action_key.hex().encode(), profile.consent_key.hex().encode(),
+        profile.journal_key.hex().encode(), *(home.secret.hex().encode() for home in profile.homes.values())
+    }:
+        raise ValueError("distinct Serve lighting credential required")
     target = core_application.state.database.engine.url
     parsed = make_url(profile.database_url)
     if (parsed.host, parsed.port or 5432, parsed.database) != (target.host, target.port or 5432, target.database):
@@ -118,7 +123,8 @@ def build_listener(core_application, profile):
                     storage=LightingGrantStorage(LightingConsentCommitment(profile.consent_key)),
                     commitment=LightingActionCommitment(profile.action_key), journal=journal, clients=clients,
                     admission=admission, grant_lifetime=timedelta(seconds=profile.grant_lifetime_seconds))
-                private = create_lighting_ingress(binding=profile.binding, service=service)
+                private = create_lighting_ingress(binding=profile.binding, service=service,
+                                                  serve_credential=serve_credential)
                 app.router.routes.extend(private.routes)
                 try:
                     yield
@@ -136,7 +142,9 @@ def main():
     settings = Settings(database_pool_size=1, database_max_overflow=0)
     if settings.operator_database_url is not None:
         raise ValueError("lighting listener does not use operator credentials")
-    app = build_listener(create_app(settings), profile)
+    serve_file = os.environ.get("HOME_AGENT_SERVE_LIGHTING_CORE_CREDENTIAL_FILE")
+    serve_credential = _hex_secret(serve_file) if serve_file else None
+    app = build_listener(create_app(settings), profile, serve_credential=serve_credential)
     uvicorn.run(app, host=profile.address, port=profile.port, ssl_certfile=profile.certificate,
         ssl_keyfile=profile.private_key, proxy_headers=False, access_log=False, workers=1, limit_concurrency=2,
         timeout_keep_alive=5, timeout_graceful_shutdown=25)

@@ -22,7 +22,7 @@ const change = value => exact(value,["site_id","name","operation","brightness"])
 
 function validRequest(operation, value) {
   if (operation==="status") return exact(value,[]);
-  if (operation==="propose") return exact(value,["version","operation_id","sites","targets","operation","brightness"]) &&
+  if (operation==="propose" || operation==="action") return exact(value,["version","operation_id","sites","targets","operation","brightness"]) &&
     value.version===1 && uuid(value.operation_id) && Array.isArray(value.sites) && value.sites.length>=1 &&
     value.sites.length<=2 && new Set(value.sites).size===value.sites.length && value.sites.every(site=>SITES.includes(site)) &&
     (value.targets==="all" || Array.isArray(value.targets) && value.targets.length>=1 && value.targets.length<=8 &&
@@ -42,7 +42,7 @@ function summary(result, input) {
       RESULTS.includes(item.status));
 }
 
-function validResult(operation, result, input, now) {
+function validResult(operation, result, input, now, { serve = false } = {}) {
   if (operation==="status") return exact(result,["version","permitted","homes"]) && result.version===1 &&
     exact(result.permitted,SITES) && SITES.every(site=>typeof result.permitted[site]==="boolean") &&
     Array.isArray(result.homes) && result.homes.every(site=>SITES.includes(site));
@@ -55,8 +55,12 @@ function validResult(operation, result, input, now) {
     Date.parse(result.grants_expire_at)<=now+366*86400000 && digest(result.reviewed_digest);
   if (operation==="consent-confirm" || operation==="consent-outcome") return exact(result,["version","operation_id","status"]) &&
     result.version===1 && result.operation_id===input.operation_id && ["committed","unknown"].includes(result.status);
-  if (operation==="propose") {
-    if (exact(result,["version","status","review"])) {
+  if (serve) {
+    if (exact(result,["version","operation_id","status"]) && result.version===1 &&
+        result.operation_id===input.operation_id && result.status==="pending") return true;
+  }
+  if (operation==="propose" || serve) {
+    if (operation==="propose" && exact(result,["version","status","review"])) {
       const review=result.review;
       return result.version===1 && result.status==="review" &&
         exact(review,["version","operation_id","expires_at","reviewed_digest","operations"]) && review.version===1 &&
@@ -70,11 +74,13 @@ function validResult(operation, result, input, now) {
       const value=result.clarification;
       return result.version===1 && result.status==="clarify" &&
         exact(value,["version","reason","site_id","target","candidates"]) && value.version===1 &&
-        CLARIFY.includes(value.reason) && input.sites.includes(value.site_id) &&
+        CLARIFY.includes(value.reason) && (operation==="outcome" ? SITES : input.sites).includes(value.site_id) &&
         (value.target===null || target(value.target)) && Array.isArray(value.candidates) &&
         value.candidates.length<=8 && value.candidates.every(name);
     }
-    return summary(result,input);
+    return summary(result,input) && (!serve || operation==="outcome" ||
+      result.results.every(row => input.sites.includes(row.site_id) && row.operation === input.operation &&
+        row.brightness === input.brightness));
   }
   return summary(result,input);
 }
@@ -144,5 +150,50 @@ export class LightingClient {
     try { return await Promise.race([execution,cancelled]); }
     catch { throw new Error(refused ?? "lighting_outcome_unknown"); }
     finally { controller.signal.removeEventListener("abort",onAbort); }
+  }
+}
+
+
+export const SERVE_LIGHTING_TIMEOUT_MS = 100_000;
+
+export class ServeLightingClient {
+  #origin; #credential; #fetch; #active = 0;
+
+  constructor({ origin, credential, fetchImpl = fetch }) {
+    const url = new URL(origin);
+    if (url.protocol !== "https:" || url.pathname !== "/" || url.username || url.password ||
+        url.search || url.hash || !digest(credential) || typeof fetchImpl !== "function") {
+      throw new Error("serve_lighting_configuration_rejected");
+    }
+    this.#origin = url.origin;
+    this.#credential = credential;
+    this.#fetch = fetchImpl;
+  }
+
+  async request(operation, input) {
+    if (!["action", "outcome"].includes(operation) || !validRequest(operation, input)) {
+      return { status: 422, body: { error: "invalid_request" } };
+    }
+    if (this.#active >= 2) return { status: 429, body: { error: "lighting_busy" } };
+    this.#active++;
+    try {
+      const response = await this.#fetch(this.#origin + "/internal/lighting/serve/v1/" + operation, {
+        method: "POST", redirect: "error", credentials: "omit", cache: "no-store",
+        signal: AbortSignal.timeout(SERVE_LIGHTING_TIMEOUT_MS),
+        headers: { authorization: "Bearer " + this.#credential, "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      const body = await readHaJson(response, 16384);
+      if (response.status === 200 && exact(body, ["version", "result"]) && body.version === 1 &&
+          validResult(operation, body.result, input, Date.now(), { serve: true })) return { status: 200, body };
+      const definite = { 404: "not_found", 409: "conflict", 422: "invalid_request", 429: "lighting_busy" };
+      if (exact(body, ["error"]) && (definite[response.status] === body.error ||
+          (response.status === 503 && body.error === "home_lighting_unavailable"))) {
+        return { status: response.status, body };
+      }
+    } catch {
+      // Delivery could have reached the private service. Only lookup may follow.
+    } finally { this.#active--; }
+    return { status: 503, body: { error: "lighting_outcome_unknown" } };
   }
 }

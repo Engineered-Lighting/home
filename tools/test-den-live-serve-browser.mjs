@@ -30,6 +30,15 @@ const listen = server => new Promise((resolve, reject) => {
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function clickCoordinator(page, button, command) {
+  const [response] = await Promise.all([
+    page.waitForResponse(response => response.url().endsWith(denBase + '/coordinator/' + command)
+      && response.request().method() === 'POST'),
+    button.click(),
+  ]);
+  assert.ok(response.ok(), `${command} returned ${response.status()}: ${await response.text()}`);
+}
+
 let folder, upstream, relay, gateway, browser, origin, den, scene, ordinaryPort, servePort;
 let previewPort = null;
 const relaySockets = new Set();
@@ -456,7 +465,7 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
     const dark = await readDrawn();
     assert.ok(dark.length && dark.every(on => on === false));
     await panel.locator('summary').click();
-    await button('switch').click();
+    await clickCoordinator(page, button('switch'), 'switch');
     await waitForSpot(true);
     assert.ok((await readDrawn()).every(on => on === true));
     assert.match(await panel.locator('[data-den-coordinator-why]').innerText(), /wrists.*trace-1/);
@@ -472,7 +481,7 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
     fake.spotStreaming = true;
     await waitForSpot(true);
     const preStop = spotEvent();
-    await button('stop').click();
+    await clickCoordinator(page, button('stop'), 'stop');
     await waitForSpot(false);
     for (const stream of fake.streams) stream.write('event: spot_snapshot\ndata: ' + JSON.stringify({ ...preStop, seq: ++fake.seq }) + '\n\n');
     await delay(400);
@@ -482,17 +491,17 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.spot?.epoch === 'fixture-restarted', null, { timeout: 60000 });
     assert.ok((await readDrawn()).every(on => on === false));
-    await panel.locator('summary').evaluate(summary => {
-      if (!summary.parentElement.open) summary.click();
-    });
     const other = await context.newPage();
     try {
       await other.goto(page.url(), { waitUntil: 'domcontentloaded' });
       await other.waitForFunction(() => window.HomeDenLiveView?.status()?.spot?.stopped === true);
       const observed = await other.evaluate(() => window.HomeDenLiveView.status().spot.stop_counter);
-      const repeatedStop = page.waitForResponse(response => response.url().endsWith('/coordinator/stop') && response.ok());
-      await button('stop').click();
-      await repeatedStop;
+      await page.bringToFront();
+      await page.waitForFunction(() => !document.hidden && window.HomeDenLiveView?.status()?.chip);
+      await panel.locator('summary').evaluate(summary => {
+        if (!summary.parentElement.open) summary.click();
+      });
+      await clickCoordinator(page, button('stop'), 'stop');
       const staleResume = await other.evaluate(async ({ url, stop_counter }) => {
         const response = await fetch(url + '/resume', { method: 'POST', headers: {
           'Content-Type': 'application/json', 'X-Home-Den-Live-CSRF': '1',
@@ -502,9 +511,9 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
       assert.equal(staleResume, 409, 'a second tab cannot resume past a newer Stop');
       assert.ok((await readDrawn()).every(on => on === false));
     } finally { await other.close(); }
-    await button('resume').click();
+    await clickCoordinator(page, button('resume'), 'resume');
     await waitForSpot(true);
-    await button('switch').click();
+    await clickCoordinator(page, button('switch'), 'switch');
     await waitForSpot(false);
     assert.ok((await readDrawn()).every(on => on === false));
     assert.equal(await panel.locator('[data-den-coordinator-desk]').count(), 0);
@@ -574,7 +583,8 @@ test('the real coordinator trace, virtual spot and Stop agree through Full Home 
           initial_cdeg: [0, -4500] }];
       }));
     });
-    preview = await startPreview({ state_dir: traceRoot, fixtures: geometry,
+    const site = await page.evaluate(() => window.__APT_ENGINE.siteId);
+    preview = await startPreview({ state_dir: traceRoot, fixtures: geometry, site,
       binding: { transform_id: 'authored-transform', scan_revision: den.revision,
         equipment_revision: scene.revision, equipment_digest: scene.digest },
       target_m: [1.2, 1.38, .65], facing: [0, 1] });
@@ -606,7 +616,7 @@ test('the real coordinator trace, virtual spot and Stop agree through Full Home 
     await page.locator('[data-den-coordinator] summary').evaluate(summary => {
       if (!summary.parentElement.open) summary.click();
     });
-    await button('stop').click();
+    await clickCoordinator(page, button('stop'), 'stop');
     await waitForDark();
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.spot?.stopped === true);
     let receipt, traces;
@@ -622,9 +632,9 @@ test('the real coordinator trace, virtual spot and Stop agree through Full Home 
     assert.equal(receipt.trace_complete, true);
     assert.equal(receipt.trace_event_index, traces.length);
     assert.equal(traces.filter(trace => trace.action === 'stop' && trace.outcome === 'encoded_only').length, Object.keys(geometry).length);
-    await button('resume').click();
+    await clickCoordinator(page, button('resume'), 'resume');
     await waitForLit();
-    await button('switch').click();
+    await clickCoordinator(page, button('switch'), 'switch');
     await waitForDark();
     assert.deepEqual(fake.actions.slice(firstAction).map(action => action.path), ['stop', 'resume', 'switch']
       .map(action => denBase + '/coordinator/virtual/' + action));

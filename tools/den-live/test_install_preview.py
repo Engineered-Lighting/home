@@ -9,6 +9,8 @@ from unittest.mock import patch
 
 import install_la as install
 
+SITE = "synthetic-den"
+
 
 class PreviewInstallTest(unittest.TestCase):
     def test_preview_geometry_is_only_sent_as_a_separate_credential(self):
@@ -16,7 +18,7 @@ class PreviewInstallTest(unittest.TestCase):
             root = Path(folder)
             geometry = root / "export.json"
             geometry.write_text(json.dumps({
-                "schema": "lighting-brain-geometry-1", "home": "victoria", "room": "den",
+                "schema": "lighting-brain-geometry-1", "home": SITE, "room": "den",
                 "physical_commands": False,
                 "fixtures": [{"fixture_id": "test-fixture", "aim_origin_m": [0.1234, 0, 1]}],
             }), encoding="utf-8")
@@ -39,7 +41,7 @@ class PreviewInstallTest(unittest.TestCase):
                 patch.object(install.perceive, "Tools"),
                 patch.object(install, "registration", return_value=(model, receipt, "test-transform")),
                 patch.object(install.rl, "den_take", return_value=SimpleNamespace(read_token=lambda _: "fake")),
-                patch.object(install.rl, "den_site", return_value="synthetic-den"),
+                patch.object(install.rl, "den_site", return_value=SITE),
                 patch.object(install.release, "build", return_value=bundle),
                 patch.object(install.release, "report"),
                 patch.object(install, "say"),
@@ -61,10 +63,11 @@ class PreviewInstallTest(unittest.TestCase):
             root = Path(folder)
             geometry = root / "export.json"
             geometry.write_text(json.dumps({
-                "schema": "lighting-brain-geometry-1", "home": "victoria", "room": "den",
+                "schema": "lighting-brain-geometry-1", "home": SITE, "room": "den",
                 "physical_commands": True, "fixtures": [{"fixture_id": "test-fixture"}],
             }), encoding="utf-8")
-            with patch.object(install.sc, "archive") as archive, self.assertRaises(install.Stop):
+            with (patch.object(install.rl, "den_site", return_value=SITE),
+                  patch.object(install.sc, "archive") as archive, self.assertRaises(install.Stop)):
                 install.run(root=root, host="fake-host", camera_url="http://192.0.2.8:8090",
                             token_file=root / "fake-token.txt", transport=None, preview_geometry=geometry)
             archive.assert_not_called()

@@ -36,7 +36,7 @@ def main():
         raise RuntimeError(why)
     with patch.object(run_service.ha_link, "HaClient", forbidden):
         service, close = run_service.coordinator_starter(settings, {"ha_url": "synthetic"}, state=state, tree=tree)()
-    service.site = "victoria"
+    service.site = config["site"]
     service.configure({"fade_in_s": 0})
     server = PeopleStream(port=0, body_available=False)
     service.connect(server.publish_spot)

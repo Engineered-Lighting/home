@@ -133,7 +133,7 @@ def labels_seed(root):
     return path, len(doc["labels"])
 
 
-def preview_geometry_export(path):
+def preview_geometry_export(path, site):
     """Validate the export envelope and keep the original bytes for the service credential."""
     try:
         payload = Path(path).read_bytes()
@@ -141,9 +141,9 @@ def preview_geometry_export(path):
     except (OSError, ValueError):
         raise Stop("the private Home preview geometry export could not be read") from None
     if (not isinstance(doc, dict) or doc.get("schema") != "lighting-brain-geometry-1"
-            or doc.get("physical_commands") is not False or doc.get("home") != "victoria" or doc.get("room") != "den"
+            or doc.get("physical_commands") is not False or doc.get("home") != site or doc.get("room") != "den"
             or not isinstance(doc.get("fixtures"), list) or not doc["fixtures"]):
-        raise Stop("choose the registered Victoria Den preview geometry exported by Home")
+        raise Stop("choose the registered Den preview geometry exported by Home")
     return payload
 
 
@@ -153,7 +153,8 @@ def undo_lines(host):
 
 def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID,
         ha_token_file=None, ha_url_file=None, preview_geometry=None):
-    geometry = None if preview_geometry is None else preview_geometry_export(preview_geometry)
+    site = rl.den_site()
+    geometry = None if preview_geometry is None else preview_geometry_export(preview_geometry, site)
     tools_dir = root / "tools"
     observe, track = sc.archive(tools_dir, "observe"), sc.archive(tools_dir, "track")
     model, receipt, transform_id = registration(root, perceive.Tools(observe, track), camera_id)
@@ -184,7 +185,7 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         shutil.copyfile(model, outbox / "room-model.jsonl")
         shutil.copyfile(token_file, outbox / "camera-token.txt")
         shutil.copyfile(receipt, outbox / "register-receipt.json")
-        settings = {"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url, "site": rl.den_site()}
+        settings = {"schema": rs.SETTINGS_SCHEMA, "camera_url": camera_url, "site": site}
         if ha_token:
             settings["asks"] = {"ha_url": ha_url, "ha_entity": rs.FRIGATE_ENTITY}
             (outbox / rs.HA_TOKEN).write_text(ha_token + "\n", encoding="utf-8", newline="\n")
@@ -226,7 +227,7 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--host", default=HOST, help="the ssh host for LA (default %(default)s)")
     parser.add_argument("--camera", help="the camera's URL as LA reaches it (default: den-take's)")
-    parser.add_argument("--preview-geometry", type=Path, help="private registered Victoria Den geometry export from Home")
+    parser.add_argument("--preview-geometry", type=Path, help="private registered Den geometry export from Home")
     args = parser.parse_args(argv)
     if not console():   # a background run is refused before anything: no build, no ssh
         say("install: refused, no console. Paste the line into PowerShell yourself.")

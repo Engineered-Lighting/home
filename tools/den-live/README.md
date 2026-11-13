@@ -234,7 +234,11 @@ The owner qualification uses one short tailnet phone run in room light and one w
 - **The clock:** frame times come from when frames arrive on this PC, as they did while the den Jetson's clock read 1970. They're kept on this PC's monotonic clock, so a time-sync step can't stall the tracker. "Behind" leaves out the camera-to-PC transit, about 0.1 s here. Since the Jetson's clock is right again, the stream's health line also has `transit_s_median`: arrival less the frame's `captured_unix_ns`, used only between 0 and 5 s. Step 4's walk test adds it to "behind".
 - **Weak boxes:** a person box under 0.5 still reaches the tracker, but it never shows as a marker on its own. A track shows once a pose, or a box at 0.5 or more, has backed it (plan L3).
 - **The arrow:** a heading older than 3 s is left off.
-- **New epochs:** a camera restart gives new marker ids (`e2-trk-1`), never an old marker.
+- **New epochs:** a camera restart gives new marker ids (`e2-trk-1`), never an old marker. An epoch starts on a new camera session, the camera's clock going back more than 1 s, a new depth calibration, a day/night switch, or 3.0 s without a fresh frame. One late or missing frame only makes the stream stale for a moment: the next frame keeps the epoch and the track.
+- **The association:** each track's `association_revision` moves only once its safe or unsafe state has held for two frames in a row. One unsafe frame still reads ambiguous, so the ask skips it.
+- **The binding:** each marker carries `service_run_id`, `camera_epoch` and `association_revision` beside its `track_id`: the person binding every consumer matches.
+- **Seated:** worked out once per track per frame (`seated.Published`, the coordinator's `body.seated()` rule), with the capture time its 2 s hold began (`since_mono`) and whether hips or the head decided it. It starts again when the association revision moves. The ask and the lighting preview read it and never work it out themselves.
+- **Person state:** the LA service logs each snapshot as `den-person-state-1` beside the ask's log, in `days/<UTC date>/person-state.jsonl`, numbers only (no image, name or words: the snapshot's reason and the near phrase stay out), with one mono-and-wall anchor per run per day file. It's kept 14 days like the ask's log. `run_local.py` keeps nothing.
 - **The scan revision:** it must be the one step 2 picked on. If the active scan changed since, it stops and asks you to register again.
 - **Too dark:** the picture's mean brightness under 40 (of 255) for 3 s gives "too dark" until step 6's infrared.
 
@@ -481,9 +485,10 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
   - It's read twice a second and held for 2 minutes after the sensor last read on, den_lighting's own vacancy, because Frigate can lose a reader sitting still. Standing up still stops the asks at once, through the seated check.
   - If it reads unknown, or nothing reads for 10 s, nothing is asked.
   - The reader never follows a redirect, so the token goes to Home Assistant only.
-- A confirmed track is seated (`seated.py`: the coordinator's `body.seated()`, copied unchanged until den-live carries its code).
+- A confirmed track is seated, as perception publishes it on the track (contract 2's `seated`; `seated.py`: the coordinator's `body.seated()`, copied unchanged until den-live carries its code). The ask reads it and doesn't work it out again, so it and the lighting preview agree to the frame.
   - Becoming seated needs 2 s of hips 0.30 to 0.75 m above the floor (or the face below 1.30 m with no pair of hips) and a torso moving under 0.15 m/s.
   - Staying seated needs only low hips, so shifting along the sofa doesn't drop you.
+  - Seated starts again when the track's association revision moves.
 - The settings say `asks_on`, and the back-off monitor is below its step 2.
   - At step 1, it asks at most every 4 s.
   - If `backoff_status` is set but the monitor's file is missing, unreadable or over 10 minutes old, it counts as step 1.
@@ -492,7 +497,7 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 **The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
 
 **What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
-- Two or three stills from a continuously supported subject window, made into JPEGs in the detector's process (`stills.py`).
+- Two or three stills from a continuously supported subject window, none from before the seated episode began (`since_mono`) or the association became confident, made into JPEGs in the detector's process (`stills.py`). The reply's gate carries that `seated_since_mono`, the instant the lighting preview's episode starts from too.
 - Today's Lab question, with three changes:
   - "hobby" and "craft" are added;
   - the old camera placement is removed;

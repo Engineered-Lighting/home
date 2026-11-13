@@ -4,10 +4,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const F = await import(pathToFileURL(path.join(ROOT, 'app/src/home-3d/apartment-body-frame.mjs')).href);
-const { BODY_SCHEMA, FACE_FREE_BODY_SCHEMA, KIND, validBodyFrame, decodeBodyFrame, encodeBodyFrame, mergeFrames, mergeJoints, drawBuffers, zoomRatio, MAX_POINTS } = F;
+const { BODY_SCHEMA, KIND, validBodyFrame, decodeBodyFrame, encodeBodyFrame, mergeFrames, mergeJoints, drawBuffers, zoomRatio, MAX_POINTS } = F;
 
 const pts = (list) => list.map(([key, x, y, z, kind = KIND.measured]) => ({ key, xyz_m: [x, y, z], kind, normal: [0, 0, 1] }));
 const frame = (list, extra = {}) => encodeBodyFrame({ trackId: 'trk-1', captureTs: 10, seq: 1, points: pts(list), ...extra });
@@ -49,23 +50,6 @@ test('anything off-contract is refused whole', () => {
     for (const f of bad) { assert.equal(validBodyFrame(f), false, JSON.stringify(Object.keys(f))); assert.equal(decodeBodyFrame(f), null); }
 });
 
-test('the opt-in v2 body decoder accepts generated limbs without a head channel or facial joints', () => {
-    const options = { schema: FACE_FREE_BODY_SCHEMA };
-    const v2 = encodeBodyFrame({ ...options, trackId: 'trk-1', captureTs: 10, points: [{ key: 1, xyz_m: [0, 0, 1] }],
-        joints: { left_shoulder: [0, 0, 1] } });
-    assert.equal(v2.points.head, undefined);
-    assert.equal(decodeBodyFrame(v2), null, 'v1 callers do not silently switch wire schemas');
-    assert.deepEqual(decodeBodyFrame(v2, options)?.centroid, [0, 0, 1]);
-    assert.equal(decodeBodyFrame(frame([[1, 0, 0, 1]]), options), null);
-    for (const bad of [
-        { ...v2, source: 'depth' },
-        { ...v2, rgb: 'bytes' },
-        { ...v2, points: { ...v2.points, head: btoa('\0') } },
-        { ...v2, points: { ...v2.points, kind: btoa('\0') } },
-        { ...v2, joints: [{ name: 'nose', xyz_m: [0, 0, 1] }] },
-    ]) assert.equal(decodeBodyFrame(bad, options), null);
-});
-
 test('bytes that disagree with the shape are refused: keys out of order, an unknown kind, bad base64', () => {
     const f = frame([[1, 0, 0, 1], [2, 0, 0, 1.1]]);
     const swapped = { ...f, points: { ...f.points, key: btoa(String.fromCharCode(2, 0, 0, 0, 1, 0, 0, 0)) } };
@@ -74,6 +58,24 @@ test('bytes that disagree with the shape are refused: keys out of order, an unkn
     assert.equal(decodeBodyFrame(kind), null, 'kind 2 is not defined');
     const junk = { ...f, points: { ...f.points, kind: '!!!!' } };
     assert.equal(decodeBodyFrame(junk), null);
+});
+
+test('the live decoder admits measured geometry and clear events only', () => {
+    const live = measuredBodyEvent(), clear = measuredBodyEvent({ reason: 'empty', mode: 'none' });
+    const { decoded } = F.decodeLiveBodyEvent(live);
+    assert.equal(decoded.n, live.points.count);
+    assert.deepEqual(decoded.torso, { facingDeg: 90, shoulder: [1.2, 1.46, 1.51], pelvisZ: 0.78 });
+    assert.deepEqual(F.decodeLiveBodyEvent(clear), { event: clear });
+    const legacyPoints = (list) => {
+        const { count, key, position_mm, normal, kind } = frame(list).points;
+        return { count, key, position_mm, normal, kind };
+    };
+    for (const invalid of [frame([[1, 0, 0, 1]]), { ...clear, track_id: 'leaked' }, { ...live, head: {} },
+        { ...live, seq: -1 }, { ...live, expires_ts: 102 }, { ...live, mode: 'none' },
+        { ...live, points: { ...live.points, normal: undefined } }, { ...live, points: { ...live.points, head: '' } },
+        { ...live, points: legacyPoints([[1, 0, 0, 1, KIND.backFill]]) }, { ...live, points: legacyPoints([[640 * 400, 0, 0, 1]]) }]) {
+        assert.equal(F.decodeLiveBodyEvent(invalid), null);
+    }
 });
 
 test('interpolation: equal keys move between frames, unmatched points fade out and in', () => {

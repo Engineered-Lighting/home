@@ -77,7 +77,8 @@ async function routes(req, res, url) {
   return false;
 }
 
-const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__denLive={stream:${JSON.stringify(STREAM + 'stream')},body:${JSON.stringify(STREAM + 'body')},site:${JSON.stringify(home.site)}};`
+const PAGE_INIT = `<script>window.HG_DISABLE_SERVICE_WORKER=true;window.__denLive={stream:${JSON.stringify(STREAM + 'stream')},site:${JSON.stringify(home.site)}};`
+  + (ROOM === 'real' ? `window.HomeDenLive=Object.freeze({...window.__denLive,home:'den',body:${JSON.stringify(STREAM + 'body')}});` : '')
   + `window.HomeDenLabels=Object.freeze({site:${JSON.stringify(home.site)},labels:${JSON.stringify(STREAM + 'labels')}});`
   + `try{localStorage.setItem('apartment3d.site',${JSON.stringify(home.site)});localStorage.setItem('home.perf.backgroundWarmup','off');localStorage.setItem('apartment3d.prewarm','off');}catch(_){}</script>`;
 // --labels-only (run_local.py's): no camera loop runs, so the markers' panel would only say the stream stopped.

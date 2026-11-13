@@ -10,7 +10,8 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind, denLiveWriteRefusal } from "../web-gateway/den-live-route.mjs";
+import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
+  denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind, denLiveWriteRefusal } from "../web-gateway/den-live-route.mjs";
 import { isTailnetAddress, lookOnlyKind, lookOnlyPackIndex } from "../web-gateway/look-only.mjs";
 import { REGISTRATION_ROUTE, initRegistration, readActiveBinding } from "../web-gateway/equipment-registration.mjs";
 import { SITES } from "../web-gateway/home-location.mjs";
@@ -80,7 +81,7 @@ function unitTests() {
   assert("den-live's body path is its own kind, GET only", denLiveRouteKind("GET", "/v1/homes/den/body") === "body"
     && denLiveRouteKind("HEAD", "/v1/homes/den/body") === null && denLiveRouteKind("GET", "/v1/homes/den/body?x") === null
     && denLiveRouteKind("GET", "/v1/homes/den/body/x") === null);
-  assert("look-only reads the markers but never the body", lookOnlyKind("GET", "/api/den-live/v1/homes/den/stream") === "den-live"
+  assert("the body uses its own trusted ingress dispatch", lookOnlyKind("GET", "/api/den-live/v1/homes/den/stream") === "den-live"
     && lookOnlyKind("GET", "/api/den-live/v1/homes/den/body") === null);
   // The lighting coordinator: its state for anyone who reads the markers, its four writes for a session only.
   assert("den-live's coordinator state is its own kind, GET only", denLiveRouteKind("GET", "/v1/homes/den/coordinator") === "coordinator"
@@ -189,22 +190,22 @@ const json = response => { try { return JSON.parse(response.body.replace(/^[0-9a
 
 function fakeUpstreams() {
   const seen = [];
-  const mode = { bodyV2: true };
+  const mode = { bodyResponse: {} };
   const websocketMessages = [];
   const server = http.createServer((req, res) => {
     let body = "";
     req.on("data", chunk => { body += chunk; });
     req.on("end", () => {
       seen.push({ method: req.method, url: req.url, headers: req.headers, body });
-      if (req.url === DEN_HOME + "/body" || req.url === DEN_HOME + "/body-v2" && mode.bodyV2) {
-        const schema = req.url.endsWith("-v2") ? "den-live-body-2" : "den-live-body-1";
-        res.writeHead(200, { "Content-Type": "text/event-stream" });
-        res.end("event: body\ndata: " + JSON.stringify({ schema }) + "\n\n");
-        return;
-      }
-      if (req.url === DEN_HOME + "/body-v2") {
-        res.writeHead(404, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ ok: false, error: "not_found" }));
+      if (req.url === DEN_LIVE_BODY_PATH) {
+        const { status = 200, mime = "text/event-stream; charset=utf-8", schema = DEN_LIVE_BODY_SCHEMA } = mode.bodyResponse;
+        const headers = { "Content-Type": mime, "Cache-Control": "public, max-age=900", "Set-Cookie": "irrelevant=fixture" };
+        if (schema) headers[DEN_LIVE_BODY_SCHEMA_HEADER] = schema;
+        res.writeHead(status, headers);
+        const frame = { schema: schema ?? "den-live-body-1", home: "den", run_id: "fixture", track_epoch: 1,
+          content_revision: "r1", transform_id: "fixture", seq: 1, mode: "rgb", status: "clear", reason: "empty" };
+        res.write('event: body_clock\ndata: {"server_ts":1000}\n\nevent: body\ndata: ' + JSON.stringify(frame) + "\n\n");
+        setTimeout(() => res.end(), 1500);
         return;
       }
       if (req.url.startsWith("/internal/home/serve-lighting/")) {
@@ -378,14 +379,38 @@ async function fullServeTests(base, upstream, temp, fake) {
     upstream.seen.length = 0;
     r = await exchange(servePort, { method: "POST", url: DEN_HOME + "/coordinator/desk", headers: controls, body: "{}" });
     assert("virtual stage rejects desk before forwarding", r.status === 404 && upstream.seen.length === 0);
-    r = await exchange(servePort, { url: DEN_HOME + "/body", until: "den-live-body-2" });
-    assert("stable body URL forwards to the v2-only route", r.status === 200 && r.body.includes("den-live-body-2") &&
-      upstream.seen.at(-1)?.url === DEN_HOME + "/body-v2");
-    upstream.mode.bodyV2 = false;
-    r = await exchange(servePort, { url: DEN_HOME + "/body" });
-    assert("producer downgrade cannot emit v1 body bytes", r.status === 503 && !r.body.includes("den-live-body-1") &&
-      upstream.seen.at(-1)?.url === DEN_HOME + "/body-v2");
-    upstream.mode.bodyV2 = true;
+    r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH, until: "event: body\ndata:" });
+    assert("tailnet body GET without a session streams v2 unbuffered", r.status === 200
+      && r.body.includes("event: body_clock") && r.body.includes(DEN_LIVE_BODY_SCHEMA)
+      && /cache-control: no-store/i.test(r.head) && /x-accel-buffering: no/i.test(r.head) && !/set-cookie:/i.test(r.head)
+      && upstream.seen.at(-1)?.url === DEN_LIVE_BODY_PATH, r.head);
+    const basic = `Basic ${Buffer.from(`${USER}:${PASSWORD}`).toString("base64")}`;
+    r = await exchange(port, { client: null, url: "/", headers: { Authorization: basic } });
+    const cookie = /\r\nset-cookie: ([^;\r\n]+)/i.exec(r.head)?.[1];
+    assert("signed-in ordinary Home has a session and omits the body mount", r.status === 200 && !!cookie
+      && !r.body.includes(DEN_LIVE_BODY_PATH), r.status);
+    r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH, headers: { Cookie: cookie }, until: "event: body\ndata:" });
+    assert("a Home session on the tailnet can read body without forwarding its cookie", r.status === 200
+      && !upstream.seen.at(-1)?.headers.cookie, r.status);
+    const beforeDenied = upstream.seen.length;
+    for (const [listener, client] of [[servePort, "192.0.2.1"], [port, TAILNET_CLIENT]]) {
+      r = await exchange(listener, { client, url: DEN_LIVE_BODY_PATH, headers: { Cookie: cookie } });
+      assert("signed-in body requires verified tailnet ingress", r.status === 403, r.status);
+    }
+    for (const [method, url] of [["HEAD", DEN_LIVE_BODY_PATH], ["GET", DEN_LIVE_BODY_PATH + "?x"],
+      ["GET", DEN_LIVE_BODY_PATH.replace("/den/body", "/den/./body")]]) {
+      r = await exchange(servePort, { method, url, headers: { Cookie: cookie } });
+      assert("only the exact body GET is routed", r.status === 404, r.status);
+    }
+    r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH, body: "x" });
+    assert("body GET rejects a payload before proxying", r.status === 400 && upstream.seen.length === beforeDenied, r.status);
+    for (const invalid of [{ schema: null }, { schema: "den-live-body-1" }, { mime: "application/json" }, { status: 206 }]) {
+      upstream.mode.bodyResponse = invalid;
+      r = await exchange(servePort, { url: DEN_LIVE_BODY_PATH });
+      assert("invalid body upstream response is rejected before streaming bytes", r.status === 503
+        && !r.body.includes("event: body") && json(r)?.error === "den_body_unavailable", r.head);
+    }
+    upstream.mode.bodyResponse = {};
     const lighting = { method: "POST", url: "/api/home/lighting/action", body: '{"version":1}',
       headers: { Origin: ORIGIN, "Content-Type": "application/json", "X-Home-Lighting-CSRF": "1", Authorization: "Bearer caller", Cookie: "fixture=ignored" } };
     r = await exchange(servePort, lighting);
@@ -428,6 +453,8 @@ async function fullServeTests(base, upstream, temp, fake) {
       r.body.includes("window.HomeServe=") && !r.body.includes('"bodySchema":') && !r.body.includes('"coordinator":'));
     r = await exchange(shellServePort, { url: DEN_HOME + "/body" });
     assert("body v2 is unavailable until explicitly configured", r.status === 404);
+    r = await exchange(shellServePort, { url: DEN_HOME + "/stream", until: "event: people" });
+    assert("body rollback leaves people markers available", r.status === 200 && r.body.includes("event: people"), r.status);
     r = await exchange(shellServePort, { method: "POST", url: DEN_HOME + "/coordinator/switch",
       headers: { Origin: ORIGIN, "X-Home-Den-Live-CSRF": "1", "Content-Type": "application/json" }, body: '{"on":true}' });
     assert("Serve does not forward unconfigured virtual controls to the old HA switch", r.status === 404);

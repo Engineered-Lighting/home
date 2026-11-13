@@ -23,8 +23,9 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
-import { DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime, denLabelsSaveProblem, denLiveEnabled, denLiveHeaders,
-  denLiveRouteKind, denLiveRuntime, denLiveUpstreamSuffix, denLiveWriteRefusal } from "./den-live-route.mjs";
+import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
+  denLabelsSaveProblem, denLiveEnabled, denLiveHeaders, denLiveRouteKind, denLiveRuntime, denLiveUpstreamSuffix,
+  denLiveWriteRefusal } from "./den-live-route.mjs";
 import { createServeLightingRelay, readServeCredential, SERVE_LIGHTING_PREFIX, serveHomeAdmission, serveHomeOrigin } from "./serve-home.mjs";
 import { REDACTED, hasBody, lookOnlyClient, lookOnlyEnabled, lookOnlyKind, lookOnlyPackIndex, lookOnlyRuntime } from "./look-only.mjs";
 
@@ -701,6 +702,10 @@ function browserAdmitted(req) {
   return req[SERVE_ADMITTED] === true || hasValidAuth(req).ok;
 }
 
+function denBodyIngress(req) {
+  return req[SERVE_ADMITTED] === true || (LOOK_ONLY_ENABLED && lookOnlyClient(req) !== null);
+}
+
 function requireAuth(req, res) {
   if (req[SERVE_ADMITTED] === true) return true;
   const auth = hasValidAuth(req);
@@ -1284,7 +1289,8 @@ function sendIndex(req, res, filePath, { lookOnly = false } = {}) {
       : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
     const serve = req[SERVE_ADMITTED] === true;
     const den = DEN_LIVE_ENABLED
-      ? denLiveRuntime({ bodyV2: !lookOnly && DEN_BODY_V2, virtual: DEN_VIRTUAL, coordinator: !serve || DEN_VIRTUAL }) + denLabelsRuntime()
+      ? denLiveRuntime({ bodyV2: DEN_BODY_V2 && denBodyIngress(req), virtual: DEN_VIRTUAL,
+        coordinator: !serve || DEN_VIRTUAL }) + denLabelsRuntime()
       : "";
     const serveRuntime = serve
       ? `window.HomeServe=Object.freeze({active:true,bridgeManaged:${!!serveBridgeCredential && envEnabled("HOME_WEB_ENABLE_LEGACY_BRIDGE_PROXY")}});`
@@ -1671,8 +1677,9 @@ function proxyHttp(req, res, route) {
     return;
   }
 
-  const upstreamSuffix = route.prefix === DEN_LIVE_PREFIX
-    ? denLiveUpstreamSuffix(suffix, denLiveRouteKind(req.method, suffix), {
+  const denKind = route.prefix === DEN_LIVE_PREFIX ? denLiveRouteKind(req.method, suffix) : null;
+  const upstreamSuffix = denKind
+    ? denLiveUpstreamSuffix(suffix, denKind, {
       bodyV2: DEN_BODY_V2, virtual: DEN_VIRTUAL, serve: req[SERVE_ADMITTED] === true,
     })
     : suffix;
@@ -1696,14 +1703,27 @@ function proxyHttp(req, res, route) {
   }, (upstreamRes) => {
     receivedResponse = true;
     if (responseTimer) clearTimeout(responseTimer);
-    let headers = { ...upstreamRes.headers };
-    delete headers["content-security-policy"];
-    if (route.prefix === DEN_LIVE_PREFIX && upstreamSuffix.endsWith("/body-v2") &&
-      (upstreamRes.statusCode !== 200 || !/^text\/event-stream(?:;|$)/i.test(headers["content-type"] || ""))) {
-      upstreamRes.resume();
-      sendJson(res, 503, { ok: false, error: "den_body_unavailable" });
+    if (denKind === "body") {
+      const mime = String(upstreamRes.headers["content-type"] || "").split(";", 1)[0].trim().toLowerCase();
+      if (upstreamRes.statusCode !== 200 || mime !== "text/event-stream"
+          || upstreamRes.headers[DEN_LIVE_BODY_SCHEMA_HEADER] !== DEN_LIVE_BODY_SCHEMA) {
+        upstreamRes.destroy();
+        sendJson(res, 503, { ok: false, error: "den_body_unavailable" });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+        [DEN_LIVE_BODY_SCHEMA_HEADER]: DEN_LIVE_BODY_SCHEMA,
+      });
+      res.flushHeaders();
+      upstreamRes.on("error", () => res.destroy());
+      upstreamRes.pipe(res);
       return;
     }
+    let headers = { ...upstreamRes.headers };
+    delete headers["content-security-policy"];
     if (req[SERVE_ADMITTED]) {
       delete headers["set-cookie"];
       delete headers["www-authenticate"];
@@ -2128,6 +2148,24 @@ const server = http.createServer({
   }
   if (parsed.pathname === "/auth" || parsed.pathname.startsWith("/auth/")) {
     await handleAuthRoute(req, res, parsed);
+    return;
+  }
+  if (parsed.pathname === DEN_LIVE_BODY_PATH) {
+    if (req.method !== "GET" || req.url !== DEN_LIVE_BODY_PATH) {
+      req.resume();
+      sendJson(res, 404, { ok: false, error: "route_not_found" });
+    } else if (!denBodyIngress(req)) {
+      req.resume();
+      sendJson(res, 403, { ok: false, error: "tailnet_required" });
+    } else if (!DEN_BODY_V2) {
+      req.resume();
+      sendCapabilityDisabled(res, "den_live_body");
+    } else if (hasBody(req)) {
+      req.resume();
+      sendJson(res, 400, { ok: false, error: "unexpected_body" });
+    } else {
+      proxyHttp(req, res, route);
+    }
     return;
   }
   // A look-only device reading a listed path. Anything else it asks falls through to the rules below, unchanged.

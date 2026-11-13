@@ -1,10 +1,11 @@
-// The live Den service binds loopback. Serve and ordinary authenticated Home
-// share these exact routes. Body v2 and virtual controls use upstream paths
-// that old producers cannot serve after a rollback.
+// The live Den service binds loopback. The measured body uses the trusted
+// tailnet listener. Virtual controls use separate upstream paths.
 import { REGISTRATION_ROUTE } from "./equipment-registration.mjs";
 
 export const DEN_LIVE_PREFIX = "/api/den-live";
 export const DEN_LIVE_HOME = "den";
+export const DEN_LIVE_BODY_SCHEMA = "den-live-body-2";
+export const DEN_LIVE_BODY_SCHEMA_HEADER = "x-home-den-body-schema";
 export const DEN_SITE = /^\/api\/apartment\/v1\/sites\/([a-z0-9][a-z0-9-]{0,63})\//.exec(REGISTRATION_ROUTE)[1];
 export const DEN_LABELS_CSRF_HEADER = "x-home-den-labels";
 export const DEN_LABELS_MAX_BYTES = 65536;
@@ -12,6 +13,7 @@ export const DEN_LIVE_CSRF_HEADER = "x-home-den-live-csrf";
 export const DEN_LIVE_WRITE_MAX_BYTES = 65536;
 
 const HOME = "/v1/homes/den";
+export const DEN_LIVE_BODY_PATH = DEN_LIVE_PREFIX + HOME + "/body";
 const COORDINATOR = HOME + "/coordinator";
 const READ = new Set([HOME + "/state", HOME + "/stream", HOME + "/labels"]);
 const COORDINATOR_WRITES = new Set(["switch", "settings", "learned/clear", "desk", "stop", "resume"]
@@ -57,7 +59,7 @@ export function denLiveEnabled(env = process.env) {
 }
 
 export function denLiveUpstreamSuffix(suffix, kind, { bodyV2, virtual, serve }) {
-  if (kind === "body") return bodyV2 ? suffix + "-v2" : null;
+  if (kind === "body") return bodyV2 ? suffix : null;
   if (kind !== "coordinator" && kind !== "coordinator-write") return suffix;
   if (virtual) {
     if (suffix === COORDINATOR + "/desk") return null;
@@ -82,7 +84,7 @@ const base = `${DEN_LIVE_PREFIX}/v1/homes/${DEN_LIVE_HOME}/`;
 export function denLiveRuntime({ bodyV2 = false, virtual = false, coordinator = true } = {}) {
   return "window.HomeDenLive=Object.freeze(" + JSON.stringify({
     home: DEN_LIVE_HOME, site: DEN_SITE, state: base + "state", stream: base + "stream",
-    ...(bodyV2 ? { body: base + "body", bodySchema: "den-live-body-2" } : {}),
+    ...(bodyV2 ? { body: DEN_LIVE_BODY_PATH, bodySchema: DEN_LIVE_BODY_SCHEMA } : {}),
     ...(coordinator ? { coordinator: base + "coordinator" } : {}),
     ...(virtual ? { virtual: true } : {}),
   }) + ");";

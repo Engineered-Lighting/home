@@ -375,11 +375,10 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     config = {"schema": CONFIG_SCHEMA, "camera_url": settings["camera_url"], "content_packs": str(packs), "site": site,
               "venv_python": str(venv_python), "models": str(models), "stream_port": int(stream_port),
               **({"asks": block} if block else {})}
-    for key in ("body_v2", "coordinator"):
-        if key in settings:
-            config[key] = settings[key]
-        elif isinstance(current, dict) and key in current:
-            config[key] = current[key]
+    if "coordinator" in settings:
+        config["coordinator"] = settings["coordinator"]
+    elif isinstance(current, dict) and "coordinator" in current:
+        config["coordinator"] = current["coordinator"]
     seed = settings.get("labels_seed") is True
     for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"), (Path(dropin), dropin_text(address, packs, ha, seed))):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -466,7 +465,7 @@ def roll(log):
 
 
 def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, trees=None, camera_id=rl.CAMERA_ID,
-        require_correction=None):
+        require_correction=None, body_input=None):
     """camera_id and require_correction are the tests' (the den simulation's renders are camera den-virtual, with no
     depth_correction record); the service uses den-oak and the method file's rule."""
     env = os.environ if env is None else env
@@ -521,7 +520,7 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
                     status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say),
-                    asks=starter, coordinator=coordinator, body_v2=config.get("body_v2") is True)
+                    asks=starter, coordinator=coordinator, body_input=body_input)
 
 
 def stopping(_signum, _frame):

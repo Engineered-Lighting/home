@@ -38,6 +38,7 @@ const USER = 'owner', PASSWORD = 'correct-horse-battery-staple';
 const TAILNET_CLIENT = '100.101.102.103';
 const STREAM = `${DEN_LIVE_PREFIX}/v1/homes/den/stream`, STATE = `${DEN_LIVE_PREFIX}/v1/homes/den/state`;
 const BODY = `${DEN_LIVE_PREFIX}/v1/homes/den/body`;
+const LABELS = `${DEN_LIVE_PREFIX}/v1/homes/den/labels`;
 const COORDINATOR = `${DEN_LIVE_PREFIX}/v1/homes/den/coordinator`;
 const TARGETS = ['HOME_WEB_HA_TARGET', 'HOME_WEB_METRICS_TARGET', 'HOME_WEB_VLLM_TARGET', 'HOME_WEB_VISION_TARGET',
   'HOME_WEB_INTELLIGENCE_TARGET', 'HOME_WEB_SUPERVISOR_TARGET', 'HOME_WEB_S2S_TARGET', 'HOME_WEB_TRACKER_TARGET',
@@ -125,15 +126,16 @@ function startUpstream() {
       return;
     }
     if (req.method === 'GET' && req.url === BODY) {
-      // The live body's own stream (signed-in only). No frames: this test is about who opens it and when it closes.
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
-      res.write('retry: 1000\n\n');
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', 'X-Home-Den-Body-Schema': 'den-live-body-2' });
+      res.write(`event: body_clock\ndata: ${JSON.stringify({ server_ts: Date.now() / 1000 })}\n\n`);
       fake.bodies.add(res); fake.bodiesOpened += 1;
       req.on('close', () => fake.bodies.delete(res));
       return;
     }
-    const body = req.url === STATE ? { people: peopleEvent() } : { ok: false, error: 'not_served_by_fake' };
-    res.writeHead(req.url === STATE ? 200 : req.url.startsWith('/api/lighting-brain/') ? 503 : 404, { 'Content-Type': 'application/json' });
+    const body = req.url === STATE ? { people: peopleEvent() } : req.url === LABELS
+      ? { schema: 'den-room-labels-1', home: 'den', room_id: 'den', content_revision: den.revision, revision: 0, saved_at: null, labels: [] }
+      : { ok: false, error: 'not_served_by_fake' };
+    res.writeHead(req.url === STATE || req.url === LABELS ? 200 : req.url.startsWith('/api/lighting-brain/') ? 503 : 404, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify(body));
   });
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server)));
@@ -178,7 +180,7 @@ before(async () => {
     HOME_WEB_ENABLE_LEGACY_HA_PROXY: '1', HOME_WEB_ASSET_VERSION: '', HOME_CONTENT_PACKS_DIR: packs,
     HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: '1', HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: privateRoot,
     HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin, HOME_WEB_DEN_LIVE_TARGET: `${target}${DEN_LIVE_PREFIX}`,
-    HOME_WEB_LIGHTING_BRAIN_TARGET: `${target}/api/lighting-brain`, HOME_WEB_DEN_LIVE: '1', HOME_WEB_LOOK_ONLY: '1',
+    HOME_WEB_LIGHTING_BRAIN_TARGET: `${target}/api/lighting-brain`, HOME_WEB_DEN_LIVE: '1', HOME_WEB_DEN_BODY_V2: '1', HOME_WEB_LOOK_ONLY: '1',
     HOME_WEB_SERVE_PORT: String(servePort), HOME_WEB_SITE_LANS: '', HOME_WEB_LOCATION_PERSON: '', HOME_WEB_DEN_LAB_ORIGIN: '' };
   for (const name of TARGETS) env[name] = target;
   gateway = childProcess.spawn(process.execPath, [path.join(ROOT, 'web-gateway/server.mjs')], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -268,16 +270,17 @@ async function screenshot(page, name) {
 }
 /* Nothing but GETs, all on the gateway's look-only list, none refused. */
 function assertLookOnlyTraffic(seen, name) {
+  const kindOf = request => request.method === 'GET' && request.url === BODY ? 'den-live-body' : lookOnlyKind(request.method, request.url);
   const kinds = {};
   for (const request of seen.requests) {
-    const kind = lookOnlyKind(request.method, request.url) || 'OFF THE LIST', at = request.url.replace(/\?.*$/, '');
+    const kind = kindOf(request) || 'OFF THE LIST', at = request.url.replace(/\?.*$/, '');
     (kinds[kind] ||= new Set()).add(kind === 'static' ? at.replace(/[^/]+$/, '*') : at);
   }
   process.stdout.write(`# ${name}: ${seen.requests.length} requests, by look-only kind\n` + Object.entries(kinds)
     .map(([kind, urls]) => `#   ${kind}: ${[...urls].sort().join(' ')}\n`).join(''));
   const writes = seen.requests.filter(request => request.method !== 'GET');
   assert.deepEqual(writes, [], 'a look-only page sends no non-GET request');
-  const off = [...new Set(seen.requests.filter(request => lookOnlyKind(request.method, request.url) === null).map(request => request.url))];
+  const off = [...new Set(seen.requests.filter(request => kindOf(request) === null).map(request => request.url))];
   assert.deepEqual(off, [], 'every request is on the gateway look-only list');
   assert.deepEqual(seen.responses.filter(response => response.status === 401), [], 'no 401');
   assert.deepEqual(seen.sockets, [], 'no WebSocket');

@@ -546,10 +546,8 @@ class Live(unittest.TestCase):
                   r'^camera ok \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames',
                   r"^The live body is on, in the detector's process\. It learns the empty room",
                   r"^The live body is off: [a-z '(),:0-9]+\. The markers go on\.$")
-        # The live body ran beside the markers: frames reached it, and it never stopped the loop.
-        self.assertIsNotNone(result['body'])
-        self.assertGreater(result['body']['sent'], 5)
-        self.assertIsNone(result['body']['stopped'])
+        # This legacy camera fixture has no qualified body timing, privacy evidence or scan receipt.
+        self.assertIsNone(result['body'])
         known = lambda line: any(re.search(shape, line) for shape in shapes)
         self.assertTrue(all(known(line) for line in text.splitlines() if line.strip()), text)
         self.assertFalse(known('camera ok | 4.0 frames a second | 1 people at [0.01, 0.04] | 0.25 s behind'), 'the control')

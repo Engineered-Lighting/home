@@ -12,9 +12,9 @@ import { after, before, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import Core from '../app/src/home-equipment-registration.js';
-import { encodeBodyFrame } from '../app/src/home-3d/apartment-body-frame.mjs';
 import { initRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { authoredDocument, installPack } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const certDir = path.join(root, 'tools/shared-home/tests/fixtures/gateway_client');
@@ -29,8 +29,10 @@ const listen = server => new Promise((resolve, reject) => {
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 let folder, upstream, relay, gateway, browser, origin, den, scene, ordinaryPort, servePort;
+const relaySockets = new Set();
 const fake = { streams: new Set(), bodies: new Set(), sockets: new Set(), actions: [], ws: [], labels: null,
-  bodyAvailable: true, haOffline: false, control: { enabled: false, stopped: false, control_revision: 0 }, epoch: 'fixture-epoch', seq: 0 };
+  bodyAvailable: true, bodyStreaming: true, bodySeq: 0, haOffline: false,
+  control: { enabled: false, stopped: false, control_revision: 0 }, epoch: 'fixture-epoch', seq: 0 };
 
 function json(res, value, status = 200) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
@@ -53,9 +55,10 @@ function spotEvent() {
       pan_deg: 10, tilt_deg: 25, on,
       level: on ? .6 : 0, cct_k: 3000, why: on ? 'Reading' : 'Stopped', trace_id: on ? 'authored-trace' : null })) };
 }
-function openEvents(req, res, clients, write) {
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+function openEvents(res, clients, write, headers = {}, first = '') {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store', ...headers });
   res.write('retry: 500\n\n');
+  if (first) res.write(first);
   clients.add(res);
   const timer = setInterval(() => write(res), 200);
   res.on('close', () => { clearInterval(timer); clients.delete(res); });
@@ -65,18 +68,17 @@ async function upstreamRequest(req, res) {
   for await (const part of req) text += part;
   const body = text ? JSON.parse(text) : null;
   const { pathname } = new URL(req.url, 'http://fixture.local');
-  if (pathname === denBase + '/stream') return openEvents(req, res, fake.streams, out => {
+  if (pathname === denBase + '/stream') return openEvents(res, fake.streams, out => {
     const now = Date.now() / 1000;
     const people = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform',
       content_revision: den.revision, capture_ts: now, emitted_ts: now, mode: 'rgb', camera: { status: 'ok' },
       tracks: [{ track_id: 'authored-person', state: 'confirmed', xy_m: [1.2, 1.5], sigma_m: .1, age_s: 0 }] };
     out.write('event: people\ndata: ' + JSON.stringify(people) + '\n\nevent: spot_snapshot\ndata: ' + JSON.stringify(spotEvent()) + '\n\n');
   });
-  if (pathname === denBase + '/body-v2' && fake.bodyAvailable) return openEvents(req, res, fake.bodies, out => {
-    const frame = encodeBodyFrame({ schema: 'den-live-body-2', trackId: 'authored-person', captureTs: Date.now() / 1000,
-      seq: ++fake.seq, points: [{ key: 1, xyz_m: [1.2, 1.5, 1.2], normal: [0, 0, 1], kind: 3 }] });
-    out.write('event: body\ndata: ' + JSON.stringify({ ...frame, content_revision: den.revision, transform_id: 'authored-transform' }) + '\n\n');
-  });
+  if (pathname === denBase + '/body' && fake.bodyAvailable) return openEvents(res, fake.bodies, out => {
+    if (fake.bodyStreaming) emitBody(out);
+  }, { 'X-Home-Den-Body-Schema': 'den-live-body-2' },
+  'event: body_clock\ndata: ' + JSON.stringify({ server_ts: Date.now() / 1000 }) + '\n\n');
   if (pathname === denBase + '/body') return json(res, { schema: 'den-live-body-1', private_fixture: true });
   if (pathname === denBase + '/labels') {
     if (req.method === 'GET') return json(res, fake.labels);
@@ -108,6 +110,12 @@ async function upstreamRequest(req, res) {
   }
   if (pathname === '/api/states') return json(res, []);
   return json(res, { error: 'fixture_unavailable' }, 404);
+}
+
+function emitBody(out, reason) {
+  const frame = measuredBodyEvent({ revision: den.revision, captured: Date.now() / 1000 - 0.05,
+    seq: ++fake.bodySeq, reason });
+  out.write('event: body\ndata: ' + JSON.stringify(frame) + '\n\n');
 }
 
 function serverFrame(socket, data) {
@@ -191,6 +199,10 @@ before(async () => {
     client.on('error', () => upstreamSocket.destroy());
     client.on('close', () => upstreamSocket.destroy());
   });
+  relay.on('connection', socket => {
+    relaySockets.add(socket);
+    socket.on('close', () => relaySockets.delete(socket));
+  });
   origin = 'https://localhost:' + await listen(relay);
   const haFile = path.join(folder, 'ha-token'), relayFile = path.join(folder, 'relay-token');
   fs.writeFileSync(haFile, haToken, { mode: 0o600 }); fs.writeFileSync(relayFile, relayCredential, { mode: 0o600 });
@@ -226,6 +238,7 @@ after(async () => {
   await browser?.close();
   gateway?.kill();
   gateway?.stdout.destroy(); gateway?.stderr.destroy();
+  for (const socket of relaySockets) socket.destroy();
   relay?.close();
   for (const socket of fake.sockets) socket.destroy();
   for (const res of [...fake.streams, ...fake.bodies]) res.destroy();
@@ -379,9 +392,18 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
   });
   try {
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.body?.layer?.points > 0, null, { timeout: 60000 });
-    assert.equal((await live()).body.layer.trackId, 'authored-person');
+    assert.equal((await live()).body.layer.trackId, 'authored-track');
+    assert.ok((await live()).body.last_paint_age_s > 0);
     assert.equal(fake.bodies.size, 1);
     assert.equal(fake.streams.size, 1);
+    fake.bodyStreaming = false;
+    for (const connection of fake.bodies) emitBody(connection, 'ambiguous');
+    await page.waitForFunction(() => {
+      const status = window.HomeDenLiveView?.status();
+      return status?.body?.reason === 'ambiguous' && status.body.layer?.points === 0 && status.layer?.tracks === 1;
+    });
+    fake.bodyStreaming = true;
+    await page.waitForFunction(() => window.HomeDenLiveView?.status()?.body?.layer?.points > 0);
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.coordinator?.kind === 'running');
     const dark = await readDrawn();
     assert.ok(dark.length && dark.every(on => on === false));
@@ -408,7 +430,10 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
     await waitForSpot(false);
     assert.ok((await readDrawn()).every(on => on === false));
     assert.equal(await panel.locator('[data-den-coordinator-desk]').count(), 0);
-  } finally { fake.control = initial; fake.epoch = initialEpoch; await context.close(); }
+  } catch (error) {
+    error.message += '\nDen state: ' + JSON.stringify(await page.evaluate(() => window.HomeDenLiveView?.status() || null));
+    throw error;
+  } finally { fake.control = initial; fake.epoch = initialEpoch; fake.bodyStreaming = true; await context.close(); }
 });
 
 test('the normal Den label editor saves a label and keeps a draft across a revision conflict', { timeout: 110000 }, async () => {
@@ -429,5 +454,8 @@ test('the normal Den label editor saves a label and keeps a draft across a revis
     await page.waitForFunction(() => window.HomeDenLabelsView?.status()?.save?.state === 'saved');
     assert.equal(fake.labels.labels[0].name, name);
     assert.equal(fake.labels.revision, initial.revision + 2);
+  } catch (error) {
+    error.message += '\nLabel state: ' + JSON.stringify(await page.evaluate(() => window.HomeDenLabelsView?.status() || null));
+    throw error;
   } finally { fake.labels = initial; await context.close(); }
 });

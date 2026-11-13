@@ -241,7 +241,7 @@ def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="
         raise Stop("the Home checkout with the Labels tool isn't at %s" % app)
     store = room_labels.Store(Path(root) / "private" / "labels", say=say)
     try:
-        out = people_stream.PeopleStream(port=stream_port, labels=store)
+        out = people_stream.PeopleStream(port=stream_port, labels=store, body_available=False)
     except OSError:
         raise Stop("port %d is busy: is another run_local.py still open?" % stream_port) from None
     out.start()
@@ -314,11 +314,12 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
         except perceive.Stop as exc:
             raise Stop(str(exc)) from None
         perceiver.detector = detector
+        body_available = bool(body and body_input is not None and revision is not None and registered_on == revision)
         try:
-            out = people_stream.PeopleStream(port=stream_port, labels=labels)
+            out = people_stream.PeopleStream(port=stream_port, labels=labels, body_available=body_available)
         except OSError:
             raise Stop("port %d is busy: %s" % (stream_port, busy)) from None
-        if body and body_input is not None and revision is not None and registered_on == revision:
+        if body_available:
             link = start_body(perceiver, out, detector, body_input)
         if asks is not None:
             try:

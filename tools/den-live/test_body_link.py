@@ -239,6 +239,16 @@ class StreamTests(unittest.TestCase):
         self.addCleanup(self.stream.close)
         self.base = f"http://127.0.0.1:{self.stream.port}{BASE}den/"
 
+    def test_unconfigured_body_route_does_not_disable_people(self):
+        self.stream.body_available = False
+        self.stream.publish({"seq": 5, "tracks": []})
+        with self.assertRaises(urllib.error.HTTPError) as refusal:
+            urllib.request.urlopen(self.base + "body", timeout=3)
+        self.assertEqual(refusal.exception.code, 503)
+        refusal.exception.close()
+        with urllib.request.urlopen(self.base + "stream", timeout=3) as response:
+            self.assertEqual(read_event(response), ("people", {"seq": 5, "tracks": []}))
+
     def test_capture_deadline_and_clear_replay_with_independent_markers(self):
         self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
         self.assertTrue(self.stream.publish_body(SCOPE, frame={**FRAME, "head": "must never be forwarded"}, capture_mono=99.5))

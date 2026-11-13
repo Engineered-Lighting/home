@@ -48,9 +48,10 @@ class _Client:
 
 class PeopleStream:
     def __init__(self, *, home="den", host="127.0.0.1", port=8111, max_clients=16, heartbeat_s=2.0, labels=None,
-                 clock=time.monotonic, wall_clock=time.time):
+                 clock=time.monotonic, wall_clock=time.time, body_available=True):
         self.home, self.host, self.max_clients, self.heartbeat_s = home, host, max_clients, heartbeat_s
         self.labels = labels   # a room_labels.Store, or None: then the labels paths answer 503
+        self.body_available = body_available
         self.latest, self.clients, self.lock, self.closing = None, set(), threading.Lock(), threading.Event()
         self.body_latest, self.body_clients = None, set()
         self.body_run, self.body_seq = None, 0
@@ -101,6 +102,8 @@ class PeopleStream:
                 if path == BASE + stream.home + "/stream":
                     return self.sse()
                 if path == BASE + stream.home + "/body":
+                    if not stream.body_available:
+                        return self.answer(503, {"ok": False, "error": "body_unavailable"})
                     return self.sse(body=True)
                 if path == BASE + stream.home + "/labels":
                     if stream.labels is None:

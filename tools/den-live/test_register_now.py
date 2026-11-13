@@ -96,7 +96,7 @@ class MethodFile(unittest.TestCase):
         self.assertEqual(rn.METHOD_FILE.name, 'REGISTER-LIVE-20261113.md')
 
     def test_no_tape_is_in_the_method_file(self):
-        """The tapes are typed at the console and kept in the private receipt only."""
+        """The tapes are typed at the console and kept privately, beside the take and in the receipt, never here."""
         self.assertNotIn('tape_m', rn.METHOD_FILE.read_text(encoding='utf-8').split('```den-live-v2')[1])
 
     def test_the_old_method_file_stays_for_old_receipts(self):
@@ -1008,6 +1008,37 @@ class AgainTake(unittest.TestCase):
         self.assertEqual((carried['carried_from'], carried['frame']['n']), ('20261112-101500-x1-m', 2))
 
 
+class KeptTapes(unittest.TestCase):
+    """The tapes beside their take, in a temp data root, with synthetic values."""
+    tapes = {'lens_height_m': 1.5, 'facing_wall_m': 4.0}
+
+    def setUp(self):
+        self.work = scratch('den-live-tapes-')
+        self.raw = bare_take(self.work / 'takes' / '20261113-090000')
+
+    def test_the_tapes_beside_the_take_come_back_with_no_receipt(self):
+        self.assertIsNone(rn.known_tapes(self.work, self.raw))
+        rn.keep_tapes(self.raw, self.tapes)
+        self.assertEqual(rn.tapes_path(self.raw), self.work / 'takes' / '20261113-090000.tapes.json')
+        self.assertEqual(rn.known_tapes(self.work, self.raw), self.tapes)
+        self.assertEqual(list(self.work.glob('register-now-*.json')), [])
+        self.assertEqual(rn.newest_raw(self.work, METHOD), self.raw, 'the tapes beside a take are no take')
+        self.assertEqual(rn.median_copies(self.raw), [])
+
+    def test_another_takes_tapes_or_a_tape_out_of_range_is_none(self):
+        other = bare_take(self.work / 'takes' / '20261113-100000')
+        rn.keep_tapes(self.raw, self.tapes)
+        shutil.copyfile(rn.tapes_path(self.raw), rn.tapes_path(other))
+        self.assertIsNone(rn.known_tapes(self.work, other), 'the file names its own take')
+        rn.keep_tapes(other, {'lens_height_m': 15.0, 'facing_wall_m': 4.0})   # centimetres typed as metres
+        self.assertIsNone(rn.known_tapes(self.work, other))
+
+    def test_a_take_from_before_they_were_kept_still_finds_them_in_a_receipt(self):
+        (self.work / 'register-now-1.json').write_text(json.dumps({'schema': rn.REGISTER_SCHEMA, 'raw_take': self.raw.name,
+                                                                   'tapes': self.tapes}), encoding='utf-8')
+        self.assertEqual(rn.known_tapes(self.work, self.raw), self.tapes)
+
+
 # ---- the scan page's harness ----------------------------------------------------------------------------------------
 
 class Page:
@@ -1576,6 +1607,32 @@ class OnRenders(unittest.TestCase):
         self.assertIn("register: interrupted. Paste the line again (with --again to keep the take) when you're ready.", text)
         take = json.loads(sorted((self.work() / 'takes').glob('*[0-9]/take.json'))[-1].read_text(encoding='utf-8'))
         self.assertEqual((take['complete'], take['method']['file']), (True, 'REGISTER-LIVE-20261113.md'))
+
+    def test_the_tapes_outlast_every_stop_that_writes_no_receipt(self):
+        """The scan tab closed without Save (scan_page's own Stops end the same way), den-register's refusal and Ctrl+C
+        write no receipt. The tapes were kept beside the take as soon as it was recorded, so no --again asks for them."""
+        def closed(work, take):
+            raise rn.Stop('the scan page closed without saving the picks')
+
+        def refused(work, take):
+            raise R.scene.Refused('take_unreadable', 'a frame it can not use')
+
+        def interrupted(work, take):
+            raise KeyboardInterrupt
+        code, text = self.paste(clicker=self.clicker(), picker=closed, shower=self.fail_if_called)
+        self.assertEqual((code, self.seen['asked']), (2, 2), text)
+        self.assertIn('register: stopped: the scan page closed without saving the picks', text)
+        for clicker, stopped in ((refused, 'register: stopped: den-register refused, take_unreadable'),
+                                 (interrupted, 'register: interrupted. Paste the line again (with --again to keep the take)')):
+            code, text = self.paste(again=True, clicker=clicker, picker=self.fail_if_called, shower=self.fail_if_called)
+            self.assertIn(stopped, text)
+            self.assertEqual(self.seen['asked'], 0, 'the tapes were kept beside the take')
+        self.assertEqual(list(self.work().glob('register-now-*.json')), [], 'none of these wrote a receipt')
+        code, text = self.paste(again=True, clicker=self.kept_clicks, picker=self.picker(), shower=lambda w, t: None)
+        self.assertEqual((code, self.seen['asked']), (0, 0), text)
+        self.assertNotIn('No tapes were kept', text)
+        self.assertIn('QUALIFIED: yes', self.summary(text))
+        self.assertAlmostEqual(self.receipt()['tapes']['facing_wall_m'], self.wall, places=5)
 
     def test_again_after_the_method_changed_makes_a_new_copy_and_carries_the_clicks(self):
         """A 3% long take with a method that takes no scale under 5%, then the committed one: --again measures the

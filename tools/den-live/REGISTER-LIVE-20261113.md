@@ -53,7 +53,8 @@ The camera service corrects depth itself (x0.889, release `pilot-20261111-depth`
 `depth_correction` record. With `require_source_correction` 1, a frame that doesn't say `applied` stops the paste.
 
 On top of that, the session measures what's left, with two fresh tapes typed at the console: the lens's height above
-the floor, and the lens to the facing wall, square to it. They're kept in the private receipt only and never printed.
+the floor, and the lens to the facing wall, square to it. They're kept privately only, beside the take as soon as it's
+recorded and in the receipt, and never printed.
 On the take's median depth, a RANSAC floor plane (the lowest strongly supported near-level plane, as v1's guard found
 it) gives the lens's height, and a RANSAC plane square to the floor and facing the camera, beyond
 `wall_search_fraction` of the wall tape, gives the wall's distance. Only planes within `wall_tape_band` (10%) of the

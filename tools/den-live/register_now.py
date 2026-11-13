@@ -11,8 +11,9 @@ method file, or one a v2 receipt names: a take stopped part way keeps nothing, a
 back. --packs <folder> uses those content packs, for the scan page and the held-out check, in place of the
 workstation's own.
 
-1. Two tapes, typed at the console: the lens's height above the floor, and the lens to the facing wall, square. They go
-   into the private receipt only. Nothing prints them.
+1. Two tapes, typed at the console: the lens's height above the floor, and the lens to the facing wall, square. They're
+   kept privately only: beside the take (<take>.tapes.json) as soon as it's recorded, and in the receipt. Nothing
+   prints them. --again reads them from beside the take, however the paste that typed them ended.
 2. A 20 s take of the empty den. It speaks the cues: leave the camera's view, recording, done. It reads the camera's
    /frame.npz about 5 times a second with den-take's own client and token file, keeps each bundle byte for byte with
    den-take's TakeWriter, and saves the camera's /calibration reply. Everything goes under
@@ -289,7 +290,8 @@ def console_ask(prompt):
 
 def ask_tapes(ask):
     """Your two tapes in metres, each asked up to three times. Never printed, never echoed back."""
-    say("Two tapes, in metres, as on 2026-11-11. They go into the private receipt only; nothing prints them.")
+    say("Two tapes, in metres, as on 2026-11-11. They're kept privately, beside the take and in the receipt; nothing "
+        "prints them.")
     tapes = {}
     for key, words, low, high in TAPES:
         for _ in range(3):
@@ -306,17 +308,41 @@ def ask_tapes(ask):
     return tapes
 
 
+def tapes_path(raw):
+    """Where a take's tapes are kept: beside the take, in the private data root."""
+    return raw.parent / (raw.name + ".tapes.json")
+
+
+def keep_tapes(raw, tapes):
+    """Keep the tapes beside their take as soon as it's recorded, so --again has them however the paste ends: a scan
+    tab closed without Save, Ctrl+C and den-register's refusals write no receipt."""
+    write_json(tapes_path(raw), {"take": raw.name, "tapes": tapes})
+
+
+def tapes_of(tapes):
+    """The two tapes from a kept record, or None unless both are metres in range."""
+    if type(tapes) is dict and all(type(tapes.get(key)) in (int, float) and low <= tapes[key] <= high
+                                   for key, _, low, high in TAPES):
+        return {key: tapes[key] for key, _, _, _ in TAPES}
+    return None
+
+
 def known_tapes(work, raw):
-    """The tapes an earlier paste typed for this take, from its receipt, or None."""
+    """The tapes typed for this take: kept beside it, else (a take from before they were) from an earlier paste's
+    receipt. None when neither has them."""
+    try:
+        kept = json.loads(tapes_path(raw).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        kept = None
+    if type(kept) is dict and kept.get("take") == raw.name and tapes_of(kept.get("tapes")):
+        return tapes_of(kept["tapes"])
     for path in sorted(work.glob("register-now-*.json"), key=receipt_number, reverse=True):
         try:
             receipt = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        tapes = receipt.get("tapes")
-        if receipt.get("raw_take") == raw.name and type(tapes) is dict and all(
-                type(tapes.get(key)) in (int, float) and low <= tapes[key] <= high for key, _, low, high in TAPES):
-            return {key: tapes[key] for key, _, _, _ in TAPES}
+        if receipt.get("raw_take") == raw.name and tapes_of(receipt.get("tapes")):
+            return tapes_of(receipt["tapes"])
     return None
 
 
@@ -1384,6 +1410,7 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
         if tapes is None:
             say("No tapes were kept for the take %s." % raw.name)
             tapes = ask_tapes(ask)
+            keep_tapes(raw, tapes)
         say("Using the take %s again, with its tapes." % raw.name)
     else:
         camera()   # the token first: a missing one stops before any question
@@ -1391,6 +1418,7 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
         raw = work / "takes" / time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
         say("Frames go to %s" % raw)
         frames = record(R, camera(), raw, timing, speak, wait, method=method)
+        keep_tapes(raw, tapes)   # now, however this paste ends: --again reads them from here
         progress["take"] = raw.name
         shutil.copyfile(raw / "camera-calibration.json", work / R.register.CAMERA_CALIBRATION)
         say("Kept %d frames." % frames)

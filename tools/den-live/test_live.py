@@ -516,6 +516,11 @@ class Live(unittest.TestCase):
                         if raw.startswith(b'event: people'):
                             seen['sse'] = True
                             break
+                with self.assertRaises(urllib.error.HTTPError) as refused:
+                    urllib.request.urlopen(f'http://127.0.0.1:{stream_port}/api/den-live/v1/homes/den/body', timeout=5)
+                with refused.exception as response:
+                    self.assertEqual(response.code, 503)
+                    self.assertEqual(json.load(response)['error'], 'body_unavailable')
             elapsed = time.monotonic() - started
             if elapsed > 60 or (elapsed > 40 and 'url' not in seen):
                 return True
@@ -545,9 +550,9 @@ class Live(unittest.TestCase):
         # No coordinate is printed: every line is one of the shapes run_local prints, whose only numbers are counts, rates
         # and times. The control: a line holding a position would match none of them.
         shapes = (r'^Starting the detector', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
-                  r'^camera ok \| [\d.-]+ frames a second \| \d+ people \| [\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames',
-                  r'^The measured body output is awaiting night-depth and head-exclusion qualification\.$')
-        self.assertEqual(result['body']['why'], 'measured body output is awaiting qualification')
+                  r'^camera ok(?:: camera clock moved back)? \| [\d.-]+ frames a second \| \d+ people \| '
+                  r'[\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames(?:, \d+ out of order)?$')
+        self.assertIsNone(result['body'])
         known = lambda line: any(re.search(shape, line) for shape in shapes)
         self.assertTrue(all(known(line) for line in text.splitlines() if line.strip()), text)
         self.assertFalse(known('camera ok | 4.0 frames a second | 1 people at [0.01, 0.04] | 0.25 s behind'), 'the control')

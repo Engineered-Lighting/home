@@ -440,7 +440,7 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 4. **The check:** paste this on this PC, then sit, read, use your phone and leave, as it speaks the cues:
 
    ```powershell
-   python -B C:\claude\home\.claude\worktrees\zealous-faraday-76b9d1\tools\den-live\ask_check.py --home https://<your Home address>
+   python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\ask_check.py --home https://<your Home address>
    ```
 
    It prints, for example:

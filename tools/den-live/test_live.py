@@ -433,7 +433,7 @@ class Perceiving(unittest.TestCase):
         placed on another scan revision put nothing there."""
         import room_labels
         x, y = truth(READING)
-        sofa = {'id': 'l-sofa-1', 'name': 'sofa', 'kind': 'seat', 'box': {'centre_m': [x, y, 0.42], 'size_m': [2.0, 0.9, 0.85], 'yaw_deg': 0},
+        sofa = {'id': 'l-sofa-1', 'name': 'sofa', 'kind': 'seat', 'box': {'centre_m': [x, y, 0.4], 'size_m': [1.6, 0.8, 0.8], 'yaw_deg': 0},
                 'on_wall': False, 'made_by': 'owner', 'status': 'confirmed', 'updated_at': None}
         for revision, near in ((None, 'on the sofa'), ('another-scan', None)):
             with self.subTest(content_revision=revision):

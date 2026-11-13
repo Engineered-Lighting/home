@@ -18,7 +18,7 @@ import room_labels as rl  # noqa: E402
 import stream as people_stream  # noqa: E402
 
 
-def label(name="desk", kind="table", centre=(1.0, 2.0, 0.375), size=(1.4, 0.7, 0.75), yaw=0.0, **over):
+def label(name="desk", kind="table", centre=(1.0, 2.0, 0.4), size=(1.5, 0.8, 0.8), yaw=0.0, **over):
     slug = "".join(c if c.isalnum() else "-" for c in name.lower()).strip("-")
     return {"id": over.pop("id", "l-%s-1" % slug), "name": name, "kind": kind,
             "box": {"centre_m": list(centre), "size_m": list(size), "yaw_deg": yaw},
@@ -30,17 +30,18 @@ def doc(labels=None, revision=0, content_revision="rev-a"):
     return {**rl.empty(content_revision), "revision": revision, "labels": [label()] if labels is None else labels}
 
 
-# A small den: a desk along x = 0.05..0.75 (front +x), its chair, a 3D printer behind the desk's end, a bookshelf, a
-# sofa against the far wall, a painting above it and a reading corner by the window.
+# A small synthetic den, 5 x 4 m in round numbers (no real room's): a desk along x = 0.1..0.9 (front +x), its chair, a
+# 3D printer behind the desk's end, a bookshelf, a sofa against the far wall, a painting above it and a reading corner
+# by the window.
 DEN = [
-    label("desk", "table", (0.4, 1.4, 0.375), (1.4, 0.7, 0.75), 270),
-    label("desk chair", "seat", (1.15, 1.4, 0.5), (0.55, 0.6, 1.0), 270),
-    label("3D printer", "machine", (0.3, 2.65, 0.85), (0.46, 0.46, 0.5), 270),
-    label("bookshelf", "storage", (0.75, 3.8, 0.9), (0.9, 0.35, 1.8), 180),
-    label("sofa", "seat", (2.6, 3.45, 0.425), (2.0, 0.9, 0.85), 180),
-    label("blue painting", "picture", (2.6, 3.955, 1.55), (1.0, 0.03, 0.7), 180, on_wall=True),
-    label("window", "opening", (4.25, 3.975, 1.45), (1.2, 0.05, 1.3), 180, on_wall=True),
-    label("reading corner", "area", (4.2, 2.5, 0.01), (1.4, 1.4, 0.02), 0),
+    label("desk", "table", (0.5, 1.5, 0.4), (1.5, 0.8, 0.8), 270),
+    label("desk chair", "seat", (1.3, 1.5, 0.5), (0.6, 0.6, 1.0), 270),
+    label("3D printer", "machine", (0.5, 3.0, 0.9), (0.5, 0.5, 0.5), 270),
+    label("bookshelf", "storage", (1.0, 3.8, 1.0), (1.0, 0.4, 2.0), 180),
+    label("sofa", "seat", (3.0, 3.5, 0.4), (1.6, 0.8, 0.8), 180),
+    label("blue painting", "picture", (3.0, 3.98, 1.5), (1.0, 0.04, 0.6), 180, on_wall=True),
+    label("window", "opening", (4.5, 3.98, 1.5), (1.0, 0.04, 1.2), 180, on_wall=True),
+    label("reading corner", "area", (4.5, 2.5, 0.01), (1.0, 1.0, 0.02), 0),
 ]
 
 
@@ -83,8 +84,8 @@ class Validate(unittest.TestCase):
         self.assertLess(len(json.dumps(long_revision)), rl.MAX_BYTES)   # 100 ordinary labels fit
         bloated = copy.deepcopy(long_revision)
         for item in bloated["labels"]:
-            item["box"]["centre_m"] = [1.0000000000001, 2.0000000000001, 0.3750000000001]
-            item["box"]["size_m"] = [1.4000000000001, 0.7000000000001, 0.7500000000001]
+            item["box"]["centre_m"] = [1.0000000000001, 2.0000000000001, 0.4000000000001]
+            item["box"]["size_m"] = [1.5000000000001, 0.8000000000001, 0.8000000000001]
         self.assertIn(rl.validate(bloated)[1], (None, "too_large"))
 
 
@@ -134,20 +135,20 @@ class StoreTests(unittest.TestCase):
 class Line(unittest.TestCase):
     def test_the_phrase_from_where_a_person_is(self):
         cases = [
-            ((1.15, 1.4), "on the desk chair, at the desk"),
-            ((0.95, 2.05), "at the desk, beside the desk chair and the 3D printer"),
-            ((2.6, 3.3), "on the sofa, beside the blue painting"),
-            ((4.2, 2.5), "in the reading corner, beside the sofa"),
-            ((2.5, 1.0), None),
+            ((1.3, 1.5), "on the desk chair, at the desk"),
+            ((1.0, 2.2), "at the desk, beside the desk chair and the 3D printer"),
+            ((3.0, 3.4), "on the sofa, beside the blue painting"),
+            ((4.5, 2.5), "in the reading corner, beside the sofa"),
+            ((3.0, 1.0), None),
         ]
         for xy, expected in cases:
             with self.subTest(xy=xy):
                 self.assertEqual(rl.near_phrase(DEN, xy), expected)
 
     def test_suggested_labels_and_openings_are_never_named(self):
-        den = [label("desk", "table", (0.4, 1.4, 0.375), (1.4, 0.7, 0.75), 270, status="suggested"),
-               label("door", "opening", (1.2, 1.0, 1.0), (0.9, 0.05, 2.0), 0)]
-        self.assertIsNone(rl.near_phrase(den, (1.15, 1.4)))
+        den = [label("desk", "table", (0.5, 1.5, 0.4), (1.5, 0.8, 0.8), 270, status="suggested"),
+               label("door", "opening", (1.5, 1.0, 1.0), (1.0, 0.04, 2.0), 0)]
+        self.assertIsNone(rl.near_phrase(den, (1.3, 1.5)))
 
     def test_the_article_rule_and_the_160_character_cut(self):
         mine = [label("My workbench", "table", (0, 0, 0.45), (1.2, 0.6, 0.9)), label("a plant", "other", (0, 0.9, 0.45), (0.4, 0.4, 0.9), id="l-plant-1")]
@@ -160,23 +161,23 @@ class Line(unittest.TestCase):
 
     def test_line_for_the_ask(self):
         den = doc(DEN)
-        self.assertEqual(rl.line_for(den, {"xy_m": [0.95, 2.05]}, scan_revision="rev-a"),
+        self.assertEqual(rl.line_for(den, {"xy_m": [1.0, 2.2]}, scan_revision="rev-a"),
                          "Seated at the desk, beside the desk chair and the 3D printer.")
-        self.assertIsNone(rl.line_for(den, {"xy_m": [0.95, 2.05]}, scan_revision="rev-b"))   # placed on another scan
-        self.assertIsNone(rl.line_for(den, {"xy_m": [2.5, 1.0]}))                            # nothing near
+        self.assertIsNone(rl.line_for(den, {"xy_m": [1.0, 2.2]}, scan_revision="rev-b"))   # placed on another scan
+        self.assertIsNone(rl.line_for(den, {"xy_m": [3.0, 1.0]}))                            # nothing near
         self.assertIsNone(rl.line_for(den, {"xy_m": [float("nan"), 1.0]}))
         self.assertIsNone(rl.line_for(None, {"xy_m": [1, 1]}))
-        self.assertIsNone(rl.line_for({**den, "schema": "x"}, {"xy_m": [0.95, 2.05]}))
+        self.assertIsNone(rl.line_for({**den, "schema": "x"}, {"xy_m": [1.0, 2.2]}))
 
     def test_the_asks_hook_reads_the_store_at_each_ask(self):
         folder = Path(tempfile.mkdtemp(prefix="den-labels-hook-"))
         try:
             store = rl.Store(folder, say=lambda *_: None)
             hook = rl.near_line(store, "rev-a")
-            self.assertEqual(hook({"xy_m": [0.95, 2.05]}), (None, 0), "no labels yet")
+            self.assertEqual(hook({"xy_m": [1.0, 2.2]}), (None, 0), "no labels yet")
             self.assertEqual(store.put(doc(DEN))[0], 200)
-            self.assertEqual(hook({"xy_m": [0.95, 2.05]}), ("Seated at the desk, beside the desk chair and the 3D printer.", 1))
-            self.assertEqual(rl.near_line(store, "rev-b")({"xy_m": [0.95, 2.05]}), (None, 1), "labels on another scan")
+            self.assertEqual(hook({"xy_m": [1.0, 2.2]}), ("Seated at the desk, beside the desk chair and the 3D printer.", 1))
+            self.assertEqual(rl.near_line(store, "rev-b")({"xy_m": [1.0, 2.2]}), (None, 1), "labels on another scan")
         finally:
             shutil.rmtree(folder, ignore_errors=True)
 
@@ -186,9 +187,9 @@ class Line(unittest.TestCase):
         self.assertAlmostEqual(fx, 1.0)
         self.assertAlmostEqual(fy, 0.0, places=9)
         xs = sorted(round(x, 3) for x, _y in rl.footprint(desk))
-        self.assertEqual((xs[0], xs[-1]), (0.05, 0.75))
-        self.assertEqual(rl.foot_distance(desk, (0.4, 1.4)), 0.0)
-        self.assertAlmostEqual(rl.foot_distance(desk, (1.15, 1.4)), 0.4)
+        self.assertEqual((xs[0], xs[-1]), (0.1, 0.9))
+        self.assertEqual(rl.foot_distance(desk, (0.5, 1.5)), 0.0)
+        self.assertAlmostEqual(rl.foot_distance(desk, (1.3, 1.5)), 0.4)
 
 
 class Routes(unittest.TestCase):

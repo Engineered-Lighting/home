@@ -144,14 +144,17 @@ def stop_page(proc):
     proc.stdout.close()
 
 
-def status_line(perceiver, latest):
-    """One line of words and counts from the newest event and the loop's own counters: never a position."""
+def status_line(perceiver, latest, logs=()):
+    """One line of words and counts from the newest event and the loop's own counters: never a position. logs: the day
+    files' writers (person_state.Log, ask.AskLog); lines they skipped at the day's cap are counted at the end."""
     event = latest or {}
     health, camera, c = event.get("health") or {}, event.get("camera") or {}, perceiver.counts
     lag = health.get("lag_s_median")
-    problems = ", ".join("%d %s" % (c[key], words) for key, words in (
+    skipped = sum(log.skipped for log in logs)
+    problems = ", ".join([*("%d %s" % (c[key], words) for key, words in (
         ("refused_depth", "refused for depth"), ("detector_errors", "detector errors"), ("unreadable", "unreadable"),
-        ("out_of_order", "out of order"), ("expired", "too late")) if c[key])
+        ("out_of_order", "out of order"), ("expired", "too late")) if c[key]),
+        *(["%d lines not kept: the day's files are at their cap" % skipped] if skipped else [])])
     qwen = health.get("qwen")
     asks = "" if not qwen else " | Qwen %s%s, %d asks a minute" % (qwen["state"], (": " + qwen["why"]) if qwen.get("why") else "",
                                                                  qwen.get("asks_per_min") or 0)
@@ -446,8 +449,10 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
                 lighting[0].site = site
                 lighting[0].connect(out.publish_spot)
                 out.routes.update(lighting[0].routes())
-        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None,
-                                     None if person_log is None else person_state.Log(person_log))
+        person = None if person_log is None else person_state.Log(person_log)
+        # The day files' writers: lines skipped at the day's cap go on the status line.
+        logs = [log for log in (person, getattr(asker[0], "log", None) if asker else None) if log is not None]
+        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None, person)
         loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observer)
         out.start()
         src.start()
@@ -461,11 +466,11 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
             if not loop.is_alive():
                 raise Stop("the loop stopped")
             if time.monotonic() >= next_line:
-                say(status_line(perceiver, out.latest))
+                say(status_line(perceiver, out.latest, logs))
                 next_line += status_every_s
             time.sleep(0.2)
         return {"counts": dict(perceiver.counts), "sessions": perceiver.sessions, "latest": out.latest, "drops": mailbox.dropped,
-                "received": mailbox.received, "status": status_line(perceiver, out.latest),
+                "received": mailbox.received, "status": status_line(perceiver, out.latest, logs),
                 "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped},
                 "asks": None if asker is None else dict(asker[0].counts),
                 "coordinator": None if lighting is None else dict(lighting[0].counts)}

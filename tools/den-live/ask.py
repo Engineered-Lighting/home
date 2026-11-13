@@ -12,7 +12,8 @@ process (stills.py), in den_live_scene's den-live-scene-2 body. The context is t
 answer when it's under 10 s old, and near_person: the labeling plan's line, only while its switch is on and exactly one
 person is tracked.
 What it keeps: one words-only line per ask in <state>/days/<UTC date>/asks.jsonl (no image, no reply text), for
-RETENTION_DAYS. Every time the chain has is in it: each still's capture and arrival, decided, sent and answered.
+RETENTION_DAYS, under the day's DAY_CAP_BYTES with person-state.jsonl. Every time the chain has is in it: each still's
+capture and arrival, decided, sent and answered.
 observe() updates the current TrackingSnapshot and pop_reply() returns a bound InferenceReply after the snapshot.
 The people stream shows Qwen health and the eligible track's current activity.
 """
@@ -42,6 +43,8 @@ POST_TIMEOUT_S = 20.0
 POOL_S = 5.0              # frames the pool keeps; the detector's process keeps about as many (stills.RING)
 UNAVAILABLE_AFTER = 3     # failed asks in a row before the health line says Qwen isn't answering
 RETENTION_DAYS = 14
+DAY_CAP_BYTES = 300 * 1024 * 1024   # a UTC day's DAY_FILES together; a line past it is skipped and counted
+DAY_FILES = ("asks.jsonl", "person-state.jsonl")   # this log's and person_state.py's, in one day folder
 BACKOFF_STALE_S = 600.0   # the monitor writes its status each minute: older than this, it isn't running
 
 
@@ -169,25 +172,44 @@ def local_label(wall, zone=None):
 
 class AskLog:
     """One line per ask, words and numbers only, in <state>/days/<UTC date>/asks.jsonl; days past RETENTION_DAYS go.
-    name: another day file beside it, kept the same way (person_state.py's person-state.jsonl)."""
+    name: another day file beside it, kept the same way (person_state.py's person-state.jsonl).
+    A day's DAY_FILES together stop at cap bytes: a line that would pass it isn't written, and skipped counts it (the
+    status line says so). Both logs measure the same folder, so the cap holds across them."""
 
-    def __init__(self, state, name="asks.jsonl"):
+    def __init__(self, state, name="asks.jsonl", cap=DAY_CAP_BYTES):
         self.days, self.today, self.name = Path(state) / "days", None, name
+        self.cap, self.skipped = cap, 0
         self.lock = threading.Lock()
 
+    @staticmethod
+    def day_bytes(folder):
+        total = 0
+        for name in DAY_FILES:
+            try:
+                total += (folder / name).stat().st_size
+            except FileNotFoundError:
+                pass
+        return total
+
     def write(self, line, wall):
+        """True once written; False when the day's files are at the cap (counted in skipped)."""
+        text = json.dumps(line, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"   # ASCII: chars are bytes
         day = time.strftime("%Y-%m-%d", time.gmtime(wall))
         with self.lock:
             folder = self.days / day
             folder.mkdir(parents=True, exist_ok=True)
+            if self.day_bytes(folder) + len(text) > self.cap:
+                self.skipped += 1
+                return False
             with open(folder / self.name, "a", encoding="utf-8", newline="\n") as out:
-                out.write(json.dumps(line, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n")
+                out.write(text)
             if day != self.today:
                 self.today = day
                 cutoff = time.strftime("%Y-%m-%d", time.gmtime(wall - RETENTION_DAYS * 86400))
                 for old in self.days.iterdir():
                     if old.is_dir() and len(old.name) == 10 and old.name < cutoff:
                         shutil.rmtree(old, ignore_errors=True)
+        return True
 
 
 # ---- the ask -------------------------------------------------------------------------------------------------------

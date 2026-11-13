@@ -239,7 +239,7 @@ The owner qualification uses one short tailnet phone run in room light and one w
 - **The association:** each track's `association_revision` moves only once its safe or unsafe state has held for two frames in a row. One unsafe frame still reads ambiguous, so the ask skips it.
 - **The binding:** each marker carries `service_run_id`, `camera_epoch` and `association_revision` beside its `track_id`: the person binding every consumer matches.
 - **Seated:** worked out once per track per frame (`seated.Published`, the coordinator's `body.seated()` rule), with the capture time its 2 s hold began (`since_mono`) and whether hips or the head decided it. It starts again when the association revision moves. The ask and the lighting preview read it and never work it out themselves.
-- **Person state:** the LA service logs each snapshot as `den-person-state-1` beside the ask's log, in `days/<UTC date>/person-state.jsonl`, numbers only (no image, name or words: the snapshot's reason and the near phrase stay out), with one mono-and-wall anchor per run per day file. It's kept 14 days like the ask's log. `run_local.py` keeps nothing.
+- **Person state:** the LA service logs each snapshot as `den-person-state-1` beside the ask's log, in `days/<UTC date>/person-state.jsonl`, numbers only (no image, name or words: the snapshot's reason and the near phrase stay out), with one mono-and-wall anchor per run per day file. It's kept 14 days like the ask's log, and the two stop at 300 MB a day together ("What's kept on LA", step 4). `run_local.py` keeps nothing.
 - **The scan revision:** it must be the one step 2 picked on. If the active scan changed since, it stops and asks you to register again.
 - **Too dark:** the picture's mean brightness under 40 (of 255) for 3 s gives "too dark" until step 6's infrared.
 
@@ -338,7 +338,13 @@ ssh -t hav-ubuntu "sudo systemctl disable --now den-live"
 - It refuses to start, with one sentence in its journal, when an input is missing or doesn't match. Then systemd doesn't restart it, because a restart can't mend that. That's a missing credential, a receipt that didn't register the room model's camera or didn't qualify it, another scan revision than step 2 picked on, or a camera that no longer fits the registration.
 - Every 60 s it writes one line of words and counts to its journal, the same line as step 3's: `ssh hav-ubuntu "journalctl -u den-live -n 5 -o cat"`.
 
-**What's kept on LA:** what step 3 keeps, in its state folder, `/var/lib/den-live/`: the tracker's method copy and the detector's log and caches. The log is rolled once past 10 MB. No frames and no tracks. The release, the venv and the models are under `/opt/den-live/`, and the settings and private inputs under `/etc/den-live/`.
+**What's kept on LA:** in its state folder, `/var/lib/den-live/`:
+- the tracker's method copy and the detector's log and caches. The log is rolled once past 10 MB.
+- `days/<UTC date>/asks.jsonl`, one line per Qwen ask, and `days/<UTC date>/person-state.jsonl`, one `den-person-state-1` line per snapshot: each track's floor position, its supported joints and its seated state. Both are numbers only, with no image, name or words, and kept 14 days. A person-state line is about 0.6 KB with nobody in view and 1.7 KB with one person, at about 5 a second: roughly 0.1-0.75 GB a day.
+- A day's two files together stop at 300 MB. Past it, that day's lines are skipped and counted, and the status line ends `, N lines not kept: the day's files are at their cap`. A busy day stops early; the next UTC day starts afresh.
+- With the lighting preview on, its fixture-call trace, `days/<UTC date>/coordinator-fixture_calls.jsonl`, sits beside them, outside the cap.
+
+No frames and no stills. The release, the venv and the models are under `/opt/den-live/`, and the settings and private inputs under `/etc/den-live/`.
 
 ### 3. Home
 
@@ -506,7 +512,7 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 
   `test_ask.py` holds the rest to the Lab's pinned `qwen_scene.py`.
 
-**What it keeps.** One line per ask in `days/<UTC date>/asks.jsonl` in the service's state folder, kept 14 days. It holds:
+**What it keeps.** One line per ask in `days/<UTC date>/asks.jsonl` in the service's state folder, kept 14 days, under the day's 300 MB cap with `person-state.jsonl`. It holds:
 - words and numbers only: no image and no reply text;
 - each still's capture and arrival times;
 - when the ask was decided, sent and answered;

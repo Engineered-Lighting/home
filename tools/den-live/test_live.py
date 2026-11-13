@@ -253,6 +253,43 @@ class PersonStateLog(unittest.TestCase):
         self.assertNotIn('too dark', text)
         self.assertNotIn('camera-session', text)
 
+    def test_a_days_files_stop_at_the_cap_and_the_status_line_says_so(self):
+        """asks.jsonl and person-state.jsonl together stop at the day's cap: a line that would pass it is skipped and
+        counted, by either writer, and the status line says so. The next UTC day starts afresh. The real cap is 300 MB."""
+        import ask
+        import person_state
+        self.assertEqual(ask.DAY_CAP_BYTES, 300 * 1024 * 1024)
+        state, wall = scratch('den-live-person-state-'), [1_800_000_000.0]
+        cap = 4000
+        log = person_state.Log(state, clock=lambda: 500.0, wall=lambda: wall[0], cap=cap)
+        asks = ask.AskLog(state, cap=cap)
+        day = state / 'days' / '2027-01-15'
+        self.assertTrue(asks.write({'ask': 1}, wall[0]))
+        seq = 0
+        while not log.skipped:
+            seq += 1
+            log.write(self.snapshot(seq=seq))
+        files = lambda folder: sum((folder / name).stat().st_size for name in ask.DAY_FILES)
+        self.assertLessEqual(files(day), cap)
+        self.assertGreater(files(day), cap - 1000, 'it filled the day, a line short at most')
+        kept = (day / 'person-state.jsonl').read_text(encoding='utf-8').splitlines()
+        self.assertEqual(len(kept), seq, 'the anchor and every snapshot before the cap')
+        log.write(self.snapshot(seq=seq + 1))
+        self.assertFalse(asks.write({'ask': 2, 'pad': 'x' * 1000}, wall[0]), 'the ask log shares the cap')
+        self.assertEqual((log.skipped, asks.skipped), (2, 1))
+        self.assertLessEqual(files(day), cap)
+
+        class P:
+            counts = {'frames': 40, 'refused_depth': 0, 'detector_errors': 0, 'unreadable': 0, 'out_of_order': 0, 'expired': 0}
+        line = rl.status_line(P(), {'camera': {'status': 'ok'}, 'health': {}, 'tracks': []}, [log, asks])
+        self.assertTrue(line.endswith("| 40 frames, 3 lines not kept: the day's files are at their cap"), line)
+        self.assertNotIn('not kept', rl.status_line(P(), {'camera': {'status': 'ok'}}, [person_state.Log(scratch('x-'))]))
+        wall[0] += 86400   # the next UTC day: its own files, its own anchor
+        log.write(self.snapshot(seq=seq + 2))
+        lines = [json.loads(text) for text in (state / 'days' / '2027-01-16' / 'person-state.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(['anchor' in line for line in lines], [True, False])
+        self.assertEqual(log.skipped, 2)
+
     def test_a_log_that_cant_write_never_stops_the_loop(self):
         import person_state
         blocked = scratch('den-live-person-state-') / 'not-a-folder'

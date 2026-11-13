@@ -16,7 +16,7 @@ What runs, all on this PC, nothing installed anywhere:
 
 The loop itself is serve(), which step 4's LA service (run_service.py) runs too, without the page.
 
-It refuses to start without step 2's registration, the camera token, the detector's venv, or Node. Every 10 s it
+It refuses to start without step 2's qualified registration, the camera token, the detector's venv, or Node. Every 10 s it
 prints one line of words and counts: the camera, frames a second, people, how far behind, drops. Never a coordinate.
 Nothing is kept: no frames, no tracks. Only the tracker's method copy goes in <data root>\\private\\live\\.
 
@@ -48,6 +48,7 @@ import room_labels  # noqa: E402  the den's labels, kept and served beside the s
 import sofa_check as sc  # noqa: E402  the data root, the pinned archives, the venv, say
 import source  # noqa: E402
 import stream as people_stream  # noqa: E402
+from contracts import DEPTH_SCALE_RANGE, REGISTER_SCHEMA, take_scale  # noqa: E402  contract 1's receipt
 
 say, Stop = sc.say, sc.Stop
 ROOT = HERE.parents[1]
@@ -168,6 +169,41 @@ def revision_of(receipt, transform_id):
     return False, None
 
 
+def qualified_registration(receipt, transform_id):
+    """{scan_revision, depth_scale} from a step 2 receipt that registered transform_id and qualified it (contract 1,
+    den-live-register-now-2), or ValueError whose words say why not, for the caller's one-sentence refusal."""
+    receipt = receipt if isinstance(receipt, dict) else {}
+    if not revision_of(receipt, transform_id)[0]:
+        raise ValueError("step 2's receipt didn't register %s" % transform_id)
+    if receipt.get("schema") != REGISTER_SCHEMA:
+        raise ValueError("step 2's receipt for %s is from before registrations were qualified" % transform_id)
+    if receipt.get("qualified") is not True:
+        raise ValueError("step 2 registered %s but didn't qualify it" % transform_id)
+    revision, scale = receipt.get("scan_revision"), receipt.get("depth_scale")
+    if not isinstance(revision, str) or not revision:
+        raise ValueError("step 2's receipt for %s doesn't say which scan it was picked on" % transform_id)
+    if type(scale) not in (int, float) or not DEPTH_SCALE_RANGE[0] <= scale <= DEPTH_SCALE_RANGE[1]:
+        raise ValueError("step 2's receipt for %s has no depth scale den-live could apply" % transform_id)
+    if take_scale(receipt.get("take")) != scale:
+        raise ValueError("step 2's receipt for %s asks for depth x%g, but its take was made at x%g"
+                         % (transform_id, scale, take_scale(receipt.get("take"))))
+    if scale != 1.0:
+        raise ValueError("step 2's receipt for %s asks for depth x%g, and this den-live applies no depth scale"
+                         % (transform_id, scale))
+    return {"scan_revision": revision, "depth_scale": float(scale)}
+
+
+def receipt_registration(work, transform_id):
+    """What the newest step 2 receipt in work that registered transform_id says, once qualified; else a Refusal."""
+    path = registering_receipt(work, transform_id)
+    if path is None:
+        raise Refusal("no step 2 receipt registered %s: paste register_now.py again" % transform_id)
+    try:
+        return qualified_registration(json.loads(path.read_text(encoding="utf-8")), transform_id)
+    except (OSError, ValueError) as exc:
+        raise Refusal("%s: paste register_now.py again" % exc) from None
+
+
 def registering_receipt(work, transform_id):
     """The newest register-now-N.json receipt in work that registered transform_id, as a path, or None."""
     def number(path):
@@ -246,11 +282,8 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
     if take.inside_checkout(state) or take.in_onedrive(state):
         raise Stop("the data root is inside a git checkout or OneDrive")
 
-    def picked_on(transform_id):
-        revision = registered_revision(Path(room_model).parent, transform_id)
-        if revision is None:
-            say("Note: step 2's receipt doesn't say which scan revision the registration was picked on.")
-        return revision
+    def registration(transform_id):   # the receipt beside the room model: no receipt, or none qualified, refuses
+        return receipt_registration(Path(room_model).parent, transform_id)
 
     def open_live_page():
         proc, url = page(app, page_room, page_extra, page_port=page_port, stream_port=stream_port)
@@ -259,7 +292,7 @@ def run(*, root, camera_url, token_file, venv, app, packs, room_model, camera_id
         return lambda: stop_page(proc)
 
     return serve(trees=trees, take=take, camera=camera, room_model=room_model, camera_id=camera_id,
-                 floor=floor, packs=packs, site=None if floor is not None else den_site(), picked_on=picked_on, state=state,
+                 floor=floor, packs=packs, site=None if floor is not None else den_site(), registration=registration, state=state,
                  detector_argv=[str(venv), "-B", str(HERE / "detect_worker.py"), "--tools-root", str(trees["observe"]),
                                 "--state", str(root / "state" / "detector")],
                  stream_port=stream_port, busy="is another run_local.py still open?", until=until,
@@ -304,14 +337,16 @@ def start_body(perceiver, out, detector, body_input):
     return link
 
 
-def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, picked_on, state, detector_argv, stream_port,
+def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, registration, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
           labels=None, asks=None, coordinator=None, body_input=None, body_profile=None):
-    """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator."""
+    """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator.
+
+    registration(transform_id) is what step 2's qualified receipt says about the room model's registration,
+    {scan_revision, depth_scale}, or a Refusal: no receipt, or none qualified, starts nothing."""
     R = rn.den_register(trees["register"])
     m, live = rn.load_method(R)
     revision = None
-    registered_on = None
     if floor is None:
         bounds, revision = scan_floor(packs, site)
         say("Floor: your scan's walkable floor (pack %s), padded %g m on every side." % (revision, perceive.FLOOR_PAD_M))
@@ -320,7 +355,16 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
     state = Path(state)
     state.mkdir(parents=True, exist_ok=True)
     t = perceive.Tools(trees["observe"], trees["track"])
-    # The registration first: one it can't use stops here, before the detector's half minute.
+    # The registration first: one it can't use, or one step 2 didn't qualify, stops here, before the detector's half minute.
+    try:
+        transform_id = t.roommodel.current_transform_id(t.roommodel.load(room_model), camera_id)
+    except t.roommodel.RegistrationRefused as exc:
+        raise Refusal("the registration can't be used: %s" % exc) from None
+    registered = registration(transform_id)
+    registered_on = registered["scan_revision"]
+    if revision is not None and registered_on != revision:
+        raise Refusal("the camera was registered on scan revision %s, but the active scan is %s: register again with step 2"
+                      % (registered_on, revision))
     try:
         method_copy = perceive.track_method_copy(t, perceive.padded(bounds), state)
         perceiver = perceive.Perceiver(t, room_model_path=room_model, camera_id=camera_id, max_error_bound_m=m["gate_m"],
@@ -328,11 +372,6 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, pic
                                        require_source_correction=bool(live["require_source_correction"] if require_correction is None else require_correction))
     except perceive.Stop as exc:
         raise Refusal(str(exc)) from None
-    if revision is not None:
-        registered_on = picked_on(perceiver.camera.transform_id)
-        if registered_on is not None and registered_on != revision:
-            raise Refusal("the camera was registered on scan revision %s, but the active scan is %s: register again with step 2"
-                          % (registered_on, revision))
     perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits
     say("Registration %s; the camera's correction %s." % (perceiver.camera.transform_id,
                                                           "required" if perceiver.require_source_correction else "not required"))

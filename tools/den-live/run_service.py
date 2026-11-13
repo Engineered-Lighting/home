@@ -12,7 +12,8 @@ gateway's den-live route passes that stream through to Home.
 Its inputs, all from systemd:
 - $CREDENTIALS_DIRECTORY (LoadCredential: root-only files on LA that install_la.py copies from this PC's private
   folder): room-model.jsonl (step 2's registration), camera-token.txt (the camera's bearer token) and
-  register-receipt.json (the step 2 receipt that registered it, which says the scan revision its picks were made on).
+  register-receipt.json (the step 2 receipt that registered and qualified it, den-live-register-now-2, which says
+  the scan revision its picks were made on).
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
   its caches and TEMP. That's all it keeps, as run_local does: no frames, no tracks.
 - --config, the settings file install.sh writes (/etc/den-live/config.json): camera_url, content_packs (the gateway's
@@ -23,8 +24,8 @@ ha-token.txt: only while Frigate's den occupancy reads on and den-live sees some
 that's wrong, the ask is off and one journal line says why; the markers go on (README, "The Qwen ask").
 
 It refuses to start with one sentence and exit 3 when an input is missing or doesn't match, and systemd doesn't
-restart it (RestartPreventExitStatus=3): a missing credential, a receipt that didn't register the room model's camera,
-a scan revision other than the one step 2 picked on, or a registration the camera no longer fits. Any other stop exits
+restart it (RestartPreventExitStatus=3): a missing credential, a receipt that didn't register the room model's camera
+or didn't qualify it, a scan revision other than the one step 2 picked on, or a registration the camera no longer fits. Any other stop exits
 2, and systemd starts it again after 10 s. Every 60 s it prints one line of words and counts to the journal, never a
 coordinate.
 
@@ -529,14 +530,11 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     except take.Refused as exc:
         raise Refusal(str(exc)) from None
 
-    def picked_on(transform_id):
-        registered, revision = rl.revision_of(receipt, transform_id)
-        if not registered:
-            raise Refusal("step 2's receipt in the service's credentials didn't register %s, the room model's camera: paste "
-                          "install_la.py again" % transform_id)
-        if revision is None:
-            say("Note: step 2's receipt doesn't say which scan revision the registration was picked on.")
-        return revision
+    def registration(transform_id):   # the receipt credential: it must have registered the room model's camera, qualified
+        try:
+            return rl.qualified_registration(receipt, transform_id)
+        except ValueError as exc:
+            raise Refusal("%s: paste register_now.py, then install_la.py again" % exc) from None
 
     live = state / "live"
     live.mkdir(parents=True, exist_ok=True)
@@ -555,7 +553,7 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                    if lighting and lighting.get("preview") else None)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,
-                    floor=None, packs=config["content_packs"], site=config["site"], picked_on=picked_on, state=live,
+                    floor=None, packs=config["content_packs"], site=config["site"], registration=registration, state=live,
                     detector_argv=[config["venv_python"], "-B", str(HERE / "detect_worker.py"), "--tools-root",
                                    str(trees["observe"]), "--state", str(state / "detector"), "--models", config["models"]],
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,

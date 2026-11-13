@@ -72,7 +72,8 @@ class Fixture:
                       "transform_id": self.perceiver.camera.transform_id,
                       "scan_revision": REVISION, "min_valid_depth_fraction": 0.2,
                       "head": asdict(HeadProfile(0.13, 0.055, 0.35, 1.0, 0.006, 0.5, 0.085))}
-        self.receipt = {"source_correction": {"calibrations": [CALIBRATION], "factors": [0.889],
+        self.receipt = {"schema": "den-live-register-now-2", "qualified": True, "depth_scale": 1.0,
+                        "source_correction": {"calibrations": [CALIBRATION], "factors": [0.889],
                                              "frames": 3, "applied": 3},
                         "fit": {"result": "registered", "transform_id": self.block["transform_id"]},
                         "scan_revision": REVISION}
@@ -209,7 +210,7 @@ class RgbBodyTests(unittest.TestCase):
         arguments = serve.call_args.kwargs
         self.assertIsNone(arguments["body_input"])
         self.assertEqual(arguments["body_profile"], f.provider.profile)
-        self.assertEqual(arguments["picked_on"](f.block["transform_id"]), REVISION)
+        self.assertEqual(arguments["registration"](f.block["transform_id"]), {"scan_revision": REVISION, "depth_scale": 1.0})
 
     def test_profile_refuses_a_different_registration(self):
         f = self.f

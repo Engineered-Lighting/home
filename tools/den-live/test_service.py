@@ -248,9 +248,12 @@ def make_packs(polygon, revision='rev-1'):
     return packs
 
 
-def receipt(transform_id=TRANSFORM, revision='rev-1', result='registered'):
-    return {'schema': 'den-live-register-now-1', 'fit': {'result': result, 'transform_id': transform_id, 'reasons': []},
-            'scan_revision': revision}
+def receipt(transform_id=TRANSFORM, revision='rev-1', result='registered', **changes):
+    """A step 2 receipt as register_now.py writes one (den-live-register-now-2), qualified unless changes say otherwise."""
+    return {'schema': 'den-live-register-now-2', 'fit': {'result': result, 'transform_id': transform_id, 'reasons': []},
+            'scan_revision': revision, 'take': '20261113-200000-x1-m', 'depth_scale': 1.0, 'qualified': True,
+            'sofa_check_errors_m': {'c1': 0.02, 'c2': 0.03, 'c3': 0.02},
+            'held_out': {'take': '20261113-201000-held', 'within_noise': 0.93, 'worst_bin_m': -0.03, 'ok': True}, **changes}
 
 
 class Service:
@@ -312,7 +315,10 @@ class ServiceRefusals(unittest.TestCase):
     @unittest.skipUnless(HAVE_SET and sc.VENV_PY.is_file() and HAVE_BINARIES, 'needs the venv, its models and a prepared den-sim set')
     def test_a_receipt_that_didnt_register_the_camera_and_another_scan_revision(self):
         for the_receipt, words in ((receipt('den-virtual@2026-01-01.9'), "didn't register den-virtual@2026-11-09.1"),
-                                   (receipt(revision='rev-0'), 'registered on scan revision rev-0, but the active scan is rev-1')):
+                                   (receipt(revision='rev-0'), 'registered on scan revision rev-0, but the active scan is rev-1'),
+                                   (receipt(qualified=False), "step 2 registered den-virtual@2026-11-09.1 but didn't qualify it: "
+                                                              "paste register_now.py, then install_la.py again"),
+                                   (receipt(schema='den-live-register-now-1'), 'from before registrations were qualified')):
             service = Service('http://127.0.0.1:9', 'x' * 32, the_receipt=the_receipt)
             code, text = self.main(service, camera_id='den-virtual')
             self.assertEqual(code, rs.EXIT_REFUSED, text)
@@ -894,6 +900,26 @@ class InstallLA(unittest.TestCase):
         self.assertIn("step 2 hasn't registered the camera yet", text)
         self.assertEqual(transport.calls, [], 'no ssh before step 2')
         self.assertIn('ssh -t hav-ubuntu "sudo systemctl disable --now den-live"', text)
+
+    @unittest.skipUnless(HAVE_SET, 'needs a prepared den-sim set')
+    def test_it_refuses_a_registration_step_2_didnt_qualify(self):
+        for the_receipt, words in ((receipt(qualified=False), "step 2 registered %s but didn't qualify it" % TRANSFORM),
+                                   (receipt(schema='den-live-register-now-1'), "step 2's receipt for %s is from before "
+                                                                               'registrations were qualified' % TRANSFORM),
+                                   (None, 'no step 2 receipt registered %s' % TRANSFORM)):
+            root = scratch('den-live-root-')
+            work = root / 'private' / 'register'
+            work.mkdir(parents=True)
+            shutil.copyfile(FIT / 'room-model.jsonl', work / 'room-model.jsonl')
+            if the_receipt is not None:
+                (work / 'register-now-1.json').write_text(json.dumps(the_receipt), encoding='utf-8')
+            transport = FakeLA()
+            code, text = quiet(install_la.main, [], root=root, console=lambda: True, transport=transport,
+                               token_file=root / 't.txt', camera_id='den-virtual', check_branch=ON_DEN_LIVE)
+            self.assertEqual(code, 2)
+            self.assertIn('install: stopped: %s: paste register_now.py again' % words, text)
+            self.assertEqual(transport.calls, [], 'no ssh')
+            self.assertFalse((root / 'private' / 'release').exists(), 'nothing built')
 
     def test_your_labels_go_to_la_once(self):
         """The labels plan's step 3: install_la brings this PC's labels when they read, the drop-in loads them as a

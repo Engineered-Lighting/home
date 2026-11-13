@@ -5,8 +5,8 @@
 
 0. It refuses unless this checkout is on claude/den-live with no uncommitted change to a tracked file, the only branch
    LA installs from, and prints the branch and commit it found.
-1. It refuses until step 2 has registered the camera: the room model in <data root>\\private\\register\\ and the step 2
-   receipt that registered its camera.
+1. It refuses until step 2 has registered and qualified the camera: the room model in
+   <data root>\\private\\register\\ and the step 2 receipt that registered its camera and says qualified: true.
 2. It builds the release (release.py): this branch at HEAD, the pinned trees, the two models and rtmlib's wheel,
    scanned for private strings.
 3. It copies to LA, into /dev/shm/den-live-install/ (memory, never disk, the folder yours alone): the tarball,
@@ -51,7 +51,8 @@ INSTALL_SH = Path("stack") / "services" / "den-live" / "install.sh"
 
 
 def registration(root, tools, camera_id=rl.CAMERA_ID):
-    """(room model path, the receipt that registered its camera, the transform id): refuses before step 2 has."""
+    """(room model path, the receipt that registered and qualified its camera, the transform id): refuses before step 2
+    has, and when step 2's receipt didn't qualify the registration."""
     work = Path(root) / "private" / "register"
     model = work / "room-model.jsonl"
     if not model.is_file():
@@ -63,6 +64,10 @@ def registration(root, tools, camera_id=rl.CAMERA_ID):
     receipt = rl.registering_receipt(work, transform_id)
     if receipt is None:
         raise Stop("no step 2 receipt registered %s: paste register_now.py again" % transform_id)
+    try:
+        rl.qualified_registration(json.loads(receipt.read_text(encoding="utf-8")), transform_id)
+    except (OSError, ValueError) as exc:
+        raise Stop("%s: paste register_now.py again" % exc) from None
     return model, receipt, transform_id
 
 

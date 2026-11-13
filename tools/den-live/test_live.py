@@ -25,6 +25,7 @@ import tempfile
 import threading
 import time
 import unittest
+import unittest.mock
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -493,6 +494,101 @@ class ScanFloor(unittest.TestCase):
         self.assertNotIn(site, (HERE / 'run_local.py').read_text(encoding='utf-8'), 'no site is named in den-live code')
 
 
+# ---- step 2's receipt: no receipt, or none qualified, starts nothing (contract 1) -------------------------------------
+
+FIT_TRANSFORM = 'den-virtual@2026-11-09.1'   # the set's own registration
+
+
+def qualified_receipt(transform_id=FIT_TRANSFORM, **changes):
+    """A den-live-register-now-2 receipt that registered and qualified transform_id, as register_now.py writes one."""
+    receipt = {'schema': 'den-live-register-now-2', 'fit': {'result': 'registered', 'transform_id': transform_id, 'reasons': []},
+               'take': '20261113-200000-x1-m', 'depth_scale': 1.0, 'scan_revision': 'rev-1', 'qualified': True,
+               'sofa_check_errors_m': {'c1': 0.02, 'c2': 0.03, 'c3': 0.02},
+               'held_out': {'take': '20261113-201000-held', 'within_noise': 0.93, 'worst_bin_m': -0.03, 'ok': True}}
+    receipt.update(changes)
+    return receipt
+
+
+def registered_work(root, receipt=None, model=FIT / 'room-model.jsonl'):
+    """<root>/private/register/ with the set's room model and, unless receipt is False, one step 2 receipt."""
+    work = Path(root) / 'private' / 'register'
+    work.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(model, work / 'room-model.jsonl')
+    if receipt is not False:
+        (work / 'register-now-1.json').write_text(json.dumps(receipt or qualified_receipt()), encoding='utf-8')
+    return work / 'room-model.jsonl'
+
+
+class Qualified(unittest.TestCase):
+    def refused(self, receipt):
+        with self.assertRaises(ValueError) as caught:
+            rl.qualified_registration(receipt, FIT_TRANSFORM)
+        return str(caught.exception)
+
+    def test_a_qualified_receipt_gives_its_scan_and_depth_scale(self):
+        self.assertEqual(rl.qualified_registration(qualified_receipt(), FIT_TRANSFORM), {'scan_revision': 'rev-1', 'depth_scale': 1.0})
+
+    def test_every_other_receipt_is_refused_in_words(self):
+        v1 = {'schema': 'den-live-register-now-1', 'fit': {'result': 'registered', 'transform_id': FIT_TRANSFORM}, 'scan_revision': 'rev-1'}
+        for receipt, words in (
+                (qualified_receipt('den-virtual@2026-01-01.9'), "step 2's receipt didn't register %s" % FIT_TRANSFORM),
+                (qualified_receipt(fit={'result': 'refused', 'transform_id': None}), "didn't register"),
+                (v1, 'is from before registrations were qualified'),
+                (qualified_receipt(qualified=False), 'step 2 registered %s but didn\'t qualify it' % FIT_TRANSFORM),
+                (qualified_receipt(qualified='yes'), "didn't qualify it"),
+                (qualified_receipt(scan_revision=None), "doesn't say which scan it was picked on"),
+                (qualified_receipt(depth_scale=1.2, take='t-x1.2-m'), 'has no depth scale den-live could apply'),
+                (qualified_receipt(depth_scale=None), 'has no depth scale den-live could apply'),
+                (qualified_receipt(depth_scale=0.97), 'asks for depth x0.97, but its take was made at x1'),
+                (None, "didn't register")):
+            self.assertIn(words, self.refused(receipt))
+
+    def test_the_newest_receipt_that_registered_it_decides(self):
+        work = scratch('den-live-register-')
+        (work / 'register-now-1.json').write_text(json.dumps(qualified_receipt()), encoding='utf-8')
+        (work / 'register-now-2.json').write_text(json.dumps(qualified_receipt(qualified=False)), encoding='utf-8')
+        with self.assertRaises(rl.Refusal) as caught:
+            rl.receipt_registration(work, FIT_TRANSFORM)
+        self.assertEqual(str(caught.exception), "step 2 registered %s but didn't qualify it: paste register_now.py again" % FIT_TRANSFORM)
+        (work / 'register-now-3.json').write_text(json.dumps(qualified_receipt(scan_revision='rev-3')), encoding='utf-8')
+        self.assertEqual(rl.receipt_registration(work, FIT_TRANSFORM)['scan_revision'], 'rev-3')
+
+
+@unittest.skipUnless(HAVE_SET, 'needs a prepared den-sim set')
+class RunLocalRefuses(unittest.TestCase):
+    """run_local.py on a room model whose receipt is missing or unqualified: one sentence naming the paste, before the
+    camera is read or the detector starts."""
+
+    def run_local(self, receipt):
+        root = scratch('den-live-root-')
+        model = registered_work(root, receipt)
+        app = root / 'app-checkout'
+        (app / 'app' / 'src' / 'home-3d').mkdir(parents=True)
+        (app / 'app' / 'src' / 'home-3d' / 'apartment-people-layer.mjs').touch()
+        (root / 'token.txt').write_text('t' * 32, encoding='ascii')
+        started = []
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), \
+                unittest.mock.patch.object(rl.sc, 'archive', lambda tools_root, key, real=sc.archive: real(TOOLS, key)), \
+                unittest.mock.patch.object(rl.perceive, 'DetectorWorker', lambda *a, **k: started.append(1)):
+            code = rl.main([], root=root, console=lambda: True, camera_url='http://127.0.0.1:9', token_file=root / 'token.txt',
+                           venv=Path(sys.executable), app=app, room_model=model, camera_id='den-virtual',
+                           floor=[-2.5, -3.0, 2.5, 2.0], require_correction=False, until=lambda: True)
+        self.assertEqual(started, [], 'refused before the detector')
+        return code, out.getvalue()
+
+    def test_a_room_model_with_no_receipt(self):
+        code, text = self.run_local(False)
+        self.assertEqual(code, 2)
+        self.assertEqual(text.strip(), 'live: stopped: no step 2 receipt registered %s: paste register_now.py again' % FIT_TRANSFORM)
+
+    def test_a_receipt_that_registered_it_but_didnt_qualify_it(self):
+        code, text = self.run_local(qualified_receipt(qualified=False))
+        self.assertEqual(code, 2)
+        self.assertEqual(text.strip(), "live: stopped: step 2 registered %s but didn't qualify it: paste register_now.py again"
+                         % FIT_TRANSFORM)
+
+
 # ---- end to end: the real detector, the fake camera, the page ------------------------------------------------------
 
 @unittest.skipUnless(HAVE_SET and NODE and sc.VENV_PY.is_file() and (rl.APP / 'app' / 'src' / 'home-3d' / 'apartment-people-layer.mjs').is_file(),
@@ -533,7 +629,7 @@ class Live(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             result = rl.run(root=root, camera_url=camera.url, token_file=token, venv=sc.VENV_PY, app=rl.APP, packs=None,
-                            room_model=FIT / 'room-model.jsonl', camera_id='den-virtual', page_room='authored',
+                            room_model=registered_work(root), camera_id='den-virtual', page_room='authored',
                             open_page=lambda url: seen.update(url=url), until=until, status_every_s=5,
                             floor=[-2.5, -3.0, 2.5, 2.0], require_correction=False, page_extra=('--tmp', str(root)),
                             page_port=page_port, stream_port=stream_port)

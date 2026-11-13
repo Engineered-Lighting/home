@@ -1,6 +1,6 @@
 ---
 title: den-live runs the den lighting coordinator
-target: deploy
+target: backend
 type: added
 ---
 

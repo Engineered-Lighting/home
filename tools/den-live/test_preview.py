@@ -236,6 +236,28 @@ class PreviewTest(unittest.TestCase):
         self.assertFalse(self.row()["on"])
         self.assertIsNone(self.row()["keep_lit_token"])
 
+    def test_the_next_frame_keeps_a_negative_and_older_stills_are_refused(self):
+        """The review's false light: a valid multiple reply moves the episode's start on to it. The next tracking frame,
+        whose published since hasn't moved, keeps that episode, so replies whose stills began before the negative are
+        refused and two of them light nothing. The control: stills after the negative are taken."""
+        self.light()
+        episode, negative = self.preview.episode, self.now
+        self.read(people_visible="multiple")
+        self.assertEqual(episode.started, negative)
+        self.assertFalse(self.row()["on"])
+        for _ in range(2):
+            self.now += .5
+            self.track()
+            self.assertIs(self.preview.episode, episode, "the next frame keeps the episode")
+            self.read(start=negative - .25)
+            self.assertNotIn(str(self.now), episode.requests, "stills from before the negative are refused")
+        self.assertEqual(episode.last_observed, negative)
+        self.assertFalse(self.row()["on"])
+        self.now += .5
+        self.track()
+        self.read(start=negative + .25)
+        self.assertEqual(episode.last_observed, self.now, "the control: stills after the negative are taken")
+
     def test_dim_travel_records_the_requested_level_before_dark_fallback(self):
         self.light()
         self.preview.configure({"move_dim_level": .35})

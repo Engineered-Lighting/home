@@ -72,6 +72,7 @@ class Preview:
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
         self.eligible_track = None
         self.captured = None   # the newest frame taken for the track
+        self.since = None      # the published seated since_mono the episode was built at
         self.shift = None
         self.target_basis = None
         self.latest_decision = self.latest = self.problem = None
@@ -143,7 +144,7 @@ class Preview:
     def _drop_track(self):
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
         self.eligible_track = None
-        self.captured = None
+        self.captured = self.since = None
         self.shift = self.target_basis = None
 
     def tracking(self, snapshot):
@@ -204,11 +205,13 @@ class Preview:
         self.captured = captured
         self.track_until = deadline
         # Contract 2's seated, published once by perception: the episode starts at its since_mono, the same instant
-        # the ask's stills start from.
+        # the ask's stills start from. It's rebuilt only when that published since moves, never on episode.started:
+        # a none or multiple reply moves started on to the negative, and the episode must keep that.
         seated, since = published_seated(track, captured)
-        if seated and (self.episode is None or self.episode.started != since):
+        if seated and (self.episode is None or since != self.since):
             policy = self.core.need_v1.make_policy({"phone_patience_s": self.settings["phone_patience_s"]})
             self.episode = Episode(policy, key, since, (self.binding["transform_id"], self.binding["scan_revision"]))
+            self.since = since
             self.shift = body.ShiftFilter(self.settings["shift_m"], self.settings["shift_hold_s"])
         if not seated:
             self.episode = self.shift = self.target_basis = None

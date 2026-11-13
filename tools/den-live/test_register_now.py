@@ -15,6 +15,7 @@ import atexit
 import contextlib
 import csv
 import io
+import itertools
 import json
 import math
 import re
@@ -923,12 +924,12 @@ class Worksheet(unittest.TestCase):
 METHOD = {'file': rn.METHOD_FILE.name, 'sha256': 'f' * 64}
 
 
-def bare_take(folder, method=METHOD, complete=True, frames=3):
+def bare_take(folder, method=METHOD, complete=True, frames=3, kept=20):
     """A den-take-1 take's take.json and frames.csv, no bundles: what newest_raw and carry_clicks read. method None is
-    a take from before takes named their method, registration v1's included."""
+    a take from before takes named their method, registration v1's included. kept: what its counts say was kept."""
     (folder / 'frames').mkdir(parents=True)
     doc = {'schema': 'den-take-1', 'take': folder.name, 'cues': [{'cue': 'begin', 'pc_mono_s': 1.0}],
-           'ended_unix': 1794268933.5, 'complete': complete}
+           'ended_unix': 1794268933.5, 'complete': complete, 'counts': {'kept': kept, 'errors': 0, 'sessions': 1}}
     if method:
         doc['method'] = dict(method)
     (folder / 'take.json').write_text(json.dumps(doc), encoding='utf-8')
@@ -983,6 +984,19 @@ class AgainTake(unittest.TestCase):
         bare_take(self.work / 'takes' / '20261113-100000', complete=False)
         self.assert_stops()
 
+    def test_a_short_take_is_never_whole(self):
+        """The review's case: a take record() refused on a slow link (1-9 frames) said complete before the fix. One
+        that says so, or says complete false, stops --again; a receipt naming it doesn't make it whole."""
+        bare_take(self.work / 'takes' / '20261113-090000')
+        for name, changes in (('20261113-100000', {'kept': 4}), ('20261113-110000', {'complete': False, 'kept': 4}),
+                              ('20261113-120000', {'kept': None})):
+            with self.subTest(changes=changes):
+                bare_take(self.work / 'takes' / name, **changes)
+                self.receipt(rn.REGISTER_SCHEMA, name)
+                self.assertIn("the newest take, %s, isn't whole" % name, self.assert_stops())
+        bare_take(self.work / 'takes' / '20261113-130000', kept=10)
+        self.assertEqual(rn.newest_raw(self.work, METHOD).name, '20261113-130000', 'ten frames are enough')
+
     def test_a_take_a_v2_receipt_names_is_used(self):
         """A v2 take from before takes named their method: its v2 receipt vouches for it."""
         bare_take(self.work / 'takes' / '20261113-090000', method=None)
@@ -1007,6 +1021,38 @@ class AgainTake(unittest.TestCase):
         self.assertEqual(rn.carry_clicks(R, self.work, raw, target), 3)
         carried = R.register.read_clicks(R.register.clicks_path(self.work, target))
         self.assertEqual((carried['carried_from'], carried['frame']['n']), ('20261112-101500-x1-m', 2))
+
+
+class SlowLink:
+    """A camera on a slow link: /calibration answers, and /frame.npz only ever has the marks take's first few frames."""
+    host, port = '127.0.0.1', 9
+
+    def __init__(self, count):
+        self.frames = itertools.cycle([(MARKS / row['file']).read_bytes() for row in marks_rows(count)])
+
+    def get(self, path):
+        return (200, b'{}') if path == '/calibration' else (200, next(self.frames))
+
+
+@unittest.skipUnless((MARKS / 'frames.csv').is_file(), 'needs a prepared den-sim set')
+class ShortTake(unittest.TestCase):
+    def test_a_take_with_too_few_frames_is_refused_and_never_whole(self):
+        """record() refuses a take with fewer than 10 frames, and its take.json says so before anything reads it:
+        complete false, with the stop_reason. --again then stops rather than measure, click and fit on it."""
+        work = scratch('den-live-short-')
+        raw = work / 'takes' / '20261113-090000'
+        with self.assertRaises(rn.Stop) as stop:
+            rn.record(R, SlowLink(4), raw, rn.Timing(lead_s=0.0, window_s=1.0, poll_s=0.01), speak=lambda text: None,
+                      wait=time.sleep, method=METHOD)
+        self.assertEqual(str(stop.exception), 'only 4 frames came from the camera in 1 s')
+        doc = json.loads((raw / 'take.json').read_text(encoding='utf-8'))
+        self.assertEqual((doc['complete'], doc['stop_reason'], doc['counts']['kept'], doc['method']['file']),
+                         (False, str(stop.exception), 4, METHOD['file']))
+        self.assertFalse(rn.whole(doc))
+        with self.assertRaises(rn.Stop) as stop:
+            rn.newest_raw(work, METHOD)
+        self.assertIn("the newest take, 20261113-090000, isn't whole", str(stop.exception))
+        self.assertIn('paste the line without --again', str(stop.exception))
 
 
 class KeptTapes(unittest.TestCase):
@@ -1383,7 +1429,7 @@ class OnRenders(unittest.TestCase):
             urllib.request.urlopen(request, timeout=20).read()
         return lambda work, take: rn.scan_page(work, take, 'show', opener=opener, extra=('--room', 'authored', '--tmp', str(TMP), '--port', str(port)))
 
-    def paste(self, again=False, tapes=None, wait=time.sleep, **kw):
+    def paste(self, again=False, tapes=None, wait=time.sleep, timing=FAST, **kw):
         typed = iter(['%.6f' % value for value in (tapes or (self.height, self.wall))])
         self.seen['asked'] = 0
 
@@ -1393,7 +1439,7 @@ class OnRenders(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = rn.main(['--again'] if again else [], root=self.root, camera_url=self.camera.url, token_file=self.token_file,
-                           timing=FAST, speak=lambda text: self.seen.setdefault('spoken', []).append(text), wait=wait,
+                           timing=timing, speak=lambda text: self.seen.setdefault('spoken', []).append(text), wait=wait,
                            console=lambda: True, method_file=self.method, ask=ask, packs=self.root / 'packs', site=SITE, **kw)
         text = out.getvalue()
         self.assertEqual(text, text.encode('ascii', 'replace').decode('ascii'), 'the output is ASCII')
@@ -1669,6 +1715,19 @@ class OnRenders(unittest.TestCase):
         self.assertIn("register: interrupted. Paste the line again (with --again to keep the take) when you're ready.", text)
         take = json.loads(sorted((self.work() / 'takes').glob('*[0-9]/take.json'))[-1].read_text(encoding='utf-8'))
         self.assertEqual((take['complete'], take['method']['file']), (True, 'REGISTER-LIVE-20261113.md'))
+
+    def test_again_after_a_take_refused_for_too_few_frames_stops(self):
+        """The review's case, end to end: a slow link leaves the take under 10 frames, so the paste stops. --again then
+        stops too, rather than take the median, the clicks and the fit on the refused take."""
+        slow = rn.Timing(lead_s=0.2, window_s=0.6, poll_s=0.2)
+        code, text = self.paste(timing=slow, clicker=self.fail_if_called, picker=self.fail_if_called, shower=self.fail_if_called)
+        self.assertEqual(code, 2, text)
+        self.assertRegex(text, r'register: stopped: only \d frames came from the camera in 1 s')
+        code, text = self.paste(again=True, clicker=self.fail_if_called, picker=self.fail_if_called, shower=self.fail_if_called)
+        self.assertEqual(code, 2, text)
+        self.assertRegex(text, r"register: stopped: the newest take, \d{8}-\d{6}, isn't whole .+; paste the line without "
+                               r"--again")
+        self.assertEqual(list(self.work().glob('register-now-*.json')), [], 'nothing was measured')
 
     def test_the_tapes_outlast_every_stop_that_writes_no_receipt(self):
         """The scan tab closed without Save (scan_page's own Stops end the same way), den-register's refusal and Ctrl+C

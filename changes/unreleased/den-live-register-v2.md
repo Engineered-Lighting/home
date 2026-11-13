@@ -14,7 +14,9 @@ type: changed
   distance check stops only on a feature past it; one past 6 cm but within it is only noted. Then each sofa check,
   c1-c3, must be within 0.10 m.
 - `--again` keeps the newest whole take recorded with this method file, or one a v2 receipt names, with its tapes,
-  clicks and picks. A take stopped part way keeps nothing, and a v1 take or its clicks never come back.
+  clicks and picks. A take stopped part way keeps nothing, and a v1 take or its clicks never come back. A take with
+  fewer than 10 frames (a slow link) is refused and never counts as whole, so `--again` stops on it rather than
+  measure, click and fit on it.
 - A held-out empty-room take is carried into the room through the new registration and compared there with the
   scan's floor and upper walls, each judged on its own: at least 75% within noise, and no 1 m range bin with a median
   residual over 10 cm.

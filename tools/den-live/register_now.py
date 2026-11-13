@@ -7,8 +7,8 @@
 Registration v2, with REGISTER-LIVE-20261113.md as its method. The first line asks for your two tapes, records a new
 take and starts the clicks and scan picks afresh. --again keeps the newest take, its tapes, your clicks and your scan
 picks, so after a refusal you change only what it named and go on. It uses only a whole take recorded with this
-method file, or one a v2 receipt names: a take stopped part way keeps nothing, and a v1 take or its clicks never come
-back. --packs <folder> uses those content packs, for the scan page and the held-out check, in place of the
+method file, or one a v2 receipt names: a take stopped part way, or refused with fewer than 10 frames, keeps nothing,
+and a v1 take or its clicks never come back. --packs <folder> uses those content packs, for the scan page and the held-out check, in place of the
 workstation's own.
 
 1. Two tapes, typed at the console: the lens's height above the floor, and the lens to the facing wall, square. They're
@@ -99,6 +99,7 @@ CHECKS = tuple(pid for pid, role, _ in POINTS if role == "check")
 TAPES = (("lens_height_m", "the lens's height above the floor", 0.5, 3.0),
          ("facing_wall_m", "the lens to the facing wall, square to it", 1.0, 10.0))
 WIDTH, HEIGHT = 640, 400
+MIN_FRAMES = 10   # a take with fewer is refused, and never whole
 RANSAC_TRIES, WALL_TRIES, SAMPLE_STEP, SEED = 400, 1500, 2, 0
 HIDDEN = re.compile(r"^\s*camera at x |^Next: |^Or, if this take")   # den-register's lines for its own command line
 # A den-register line about the camera (camera_below_floor's "the fit puts the camera -50.0 cm from the floor", the
@@ -360,7 +361,9 @@ def record(R, camera, folder, timing, speak, wait, cues=REGISTRATION_CUES, scrip
            method=None):
     """A den-take-1 take of the empty den. Its cues begin and hold_phone_end bracket the window, so den-register's
     default frame is the window's middle. No slates: nobody is in view to hold one. take.json, written only once the
-    window has closed, names the method file it was recorded under: --again uses no take from another method."""
+    window has closed, names the method file it was recorded under: --again uses no take from another method. It says
+    complete only once the take has MIN_FRAMES frames; a shorter one (a slow link) is refused, and its take.json says
+    complete false with the stop_reason, so --again never uses it either."""
     try:
         status, body = camera.get("/calibration")
     except (OSError, R.take.http.client.HTTPException) as exc:
@@ -402,14 +405,17 @@ def record(R, camera, folder, timing, speak, wait, cues=REGISTRATION_CUES, scrip
         writer.close()
     if grab.stop_reason:
         raise Stop(grab.stop_reason)
+    kept = len(writer.index)
     doc["ended_unix"] = time.time()
-    doc["counts"] = {"kept": len(writer.index), "errors": grab.errors, "sessions": len(set(grab.sessions.values()))}
-    doc["complete"] = True
+    doc["counts"] = {"kept": kept, "errors": grab.errors, "sessions": len(set(grab.sessions.values()))}
     doc["sha256"] = {"frames.csv": sha256_bytes((folder / "frames.csv").read_bytes())}
+    if kept < MIN_FRAMES:
+        doc["stop_reason"] = "only %d frames came from the camera in %d s" % (kept, round(timing.window_s))
+        write_json(folder / "take.json", doc)   # complete stays false: refused, never whole
+        raise Stop(doc["stop_reason"])
+    doc["complete"] = True
     write_json(folder / "take.json", doc)
-    if len(writer.index) < 10:
-        raise Stop("only %d frames came from the camera in %d s" % (len(writer.index), round(timing.window_s)))
-    return len(writer.index)
+    return kept
 
 
 # ---- 4 and 5. the take median and its copy ------------------------------------------------------------------------
@@ -1261,10 +1267,19 @@ def scaled_name(raw, scale):
     return raw.parent / ("%s-x%s-m" % (raw.name, format(scale, "g")))
 
 
+def whole(doc):
+    """Whether a take.json says its take is whole: complete, with at least MIN_FRAMES frames kept. record() writes
+    complete false on a take it refused; a take from before that rule may say complete with fewer frames kept."""
+    counts = doc.get("counts") if type(doc) is dict else None
+    return (type(doc) is dict and doc.get("complete") is True and type(counts) is dict
+            and type(counts.get("kept")) is int and counts["kept"] >= MIN_FRAMES)
+
+
 def newest_raw(work, method):
     """The newest whole take, for --again: one recorded under this method file (its take.json says so), or one a
     den-live-register-now-2 receipt names. A take stopped part way has no take.json, so the newest whole one can be
-    older, even registration v1's, whose f1-f4, c1 and c2 were other features: anything else stops."""
+    older, even registration v1's, whose f1-f4, c1 and c2 were other features: anything else stops. So does a newest
+    take record() refused (too few frames): its take.json isn't whole."""
     folder = work / "takes"
     raws = sorted(p for p in folder.iterdir() if RAW_TAKE.fullmatch(p.name) and (p / "take.json").is_file()) if folder.is_dir() else []
     if not raws:
@@ -1274,8 +1289,10 @@ def newest_raw(work, method):
         doc = json.loads((raw / "take.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         doc = None
-    recorded = (type(doc) is dict and doc.get("complete") is True and type(doc.get("method")) is dict
-                and doc["method"].get("file") == method["file"])
+    if not whole(doc):
+        raise Stop("the newest take, %s, isn't whole (it was refused, with fewer than %d frames, or never finished); "
+                   "paste the line without --again" % (raw.name, MIN_FRAMES))
+    recorded = type(doc.get("method")) is dict and doc["method"].get("file") == method["file"]
     named = any(r.get("schema") == REGISTER_SCHEMA and r.get("raw_take") == raw.name for r in receipts(work))
     if not (recorded or named):
         raise Stop("the newest whole take, %s, wasn't recorded with %s; paste the line without --again"

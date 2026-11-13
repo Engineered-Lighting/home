@@ -92,7 +92,7 @@ TRANSIT_MAX_S = 5.0  # arrival less captured_unix_ns counts only between 0 and t
 NOT_CORRECTED = "depth not corrected at the camera"
 CORRECTION_CHANGED = ("the camera's depth correction isn't the one step 2 registered on: paste register_now.py without "
                       "--again, which records a new take")
-REINSTALL = ", then paste install_la.py again"   # the LA service's refusal adds it: LA starts on the receipt it was given
+REINSTALL = ", then paste install_la.py again"   # the LA service's adds it: LA starts on the receipt it was given
 
 
 class Stop(Exception):
@@ -376,7 +376,7 @@ class Perceiver:
     now, capture_ts is now less how long ago the frame was captured."""
 
     depth_scale, depth_table = 1.0, None   # step 2's depth scale and its table; __init__ sets them from the registration
-    correction_changed = CORRECTION_CHANGED   # the why on a frame with another correction; __init__ adds REINSTALL on LA
+    correction_changed = CORRECTION_CHANGED   # why a frame on another correction is refused; on LA, plus REINSTALL
 
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
                  require_source_correction=True, content_revision=None, now=time.time, depth_scale=1.0,
@@ -537,7 +537,7 @@ class Perceiver:
         self.body_input = None
         status = camera_state.get("status")
         if status not in ("starting", "offline", "refused"):
-            status = "refused" if self.problem == self.correction_changed else "stale"   # a frame was refused: register again
+            status = "refused" if self.problem == self.correction_changed else "stale"   # refused: register again
         self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
         return self._snapshot(self.event(None, [], camera_state, now_mono), status=status)
 

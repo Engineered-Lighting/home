@@ -93,7 +93,8 @@ class Log:
 
     def due(self, snapshot, mono):
         """Whether this snapshot gets a line; noted as the last line's when it does."""
-        state = (snapshot.service_run_id, snapshot.camera_epoch, snapshot.status, snapshot.presence, bool(snapshot.tracks))
+        state = (snapshot.service_run_id, snapshot.camera_epoch, snapshot.status, snapshot.presence,
+                 bool(snapshot.tracks))
         second = mono // IDLE_EVERY_S
         if nobody(snapshot) and self.last is not None and self.last == (state, second):
             self.thinned += 1

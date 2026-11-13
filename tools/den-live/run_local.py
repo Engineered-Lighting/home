@@ -363,7 +363,8 @@ def start_body(perceiver, out, detector, body_input):
 
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, registration, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
-          labels=None, asks=None, coordinator=None, body_input=None, body_profile=None, person_log=None, reinstall=False):
+          labels=None, asks=None, coordinator=None, body_input=None, body_profile=None, person_log=None,
+          reinstall=False):
     """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator.
 
     registration(transform_id) is what step 2's qualified receipt says about the room model's registration,

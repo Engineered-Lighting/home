@@ -8,8 +8,9 @@ Registration v2, with REGISTER-LIVE-20261113.md as its method. The first line as
 take and starts the clicks and scan picks afresh. --again keeps the newest take, its tapes, your clicks and your scan
 picks, so after a refusal you change only what it named and go on. It uses only a whole take recorded with this
 method file, or one a v2 receipt names: a take stopped part way, or refused with fewer than 10 frames, keeps nothing,
-and a v1 take or its clicks never come back. --packs <folder> uses those content packs, for the scan page and the held-out check, in place of the
-workstation's own.
+and a v1 take or its clicks never come back. After a camera release changes its depth correction, --again stops: paste
+without it, for a new take. --packs <folder> uses those content packs, for the scan page and the held-out check, in
+place of the workstation's own.
 
 1. Two tapes, typed at the console: the lens's height above the floor, and the lens to the facing wall, square. They're
    kept privately only: beside the take (<take>.tapes.json) as soon as it's recorded, and in the receipt. Nothing

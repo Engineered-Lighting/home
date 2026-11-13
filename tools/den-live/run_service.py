@@ -564,7 +564,7 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                     status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say),
                     asks=starter, coordinator=coordinator, body_input=body_input, body_profile=body_profile,
                     person_log=state,   # den-person-state-1, in state/days/<UTC date>/ beside the ask's asks.jsonl
-                    reinstall=True)   # a frame on another correction: register_now.py without --again, then install_la.py
+                    reinstall=True)   # another correction: register_now.py without --again, then install_la.py
 
 
 def stopping(_signum, _frame):

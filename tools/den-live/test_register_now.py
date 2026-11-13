@@ -917,6 +917,97 @@ class Worksheet(unittest.TestCase):
         self.assertEqual(len(json.loads(path.read_text(encoding='utf-8'))['points']), 9)
 
 
+# ---- the takes --again may use ------------------------------------------------------------------------------------
+
+METHOD = {'file': rn.METHOD_FILE.name, 'sha256': 'f' * 64}
+
+
+def bare_take(folder, method=METHOD, complete=True, frames=3):
+    """A den-take-1 take's take.json and frames.csv, no bundles: what newest_raw and carry_clicks read. method None is
+    a take from before takes named their method, registration v1's included."""
+    (folder / 'frames').mkdir(parents=True)
+    doc = {'schema': 'den-take-1', 'take': folder.name, 'cues': [{'cue': 'begin', 'pc_mono_s': 1.0}],
+           'ended_unix': 1794268933.5, 'complete': complete}
+    if method:
+        doc['method'] = dict(method)
+    (folder / 'take.json').write_text(json.dumps(doc), encoding='utf-8')
+    rows = ['n,file,npz_sha256,recv_pc_mono_s'] + ['%d,frames/%06d-%d.npz,%s,%d.0' % (n, n, n, 'a' * 64, n)
+                                                    for n in range(1, frames + 1)]
+    (folder / 'frames.csv').write_text('\n'.join(rows) + '\n', encoding='utf-8')
+    return folder
+
+
+def clicks_for(work, take, n=2, ids=('f1', 'f2', 'c1')):
+    path = R.register.clicks_path(work, take)
+    path.write_text(json.dumps({'schema': R.register.SCHEMA_CLICKS, 'take': take.name,
+                                'frame': {'n': n, 'file': 'frames/%06d-%d.npz' % (n, n), 'sha256': 'a' * 64},
+                                'clicks': {pid: {'u': 100.0 + i, 'v': 200.0} for i, pid in enumerate(ids)}}), encoding='utf-8')
+    return path
+
+
+class AgainTake(unittest.TestCase):
+    def setUp(self):
+        self.work = scratch('den-live-again-')
+        (self.work / 'takes').mkdir()
+
+    def receipt(self, schema, raw):
+        n = len(list(self.work.glob('register-now-*.json'))) + 1
+        (self.work / ('register-now-%d.json' % n)).write_text(json.dumps({'schema': schema, 'raw_take': raw}), encoding='utf-8')
+
+    def assert_stops(self):
+        with self.assertRaises(rn.Stop) as stop:
+            rn.newest_raw(self.work, METHOD)
+        self.assertIn('paste the line without --again', str(stop.exception))
+        return str(stop.exception)
+
+    def test_a_take_stopped_part_way_never_brings_back_a_v1_take(self):
+        """The review's case: a v1 take from 2026-11-12, then a v2 paste stopped in the lead or the window, which
+        leaves frames and no take.json. The newest whole take is v1's: --again stops rather than use it."""
+        bare_take(self.work / 'takes' / '20261112-101500', method=None)
+        self.receipt('den-live-register-now-1', '20261112-101500')
+        (self.work / 'takes' / '20261113-090000' / 'frames').mkdir(parents=True)   # stopped part way
+        self.assertIn("the newest whole take, 20261112-101500, wasn't recorded with REGISTER-LIVE-20261113.md",
+                      self.assert_stops())
+
+    def test_a_take_recorded_with_this_method_file_is_used(self):
+        bare_take(self.work / 'takes' / '20261112-101500', method=None)
+        bare_take(self.work / 'takes' / '20261113-090000')
+        self.assertEqual(rn.newest_raw(self.work, METHOD).name, '20261113-090000')
+        self.assertEqual(rn.newest_raw(self.work, {**METHOD, 'sha256': 'e' * 64}).name, '20261113-090000',
+                         'the method is its file: an edit to the numbers in it is the same method')
+
+    def test_a_take_from_another_method_file_or_never_finished_stops(self):
+        bare_take(self.work / 'takes' / '20261113-090000', method={'file': 'REGISTER-LIVE-20261111.md', 'sha256': 'f' * 64})
+        self.assert_stops()
+        bare_take(self.work / 'takes' / '20261113-100000', complete=False)
+        self.assert_stops()
+
+    def test_a_take_a_v2_receipt_names_is_used(self):
+        """A v2 take from before takes named their method: its v2 receipt vouches for it."""
+        bare_take(self.work / 'takes' / '20261113-090000', method=None)
+        self.assert_stops()
+        self.receipt('den-live-register-now-1', '20261113-090000')
+        self.assert_stops()
+        self.receipt(rn.REGISTER_SCHEMA, '20261113-090000')
+        self.assertEqual(rn.newest_raw(self.work, METHOD).name, '20261113-090000')
+
+    def test_clicks_never_come_from_a_v1_copy(self):
+        """v1's copy, <raw>-x1, holds clicks on v1's six features: none is carried. A v2 median copy's are."""
+        raw = bare_take(self.work / 'takes' / '20261112-101500', method=None)
+        v1_copy = bare_take(self.work / 'takes' / '20261112-101500-x1', method=None)
+        clicks_for(self.work, v1_copy)
+        (self.work / 'takes' / '20261112-101500-x0.97-m.tmp').mkdir()   # a median copy cut short
+        target = bare_take(self.work / 'takes' / '20261112-101500-x0.97-m')
+        self.assertEqual(rn.carry_clicks(R, self.work, raw, target), 0)
+        self.assertFalse(R.register.clicks_path(self.work, target).exists())
+        self.assertEqual([p.name for p in rn.median_copies(raw)], ['20261112-101500-x0.97-m'])
+        v2_copy = bare_take(self.work / 'takes' / '20261112-101500-x1-m')
+        clicks_for(self.work, v2_copy)
+        self.assertEqual(rn.carry_clicks(R, self.work, raw, target), 3)
+        carried = R.register.read_clicks(R.register.clicks_path(self.work, target))
+        self.assertEqual((carried['carried_from'], carried['frame']['n']), ('20261112-101500-x1-m', 2))
+
+
 # ---- the scan page's harness ----------------------------------------------------------------------------------------
 
 class Page:
@@ -1239,7 +1330,7 @@ class OnRenders(unittest.TestCase):
             urllib.request.urlopen(request, timeout=20).read()
         return lambda work, take: rn.scan_page(work, take, 'show', opener=opener, extra=('--room', 'authored', '--tmp', str(TMP), '--port', str(port)))
 
-    def paste(self, again=False, tapes=None, **kw):
+    def paste(self, again=False, tapes=None, wait=time.sleep, **kw):
         typed = iter(['%.6f' % value for value in (tapes or (self.height, self.wall))])
         self.seen['asked'] = 0
 
@@ -1249,7 +1340,7 @@ class OnRenders(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             code = rn.main(['--again'] if again else [], root=self.root, camera_url=self.camera.url, token_file=self.token_file,
-                           timing=FAST, speak=lambda text: self.seen.setdefault('spoken', []).append(text), wait=time.sleep,
+                           timing=FAST, speak=lambda text: self.seen.setdefault('spoken', []).append(text), wait=wait,
                            console=lambda: True, method_file=self.method, ask=ask, packs=self.root / 'packs', site=SITE, **kw)
         text = out.getvalue()
         self.assertEqual(text, text.encode('ascii', 'replace').decode('ascii'), 'the output is ASCII')
@@ -1453,6 +1544,38 @@ class OnRenders(unittest.TestCase):
         self.assertEqual(self.seen['take'], take)
         self.assertEqual(self.seen['saved'], {'ok': True, 'saved': 9})
         self.assertIn('QUALIFIED: yes', self.summary(text))
+
+    def test_ctrl_c_before_the_take_is_whole_offers_no_again(self):
+        """Ctrl+C in the lead or in the window: take.json isn't written, so nothing is kept, and the paste says to paste
+        without --again. --again then finds no take, never an older one. Once a take is whole, Ctrl+C offers --again."""
+        for n, stop_at in enumerate((1, 2)):   # the lead's wait, then the window's
+            calls = []
+
+            def wait(seconds):
+                calls.append(seconds)
+                if len(calls) == stop_at:
+                    raise KeyboardInterrupt
+                time.sleep(seconds)
+            code, text = self.paste(wait=wait, now=lambda: 1794268800.0 + 60 * n, clicker=self.fail_if_called,
+                                    picker=self.fail_if_called, shower=self.fail_if_called)
+            self.assertEqual(code, 130, text)
+            self.assertIn('register: interrupted before the take was whole, so nothing is kept. Paste the line again, '
+                          'without --again, when you\'re ready.', text)
+            self.assertNotIn('with --again', text)
+        takes = sorted((self.work() / 'takes').iterdir())
+        self.assertEqual(len(takes), 2)
+        self.assertFalse(any((take / 'take.json').exists() for take in takes))
+        code, text = self.paste(again=True, clicker=self.fail_if_called, picker=self.fail_if_called, shower=self.fail_if_called)
+        self.assertEqual(code, 2)
+        self.assertIn('no earlier take to use again; paste the line without --again', text)
+
+        def interrupted(work, take):
+            raise KeyboardInterrupt
+        code, text = self.paste(clicker=interrupted, picker=self.fail_if_called, shower=self.fail_if_called)
+        self.assertEqual(code, 130)
+        self.assertIn("register: interrupted. Paste the line again (with --again to keep the take) when you're ready.", text)
+        take = json.loads(sorted((self.work() / 'takes').glob('*[0-9]/take.json'))[-1].read_text(encoding='utf-8'))
+        self.assertEqual((take['complete'], take['method']['file']), (True, 'REGISTER-LIVE-20261113.md'))
 
     def test_again_after_the_method_changed_makes_a_new_copy_and_carries_the_clicks(self):
         """A 3% long take with a method that takes no scale under 5%, then the committed one: --again measures the

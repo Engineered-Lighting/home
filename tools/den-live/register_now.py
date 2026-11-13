@@ -6,8 +6,10 @@
 
 Registration v2, with REGISTER-LIVE-20261113.md as its method. The first line asks for your two tapes, records a new
 take and starts the clicks and scan picks afresh. --again keeps the newest take, its tapes, your clicks and your scan
-picks, so after a refusal you change only what it named and go on. --packs <folder> uses those content packs, for the
-scan page and the held-out check, in place of the workstation's own.
+picks, so after a refusal you change only what it named and go on. It uses only a whole take recorded with this
+method file, or one a v2 receipt names: a take stopped part way keeps nothing, and a v1 take or its clicks never come
+back. --packs <folder> uses those content packs, for the scan page and the held-out check, in place of the
+workstation's own.
 
 1. Two tapes, typed at the console: the lens's height above the floor, and the lens to the facing wall, square. They go
    into the private receipt only. Nothing prints them.
@@ -327,9 +329,11 @@ HELD_OUT_CUES = {"leave": "Leave the view again. Recording the held-out take in 
                  "begin": "Recording the held-out take.", "end": "Done. You can come back."}
 
 
-def record(R, camera, folder, timing, speak, wait, cues=REGISTRATION_CUES, script="den-live-register-clear-room"):
+def record(R, camera, folder, timing, speak, wait, cues=REGISTRATION_CUES, script="den-live-register-clear-room",
+           method=None):
     """A den-take-1 take of the empty den. Its cues begin and hold_phone_end bracket the window, so den-register's
-    default frame is the window's middle. No slates: nobody is in view to hold one."""
+    default frame is the window's middle. No slates: nobody is in view to hold one. take.json, written only once the
+    window has closed, names the method file it was recorded under: --again uses no take from another method."""
     try:
         status, body = camera.get("/calibration")
     except (OSError, R.take.http.client.HTTPException) as exc:
@@ -347,6 +351,8 @@ def record(R, camera, folder, timing, speak, wait, cues=REGISTRATION_CUES, scrip
            "pc_clock": "time.perf_counter", "started_unix": time.time(), "ended_unix": None, "cues": [], "slates": [],
            "note": "No slates: the room is clear. The begin and hold_phone_end cues bracket the clear-room window.",
            "counts": None, "stop_reason": None, "complete": False, "sha256": None}
+    if method:
+        doc["method"] = {"file": method["file"], "sha256": method["sha256"]}
 
     def cue(name, text):
         doc["cues"].append({"cue": name, "text": text, "pc_mono_s": R.take.clock(), "pc_unix": time.time()})
@@ -1228,18 +1234,39 @@ def scaled_name(raw, scale):
     return raw.parent / ("%s-x%s-m" % (raw.name, format(scale, "g")))
 
 
-def newest_raw(work):
+def newest_raw(work, method):
+    """The newest whole take, for --again: one recorded under this method file (its take.json says so), or one a
+    den-live-register-now-2 receipt names. A take stopped part way has no take.json, so the newest whole one can be
+    older, even registration v1's, whose f1-f4, c1 and c2 were other features: anything else stops."""
     folder = work / "takes"
     raws = sorted(p for p in folder.iterdir() if RAW_TAKE.fullmatch(p.name) and (p / "take.json").is_file()) if folder.is_dir() else []
     if not raws:
         raise Stop("no earlier take to use again; paste the line without --again")
-    return raws[-1]
+    raw = raws[-1]
+    try:
+        doc = json.loads((raw / "take.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        doc = None
+    recorded = (type(doc) is dict and doc.get("complete") is True and type(doc.get("method")) is dict
+                and doc["method"].get("file") == method["file"])
+    named = any(r.get("schema") == REGISTER_SCHEMA and r.get("raw_take") == raw.name for r in receipts(work))
+    if not (recorded or named):
+        raise Stop("the newest whole take, %s, wasn't recorded with %s; paste the line without --again"
+                   % (raw.name, method["file"]))
+    return raw
+
+
+def median_copies(raw):
+    """This take's median copies, <raw>-x<scale>-m. Registration v1's plain copies, <raw>-x<scale>, aren't among them:
+    their clicks were v1's six features."""
+    pattern = re.compile(re.escape(raw.name) + r"-x[0-9.]+-m")
+    return [p for p in raw.parent.glob(raw.name + "-x*") if pattern.fullmatch(p.name) and p.is_dir()]
 
 
 def carry_clicks(R, work, raw, target):
-    """A new copy of the same take (another depth scale): the newest other copy's clicks, onto the same frame of the
-    new copy. The pixels are the same left image; only the frame's hash (its depth changed) is new."""
-    copies = sorted((p for p in raw.parent.glob(raw.name + "-x*") if p != target and R.register.clicks_path(work, p).exists()),
+    """A new copy of the same take (another depth scale): the newest other median copy's clicks, onto the same frame of
+    the new copy. The pixels are the same left image; only the frame's hash (its depth changed) is new."""
+    copies = sorted((p for p in median_copies(raw) if p != target and R.register.clicks_path(work, p).exists()),
                     key=lambda p: R.register.clicks_path(work, p).stat().st_mtime_ns)
     if not copies:
         return 0
@@ -1321,7 +1348,10 @@ class Paste:
 
 
 def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method_file=METHOD_FILE, clicker=None,
-        picker=None, shower=None, ask=console_ask, packs=None, site=None, page_extra=()):
+        picker=None, shower=None, ask=console_ask, packs=None, site=None, page_extra=(), progress=None):
+    """One paste. progress, if given, gets "take" once this paste has a whole take to keep: from then on, --again can
+    use it."""
+    progress = {} if progress is None else progress
     try:
         import numpy  # noqa: F401  the depth, the planes and the scan
         import PIL.Image  # noqa: F401  the camera's picture beside your scan
@@ -1348,7 +1378,8 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
 
     # 1 and 2: the tapes and the take, or the newest take again with its tapes
     if again:
-        raw = newest_raw(work)
+        raw = newest_raw(work, method)
+        progress["take"] = raw.name
         tapes = known_tapes(work, raw)
         if tapes is None:
             say("No tapes were kept for the take %s." % raw.name)
@@ -1359,7 +1390,8 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
         tapes = ask_tapes(ask)
         raw = work / "takes" / time.strftime("%Y%m%d-%H%M%S", time.localtime(now))
         say("Frames go to %s" % raw)
-        frames = record(R, camera(), raw, timing, speak, wait)
+        frames = record(R, camera(), raw, timing, speak, wait, method=method)
+        progress["take"] = raw.name
         shutil.copyfile(raw / "camera-calibration.json", work / R.register.CAMERA_CALIBRATION)
         say("Kept %d frames." % frames)
     receipt.update(tapes=tapes, raw_take=raw.name)
@@ -1524,7 +1556,7 @@ def run(*, root, again, camera_url, token_file, timing, speak, wait, now, method
     say("Now the held-out take: the empty den again, checked against your scan at the new registration.")
     held = work / "takes" / (time.strftime("%Y%m%d-%H%M%S", time.localtime(time.time())) + "-held")
     try:
-        record(R, camera(), held, timing, speak, wait, cues=HELD_OUT_CUES, script="den-live-register-held-out")
+        record(R, camera(), held, timing, speak, wait, cues=HELD_OUT_CUES, script="den-live-register-held-out", method=method)
         held_source = check_source(R, held, live, quiet=True)
     except Stop as exc:
         receipt["held_out"] = {"take": held.name, "within_noise": None, "worst_bin_m": None, "ok": False,
@@ -1551,6 +1583,7 @@ def main(argv=None, *, root=None, camera_url=None, token_file=None, timing=Timin
         say("register: refused, no console. Paste the line into PowerShell yourself.")
         return 2
     root = Path(root) if root else sc.data_root()
+    progress = {}
     try:
         import run_local   # the den's site and the workstation's content packs, read where step 3 reads them
         R = den_register(sc.archive(root / "tools", "register"))
@@ -1559,12 +1592,16 @@ def main(argv=None, *, root=None, camera_url=None, token_file=None, timing=Timin
                    token_file=token_file or R.take.DEFAULT_TOKEN_FILE, timing=timing,
                    speak=speak or sc.speaker(R.take), wait=wait, now=now(), method_file=method_file, clicker=clicker,
                    picker=picker, shower=shower, ask=ask, packs=packs, site=site or run_local.den_site(),
-                   page_extra=("--packs", str(args.packs)) if args.packs else ())
+                   page_extra=("--packs", str(args.packs)) if args.packs else (), progress=progress)
     except Stop as exc:
         say("register: stopped: %s" % exc)
         return 2
     except KeyboardInterrupt:
-        say("register: interrupted. Paste the line again (with --again to keep the take) when you're ready.")
+        if progress.get("take"):
+            say("register: interrupted. Paste the line again (with --again to keep the take) when you're ready.")
+        else:
+            say("register: interrupted before the take was whole, so nothing is kept. Paste the line again, without "
+                "--again, when you're ready.")
         return 130
     except Exception as exc:
         if type(exc).__name__ in ("Refused", "NotUtf8") and hasattr(exc, "reason"):

@@ -39,6 +39,9 @@ KEEP_HOLD_S = 1.0
 # POSE_AGE_S old, and evidence on a fresh frame (standing, leaving, a second person) darkens at once.
 GAP_HOLD_S = 3.0
 FACING_REFUSALS = ("in_front_of_reader", "no_facing")
+# A light on someone refused for these is in, or can't be checked against, their head or eyes: it's cut at once (one
+# level-0 MOVE), never eased out. Easing is for ordinary hand-offs and exits.
+EYE_REFUSALS = ("beam_through_head", "in_front_of_reader", "no_head", "no_facing")
 # The direction's choice hysteresis (lighting-direction note): a dark pre-aim moves at most once a second, and while the
 # person is on their feet only for a torso move of more than this.
 PRE_AIM_STANDING_M = .3
@@ -129,6 +132,7 @@ class Preview:
         self.ambient = direction.Ambient()
         self.standby = None   # the runner-up for the lit person, aimed dark at their page
         self.admitted = {}    # this evaluation's other admitted fixtures: {name: (eye result, joints)}
+        self.cut = {}         # this evaluation's lights in (or unchecked against) a head or eyes: {name: reason}
         self.latest_decision = self.latest = self.problem = None
         self.context_signature, self.context_since = None, self.clock()
         self.counts = {"snapshots": 0, "refused": 0, "trace_errors": 0}
@@ -383,7 +387,7 @@ class Preview:
     def _eye(self, name, row, person, kept):
         """den-core's eye rule for this fixture, with the direction's hysteresis for a fixture lit for this person: it's
         refused for its beam's centre passing the head only once that's inside GLARE_KEEP_M (admission keeps den-core's
-        0.15 m), and for being in front of the reader only once it's more than FACING_KEEP_DEG past side-on (den-core
+        0.15 m), and for being in front of the reader only once it's more than facing_keep_deg past side-on (den-core
         admits at side-on and keeps to 5). So a few centimetres of head jitter, or the shoulders' swing on a side-on
         socket, can't hand the light to another fixture."""
         eye = self.core.eye
@@ -396,7 +400,7 @@ class Preview:
                                   dict(aim.DEFAULT_LIMITS))
             held = aim.evaluate_fixture(fixture, reader, dataclasses.replace(
                 eye._KEEP, head_clearance_m=direction.GLARE_KEEP_M,
-                min_behind_cos=-math.sin(math.radians(direction.FACING_KEEP_DEG))))
+                min_behind_cos=-math.sin(math.radians(self.settings["facing_keep_deg"]))))
             result = held if held.ok else result
         return result
 
@@ -405,6 +409,7 @@ class Preview:
         now = self.clock() if now is None else now
         candidates, reasons, joints = {}, {}, {}
         incumbent = pre_aimed = None
+        self.cut = {}
         for name, row in self.rows.items():
             # An exiting fixture is never the incumbent: a refused light that's fading out can't win its job back
             # in the middle of the crossfade (that was a hand-off ping-pong).
@@ -420,6 +425,17 @@ class Preview:
                 # KEEP_HOLD_S.
                 held = self._eye(name, row, dict(person, facing=row["eye_hold"][1]), kept)
                 result = held if held.ok else result
+            if row["job"] == person["track_id"] and self._lighting(row):
+                # Any light on this person (rising, lit, holding, crossfading or leaving) is judged by the keep rule's
+                # head and eye margins, and by the head's clearance on the beam as it points now. den-core checks the
+                # line to the page, but a rise in place, the hold without lit travel and a standby's hand-over all
+                # light a beam pointing up to 8 degrees off that line. Failing is a cut at once (_evaluate).
+                safe = result if kept else self._eye(name, row, person, True)
+                if safe.ok and not self._clear(row, person, direction.GLARE_KEEP_M):
+                    safe = self.core.eye.aim.Candidate(name, False, "beam_through_head")
+                if not safe.ok and safe.reason in EYE_REFUSALS:
+                    self.cut[name] = reasons[name] = safe.reason
+                    continue
             if not result.ok:
                 reasons[name] = result.reason
                 continue
@@ -475,7 +491,7 @@ class Preview:
         for row in self.rows.values():
             self._advance(row, now, task and directing)
         chosen, target, reasons = None, None, {}
-        self.admitted = {}
+        self.admitted, self.cut = {}, {}
         if held:
             if task:
                 chosen = next((name for name, row in self.rows.items() if row["job"] == person["track_id"]
@@ -507,6 +523,10 @@ class Preview:
                     # darkens at once. So does a lit beam someone else's head has walked into (plan 04): never a
                     # fade in their eyes. Only the normal exits below fade.
                     self._release(name, row, now, reasons.get(name, "task_released"))
+                elif self._lighting(row) and name in self.cut:
+                    # In (or unchecked against) the reader's head or eyes, by the keep rule on where the beam points
+                    # now: dark at once, whatever fade it's in. Never eased.
+                    self._release(name, row, now, self.cut[name])
                 elif self._lighting(row) and not row["exiting"]:
                     # Standing up, seen on a fresh frame: the quick exit; a task that ended with the person still
                     # seated (an answer, the patience): the slow one; another fixture taking the job: the crossfade.
@@ -586,7 +606,10 @@ class Preview:
         if not lit:
             if glide:
                 return   # landing first (P3 holds a MOVE that arrives during a move); it rises once it's there
-            if target != effective_target and not self._in_beam(row, person["target"]):
+            if target != effective_target and not (self._in_beam(row, person["target"])
+                                                    and self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M)):
+                # Pointing elsewhere, or near the page but with the beam as it points too close to the head: a dark
+                # move to the target den-core's eye rule cleared, then the rise.
                 if not self._can_send(row, now):
                     return
                 if row["timed"]:
@@ -695,19 +718,37 @@ class Preview:
                 and row["glide"] is None and not self._in_beam(row, person["target"], direction.DARK_HOLD))
 
     def _ready(self, row, person):
-        """A dark fixture already pointing at the page (a standby that has landed): it can take the job as a crossfade."""
+        """A dark fixture already pointing at the page (a standby that has landed), its beam as it points clearing the
+        head by admission's margin: it can take the job as a crossfade."""
         return (not self._lighting(row) and row["glide"] is None and row["pending"] is None
-                and self._in_beam(row, person["target"], direction.DARK_HOLD))
+                and self._in_beam(row, person["target"], direction.DARK_HOLD)
+                and self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M))
+
+    def _clear(self, row, person, clearance):
+        """The beam as the fixture points now (its joints mid-glide) passes the head with at least `clearance`: the
+        head's distance from the beam's centre ray. False without a head."""
+        head = person.get("head")
+        if not head:
+            return False
+        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
+                                         row["horizontal_world_reference"])
+        to = [head[i] - row["aim_origin_m"][i] for i in range(3)]
+        along = sum(aim[i] * to[i] for i in range(3))
+        if along <= 0:
+            return math.sqrt(sum(c * c for c in to)) >= clearance
+        return math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))) >= clearance
 
     @staticmethod
     def _can_send(row, now):
         """The firmware's radio rule for a real fixture (not a fictional one): at most RADIO_PER_S commands in any
-        second, Stop and keep-lit included. The direction's own commands wait their turn. A release (dark at once), an
-        exit's fade (the light going: dark within a second of standing) and Stop never wait, but they count. A
+        second, Stop and keep-lit included. The direction's own commands wait their turn, and while the fixture is lit
+        they take one slot fewer, so a Stop or a release (dark at once) never has to be a third command in a second.
+        Those, and an exit's fade (the light going: dark within a second of standing), never wait, but they count. A
         hand-off's fall waits like the rise it's paired with."""
         if row["profile"].get("fictional"):
             return True
-        return sum(1 for t in row["sends"] if t > now - 1.0 + 1e-9) < direction.RADIO_PER_S
+        slots = direction.RADIO_PER_S - (1 if Preview._lighting(row) else 0)
+        return sum(1 for t in row["sends"] if t > now - 1.0 + 1e-9) < slots
 
     def _standby(self, chosen, task, held, person):
         """The runner-up for the lit person: the best other admitted fixture (the same pick, keeping the current one)."""

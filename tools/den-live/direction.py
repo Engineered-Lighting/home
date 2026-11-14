@@ -35,13 +35,18 @@ SETTINGS = {
     "shift_m": 0.06,              # how far the book's settled place must move before a lit spot glides after it
     "shift_hold_s": 1.5,          # the window whose median is the book's settled place (a page turn is shorter)
     "page_up_m": 0.05,            # the page's centre: this far up the page from the hands (the page faces the eyes)
+    "facing_keep_deg": 5.0,       # a lit fixture keeps its job while it's no more than this in front of side-on.
+                                  # 5 is den-core's, the owner's setting of 2026-11-12; 10 is the owner's to choose:
+                                  # it stops nearly all the hand-offs the shoulders' swing makes on a side-on socket,
+                                  # but keeps a fixture up to 10 degrees in front after a real turn. Admission is
+                                  # den-core's side-on either way.
     "ambient_level": 0.75,        # the room's glow when nobody is doing a task (Home's own display default)
     "ambient_task_scale": 0.4,    # under a task light, the glow drops to this fraction
     "ambient_dim_s": 4.0,         # the room dims more slowly than the spot rises, so the eye follows it
     "ambient_delay_s": 0.5,       # and starts a beat after the spot, so the spot leads
     "ambient_restore_s": 1.5,     # when the task ends the room comes back as the spot goes out: no one sits in the dark
 }
-LIMITS = {"page_up_m": (0.0, 0.15), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
+LIMITS = {"page_up_m": (0.0, 0.15), "facing_keep_deg": (5.0, 10.0), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
           "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 2.5), "leave_fade_s": (0.0, 1.0), "leave_fade_board_s": (0.0, 1.0),
           "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
           "ambient_dim_s": (0.0, 20.0), "ambient_delay_s": (0.0, 5.0), "ambient_restore_s": (0.0, 10.0),
@@ -57,7 +62,9 @@ LEVEL_CODES = 254               # the board's spot level, 0-254 (contract 5's ro
 # replace the train with one MOVE per cue where the board has it.
 LEVEL_STEP_S = 0.1
 RADIO_STEP_S = 0.5
-RADIO_PER_S = 2                 # every command a real fixture is sent, per rolling second (the firmware's rule)
+RADIO_PER_S = 2                 # every command a real fixture is sent, per rolling second (the firmware's rule);
+                                # while it's lit the direction keeps one free for a Stop or a release, so a lit
+                                # train steps at most once a second
 # A board without lit travel (lit_motion false) holds its aim while the page is within this fraction of half the beam's
 # FWHM (at 0.5 the page keeps 84 % of the beam's centre light), because each re-aim there is a blink.
 DARK_HOLD = 0.5
@@ -90,8 +97,6 @@ WRISTS_LOST_S = 2.0             # without both wrists for this long, the page fa
 FACING_WINDOW_S = 3.0           # a seated person's facing is the circular mean over this window
 GLARE_KEEP_M = 0.12             # a lit fixture keeps its job while its beam's centre clears the head by this much
                                 # (admission still needs den-core's 0.15 m): head jitter can't flip it
-FACING_KEEP_DEG = 15.0          # and while it's no more than this in front of side-on (admission: den-core's 5), so
-                                # the shoulders' swing can't hand a side-on socket's light to another fixture
 
 
 def level_code(level):

@@ -709,6 +709,10 @@ class DirectionTest(PreviewTest):
         self.assertFalse(self.row()["on"])
         self.read()
         self.frames(self.preview.settings["fade_in_s"] + .5)
+        for _ in range(8):   # a real board's lit train steps once a second (the radio rule's free slot)
+            if self.row()["fade"] is None:
+                break
+            self.frames(.25)
         self.assertTrue(self.row()["on"])
         self.assertIsNone(self.row()["fade"])
 
@@ -934,9 +938,9 @@ class DirectionTest(PreviewTest):
         self.assertFalse(self.preview.latest["fixtures"][spare]["on"])
         evaluate = preview.Preview._eye
 
-        def refuse(owner, name, row, person, kept):
+        def refuse(owner, name, row, person, kept):   # an ordinary refusal: not the head or the eyes
             if name == lit:
-                return self.core.eye.aim.Candidate(name, False, "beam_through_head")
+                return self.core.eye.aim.Candidate(name, False, "too_far")
             return evaluate(owner, name, row, person, kept)
         since = len(self.snapshots)
         old_goal = self.preview.rows[lit]["goal"]
@@ -957,14 +961,116 @@ class DirectionTest(PreviewTest):
                      for name in goals) for snapshot in ticks.values()]
         self.assertGreater(min(light), .9, "the page never dips during a hand-off")
 
+    def two_lit(self):
+        """F3 and F4, the direction's defaults; one lit for the reader, the other the standby. Returns (lit, spare)."""
+        fixtures = {"F3": FIXTURES["F3"], "F4": {"aim_origin_m": [.6, .2, 2.5], "horizontal_world_reference": [0, 1, 0]}}
+        self.preview = preview.Preview(self.core, binding=BINDING, fixtures=fixtures, state=self.path,
+                                       clock=lambda: self.now, threaded=False, append=self.encoded.append)
+        self.preview.configure({"pre_aim": True})
+        self.preview.connect(lambda snapshot: self.snapshots.append(json.loads(json.dumps(snapshot))))
+        self.lit_by_direction()
+        rows = self.preview.latest["fixtures"]
+        lit, spare = ("F3", "F4") if rows["F3"]["on"] else ("F4", "F3")
+        self.frames(1.5)
+        return lit, spare
+
+    def test_the_clearance_is_on_the_beam_as_it_points(self):
+        """_clear measures the head's distance from the beam's centre ray at the fixture's current joints, not from the
+        line to the page."""
+        self.lit_by_direction()
+        row, person = self.preview.rows["F3"], self.preview.track
+        self.assertTrue(self.preview._clear(row, person, .12), "lit on the page: clear of the head")
+        at_head = tuple(map(self.core.joints.to_cdeg, self.core.joints.room_to_joints(
+            person["head"], row["aim_origin_m"], row["horizontal_world_reference"])))
+        self.assertFalse(self.preview._clear(dict(row, current=at_head), person, .12), "pointed at the head")
+        self.assertFalse(self.preview._clear(row, dict(person, head=None), .12), "no head, no clearance")
+
+    def test_a_head_or_eyes_refusal_cuts_at_once_even_mid_crossfade(self):
+        """Easing is for ordinary hand-offs: a light refused for the reader's head or eyes goes dark in the same
+        snapshot, at level 0, whatever fade it's in."""
+        for reason in ("beam_through_head", "in_front_of_reader"):
+            with self.subTest(reason):
+                self.encoded.clear()
+                lit, spare = self.two_lit()
+                evaluate = preview.Preview._eye
+                state = {"why": "too_far"}
+
+                def refuse(owner, name, row, person, kept):
+                    if name == lit:
+                        return self.core.eye.aim.Candidate(name, False, state["why"])
+                    return evaluate(owner, name, row, person, kept)
+                with patch.object(preview.Preview, "_eye", refuse):
+                    self.frames(.5)   # an ordinary hand-off begins: the old light eases out
+                    self.assertEqual(self.preview.rows[lit]["exiting"], "too_far")
+                    self.assertTrue(self.row_of(lit)["on"])
+                    state["why"] = reason
+                    self.now = round(self.now + .25, 6)
+                    self.track()
+                    self.assertFalse(self.row_of(lit)["on"], "cut at once")
+                    self.assertEqual(self.row_of(lit)["level"], 0.0)
+                    self.assertEqual(self.preview.rows[lit]["reason"], reason)
+                self.rule, self.rule_epoch = seated_rule.Published(), 1
+
+    def row_of(self, name):
+        return self.preview.latest["fixtures"][name]
+
+    def test_a_lit_beam_that_points_into_the_head_is_cut_at_once(self):
+        """The eye rule's line to the page can be clear while the beam as it points isn't (a rise in place, the hold,
+        a standby's hand-over all point a little off that line): the light is cut at once, not eased."""
+        self.lit_by_direction()
+        self.assertTrue(self.row()["on"])
+        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance: False):
+            self.now = round(self.now + .25, 6)
+            self.track()
+        self.assertFalse(self.row()["on"])
+        self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head")
+        self.assertIsNone(self.row()["fade"], "no fade")
+
+    def test_a_rise_in_place_needs_the_beam_as_it_points_clear_of_the_head(self):
+        """A pre-aim near the page rises where it points only if that beam clears the head by admission's margin;
+        otherwise it moves dark to the target the eye rule cleared, and rises there."""
+        self.seat()
+        self.frames(6)
+        row = self.preview.rows["F3"]
+        self.assertEqual(row["reason"], "pre_aim")
+        nudged = (row["current"][0] + 300, row["current"][1])   # 3 degrees off: still in the beam
+        row["current"] = nudged
+        since = len(self.encoded)
+        with patch.object(preview.Preview, "_clear",
+                          lambda owner, row, person, clearance: tuple(row["current"]) != nudged):
+            self.read()
+            self.frames(.5)
+        moves = self.moves(since)
+        self.assertTrue(moves and tuple(moves[0]["requested"]["start_cdeg"]) == nudged
+                        and moves[0]["requested"]["travel"] == "dark", "a dark move first, not a rise in place")
+
+    def test_a_standby_too_close_to_the_head_does_not_take_over(self):
+        self.dark_only("F3", "F4")
+        self.lit_by_direction()
+        rows = self.preview.latest["fixtures"]
+        lit, spare = ("F3", "F4") if rows["F3"]["on"] else ("F4", "F3")
+        self.frames(1.5)
+        self.assertEqual(self.preview.rows[spare]["reason"], "standby")
+        outgrown, clear = preview.Preview._outgrown, preview.Preview._clear
+
+        def gone(owner, row, person):
+            return row is owner.rows[lit] and owner._lighting(row) and not row["exiting"] or outgrown(owner, row, person)
+
+        def standby_near_head(owner, row, person, clearance):
+            return row is not owner.rows[spare] and clear(owner, row, person, clearance)
+        with patch.object(preview.Preview, "_outgrown", gone), patch.object(preview.Preview, "_clear", standby_near_head):
+            self.frames(1.0)
+        self.assertNotEqual(self.preview.rows[lit]["reason"], "handed_on")
+        self.assertFalse(self.row_of(spare)["on"])
+
     def test_den_cores_dimming_curve_is_the_directions(self):
         for level in (0, .01, .08, .2, .5, .77, 1):
             self.assertAlmostEqual(direction.output(level), self.core.spot_light.dimming_fraction(level), places=12)
 
-    def test_a_lit_fixture_keeps_its_job_through_the_shoulders_swing(self):
-        """den-core admits a fixture at side-on or behind and keeps a lit one to 5 degrees in front; the direction keeps
-        a lit one to FACING_KEEP_DEG, so a side-on socket's light isn't handed on by the shoulders' swing. A real turn
-        still refuses it."""
+    def test_a_lit_fixture_keeps_its_job_by_the_owners_facing_margin(self):
+        """den-core admits a fixture at side-on or behind and keeps a lit one to 5 degrees in front, the owner's setting;
+        facing_keep_deg lets the owner choose up to 10, so the shoulders' swing on a side-on socket doesn't hand its
+        light on. A real turn past the margin still refuses it."""
         person = {"track_id": "t1", "head": (1.2, 1.0, 1.25), "shoulder_mid": (1.2, 1.0, .95), "facing": (0.0, 1.0),
                   "target": (1.2, 1.3, .7)}
 
@@ -972,12 +1078,16 @@ class DirectionTest(PreviewTest):
             a = math.radians(degrees_in_front)
             return {"aim_origin_m": [1.2 + 2 * math.cos(a), 1.0 + 2 * math.sin(a), 2.5],
                     "horizontal_world_reference": [0, 1, 0]}
-        keep = direction.FACING_KEEP_DEG
+        self.assertEqual(self.preview.settings["facing_keep_deg"], 5.0, "den-core's, by default")
         self.assertEqual(self.preview._eye("X", socket(3), person, False).reason, "in_front_of_reader",
                          "admission is den-core's")
-        self.assertTrue(self.preview._eye("X", socket(keep - 1), person, True).ok, "kept through the swing")
-        self.assertEqual(self.preview._eye("X", socket(keep + 1), person, True).reason, "in_front_of_reader",
-                         "a real turn refuses it")
+        for keep in (5.0, 10.0):
+            with self.subTest(keep):
+                self.assertEqual(self.preview.configure({"facing_keep_deg": keep})[0], 200)
+                self.assertTrue(self.preview._eye("X", socket(keep - 1), person, True).ok, "kept through the swing")
+                self.assertEqual(self.preview._eye("X", socket(keep + 1), person, True).reason, "in_front_of_reader",
+                                 "a real turn refuses it")
+        self.assertEqual(self.preview.configure({"facing_keep_deg": 15.0})[0], 400, "no more than 10")
 
     def dark_only(self, *names):
         """Real fixtures without lit travel (lit_motion false): the 0.5 s train and the radio rule."""
@@ -1038,6 +1148,11 @@ class DirectionTest(PreviewTest):
                            and row["action"] in ("aim_move", "keep_lit", "stop"))
             self.assertTrue(times, name)
             self.assertTrue(all(c - a >= 1.0 - 1e-9 for a, c in zip(times, times[2:])), name)
+            # and while lit, the direction leaves a slot free: no two of its own commands inside a second
+            own = sorted(row["at"] for row in self.encoded if row.get("fixture_id", name) == name and "at" in row
+                         and row["action"] in ("aim_move", "keep_lit")
+                         and row["effective"].get("spot_level", 0) > 0)
+            self.assertTrue(all(b - a >= 1.0 - 1e-9 for a, b in zip(own, own[1:])), name)
 
     def test_every_snapshot_is_one_home_accepts(self):
         """Home's validRow: lit means a level above 0 and the keep-lit token equal to the move's sequence; dark means

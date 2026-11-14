@@ -105,21 +105,77 @@ export function planLines(plan) {
     return lights.map(([light, scene]) => `${lightName(light)}: ${sceneWords(scene)}`);
 }
 
-/* What it learned: per situation and light, the scene and how many of your changes it rests on. */
+const changes = n => `${n} ${n === 1 ? 'change' : 'changes'}`;
+/* What it learned: per situation and light, the scene and how many of your changes it rests on. A situation's spot and
+ * room are the virtual lights' (learnedFromYouLines), never bulbs. */
+const VIRTUAL_LEARNED = new Set(['spot', 'room']);
 export function learnedLines(learned) {
     const lines = [];
     for (const [key, lights] of Object.entries(learned && typeof learned === 'object' ? learned : {}).sort(([a], [b]) => a.localeCompare(b))) {
-        for (const [light, row] of Object.entries(lights && typeof lights === 'object' ? lights : {}).sort(([a], [b]) => a.localeCompare(b))) {
+        for (const [light, row] of Object.entries(lights && typeof lights === 'object' ? lights : {}).filter(([name]) => !VIRTUAL_LEARNED.has(name))
+            .sort(([a], [b]) => a.localeCompare(b))) {
             const n = Number.isFinite(row?.n) ? row.n : 0;
-            lines.push(`${situationWords(key)} · ${lightName(light)}: ${sceneWords(row)} (${n} ${n === 1 ? 'change' : 'changes'})`);
+            lines.push(`${situationWords(key)} · ${lightName(light)}: ${sceneWords(row)} (${changes(n)})`);
         }
     }
     return lines.length ? lines : ['Nothing yet'];
 }
 
+/* What the virtual spot and the room glow learned from your hand (den-live's learned_from_you, den-manual-1):
+ * lux_scale is the light against the coordinator's own choice, offset_m metres from the page ([x, y, z], or null). */
+function spotLearnedWords(spot) {
+    if (spot.off === true) return 'spot off';
+    const offset = Array.isArray(spot.offset_m) ? Math.hypot(...spot.offset_m.filter(Number.isFinite))
+        : Number.isFinite(spot.offset_m) ? Math.abs(spot.offset_m) : 0;
+    const parts = [];
+    if (offset >= .005) parts.push(`aimed ${Math.round(offset * 100)} cm off the page`);
+    if (Number.isFinite(spot.lux_scale) && Math.abs(spot.lux_scale - 1) >= .005)
+        parts.push(`${Math.round(Math.abs(spot.lux_scale - 1) * 100)}% ${spot.lux_scale > 1 ? 'brighter' : 'dimmer'}`);
+    return `spot ${parts.join(', ') || 'as it chose'}`;
+}
+function roomLearnedWords(room) {
+    return `room glow ${[percent(Number.isFinite(room.level) ? room.level * 255 : null), Number.isFinite(room.cct_k) ? `${Math.round(room.cct_k)} K` : '']
+        .filter(Boolean).join(' · ') || 'as it chose'}`;
+}
+/* "Reading, evening: spot aimed 6 cm off the page, 20% dimmer; room glow 30% · 2700 K. Learned from you (3 changes)". */
+export function learnedFromYouLines(fromYou) {
+    const lines = [];
+    for (const [key, rows] of Object.entries(fromYou && typeof fromYou === 'object' ? fromYou : {}).sort(([a], [b]) => a.localeCompare(b))) {
+        const parts = [['spot', spotLearnedWords], ['room', roomLearnedWords]].filter(([name]) => rows?.[name] && typeof rows[name] === 'object');
+        if (!parts.length) continue;
+        const n = parts.reduce((sum, [name]) => sum + (Number.isFinite(rows[name].n) ? rows[name].n : 0), 0);
+        lines.push(`${situationWords(key)}: ${parts.map(([name, words]) => words(rows[name])).join('; ')}. Learned from you (${changes(n)})`);
+    }
+    return lines;
+}
+/* The Learned list: the bulbs' lines, then what the virtual lights learned from your hand: from learned_from_you, or
+ * from the spot and room den-live also keeps in each situation of learned. */
+export function allLearnedLines(state) {
+    const source = state?.learned_from_you && typeof state.learned_from_you === 'object' ? state.learned_from_you : state?.learned;
+    const fromYou = learnedFromYouLines(source), bulbs = learnedLines(state?.learned);
+    return fromYou.length && bulbs[0] === 'Nothing yet' ? fromYou : [...bulbs, ...fromYou];
+}
+
 export function summaryWords(state) {
     if (!state) return 'Lighting coordinator';
     return `Lighting coordinator · ${state.on ? 'On' : 'Off'}${state.stopped ? ' · Stop holds' : ''} · ${situationWords(state.situation)}`;
+}
+
+/* The fixtures a person holds (home-den-spot-playback.mjs handHolds), in plain words: "You're in control of Desk spot ·
+ * the coordinator will learn from this", or '' with none. The second half only while den-live takes the change. */
+export function manualWords(holds) {
+    if (!holds?.length) return '';
+    const names = holds.map(hold => hold.label || hold.fixture_id);
+    const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    const learning = holds.some(hold => hold.learning === 'pending' || hold.learning === 'recorded');
+    return `You're in control of ${list}${learning ? ' · the coordinator will learn from this' : ''}`;
+}
+
+/* A held spot whose beam crosses a head (den-live's hand.warning). den-live never cuts a held spot: Home only says so. */
+const BEAM_WARNING = { beam_through_head: 'crosses your eyes', beam_through_another_head: "crosses someone's head" };
+export function handWarningWords(holds) {
+    return (holds || []).filter(hold => hold.warning).map(hold =>
+        `${hold.label || hold.fixture_id}'s beam ${BEAM_WARNING[hold.warning] || words(hold.warning)}`).join(' · ');
 }
 
 /* The settings den-live changed, as a POST body: only the ones that differ from what it has. */
@@ -185,6 +241,17 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
     // Steps and limits only set the arrows' increments: any value goes to den-live, which says what it refuses.
     settings.noValidate = true;
     if (!lookOnly) learnedHead.append(clearButton);
+    // A person holding a fixture, said plainly outside the drawer, with the Resume chip that hands it back.
+    const manualRow = element('p', 'home-den-live-coordinator-manual');
+    manualRow.dataset.denCoordinatorManual = '1'; manualRow.setAttribute('role', 'status'); manualRow.hidden = true;
+    const manualText = element('span', 'home-den-live-coordinator-manual-text');
+    const manualWarning = element('span', 'home-den-live-coordinator-manual-warning');
+    const handBackButton = element('button', 'home-den-live-coordinator-button home-den-live-coordinator-inline', 'Resume');
+    handBackButton.type = 'button'; handBackButton.dataset.denCoordinatorHandBack = '1';
+    handBackButton.setAttribute('aria-label', 'Resume: hand the lights back to the coordinator');
+    manualRow.append(manualText, manualWarning, handBackButton);
+    const wrapper = element('div', 'home-den-live-coordinator-wrap');
+    wrapper.append(manualRow, root);
     body.append(...(lookOnly ? [] : [controls]), facts, error, whyHead, why, planHead, plan, learnedHead, learned,
         ...(lookOnly ? [] : [settingsHead, settings]));
 
@@ -253,6 +320,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
     });
     stopButton.addEventListener('click', () => { void control('stop'); });
     resumeButton.addEventListener('click', () => { void control('resume'); });
+    handBackButton.addEventListener('click', () => { spots?.handBack?.(); render(); });
     deskButton.addEventListener('click', () => {
         const on = !deskOn();
         void post('desk', { on }, on ? 'Starting the desk test' : 'Stopping the desk test');
@@ -329,11 +397,17 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         const shownOn = spots ? controlState?.on === true && !spots.holds().off : state?.on === true;
         const shownStop = spots ? controlState?.stopped === true || !!spots.holds().stop : state?.stopped === true;
         const applied = spots?.current();
+        const manual = lookOnly ? [] : spots?.handHolds?.() || [];
+        const handHeld = new Set(manual.map(hold => hold.fixture_id));
+        manualRow.hidden = !manual.length;
+        setText(manualText, manualWords(manual));
+        setText(manualWarning, handWarningWords(manual));
         const shown = state && { ...state, on: shownOn, stopped: shownStop };
         setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown));
         setText(error, controlProblem || problem);
         if (spots) {
-            fillList(why, applied?.fixtures.map(row => `${row.fixture_id} · ${reasonWords(row.reason)}${row.target_basis ? ` · ${words(row.target_basis)}` : ''}${row.last_move_trace_id ? ` · Trace ${row.last_move_trace_id}` : ''}`)
+            fillList(why, applied?.fixtures.map(row => handHeld.has(row.fixture_id) ? `${row.fixture_id} · in your hands`
+                : `${row.fixture_id} · ${reasonWords(row.reason)}${row.target_basis ? ` · ${words(row.target_basis)}` : ''}${row.last_move_trace_id ? ` · Trace ${row.last_move_trace_id}` : ''}`)
                 || ['No fresh spot snapshot']);
             why.title = '';
             stopButton.disabled = false;
@@ -361,7 +435,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
             why.title = typeof state.decision?.why === 'string' ? state.decision.why.slice(0, 600) : '';
         }
         fillList(plan, spots ? ['Existing Hue automation'] : planLines(state.plan));
-        fillList(learned, learnedLines(state.learned));
+        fillList(learned, allLearnedLines(state));
         if (!lookOnly) {
             setText(switchButton, shownOn ? 'Turn off' : 'Turn on');
             switchButton.setAttribute('aria-pressed', shownOn ? 'true' : 'false');
@@ -370,7 +444,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
             setText(clearButton, armed ? 'Clear: sure?' : 'Clear');
             clearButton.dataset.armed = armed ? '1' : '';
             for (const button of spots ? [clearButton] : [switchButton, deskButton, clearButton]) button.disabled = busy;
-            clearButton.hidden = learnedLines(state.learned)[0] === 'Nothing yet' && !armed;
+            clearButton.hidden = allLearnedLines(state)[0] === 'Nothing yet' && !armed;
             renderSettings(state.settings);
             renderSettingsButton();
         }
@@ -400,7 +474,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
     }
 
     return {
-        element: root,
+        element: wrapper,
         tick() {
             paused = false;
             if (clock() - lastPoll >= (kind === 'absent' ? ABSENT_POLL_MS : POLL_MS)) void poll();
@@ -417,6 +491,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         },
         refresh: render,
         status: () => ({ kind, on: spots ? spots.control()?.on ?? null : state ? state.on === true : null, situation: state ? situationWords(state.situation) : null,
-            polls, posts, problem: controlProblem || problem, hidden: root.hidden, open: root.open, buttons: !lookOnly }),
+            polls, posts, problem: controlProblem || problem, hidden: root.hidden, open: root.open, buttons: !lookOnly,
+            manual: manualRow.hidden ? null : manualText.textContent, warning: manualWarning.textContent || null }),
     };
 }

@@ -227,3 +227,120 @@ test('a moving row reaches the overlay with its glide on Home\'s clock, and the 
     assert.deepEqual(ambientOf({ level: .5, cct_k: 1000 }), { level: .5, cct_k: 2200 });
     assert.equal(localGlide({ ...glide, shape: 'linear' }, 0), null, 'only the board\'s own curve is drawn');
 });
+
+// A person's settled change, as the overlay reports it (equipment-virtual-fixtures.mjs onHandChange).
+function handSetup({ answer = (path, body) => ({ status: 200, answer: { ok: true, event_id: body.event_id, recorded: true, learned: false,
+    why_not: null, hand: { event_id: body.event_id, parts: ['spot'] }, from_seq: 5 } }), withPost = true } = {}) {
+    let at = 1000, listener = null, ids = 0;
+    const posts = [], released = [], queued = [], holds = new Map();
+    const scope = { generation: 1, binding: { content_revision: binding.scan_revision },
+        equipment_revision: binding.equipment_revision, equipment_digest: binding.equipment_digest, fixture_ids: [fixture] };
+    const overlay = { coordinatorSpotScope: () => scope, applyCoordinatorSpots: () => true,
+        onVirtualFixtureHand(fn) { listener = fn; return () => { listener = null; }; },
+        virtualFixtureHandHolds: () => [...holds.values()],
+        releaseVirtualFixtureHand(id) { released.push(id); holds.delete(id); return [id]; },
+        releaseVirtualFixtureHands() { const all = [...holds.keys()]; holds.clear(); return all; } };
+    const post = withPost ? async (path, body) => { posts.push({ path, body: structuredClone(body) }); return answer(path, body, posts.length); } : null;
+    const player = createSpotPlayback({ home: 'den', site: 'victoria', clock: () => at, post, makeEventId: () => `home-${++ids}`,
+        later(callback) { queued.push(callback); return queued.length; }, cancel() {} });
+    player.attach(overlay);
+    player.connect(at);
+    player.anchor({ epoch: lit.epoch, server_mono: 10 });
+    player.tracking(binding.transform_id, binding.scan_revision);
+    const start = () => { holds.set(fixture, { fixture_id: fixture, label: 'Desk spot', reason: 'aim', since_ms: 1 }); listener?.({ phase: 'start', fixture_id: fixture }); };
+    const settle = (patch = {}) => listener?.({ phase: 'settled', fixture_id: fixture, label: 'Desk spot', reason: 'aim', before: { tilt_deg: 30 },
+        after: { tilt_deg: 41 }, at_ms: 1700000000000, ...patch });
+    const change = patch => { start(); settle(patch); };
+    const snap = (seq, hand) => player.receive({ ...lit, seq, fixtures: { [fixture]: { ...lit.fixtures[fixture], hand } } });
+    const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
+    return { player, overlay, posts, released, queued, holds, start, settle, change, snap, flush, listener: () => listener };
+}
+
+test('a settled hand change goes to den-live once, with the snapshot Home was drawing, and its hold ends only when den-live releases it', async () => {
+    const { player, posts, released, change, snap, flush, holds } = handSetup();
+    change();
+    assert.equal(posts.length, 0, 'no snapshot drawn yet: nothing to learn against');
+    assert.equal(player.handHolds()[0].learning, 'unsent');
+    snap(1, null);
+    change();
+    await flush();
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].path, 'manual');
+    assert.deepEqual(posts[0].body, { schema: 'den-manual-1', event_id: 'home-1', fixture_id: fixture, before: { tilt_deg: 30 },
+        after: { tilt_deg: 41 }, at_ms: 1700000000000, snapshot: { epoch: lit.epoch, seq: 1 } });
+    assert.equal(player.handHolds()[0].learning, 'recorded');
+    // Before from_seq, and before den-live has shown the hand, a snapshot without it ends nothing.
+    snap(3, null); snap(4, null);
+    assert.deepEqual(released, []);
+    snap(5, { event_id: 'home-1', parts: ['spot'], since_mono: 1, ends: 'task_change', warning: null });
+    assert.equal(player.handHolds()[0].warning, null);
+    snap(6, { event_id: 'home-1', parts: ['spot'], since_mono: 1, ends: 'task_change', warning: 'beam_through_head' });
+    assert.equal(player.handHolds()[0].warning, 'beam_through_head', 'the held spot is kept, and Home warns');
+    assert.deepEqual(released, []);
+    snap(7, null);
+    assert.deepEqual(released, [fixture], 'den-live released it at its next reason to act');
+    assert.equal(holds.size, 0);
+    snap(8, null);
+    assert.deepEqual(released, [fixture], 'once');
+});
+
+test('a declined change, an older den-live and another run never hand the fixture back; Resume and Off then On do, and tell den-live', async () => {
+    const declined = handSetup({ answer: (path, body) => ({ status: 200, answer: { ok: true, event_id: body.event_id, recorded: false,
+        learned: false, why_not: 'no_situation', hand: null, from_seq: 2 } }) });
+    declined.snap(1, null); declined.change(); await declined.flush();
+    declined.snap(2, null); declined.snap(3, null);
+    assert.deepEqual(declined.released, [], 'den-live never showed a hand: Home keeps holding');
+    assert.deepEqual(declined.player.handHolds().map(hold => [hold.learning, hold.why_not]), [['not_recorded', 'no_situation']]);
+    const older = handSetup({ answer: () => ({ status: 404, answer: { ok: false, error: 'not_served' } }) });
+    older.snap(1, null); older.change(); await older.flush();
+    older.snap(2, null);
+    assert.equal(older.posts.length, 1, 'a 4xx is never retried');
+    assert.equal(older.player.handHolds()[0].learning, 'unsupported');
+    assert.deepEqual(older.released, []);
+    // Another run (den-live restarted) can't end a hold taken in the last one.
+    const restarted = handSetup();
+    restarted.snap(1, null); restarted.change(); await restarted.flush();
+    restarted.snap(5, { event_id: 'home-1' });
+    restarted.player.anchor({ epoch: 'preview-b', server_mono: 10 });
+    restarted.player.receive({ ...lit, epoch: 'preview-b', seq: 9, fixtures: { [fixture]: { ...lit.fixtures[fixture], hand: null } } });
+    assert.deepEqual(restarted.released, []);
+    // Resume hands it back and posts manual/resume; so does the coordinator going from off to on.
+    assert.equal(restarted.player.handBack(), 1);
+    await restarted.flush();
+    assert.deepEqual(restarted.posts.at(-1), { path: 'manual/resume', body: { fixture_id: fixture } });
+    restarted.change();
+    restarted.player.observeControl({ on: false, stopped: false, stop_counter: 0 });
+    restarted.player.observeControl({ on: true, stopped: false, stop_counter: 0 });
+    await restarted.flush();
+    assert.deepEqual(restarted.posts.at(-1), { path: 'manual/resume', body: { fixture_id: fixture } });
+    assert.equal(restarted.holds.size, 0);
+});
+
+test('a dropped report retries with the same event_id; a look-only page sends nothing', async () => {
+    const flaky = handSetup({ answer: (path, body, n) => n === 1 ? { status: 503, answer: null }
+        : { status: 200, answer: { ok: true, event_id: body.event_id, recorded: true, from_seq: 3 } } });
+    flaky.snap(1, null); flaky.change(); await flaky.flush();
+    assert.equal(flaky.posts.length, 1);
+    flaky.queued.pop()(); await flaky.flush();   // the retry is the last thing queued
+    assert.deepEqual(flaky.posts.map(row => row.body.event_id), ['home-1', 'home-1']);
+    assert.equal(flaky.player.handHolds()[0].learning, 'recorded');
+    const look = handSetup({ withPost: false });
+    look.snap(1, null); look.change(); await look.flush();
+    assert.equal(look.posts.length, 0);
+    assert.equal(look.player.handHolds()[0].learning, 'none');
+    assert.equal(look.player.handBack(), 1);
+});
+
+test('the report names the snapshot drawn before the burst started, and the hold counts in the run den-live replies with', async () => {
+    const { posts, released, start, settle, snap, flush } = handSetup({ answer: (path, body) => ({ status: 200, answer: { ok: true,
+        event_id: body.event_id, recorded: true, from_seq: 4, epoch: 'preview-b' } }) });
+    snap(1, null);
+    start();
+    snap(2, null); snap(3, null);   // den-live glides on while the hand works
+    settle();
+    await flush();
+    assert.deepEqual(posts[0].body.snapshot, { epoch: lit.epoch, seq: 1 });
+    // den-live answered from another run: only that run's snapshots can end the hold.
+    snap(4, { event_id: 'home-1' }); snap(5, null);
+    assert.deepEqual(released, []);
+});

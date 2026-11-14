@@ -43,6 +43,14 @@ const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = .0005, RADIAL_SETTLED_KELVIN 
 // The coordinator's spot (den-live's light direction): its level arrives as the level train's committed steps, about
 // one a 0.1 s tick, and is eased between them over this time; its glide is drawn on the board's S-curve every frame.
 const SPOT_EASE_MS = 120, SPOT_SETTLED_LEVEL = .002;
+// A person's hand on a fixture the coordinator owns. The owner's principle (2026-11-14): the coordinator coexists with
+// the person, predicts the best light, never blocks a change, and learns from it. So no change is refused: a person's
+// change holds its fixture, and the coordinator's rows, room glow and Stop pass it by until den-live has a new reason
+// to act (home-den-spot-playback.mjs ends the hold from den-live's snapshot), Resume, or the coordinator turning on.
+// Changes to one fixture that follow each other within this long are one settled change, reported once to
+// onHandChange's listeners: {phase: 'settled', fixture_id, label, reason, before, after, at_ms}, with only the keys that
+// changed (and {phase: 'start', fixture_id} as the burst starts).
+export const HAND_SETTLE_MS = 800;
 const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
 // SPEC Aim lifecycle: Set aim moves the warm beam to its new target with a
 // 650 ms sweep (ease-out cubic, as in the prototype), instant under reduced
@@ -622,7 +630,8 @@ function buildFixture(item, state, depth, reducedMotion) {
         pick, handlePick, spotPool: spotBeam.disc, spotVolume: spotBeam.volume, setSelected(value) { selected = value; handle.visible = value; } };
 }
 
-export function createEquipmentVirtualFixtures(parent, { binding = null, siteId = 'victoria' } = {}) {
+export function createEquipmentVirtualFixtures(parent, { binding = null, siteId = 'victoria',
+    later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id) } = {}) {
     if (!parent?.isObject3D) throw TypeError('equipment_preview_parent_required');
     const expectedBinding = binding && { ...binding };
     const root = new THREE.Group();
@@ -638,6 +647,60 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
     // glow and downlight before the coordinator's ambient, to put back when it stops directing the room.
     const coordinatorPlays = new Map();
     let houseRoom = null;
+    // fixture id → {reason, since, before, timer}: the fixtures a person holds. before is the state at the first change
+    // of a burst not reported yet, and timer its HAND_SETTLE_MS.
+    const handHolds = new Map(), handListeners = new Set();
+    const channel = value => ({ on: value.on, brightness: value.brightness, color_temp_kelvin: value.color_temp_kelvin });
+    /* A fixture's state in den-manual-1's shapes (pan_deg, tilt_deg, target, spotlight, downward, radials). */
+    function handState(id) {
+        const state = states.get(id), target = targets.get(id), item = fixtures.find(candidate => candidate.id === id);
+        const out = { pan_deg: state.pan_deg, tilt_deg: state.tilt_deg, target: target ? copy({ point: target.point, normal: target.normal,
+            surface_id: target.surface_id ?? null, kind: target.kind ?? null }) : null, spotlight: channel(state.spotlight) };
+        if (!item?.spotOnly) {
+            out.downward = channel(state.downward);
+            out.radials = state.radials.map(zone => ({ number: zone.number, ...channel(zone) }));
+        }
+        return out;
+    }
+    /* Only what changed: whole keys, and radials zone by zone. */
+    function handDiff(from, to) {
+        const before = {}, after = {};
+        for (const key of ['pan_deg', 'tilt_deg', 'target', 'spotlight', 'downward']) {
+            if (!(key in from) && !(key in to) || JSON.stringify(from[key]) === JSON.stringify(to[key])) continue;
+            before[key] = from[key] ?? null; after[key] = to[key] ?? null;
+        }
+        const zones = (to.radials || []).filter(zone => JSON.stringify(zone) !== JSON.stringify((from.radials || []).find(old => old.number === zone.number)));
+        if (zones.length) {
+            before.radials = zones.map(zone => (from.radials || []).find(old => old.number === zone.number)).filter(Boolean);
+            after.radials = zones;
+        }
+        return Object.keys(after).length ? { before, after } : null;
+    }
+    function settleHand(id, hold) {
+        if (disposed || handHolds.get(id) !== hold) return;
+        hold.timer = null;
+        const from = hold.before;
+        hold.before = null;
+        const change = from && states.has(id) ? handDiff(from, handState(id)) : null;
+        if (!change) return;
+        const event = copy({ phase: 'settled', fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id, reason: hold.reason, ...change, at_ms: Date.now() });
+        for (const listener of [...handListeners]) try { listener(event); } catch (_) { /* a listener never blocks the hand */ }
+    }
+    function releaseHold(id) {
+        const hold = handHolds.get(id);
+        if (!hold) return false;
+        if (hold.timer !== null) cancel(hold.timer);
+        handHolds.delete(id);
+        // What the hand left becomes the fixture's own glow, to put back when the coordinator stops directing the room.
+        const state = states.get(id);
+        if (houseRoom?.has(id) && state) houseRoom.set(id, { radials: state.radials.map(({ azimuth_deg, ...zone }) => zone),
+            downward: copy(state.downward) });
+        return true;
+    }
+    function clearHolds() {
+        for (const hold of handHolds.values()) if (hold.timer !== null) cancel(hold.timer);
+        handHolds.clear();
+    }
     function coordinatorFrame(id, nowMs, snap) {
         const play = coordinatorPlays.get(id), state = states.get(id), view = views.get(id);
         if (!play || !state || !view) return false;
@@ -671,16 +734,17 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
     function directRoom(ambient) {
         if (ambient === undefined) return;
         if (ambient === null) {
-            if (houseRoom) for (const [id, room] of houseRoom) if (states.has(id)) states.set(id, nextState(states.get(id), room));
+            if (houseRoom) for (const [id, room] of houseRoom) if (states.has(id) && !handHolds.has(id)) states.set(id, nextState(states.get(id), room));
             houseRoom = null;
             return;
         }
-        // Only fixtures with a glow of their own: a spot-only fixture has no glow zones or downlight to dim.
+        // Only fixtures with a glow of their own: a spot-only fixture has no glow zones or downlight to dim. A held
+        // fixture keeps what the hand painted.
         const glowing = [...states].filter(([id]) => !fixtures.find(item => item.id === id)?.spotOnly);
         houseRoom ??= new Map(glowing.map(([id, state]) => [id, { radials: state.radials.map(({ azimuth_deg, ...zone }) => zone),
             downward: copy(state.downward) }]));
         const patch = roomPatch(ambient);
-        for (const [id, state] of glowing) states.set(id, nextState(state, patch));
+        for (const [id, state] of glowing) if (!handHolds.has(id)) states.set(id, nextState(state, patch));
     }
     const snapPresentation = nowMs => {
         for (const id of coordinatorPlays.keys()) coordinatorFrame(id, nowMs, true);
@@ -703,7 +767,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             color_temp_ranges: { radials: [...PROFILE.radials.cct_range_k], downward: [...PROFILE.downlight_ring.cct_range_k], spotlight: [...PROFILE.spot.cct_range_k] },
             profile_status: 'display_model', geometry_status: 'symbolic', optical_origin_m: null,
         })), omitted: omitted.map(item => ({ ...item })), physical_commands: false });
-    const clear = () => { presentationActive = false; coordinatorPlays.clear(); houseRoom = null; disposeChildren(root); depth.reset(); views.clear(); fixtures = []; signature = null; revision = null; digest = null; omitted = []; generation++; };
+    const clear = () => { presentationActive = false; coordinatorPlays.clear(); houseRoom = null; clearHolds(); disposeChildren(root); depth.reset(); views.clear(); fixtures = []; signature = null; revision = null; digest = null; omitted = []; generation++; };
     const interactionDescriptor = fixtureId => {
         const item = fixtures.find(candidate => candidate.id === fixtureId);
         if (disposed || !item) return null;
@@ -744,6 +808,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
                 root.add(...[...views.values()].map(view => view.root)); signature = nextSignature; scopeIdentity = nextScope;
             }
             revision = next.revision; digest = next.digest; omitted = next.omitted; coordinatorOwned = coordinator;
+            if (!coordinator) clearHolds();
             status = next.fixtures.length ? 'ready' : 'empty'; reason = null;
         } catch (error) {
             clear(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; status = 'unavailable'; reason = error.message;
@@ -758,7 +823,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
     /* rows: den-virtual-spots-1's fixtures (null blanks every spot at once: Stop, expiry, a lost stream). A row's level
      * is eased toward over SPOT_EASE_MS and a row's glide_local is drawn every frame, except that Stop and Off blank at
      * once. ambient: the coordinator's room glow, on every fixture's glow zones and downlight ({level, cct_k}); null puts
-     * each fixture's own back; undefined leaves them. */
+     * each fixture's own back; undefined leaves them. A fixture a person holds is passed by: its row is checked, never
+     * drawn, and neither the room glow nor a blank reaches it. */
     function applyCoordinatorSpots(rows, expectedGeneration = generation, { ambient } = {}) {
         if (!coordinatorOwned || disposed || status !== 'ready' || expectedGeneration !== generation) return false;
         try {
@@ -766,7 +832,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             if (!rows) {
                 coordinatorPlays.clear();
                 directRoom(null);
-                const next = [...states].map(([id, state]) => [id, nextState(state, { spotlight: { on: false, brightness: 0 } })]);
+                const next = [...states].filter(([id]) => !handHolds.has(id))
+                    .map(([id, state]) => [id, nextState(state, { spotlight: { on: false, brightness: 0 } })]);
                 for (const [id, state] of next) {
                     views.get(id).update(state);
                     states.set(id, state);
@@ -781,6 +848,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             const nowMs = performance.now(), still = reducedMotion?.matches || !root.visible || visibilityDocument?.hidden;
             let moving = false;
             for (const row of rows) {
+                if (handHolds.has(row.fixture_id)) continue;
                 const play = coordinatorPlays.get(row.fixture_id) || { shown: 0, at: nowMs, cct: row.cct_k };
                 play.pan = row.pan_deg; play.tilt = row.tilt_deg;
                 play.target = row.on ? row.level : 0;
@@ -800,7 +868,42 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             return false;
         }
     }
+    /* A person's change to a fixture the coordinator owns (home-apartment.jsx releaseFixtureForHandChange, called just
+     * before the change): hold it, and report the burst once it settles. Its spot stays where the coordinator left it
+     * until the hand moves it. */
+    function holdForHand(fixtureId, { reason = 'change' } = {}) {
+        if (disposed || !coordinatorOwned || status !== 'ready' || !states.has(fixtureId)) return false;
+        const hold = handHolds.get(fixtureId) || { since: Date.now(), before: null, timer: null };
+        hold.reason = typeof reason === 'string' && reason ? reason.slice(0, 40) : 'change';
+        if (!hold.before) {
+            hold.before = handState(fixtureId);
+            // A burst starts: listeners note what they were drawing before the change ({phase: 'start', fixture_id}).
+            for (const listener of [...handListeners]) try { listener({ phase: 'start', fixture_id: fixtureId }); } catch (_) { /* as below */ }
+        }
+        if (hold.timer !== null) cancel(hold.timer);
+        hold.timer = later(() => settleHand(fixtureId, hold), HAND_SETTLE_MS);
+        handHolds.set(fixtureId, hold);
+        coordinatorPlays.delete(fixtureId);
+        return true;
+    }
+    /* Hand one fixture back (den-live released it), or every one (Resume, the coordinator turning on): the next
+     * snapshot directs it again. A burst not settled yet is not reported. Returns the fixture ids handed back. */
+    function releaseHand(fixtureId) { return releaseHold(fixtureId) ? [fixtureId] : []; }
+    function releaseHands() { return [...handHolds.keys()].filter(releaseHold); }
+    /* Read-only: the fixtures a person holds. */
+    function handHoldsReadback() {
+        return [...handHolds].map(([id, hold]) => ({ fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id,
+            reason: hold.reason, since_ms: hold.since }));
+    }
+    /* listener({phase: 'start', fixture_id}) as a burst of changes starts, and listener({phase: 'settled', fixture_id,
+     * label, reason, before, after, at_ms}) once it settles; returns the unsubscribe. */
+    function onHandChange(listener) {
+        if (typeof listener !== 'function') return () => {};
+        handListeners.add(listener);
+        return () => handListeners.delete(listener);
+    }
     return { root, setDocument, readback, interactionDescriptor, coordinatorSpotScope, applyCoordinatorSpots,
+        holdForHand, releaseHand, releaseHands, handHolds: handHoldsReadback, onHandChange,
         advancePresentation(nowMs) {
             // The settled RAF path creates no arrays, iterators or snapshots.
             if (disposed || !presentationActive || !finite(nowMs)) return false;
@@ -832,7 +935,6 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
          * other caller, such as a live preview following a target, moves the
          * beam at once exactly as before. */
         aimAtTarget(fixtureId, target, { expectedGeneration = generation, sweep = false } = {}) {
-            if (coordinatorOwned) return { ok: false, reason: 'equipment_preview_coordinator_owned' };
             const descriptor = interactionDescriptor(fixtureId);
             if (!descriptor) return { ok: false, reason: disposed ? 'equipment_preview_disposed' : 'equipment_preview_fixture_missing' };
             if (expectedGeneration !== generation) return { ok: false, reason: 'equipment_preview_generation_changed' };
@@ -851,7 +953,6 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             return { ok: true, descriptor: interactionDescriptor(fixtureId), physical_commands: false };
         },
         restoreAim(fixtureId, snapshot) {
-            if (coordinatorOwned) return { ok: false, reason: 'equipment_preview_coordinator_owned' };
             if (!snapshot || snapshot.fixture_id !== fixtureId || snapshot.generation !== generation || !states.has(fixtureId)) return { ok: false, reason: 'equipment_preview_generation_changed' };
             try {
                 const { pan_deg, tilt_deg, spotlight } = snapshot.state;
@@ -872,8 +973,6 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
                 return { ...readback(), ok: false, reason: 'equipment_preview_spotlight_only' };
             }
             try {
-                if (coordinatorOwned && patch && ('spotlight' in patch || 'pan_deg' in patch || 'tilt_deg' in patch))
-                    return { ok: false, reason: 'equipment_preview_coordinator_owned' };
                 const state = nextState(states.get(fixtureId), patch);
                 if ('pan_deg' in patch || 'tilt_deg' in patch) targets.delete(fixtureId);
                 // Property presence preserves inherited/mixed-patch semantics:

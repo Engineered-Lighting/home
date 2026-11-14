@@ -143,12 +143,27 @@ export function ambientOf(value) {
     return { level: value.level, cct_k: Math.min(AMBIENT_KELVIN[1], Math.max(AMBIENT_KELVIN[0], value.cct_k)) };
 }
 
+/* A person's change, for den-live to learn from (den-manual-1, plan-04b): POST /coordinator/manual once per settled
+ * change, with the snapshot Home was drawing. A retry on a dropped connection or a 5xx reuses its event_id. */
+export const MANUAL_SCHEMA = 'den-manual-1';
+const MANUAL_RETRIES = 2;
+const eventId = () => 'home-' + (globalThis.crypto?.randomUUID?.() ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`);
+
+/* post(path, body) → Promise<{status, answer}>: the coordinator's writes through the gateway (home-den-live-view.mjs),
+ * or null when this page sends none (look-only). */
 export function createSpotPlayback({ home, site, clock = () => performance.now(), onChange = () => {},
-    later = setTimeout, cancel = clearTimeout }) {
+    later = setTimeout, cancel = clearTimeout, post = null, makeEventId = eventId }) {
     let overlay = null, applied = null, candidate = null, control = null, controlVersion = 0;
     let anchor = null, openedAt = null, transform = null, scan = null, highestSeq = -1, stopCounter = -1, timer = null;
     let renderOffset = null;   // Home's clock minus the coordinator's, in ms: the lowest transit seen, creeping up
+    let unsubscribe = null;
     const hold = { off: null, stop: null };
+    /* fixture id → its latest manual report: {event_id, epoch, state (sending, recorded, not_recorded, unsupported,
+     * failed), from_seq, seen, why_not, learned}. A hold ends from den-live's snapshot only after that snapshot's epoch
+     * and seq (≥ from_seq) have shown the fixture's hand, and then show it null. */
+    const manual = new Map();
+    // fixture id → the snapshot Home had applied just before a burst of changes started: den-live checks "before" at it.
+    const burstFrom = new Map();
 
     function clear() {
         if (timer !== null) cancel(timer);
@@ -162,7 +177,61 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
     function attach(nextOverlay) {
         if (overlay === nextOverlay) return;
         disconnect();
+        unsubscribe?.(); unsubscribe = null;
         overlay = nextOverlay;
+        try { unsubscribe = overlay?.onVirtualFixtureHand?.(reportManual) || null; } catch (_) { unsubscribe = null; }
+    }
+    function reportManual(change) {
+        const id = change?.fixture_id;
+        if (typeof id !== 'string' || !post) return;
+        if (change.phase === 'start') {
+            if (applied) burstFrom.set(id, { epoch: applied.epoch, seq: applied.seq, subject: applied.subject, situation: applied.situation });
+            else burstFrom.delete(id);
+            return;
+        }
+        const from = burstFrom.get(id);
+        burstFrom.delete(id);
+        if (!from) {   // no snapshot to learn against: the hold stands, and nothing is sent
+            manual.set(id, { event_id: null, epoch: null, state: 'unsent', from_seq: null, seen: false, why_not: null, learned: null });
+            onChange(); return;
+        }
+        const body = { schema: MANUAL_SCHEMA, event_id: makeEventId(), fixture_id: id, before: change.before, after: change.after,
+            at_ms: change.at_ms, snapshot: { epoch: from.epoch, seq: from.seq },
+            ...(from.subject !== undefined ? { subject: from.subject } : {}),
+            ...(from.situation !== undefined ? { situation: from.situation } : {}) };
+        const entry = { event_id: body.event_id, epoch: from.epoch, state: 'sending', from_seq: null, seen: false, why_not: null, learned: null };
+        manual.set(id, entry);
+        onChange();
+        void send(body, entry, 0);
+    }
+    async function send(body, entry, attempt) {
+        let status = 0, answer = null;
+        try { ({ status, answer } = await post('manual', body)); } catch (_) { status = 0; }
+        if (manual.get(body.fixture_id) !== entry) return;   // a newer change has its own report
+        if (status === 200 && answer?.ok === true && answer.event_id === body.event_id) {
+            entry.state = answer.recorded === false ? 'not_recorded' : 'recorded';
+            entry.from_seq = revision(answer.from_seq) ? answer.from_seq : null;
+            if (text(answer.epoch)) entry.epoch = answer.epoch;   // the run den-live's from_seq counts in
+            entry.why_not = typeof answer.why_not === 'string' ? answer.why_not.slice(0, 160) : null;
+            entry.learned = answer.learned ?? null;
+        } else if ((status === 0 || status >= 500) && attempt < MANUAL_RETRIES) {
+            later(() => { void send(body, entry, attempt + 1); }, 1000 * (attempt + 1));
+            return;
+        } else entry.state = status === 404 || status === 501 ? 'unsupported' : 'failed';
+        onChange();
+    }
+    /* den-live releases a fixture at its next reason to act: once the snapshot has shown the hand Home reported, the
+     * first one in the same run that shows none ends Home's hold. */
+    function endHands(value) {
+        for (const [id, entry] of manual) {
+            if (entry.from_seq === null || value.epoch !== entry.epoch || value.seq < entry.from_seq) continue;
+            const hand = value.fixtures[id]?.hand;
+            if (hand && typeof hand === 'object') entry.seen = true;
+            else if (entry.seen) {
+                manual.delete(id);
+                try { overlay?.releaseVirtualFixtureHand?.(id); } catch (_) { /* the next snapshot tries nothing more */ }
+            }
+        }
     }
     function disconnect() {
         openedAt = null; anchor = null; transform = null; scan = null; highestSeq = -1; renderOffset = null;
@@ -172,9 +241,38 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         if (version !== controlVersion || !revision(value?.stop_counter) || value.stop_counter < stopCounter
             || typeof value.on !== 'boolean' || typeof value.stopped !== 'boolean') return;
         const changed = control?.on !== value.on || control?.stopped !== value.stopped || control?.stop_counter !== value.stop_counter;
+        const turnedOn = control?.on === false && value.on === true;
         stopCounter = value.stop_counter;
         control = { on: value.on, stopped: value.stopped, stop_counter: value.stop_counter };
+        // The coordinator turning on takes back every fixture a person held (equipment-virtual-fixtures.mjs).
+        if (turnedOn) handBack();
         if (changed) { controlVersion += 1; onChange(); }
+    }
+    /* The fixtures a person holds, each with what den-live made of the change: learning is pending (not answered yet),
+     * recorded, not_recorded (with why_not), unsupported (an older den-live), failed, or none (this page sends none);
+     * and warning, den-live's hand.warning while the held spot's beam crosses a head. */
+    function handHolds() {
+        let holds = [];
+        try { holds = overlay?.virtualFixtureHandHolds?.() || []; } catch (_) { holds = []; }
+        return holds.map(row => {
+            const entry = manual.get(row.fixture_id);
+            const learning = !post ? 'none' : !entry || entry.state === 'sending' ? 'pending' : entry.state;
+            // den-live's hand.warning in the snapshot drawn now: the held spot's beam crosses a head.
+            const hand = applied?.fixtures?.find(fixture => fixture.fixture_id === row.fixture_id)?.hand;
+            const warning = hand && typeof hand === 'object' && text(hand.warning) ? hand.warning.slice(0, 60) : null;
+            return { ...row, learning, why_not: entry?.why_not ?? null, warning };
+        });
+    }
+    /* Resume, or the coordinator turning on: hand every held fixture back, and tell den-live. */
+    function handBack() {
+        let ids = [];
+        try { ids = overlay?.releaseVirtualFixtureHands?.() || []; } catch (_) { ids = []; }
+        for (const id of ids) {
+            manual.delete(id); burstFrom.delete(id);
+            if (post) void Promise.resolve().then(() => post('manual/resume', { fixture_id: id })).catch(() => {});
+        }
+        if (ids.length) onChange();
+        return ids.length;
     }
     function block(kind) {
         const entry = { after: stopCounter };
@@ -223,6 +321,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             const glide = row.glide && renderOffset !== null && localGlideCurve(row.glide, row.glide.start_mono * 1000 + renderOffset);
             return glide ? { ...row, glide_local: glide } : row;
         });
+        endHands(value);
         if (!overlay.applyCoordinatorSpots(fixtures, scope.generation, { ambient: ambientOf(value.ambient) })) {
             overlay.applyCoordinatorSpots(null); clear(); return;
         }
@@ -233,7 +332,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         onChange();
     }
 
-    return { attach, block, acknowledge, release, disconnect, observeControl, check, sourceLost: clear,
+    return { attach, block, acknowledge, release, disconnect, observeControl, check, sourceLost: clear, handHolds, handBack,
         connect(start) { disconnect(); openedAt = start; },
         tracking(value, revision) { transform = value ?? null; scan = revision ?? null; if (!scan) clear(); else applyCandidate(); },
         anchor(value) {

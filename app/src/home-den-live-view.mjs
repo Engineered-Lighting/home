@@ -55,7 +55,14 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     let engine = null, scope = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
     let panel = null, caption = null, pipeline = null;
     let bodyKit = null, body = null, bodyRetryAt = 0, bodyFrames = 0, bodyAt = 0, watermark = null, pageActive = true;
-    const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site,
+    // A person's settled changes go to the coordinator to learn from (den-manual-1), as its other writes do; look-only
+    // sends none.
+    const post = !lookOnly && typeof config.coordinator === 'string' ? async (path, body) => {
+        const response = await fetch(`${config.coordinator}/${path}`, { method: 'POST', credentials: 'same-origin', cache: 'no-store',
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Home-Den-Live-CSRF': '1' }, body: JSON.stringify(body) });
+        return { status: response.status, answer: await response.json().catch(() => null) };
+    } : null;
+    const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site, post,
         onChange: () => { panel?.refresh(); caption?.setSpot(spots?.current() ?? null); pipeline?.setSpot(spots?.current() ?? null); } });
     const scene = current => `${current.contentRevision ?? ''}:${current.sceneIdentity?.registrationVersion ?? ''}:${current.sceneIdentity?.frameDigest ?? ''}`;
 

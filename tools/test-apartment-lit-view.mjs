@@ -142,7 +142,7 @@ test('Echo uploads all 13 spot columns independently, reports uploaded progress,
   await controller.detach(); controller.dispose(); object.geometry.dispose();
 });
 
-test('coordinator-owned spots start dark, block manual writes and snap in Lit without a bounce contribution', async t => {
+test('coordinator-owned spots start dark, take manual writes and snap in Lit without a bounce contribution', async t => {
   const posted = [];
   const w = world(t, { now: () => 1, createBakeEndpoint: () => {
     const inner = Bake.createLocalBakeEndpoint({ gpu: null });
@@ -154,11 +154,13 @@ test('coordinator-owned spots start dark, block manual writes and snap in Lit wi
   assert.equal(remembered.spotlight.on, true);
   assert.equal(w.fixtures.setDocument(w.document, { coordinator: true }).status, 'ready');
   const scope = w.fixtures.coordinatorSpotScope();
-  assert.equal(w.fixtures.setFixtureState(id, remembered).ok, false, 'a remembered lit preview cannot take ownership');
-  assert.equal(w.fixtures.interactionDescriptor(id).state.spotlight.on, false);
-  assert.equal(w.fixtures.setFixtureState(id, { spotlight: { on: true } }).ok, false);
-  assert.equal(w.fixtures.aimAtTarget(id, { point: [0, 0, 1], normal: [0, 0, 1] }).ok, false);
+  assert.equal(w.fixtures.interactionDescriptor(id).state.spotlight.on, false, 'a remembered lit preview starts dark under the coordinator');
+  // Nothing a person does is refused (the owner, 2026-11-14). Without a hand hold, the coordinator's next word directs it.
+  assert.equal(w.fixtures.setFixtureState(id, { spotlight: { on: true } }).ok, true);
+  assert.notEqual(w.fixtures.aimAtTarget(id, { point: [0, 0, 1], normal: [0, 0, 1] }).reason, 'equipment_preview_coordinator_owned');
   assert.equal(w.fixtures.setFixtureState(id, { downward: { brightness: .2 } }).ok, true);
+  assert.equal(w.fixtures.applyCoordinatorSpots(null), true);
+  assert.equal(w.fixtures.interactionDescriptor(id).state.spotlight.on, false, 'the coordinator blanks a spot nobody holds');
   w.lit.enable();
   assert.ok(lights(w).filter(light => light.name === 'lit-spot').every(light => light.intensity === 0));
   const rows = scope.fixture_ids.map(fixture_id => ({ fixture_id, on: true, level: .7, cct_k: 3100, pan_deg: 3.2, tilt_deg: 41.5 }));

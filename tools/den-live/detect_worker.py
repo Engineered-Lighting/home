@@ -17,7 +17,8 @@ In: for each frame, a 4-byte big-endian length and a JSON header {id, rgb_seq, t
 and the bundle's bytes. delay_s is how long after capture the loop handed the frame over, so available_ts counts
 arrival and waiting plus compute (plan L3), not compute only.
 Out: one JSON line per frame: {id, row, compute_s, luma} (row: den-detections-1, as den-detect writes it; luma: the
-mean of the frame's Y plane, 0 to 255, for the stream's too-dark rule) or {id, error} with a type name only. The first
+mean of the frame's Y plane, 0 to 255, for the stream's too-dark rule) or {id, error} with a type name only (a
+den-observe RowError adds reason: its own fixed words, any detection id replaced). The first
 line is {ready, load_ms, warm_ms, devices: {boxes, pose}, gpu_why?}, or {refused} and exit 2. devices names where
 each model runs (cpu or cuda:0); gpu_why, in words, why one isn't on the GPU, only when auto found a reason.
 
@@ -33,8 +34,10 @@ stills_id, never id.
 import argparse
 import json
 import os
+import re
 import struct
 import sys
+import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -89,6 +92,40 @@ def own_stdout():
     sys.stdout = sys.stderr
 
 
+def row_reason(exc):
+    """A RowError's reason with any detection id replaced, at most 160 characters: den-observe's own fixed words."""
+    return re.sub(r"detection .{1,200}?: ", "detection <id>: ", str(exc))[:160]   # live ids are rgb-<seq>:<index>
+
+
+class Guards:
+    """How often the row guards fired, said to the worker's log once a minute when any did: rows whose ready time was
+    raised to their capture (a capture mapped a hair after its arrival by the clock offset), and boxes fit_to_frame
+    dropped (past den-observe's 64, or unusable)."""
+
+    def __init__(self, clock=time.monotonic, every_s=60.0):
+        self.clock, self.every_s = clock, every_s
+        self.since, self.clamped, self.fitted = clock(), 0, 0
+
+    def count(self, clamped, fitted):
+        self.clamped += bool(clamped)
+        self.fitted += int(fitted or 0)
+        now = self.clock()
+        if now - self.since < self.every_s:
+            return None
+        line = None
+        if self.clamped or self.fitted:
+            line = "den-detect: in the last %.0f s, %d rows raised to their capture time, %d boxes dropped to fit the row" % (
+                now - self.since, self.clamped, self.fitted)
+        self.since, self.clamped, self.fitted = now, 0, 0
+        return line
+
+
+def available(capture_ts, delay_s, compute_s):
+    """When a frame's row was ready: capture, plus the loop's handover delay and compute, never before capture
+    (den-observe refuses a row whose available_ts is; a capture time mapped a hair ahead of the host's clock would)."""
+    return max(capture_ts, capture_ts + delay_s + compute_s)
+
+
 def say(value):
     PROTOCOL.write(json.dumps(value, separators=(",", ":")) + "\n")
     PROTOCOL.flush()
@@ -120,6 +157,7 @@ def main(argv=None):
          **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {})})
     stream = sys.stdin.buffer
     kept, bodies, ring, image_module = None, None, stills.Ring(), None
+    guards = Guards()
     while True:
         got = read_frame(stream)
         if got is None:
@@ -160,12 +198,20 @@ def main(argv=None):
             rgb = detector.decode(plane, detect.WIDTH, detect.HEIGHT)
             seq, t = int(header["rgb_seq"]), float(header["t_host"])
             result, _merged, compute_s = detector.run(np.ascontiguousarray(rgb[:, :, ::-1]), "rgb-%d" % seq)
-            row = detector.row_of(result, capture_ts=t, available_ts=t + float(header["delay_s"]) + compute_s, rgb_seq=seq,
+            ready = available(t, float(header["delay_s"]), compute_s)
+            line = guards.count(ready > t + float(header["delay_s"]) + compute_s, getattr(detector, "fitted", 0))
+            if line:
+                print(line, file=sys.stderr, flush=True)
+            row = detector.row_of(result, capture_ts=t, available_ts=ready, rgb_seq=seq,
                                   width=detect.WIDTH, height=detect.HEIGHT, boxes_version="yolo26s-8.4.0",
                                   keypoints_version=detector.pose.manifest["model_version"])
             say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1), **identity})
         except Exception as exc:  # one bad frame is a reply, not the end; a type name only, never its text
-            say({"id": header.get("id"), "error": type(exc).__name__, **identity})
+            reply = {"id": header.get("id"), "error": type(exc).__name__, **identity}
+            if type(exc).__name__ == "RowError":   # den-observe's schema reasons: fixed words, no frame data
+                reply["reason"] = row_reason(exc)
+                print("den-detect: a frame's row was refused: %s" % reply["reason"], file=sys.stderr, flush=True)
+            say(reply)
 
 
 if __name__ == "__main__":

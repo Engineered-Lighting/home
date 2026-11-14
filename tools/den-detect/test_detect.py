@@ -198,6 +198,94 @@ def row(seq, *found):
     return {"frame": {"rgb_seq": seq}, "detections": [{"class": cls, "box_xyxy": box, "score": score, "keypoints": kp} for cls, box, score, kp in items]}
 
 
+class FitToFrame(unittest.TestCase):
+    """One stray box never costs the frame: every row fit_to_frame leaves, den-observe's own validate takes (at the pin)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.folder = tempfile.TemporaryDirectory()
+        tree(cls.folder.name, ("tools/den-observe",))
+        cls.path = str(Path(cls.folder.name) / "tools/den-observe")
+        sys.path.insert(0, cls.path)
+        sys.modules.pop("detections", None)
+        import detections
+        cls.detections = detections
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.path.remove(cls.path)
+        sys.modules.pop("detections", None)
+        cls.folder.cleanup()
+
+    @staticmethod
+    def box(key, x, y, w, h, label="person", score=0.9):
+        return {"x": x, "y": y, "w": w, "h": h, "label": label, "confidence": score, "instance_id": key}
+
+    @staticmethod
+    def result(boxes):
+        boxes = [dict(b) for b in boxes]
+        return {"coordinate_space": "source_pixels", "boxes": boxes, "pose_instances": [],
+                "objects": [{"instance_id": b["instance_id"], "label": b["label"]} for b in boxes]}
+
+    def row(self, result):
+        return self.detections.from_perception_lab(result, capture_ts=10.0, available_ts=10.1, rgb_seq=1, width=detect.WIDTH,
+                                                   height=detect.HEIGHT, boxes_version="yolo26s-8.4.0", keypoints_version="k")
+
+    def test_each_row_the_validator_refused_is_taken_once_fitted(self):
+        person = self.box("p", 300.0, 50.0, 80.0, 200.0)
+        cases = {
+            "past the right edge": [self.box("a", 600.0, 10.0, 40.5, 100.0)],
+            "a hair past by rounding": [self.box("a", 600.1, 10.0, 39.9 + 1e-9, 100.0)],
+            "left of the frame": [self.box("a", -3.0, 10.0, 50.0, 100.0)],
+            "below the frame": [self.box("a", 10.0, 300.0, 50.0, 61.0)],
+            "no area past the edge": [self.box("a", 640.0, 10.0, 5.0, 100.0), person],
+            "not finite": [self.box("a", float("nan"), 10.0, 5.0, 100.0), person],
+            "a score over one": [self.box("a", 10.0, 10.0, 50.0, 100.0, score=1.5), person],
+            "a repeated id": [self.box("a", 10.0, 10.0, 50.0, 100.0), self.box("a", 100.0, 10.0, 50.0, 100.0)],
+            "too many": [self.box(str(i), float(i), 0.0, 5.0, 5.0, label="book", score=0.3) for i in range(70)]
+                        + [self.box("p", 300.0, 50.0, 80.0, 200.0, score=0.2)],
+        }
+        for name, boxes in cases.items():
+            with self.subTest(name):
+                with self.assertRaises(self.detections.RowError, msg="the frame was lost before the fit"):
+                    self.row(self.result(boxes))
+                result = self.result(boxes)
+                detect.fit_to_frame(result)
+                row = self.row(result)
+                self.assertTrue(row["detections"])
+                for d in row["detections"]:
+                    x0, y0, x1, y1 = d["box_xyxy"]
+                    self.assertTrue(0 <= x0 < x1 <= detect.WIDTH and 0 <= y0 < y1 <= detect.HEIGHT, (name, d["box_xyxy"]))
+                self.assertEqual({o["instance_id"] for o in result["objects"]}, {b["instance_id"] for b in result["boxes"]})
+
+    def test_people_stay_and_in_frame_boxes_are_untouched(self):
+        boxes = [self.box(str(i), float(i), 0.0, 5.0, 5.0, label="book", score=0.9) for i in range(70)]
+        boxes += [self.box("p", 300.0, 50.0, 80.0, 200.0, score=0.2), self.box("q", 610.0, 40.0, 60.0, 300.0, score=0.7)]
+        result = self.result(boxes)
+        dropped = detect.fit_to_frame(result)
+        kept = {b["instance_id"]: b for b in result["boxes"]}
+        self.assertEqual(len(kept), detect.ROW_DETECTIONS)
+        self.assertEqual(dropped, len(boxes) - detect.ROW_DETECTIONS)
+        self.assertIn("p", kept, "a person is kept before any object, however low its score")
+        self.assertEqual((kept["q"]["x"], kept["q"]["w"]), (610.0, 30.0), "clipped at the right edge")
+        self.assertEqual((kept["p"]["x"], kept["p"]["y"], kept["p"]["w"], kept["p"]["h"]), (300.0, 50.0, 80.0, 200.0))
+
+    def test_run_crops_people_from_the_fitted_boxes(self):
+        crops = []
+        detector = detect.Detector.__new__(detect.Detector)
+        detector.yolo = SimpleNamespace(infer=lambda bgr, **kw: self.result([self.box("p", 590.0, -8.0, 70.0, 380.0)]))
+        detector.distinct_people = lambda result: [o for o in result["objects"] if o["label"] == "person"]
+
+        def pose(bgr, given, **kw):
+            crops.extend(given)
+            return {"pose_instances": []}
+        detector.pose = SimpleNamespace(infer=pose)
+        result, merged, _ = detector.run(None, "rgb-1")
+        self.assertEqual(merged, 0)
+        self.assertEqual(crops[0]["xyxy"], [590.0, 0.0, 640.0, 360.0], "the pose crop lies inside the frame")
+        self.row(result)
+
+
 class Compare(unittest.TestCase):
     def test_person_boxes_within_one_pixel(self):
         recorded = [row(1, ("person", [10, 20, 110, 300]), ("book", [50, 50, 70, 70])), row(2)]

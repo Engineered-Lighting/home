@@ -81,7 +81,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-people-layer\.mjs|tools\/test-apartment-people-layer\.mjs)$/, ["test-apartment-people-layer.mjs"]],
   [/^(?:app\/src\/home-den-live-qwen\.mjs|tools\/test-den-live-qwen-line\.mjs)$/, ["test-den-live-qwen-line.mjs"]],
   [/^(?:app\/src\/home-den-coordinator-panel\.mjs|tools\/test-den-coordinator-panel\.mjs)$/, ["test-den-coordinator-panel.mjs"]],
-  [/^(?:app\/src\/(?:home-den-(?:live-view|live-qwen|coordinator-panel|labels-view)\.mjs|home-lighting-control\.js|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|serve-home|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/test-den-live-serve-browser\.mjs)$/, ["test-den-live-serve-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-den-(?:live-view|live-qwen|coordinator-panel|labels-view)\.mjs|home-lighting-control\.js|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|serve-home|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/test-den-live-serve-browser(?:-part2)?\.mjs)$/, ["test-den-live-serve-browser.mjs", "test-den-live-serve-browser-part2.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
@@ -255,7 +255,8 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
  * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up.
  * test-apartment-chat-context.cjs is a unit suite that took 131 s hosted on run 43597090472 (#441); it counted as
- * 1 s before, as an unmeasured non-browser item. */
+ * 1 s before, as an unmeasured non-browser item. Room selection took 90 to 146 s hosted on #441's runs, and the den
+ * Serve suite 166 to 180 s whole, so it runs as two parts of about 100 s each. */
 const SHARD_WEIGHT_S = {
   "run-people-agent-tray-ui-tests.cjs": 60,
   "run-people-bridge-ui-tests.cjs": 45,
@@ -279,7 +280,9 @@ const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
   "test-precompiled-jsx.mjs": 90,
-  "test-apartment-room-selection-browser.mjs": 111,
+  "test-apartment-room-selection-browser.mjs": 150,
+  "test-den-live-serve-browser.mjs": 120,
+  "test-den-live-serve-browser-part2.mjs": 120,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-beam-path-browser.mjs": 40,
   "test-apartment-room-inspector-browser.mjs": 80,

@@ -197,6 +197,12 @@ async function unusedPort() {
   await new Promise(resolve => server.close(resolve));
   return port;
 }
+// The suite runs as two files, so neither nears the touched-harness runner's 180 s per-file limit: this one (part 1:
+// the Serve shell, label CAS and the cross-home card) and test-den-live-serve-browser-part2.mjs (the phone Den's Stop,
+// the label editor and the real coordinator trace), which imports this module with part 2 selected.
+const PART = globalThis.HOME_DEN_SERVE_PART ?? 1;
+const inPart = (part, ...args) => { if (part === PART) test(...args); };
+
 before(async () => {
   assert.ok(fs.existsSync(chromium.executablePath()), 'install the pinned Playwright Chromium');
   folder = fs.mkdtempSync(path.join(os.tmpdir(), 'home-serve-browser-'));
@@ -322,7 +328,7 @@ async function startPreview(config) {
   throw Error('Python preview did not start\n' + stderr);
 }
 
-test('full Serve shell and managed HA WebSocket on a fresh desktop and phone', { timeout: 90000 }, async () => {
+inPart(1, 'full Serve shell and managed HA WebSocket on a fresh desktop and phone', { timeout: 90000 }, async () => {
   for (const mobile of [false, true]) {
     const { page, context } = await openHome(mobile);
     try {
@@ -348,7 +354,7 @@ test('full Serve shell and managed HA WebSocket on a fresh desktop and phone', {
   assert.equal((await request('http://127.0.0.1:' + ordinaryPort + '/')).status, 401);
 });
 
-test('label CAS, exact virtual controls and body rollback gate through the browser origin', { timeout: 90000 }, async () => {
+inPart(1, 'label CAS, exact virtual controls and body rollback gate through the browser origin', { timeout: 90000 }, async () => {
   const initial = { ...fake.control };
   const { page, context } = await openHome(false);
   try {
@@ -378,7 +384,7 @@ test('label CAS, exact virtual controls and body rollback gate through the brows
   } finally { fake.bodyAvailable = true; fake.control = initial; await context.close(); }
 });
 
-test('cross-home card works during HA outage and recovers a lost reply on reload', { timeout: 90000 }, async () => {
+inPart(1, 'cross-home card works during HA outage and recovers a lost reply on reload', { timeout: 90000 }, async () => {
   fake.haOffline = true;
   const { page, context } = await openHome(false);
   let phase = 'open chat';
@@ -386,6 +392,9 @@ test('cross-home card works during HA outage and recovers a lost reply on reload
   try {
     const command = 'Turn on the reading lamp in both homes';
     async function showChat() {
+      // The Serve shell can be up before the Apartment UI that holds the Chat tab has rendered (slow runners compile the
+      // JSX in the browser), so the tab gets its own wait before the 15 s click.
+      await page.locator('#apt-home-tab-chat').waitFor({ timeout: 45000 });
       await page.locator('#apt-home-tab-chat').click();
       await page.locator('[data-home-chat-surface]').waitFor();
     }
@@ -436,7 +445,7 @@ test('cross-home card works during HA outage and recovers a lost reply on reload
 
 // SwiftShader on a busy runner can slow this case well past its usual minute. If it still times out, the abort puts the
 // fake back and closes this case's browser at once, so the cases after it don't inherit paused streams or a Stop.
-test('the mobile Den draws a face-free figure, and Stop holds the visible spot through replay, restart and reload', { timeout: 240000 }, async t => {
+inPart(2, 'the mobile Den draws a face-free figure, and Stop holds the visible spot through replay, restart and reload', { timeout: 240000 }, async t => {
   const initial = { ...fake.control }, initialEpoch = fake.epoch;
   const firstAction = fake.actions.length;
   const restore = () => { fake.control = initial; fake.epoch = initialEpoch; fake.bodyStreaming = true; fake.spotStreaming = true; };
@@ -539,7 +548,7 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
   } finally { restore(); await context.close(); }
 });
 
-test('the normal Den label editor saves a label and keeps a draft across a revision conflict', { timeout: 110000 }, async () => {
+inPart(2, 'the normal Den label editor saves a label and keeps a draft across a revision conflict', { timeout: 110000 }, async () => {
   const initial = fake.labels;
   const { page, context } = await openHome(false);
   const name = 'Table beside the sofa';
@@ -566,7 +575,7 @@ test('the normal Den label editor saves a label and keeps a draft across a revis
 // The real den-live preview lives in the producer's own lane until it lands on main. Without it this case can't run
 // here; it is qualified against the installed producer instead.
 const producer = fs.existsSync(path.join(root, 'tools/den-live/test_sofa_browser_backend.py'));
-test('the real coordinator trace, virtual spot and Stop agree through Full Home Serve', { timeout: 150000,
+inPart(2, 'the real coordinator trace, virtual spot and Stop agree through Full Home Serve', { timeout: 150000,
   skip: producer ? false : 'needs den-live (tools/den-live), which is not in this checkout' }, async () => {
   const firstAction = fake.actions.length;
   const { page, context } = await openHome(false);

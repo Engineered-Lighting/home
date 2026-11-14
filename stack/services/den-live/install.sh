@@ -9,10 +9,13 @@
 #  2. Unpacks it to /opt/den-live/releases/<first 12 of the sha256>/ and checks every file against SHA256SUMS.
 #  3. Holds the two models (YOLO26s, RTMPose-m), the pose model's manifest and rtmlib's wheel to their pinned sha256,
 #     and copies the models to /opt/den-live/models/.
-#  4. Builds the detector's venv in /opt/den-live/venvs/<first 12 of requirements.lock's sha256>/ with exactly the
-#     lock's versions, wheels only, each with --no-deps: CPU torch from PyTorch's CPU index, rtmlib from its wheel in
-#     the release, the rest from PyPI. Then it holds the venv to the lock as the detector does, and loads the models
-#     once through the detector's own checks.
+#  4. Builds the detector's venv in /opt/den-live/venvs/<first 12 of its lock's sha256>/ with exactly the lock's
+#     versions, wheels only, each with --no-deps. On a host with an NVIDIA GPU (/dev/nvidiactl), the lock is
+#     requirements-cuda.lock: CUDA 12.8 torch from PyTorch's cu128 index and onnxruntime-gpu, about 4.6 GB, with
+#     12 GB free under /opt first. Otherwise it's requirements.lock: CPU torch from PyTorch's CPU index, about 400 MB.
+#     rtmlib comes from its wheel in the release, the rest from PyPI. Then it holds the venv to the lock as the detector
+#     does, and loads the models once through the detector's own checks, which say where each model runs: the GPU, or
+#     the CPU when CUDA isn't usable (the detector falls back on its own).
 #  5. Writes /etc/den-live/config.json and the unit's drop-in, from settings.json and the running Home gateway. With
 #     the Qwen ask set up (settings.json's asks block), the drop-in also allows Home Assistant's one address and loads
 #     its token as a credential.
@@ -169,10 +172,22 @@ pinned "${release}/wheels/${wheel}" "${wheel_sha}" || refuse "the release's ${wh
 say "Models: YOLO26s and RTMPose-m match their pinned sha256 (646f8bc3, 5c0a4bf6)."
 
 # ---- 4. the detector's venv ------------------------------------------------------------------------------------
-lock="${release}/tools/den-detect/requirements.lock"
+if [[ -e /dev/nvidiactl ]]; then   # an NVIDIA GPU: the CUDA build (the detector still falls back to the CPU itself)
+  lock="${release}/tools/den-detect/requirements-cuda.lock"
+  torch_index=https://download.pytorch.org/whl/cu128
+  build_words="about 4.6 GB from PyPI and PyTorch's CUDA 12.8 index, ten minutes or so"
+  build_free_kb=$((12 * 1024 * 1024))
+else
+  lock="${release}/tools/den-detect/requirements.lock"
+  torch_index=https://download.pytorch.org/whl/cpu
+  build_words="about 400 MB from PyPI and PyTorch's CPU index, a few minutes"
+  build_free_kb=$((2 * 1024 * 1024))
+fi
 venv="${base}/venvs/$(sha_of "${lock}" | cut -c1-12)"
 if [[ ! -f "${venv}/.complete" ]]; then
-  say "Building the detector's venv: about 400 MB from PyPI and PyTorch's CPU index, a few minutes..."
+  free_kb="$(df -Pk -- "${base}/venvs" | awk 'NR == 2 {print $4}')"
+  [[ "${free_kb:-0}" -ge "${build_free_kb}" ]] || refuse "the detector's venv needs $((build_free_kb / 1024 / 1024)) GB free under ${base}; there's $((${free_kb:-0} / 1024 / 1024)) GB"
+  say "Building the detector's venv: ${build_words}..."
   rm -rf -- "${venv}"
   "${python}" -m venv "${venv}"
   grep -E '^[A-Za-z0-9._-]+==' "${lock}" >"${work}/all.txt"
@@ -180,16 +195,17 @@ if [[ ! -f "${venv}/.complete" ]]; then
   grep -E '^(torch|torchvision)==' "${work}/all.txt" >"${work}/torch.txt"
   pip_step "pip itself" "$(grep -E '^pip==' "${work}/all.txt")"
   pip_step "the lock's packages from PyPI" --only-binary=:all: --index-url https://pypi.org/simple -r "${work}/pypi.txt"
-  pip_step "CPU torch" --only-binary=:all: --index-url https://download.pytorch.org/whl/cpu -r "${work}/torch.txt"
+  pip_step "torch" --only-binary=:all: --index-url "${torch_index}" -r "${work}/torch.txt"
   pip_step "rtmlib from its wheel" --no-index "${release}/wheels/${wheel}"
 fi
 if ! "${venv}/bin/python" -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import detect
-wrong = detect.unlocked(detect.lock()["versions"], detect.installed())
+have = detect.installed()
+wrong = detect.unlocked(detect.lock_for(have)["versions"], have)
 for line in wrong[:8]:
     print("  " + line)
 sys.exit(1 if wrong else 0)' "${release}/tools/den-detect"; then
   rm -f -- "${venv}/.complete"
-  refuse "the venv isn't requirements.lock's (the differences are above)"
+  refuse "the venv isn't its lock's (the differences are above)"
 fi
 say "Loading the detector once, with its own checks (about half a minute)..."
 install -d -m 0700 "${work}/detector"
@@ -201,7 +217,13 @@ if [[ "${ready}" != *'"ready":true'* ]]; then
   refuse "the detector didn't load (its words, if any, are above)"
 fi
 touch "${venv}/.complete"
-say "Detector venv: requirements.lock's versions; the models load."
+devices="$(printf '%s' "${ready}" | "${python}" -c 'import json, sys
+line = json.loads(sys.stdin.read())
+names = {"cpu": "the CPU", "cuda:0": "the GPU"}
+devices = line.get("devices") or {}
+print("YOLO26s on %s, RTMPose-m on %s%s" % (names.get(devices.get("boxes"), "?"), names.get(devices.get("pose"), "?"),
+      "; " + line["gpu_why"][:120] if line.get("gpu_why") else ""))' 2>/dev/null || true)"
+say "Detector venv: ${lock##*/}'s versions; the models load: ${devices:-where, not said}."
 
 # ---- 5. the settings -------------------------------------------------------------------------------------------
 pid="$(systemctl show -p MainPID --value "${gateway}" 2>/dev/null || true)"

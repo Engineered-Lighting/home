@@ -353,6 +353,16 @@ def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="
         out.close()
 
 
+DEVICE_WORDS = {"cpu": "the CPU", "cuda:0": "the GPU"}
+
+
+def detector_line(devices, why):
+    """Where the detector's two models run, in words: one line, never a coordinate."""
+    boxes, pose = (DEVICE_WORDS.get(devices.get(key), "an unknown device") for key in ("boxes", "pose"))
+    where = "YOLO26s and RTMPose-m on %s" % boxes if boxes == pose else "YOLO26s on %s, RTMPose-m on %s" % (boxes, pose)
+    return "Detector: %s%s." % (where, "" if not why else "; " + why[:120])
+
+
 def start_body(perceiver, out, detector, body_input):
     """Attach the link now. Its first qualified bundle schedules worker setup without a wait."""
     link = body_link.BodyLink(detector, stream=out, clock=out.body_clock)
@@ -426,6 +436,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
         except perceive.Stop as exc:
             raise Stop(str(exc)) from None
         perceiver.detector = detector
+        if detector.devices:   # where YOLO26s and RTMPose-m run: the GPU's, or the CPU and why
+            say(detector_line(detector.devices, detector.gpu_why))
         body_available = bool(body and body_input is not None and revision is not None and registered_on == revision)
         try:
             out = people_stream.PeopleStream(port=stream_port, labels=labels, body_available=body_available)

@@ -1151,7 +1151,7 @@ class Live(unittest.TestCase):
         self.assertTrue(seen.get('sse'))
         # No coordinate is printed: every line is one of the shapes run_local prints, whose only numbers are counts, rates
         # and times. The control: a line holding a position would match none of them.
-        shapes = (r'^Starting the detector', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
+        shapes = (r'^Starting the detector', r'^Detector: YOLO26s (?:and RTMPose-m )?on the (?:GPU|CPU)', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
                   r'^camera ok(?:: camera clock moved back)? \| [\d.-]+ frames a second \| \d+ people \| '
                   r'[\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames(?:, \d+ out of order)?(?:, \d+ too late)?$')
         self.assertIsNone(result['body'])

@@ -120,6 +120,63 @@ class Lock(unittest.TestCase):
         del short["rtmlib"]
         self.assertEqual(detect.unlocked(pinned, short), ["rtmlib missing (the lock: 0.0.16)"])
 
+    def test_names_are_compared_as_pep_503_normalises_them(self):
+        pinned = {"Jinja2": "3.1.6", "typing_extensions": "4.16.0", "cuda-bindings": "12.9.4"}
+        self.assertEqual(detect.unlocked(pinned, {"jinja2": "3.1.6", "typing-extensions": "4.16.0", "cuda_bindings": "12.9.4"}), [])
+        self.assertEqual(detect.unlocked(pinned, {"jinja2": "3.1.6", "typing-extensions": "4.16.0", "cuda_bindings": "12.9.3"}),
+                         ["cuda-bindings 12.9.3 (the lock: 12.9.4)"], "control: a version still differs")
+
+    def test_the_cuda_lock_is_the_cpu_lock_with_las_cuda_build(self):
+        """requirements-cuda.lock is requirements.lock's distributions at the same versions, the same weights, CUDA 12.8
+        torch and torchvision, onnxruntime-gpu for onnxruntime, and CUDA torch's Linux needs at the versions the LA
+        trial resolved and ran (tools/la-detector-trial/requirements.lock)."""
+        cpu, cuda = detect.lock(), detect.lock(detect.LOCK_CUDA)
+        self.assertEqual(cuda["weights"], cpu["weights"])
+        swapped = {"torch": "2.10.0+cu128", "torchvision": "0.25.0+cu128", "onnxruntime-gpu": "1.23.2"}
+        self.assertEqual({k: cuda["versions"][k] for k in swapped}, swapped)
+        self.assertNotIn("onnxruntime", cuda["versions"], "onnxruntime-gpu replaces it: both would clash")
+        same = {k: v for k, v in cpu["versions"].items() if k not in ("torch", "torchvision", "onnxruntime")}
+        self.assertEqual({k: cuda["versions"][k] for k in same}, same)
+        added = set(cuda["versions"]) - set(cpu["versions"]) - set(swapped)
+        self.assertTrue(added and all(k.startswith(("nvidia-", "cuda-")) or k == "triton" for k in added), added)
+        trial = {}
+        for line in (ROOT / "tools/la-detector-trial/requirements.lock").read_text(encoding="utf-8").splitlines():
+            if "==" in line and not line.startswith((" ", "#")):
+                name, _, version = line.split(" ")[0].partition("==")
+                trial[name] = version
+        self.assertEqual({k: cuda["versions"][k] for k in added}, {k: trial[k] for k in added})
+        self.assertIn("torch-2.10.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl",
+                      (ROOT / "tools/la-detector-trial/requirements.lock").read_text(encoding="utf-8"), "the trial ran cu128 torch")
+
+    def test_a_venv_is_held_to_the_lock_of_its_torch(self):
+        self.assertEqual(detect.lock_for({"torch": "2.10.0+cu128"}), detect.lock(detect.LOCK_CUDA))
+        self.assertEqual(detect.lock_for({"Torch": "2.10.0+cpu"}), detect.lock())
+        self.assertEqual(detect.lock_for({}), detect.lock(), "no torch at all: the CPU lock, which then names it missing")
+
+    def test_cuda_is_used_only_with_a_device_and_room_on_it(self):
+        def torch(available=True, free=10 * 2 ** 30, total=96 * 2 ** 30, version="2.10.0+cu128", fails=False):
+            capped = []
+
+            def info(_):
+                if fails:
+                    raise RuntimeError("driver")
+                return free, total
+            cuda = SimpleNamespace(is_available=lambda: available, mem_get_info=info,
+                                   set_per_process_memory_fraction=lambda fraction, device: capped.append((fraction, device)))
+            return SimpleNamespace(__version__=version, cuda=cuda), capped
+        fake, capped = torch()
+        with mock.patch.dict(sys.modules, {"torch": fake}):
+            self.assertEqual(detect.gpu_usable(), (True, None))
+        self.assertEqual(capped, [(detect.GPU_CAP_BYTES / (96 * 2 ** 30), 0)], "torch's allocator is capped")
+        for case, why in ((dict(available=False, version="2.10.0+cpu"), "no CUDA device"),
+                          (dict(available=False), "CUDA torch, but no usable device"),
+                          (dict(free=2 * 2 ** 30), "only 2.1 GB of the GPU free (3 GB needed)"),
+                          (dict(fails=True), "CUDA didn't start (RuntimeError)")):
+            fake, capped = torch(**case)
+            with mock.patch.dict(sys.modules, {"torch": fake}):
+                self.assertEqual(detect.gpu_usable(), (False, why), case)
+            self.assertEqual(capped, [], "no cap without the GPU")
+
     def test_main_refuses_an_interpreter_that_is_not_the_locks(self):
         """This PC's own Python is not the venv: main refuses before it reads the take or loads a model."""
         with tempfile.TemporaryDirectory() as tmp:

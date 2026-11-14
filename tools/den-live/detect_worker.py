@@ -6,7 +6,10 @@
 
 Python sockets are refused here (den-detect's guard): frames come in on stdin, rows go out on stdout, and this process
 has no network. The models load once, as in den-detect's own runs: the Lab's UltralyticsWorker and RTMPoseWorker with
-their own checks, the weights held to requirements.lock's digests, the venv held to its versions. The weights are the
+their own checks, the weights held to the lock's digests, the venv held to its versions (requirements-cuda.lock for a
+venv with CUDA torch, LA's; requirements.lock for any other). With --device auto (the default) each model runs on
+CUDA when torch sees a GPU with room for it, and on the CPU otherwise, each falling back on its own (detect.Detector);
+--device cpu keeps both on the CPU. The weights are the
 venv's models folder, or --models (the LA service's, where install.sh puts them). With stdin closed at once it loads,
 says ready and exits 0: that's install.sh's check of the venv and the weights.
 
@@ -15,7 +18,8 @@ and the bundle's bytes. delay_s is how long after capture the loop handed the fr
 arrival and waiting plus compute (plan L3), not compute only.
 Out: one JSON line per frame: {id, row, compute_s, luma} (row: den-detections-1, as den-detect writes it; luma: the
 mean of the frame's Y plane, 0 to 255, for the stream's too-dark rule) or {id, error} with a type name only. The first
-line is {ready, load_ms, warm_ms}, or {refused} and exit 2.
+line is {ready, load_ms, warm_ms, devices: {boxes, pose}, gpu_why?}, or {refused} and exit 2. devices names where
+each model runs (cpu or cuda:0); gpu_why, in words, why one isn't on the GPU, only when auto found a reason.
 
 The live body (body.py's BodyChannel) runs here too, so a frame crosses the pipe once and numpy loads once. A header
 with a kind of setup_body or body comes alone, with no bundle after it: setup_body binds calibration; body asks for
@@ -95,22 +99,25 @@ def main(argv=None):
     parser.add_argument("--tools-root", required=True)
     parser.add_argument("--state", required=True)
     parser.add_argument("--models", default=str(Path(sys.prefix) / "models"))
+    parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     args = parser.parse_args(argv)
     models = Path(args.models).resolve()   # before contain(), which moves the working folder into --state
     own_stdout()
     detect.guard()
     try:
-        pinned = detect.lock()
+        have = detect.installed()
+        pinned = detect.lock_for(have)
         detect.contain(args.state)
-        wrong = detect.unlocked(pinned["versions"], detect.installed())
+        wrong = detect.unlocked(pinned["versions"], have)
         if wrong:
-            raise detect.Refused("the detector's venv is not requirements.lock's (%d differences)" % len(wrong))
-        detector = detect.Detector(args.tools_root, models, pinned["weights"])
+            raise detect.Refused("the detector's venv is not its lock's (%d differences)" % len(wrong))
+        detector = detect.Detector(args.tools_root, models, pinned["weights"], device=args.device)
     except detect.Refused as exc:
         say({"refused": str(exc)[:200]})
         return 2
     np = detector.np
-    say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms)})
+    say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms), "devices": detector.devices,
+         **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {})})
     stream = sys.stdin.buffer
     kept, bodies, ring, image_module = None, None, stills.Ring(), None
     while True:

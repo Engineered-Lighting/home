@@ -216,6 +216,8 @@ class DetectorWorker:
             self.close()
             raise
         self.load_ms = first.get("load_ms")
+        self.devices = first.get("devices") if isinstance(first.get("devices"), dict) else None   # where each model runs
+        self.gpu_why = first.get("gpu_why") if isinstance(first.get("gpu_why"), str) else None
 
     def _read(self):
         try:

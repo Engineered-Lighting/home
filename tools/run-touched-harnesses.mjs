@@ -253,7 +253,9 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * shell-audit, room-guide, WebGPU-renderer, Lit and M2 browser weights are
  * hosted times from run 39350126935 (L5, #347), rounded up; the Lit splats,
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
- * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
+ * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up.
+ * test-apartment-chat-context.cjs is a unit suite that took 131 s hosted on run 43597090472 (#441); it counted as
+ * 1 s before, as an unmeasured non-browser item. */
 const SHARD_WEIGHT_S = {
   "run-people-agent-tray-ui-tests.cjs": 60,
   "run-people-bridge-ui-tests.cjs": 45,
@@ -288,6 +290,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-lit-webgpu-browser.mjs": 135,
   "test-apartment-lit-webgpu-browser-part2.mjs": 130,
   "test-apartment-composer-comfort-browser.mjs": 55,
+  "test-apartment-chat-context.cjs": 135,
   "test-apartment-setup-saves-browser.mjs": 110,
   "test-apartment-setup-rail-browser.mjs": 70,
   "test-apartment-setup-read-only-browser.mjs": 60,

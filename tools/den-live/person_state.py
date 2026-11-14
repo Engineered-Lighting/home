@@ -3,8 +3,8 @@
 In <state>/days/<UTC date>/person-state.jsonl, beside the ask's asks.jsonl and kept as long (ask.RETENTION_DAYS):
 every published snapshot with someone in view (a track, or presence present), at about 5 a second, and with nobody
 in view at most one a second (IDLE_EVERY_S), plus one at once on any change of status, presence, epoch or run, or a
-track coming or going. A line is about 0.6 KB with nobody in view and 1.7 KB with one person: about 50 MB for an empty
-den's day, and about 30 MB more for each person-hour. The file has its own cap, CAP_BYTES (300 MB) a UTC day, apart
+track coming or going. A line is about 0.6 KB with nobody in view and 2.0 KB with one person: about 50 MB for an empty
+den's day, and about 35 MB more for each person-hour. The file has its own cap, CAP_BYTES (300 MB) a UTC day, apart
 from the ask's 50 MB: past it, the day's lines are skipped and counted, and the status line says so, naming the file.
 The LA service writes it; run_local.py keeps nothing.
 
@@ -47,7 +47,7 @@ def frame_record(frame):
 
 def track_record(track):
     """One TrackEvidence's contract fields, near left out (words)."""
-    seated = track.seated
+    seated, facing, head = track.seated, track.body_facing, track.head_point_m
     return {"track_id": track.track_id, "state": track.state, "xy_m": [_number(v) for v in track.xy_m],
             "sigma_m": _number(track.sigma_m), "position_basis": track.position_basis,
             "current_obs_ids": list(track.current_obs_ids),
@@ -56,7 +56,11 @@ def track_record(track):
             "supported_pose": {name: [[_number(v) for v in xyz], status]
                                for name, (xyz, status) in sorted(track.supported_pose.items())},
             "seated": None if seated is None else {"state": seated.state, "since_mono": _number(seated.since_mono),
-                                                   "basis": seated.basis}}
+                                                   "basis": seated.basis},
+            "body_facing": None if facing is None else {"deg": _number(facing.deg, 1), "sd_deg": _number(facing.sd_deg, 1),
+                                                        "as_of_mono": _number(facing.as_of_mono), "n": facing.n},
+            "head_point_m": None if head is None else {"xyz": [_number(v) for v in head.xyz], "n": head.n},
+            "wrists_m": {name: [_number(v) for v in xyz] for name, xyz in sorted(track.wrists_m.items())}}
 
 
 def serialise(snapshot):

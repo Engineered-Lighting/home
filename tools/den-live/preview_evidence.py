@@ -38,6 +38,14 @@ def seated(track, captured):
     return False, None
 
 
+def head(track):
+    """Contract 2's head_point_m, as perception published it on the track: its xyz, or None."""
+    xyz = field(field(track, "head_point_m"), "xyz")
+    if isinstance(xyz, (tuple, list)) and len(xyz) == 3 and all(map(finite, xyz)):
+        return tuple(xyz)
+    return None
+
+
 def activity(facts):
     word = field(facts, "activity_hypothesis")
     if field(facts, "people_visible") != "one" or word in (None, "unclear"):

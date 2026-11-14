@@ -12,6 +12,7 @@ from body_input import BodyInput, bundle_frame_key, qualified
 from body_link import BodyLink
 from contracts import TrackingSnapshot
 from perceive import Perceiver, body_person
+from person_fields import Facing
 from seated import Published
 from stream import BODY_SCHEMA, BASE, PeopleStream
 
@@ -193,6 +194,7 @@ class PipelineTests(unittest.TestCase):
         perceiver.clock_reset_candidate = perceiver.last_input_mono = perceiver.calibration_id = None
         perceiver.associations, perceiver.hops = {}, {}
         perceiver.seated = Published()
+        perceiver.facing = Facing(lambda _: None, 30.0)   # no facing sample from these fakes
         perceiver.labels, perceiver.now = None, lambda: 1000
         perceiver.snapshot = TrackingSnapshot(perceiver.run_id, 3, 1, None, "starting", None, "unknown", ())
         perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})

@@ -1,6 +1,7 @@
 """In-process evidence shared by perception, the ask, and the coordinator, and contract 1's registration receipt."""
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Mapping
 
 # Contract 1, the room model: step 2's receipt, which register_now.py writes and every den-live start requires.
@@ -65,6 +66,23 @@ class SeatedState:
 
 
 @dataclass(frozen=True)
+class BodyFacing:
+    """Contract 2's body_facing: deg clockwise from +y, the circular median of the samples over the last second;
+    sd_deg, their median sd; as_of_mono, the newest sample's capture time; n, how many. person_fields.Facing makes it."""
+    deg: float
+    sd_deg: float
+    as_of_mono: float
+    n: int
+
+
+@dataclass(frozen=True)
+class HeadPoint:
+    """Contract 2's head_point_m: xyz, the median of the stereo-supported face joints in room metres; n, how many."""
+    xyz: tuple[float, float, float]
+    n: int
+
+
+@dataclass(frozen=True)
 class TrackEvidence:
     track_id: str
     state: str
@@ -78,6 +96,9 @@ class TrackEvidence:
     supported_pose: Mapping[str, tuple[tuple[float, float, float], str]]
     near: str | None = None
     seated: SeatedState | None = None   # perception's one answer; consumers read it and never work it out again
+    body_facing: BodyFacing | None = None   # None until a sample, and once it expires
+    head_point_m: HeadPoint | None = None   # None with fewer than two face joints
+    wrists_m: Mapping[str, tuple[float, float, float]] = field(default_factory=lambda: MappingProxyType({}))
 
 
 @dataclass(frozen=True)

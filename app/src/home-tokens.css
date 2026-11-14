@@ -1096,6 +1096,104 @@ button.hg-no-press:active {
 .home-den-caption-layer[data-compact="1"] .home-den-caption-who { font-size: 17px; }
 .home-den-caption-layer[data-compact="1"] .home-den-caption-word { font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { .home-den-caption-word.is-new { animation: none; } }
+/* The den's capsule (home-den-live-view.mjs, with the caption or the pipeline on): the chip, made one row, in the
+ * Perception Lab's card language: near-black, a hairline border, small corners, mono detail; three icons hold what
+ * used to be separate buttons and drawers. */
+.home-den-live-chip.home-den-live-chip--capsule { top: 12px; left: 12px; z-index: 15; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px);
+  height: 36px; padding: 0 4px 0 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(10,10,10,.92);
+  pointer-events: auto; font: 400 12.5px/1 'Geist', ui-sans-serif, system-ui, sans-serif; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.home-den-live-chip--capsule p { white-space: nowrap; }
+.home-den-live-chip--capsule .home-den-live-chip-title { font-weight: 560; }
+.home-den-live-chip--capsule .home-den-live-chip-facts { font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; color: var(--hg-fg-2, #a1a1a1); }
+.home-den-live-chip--capsule .home-den-live-chip-qwen { display: none; }
+.home-den-live-chip--capsule .home-den-live-chip-banner { margin: 0 !important; font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; }
+.home-den-live-chip-actions { display: flex; gap: 2px; margin-left: 2px; padding-left: 6px; border-left: 1px solid rgba(255,255,255,.12); }
+.home-den-live-chip-icon { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent;
+  color: var(--hg-fg-2, #a1a1a1); cursor: pointer; }
+.home-den-live-chip-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.home-den-live-chip-icon:hover { color: #fff; border-color: rgba(255,255,255,.18); }
+.home-den-live-chip-icon[aria-pressed="true"] { color: #fff; border-color: rgba(255,255,255,.4); background: rgba(255,255,255,.08); }
+.home-den-live-chip-icon:focus-visible { outline: 1px solid #0072f5; outline-offset: 2px; }
+.home-den-live-chip-icon[hidden] { display: none; }
+.home-den-live-sheet { position: absolute; top: calc(100% + 6px); left: -1px; width: min(320px, calc(100vw - 32px)); padding: 10px 12px; cursor: auto;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(10,10,10,.96); }
+.home-den-live-sheet[hidden] { display: none; }
+.home-den-live-sheet .home-den-live-coordinator { margin: 0; padding: 0; border: 0; }
+.apt-home-stage:has(.home-den-live-chip--capsule) .home-den-labels-toggle { display: none; }
+/* The den's pipeline through the room (home-den-pipeline-layer.mjs). Stations on one hairline along the canvas's top:
+ * a lit dot per system with its words below, no boxes, so the room stays the picture. Wires are light, a record runs
+ * them as a short comet, and the light's path back into the room is warm. On the always-dark canvas it uses the
+ * canvas's own colours (Home's dark text, the apartment's state shapes), like the caption. */
+.home-den-pipeline { position: absolute; inset: 0; z-index: 13; pointer-events: none; overflow: hidden;
+  --den-pl-fg: #ffffff; --den-pl-fg-1: #ededed; --den-pl-fg-2: #a1a1a1; --den-pl-fg-3: #8f8f8f;
+  --den-pl-ok: #91e6bd; --den-pl-attn: #ffb45f; --den-pl-warm: #ffddb0; --den-pl-glass: rgba(8,9,11,.78); }
+.home-den-pipeline-wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; transition: opacity .35s cubic-bezier(.2,.7,.2,1); }
+.home-den-pipeline-wire { fill: none; stroke: rgba(237,237,237, calc(.34 + var(--heat, 0) * .5)); stroke-width: calc(1px + var(--heat, 0) * 1px); stroke-linecap: round; }
+.home-den-pipeline-wire.is-gate { stroke: rgba(237,237,237,.3); stroke-dasharray: 2 4; }
+.home-den-pipeline-wire.is-room { stroke: rgba(237,237,237, calc(.2 + var(--heat, 0) * .25)); }
+.home-den-pipeline-wire.is-light { stroke: rgba(255,221,176, calc(.42 + var(--heat, 0) * .3)); stroke-width: 1.2px; }
+.home-den-pipeline-comet { fill: none; stroke: rgba(255,255,255, calc(.35 + var(--heat, 0) * .65)); stroke-width: 2px; stroke-linecap: round; }
+.home-den-pipeline-comet.is-light { stroke: rgba(255,226,190, calc(.4 + var(--heat, 0) * .6)); stroke-width: 2.4px; }
+.home-den-pipeline-anchor { fill: none; stroke: rgba(237,237,237,.6); stroke-width: 1.2; }
+.home-den-pipeline-anchor.is-light { fill: #ffddb0; stroke: none; }
+.home-den-pipeline-halo { fill: url(#home-den-pipeline-bloom); opacity: calc(.75 + var(--heat, 0) * .25); }
+.home-den-pipeline-rail { position: absolute; display: flex; justify-content: flex-start; gap: 30px; pointer-events: none;
+  transition: opacity .35s cubic-bezier(.2,.7,.2,1), transform .35s cubic-bezier(.2,.7,.2,1); }
+.home-den-pipeline[data-on="0"] .home-den-pipeline-rail { opacity: 0; transform: translateY(-8px); visibility: hidden; transition: opacity .2s, transform .2s, visibility 0s .2s; }
+.home-den-pipeline[data-on="0"] .home-den-pipeline-wires { opacity: 0; }
+.home-den-pipeline-card { pointer-events: auto; position: relative; flex: 1 1 0; max-width: 214px; min-width: 0; display: grid; gap: 3px; padding: 8px 10px 8px;
+  text-align: left; border: 1px solid rgba(255,255,255,.14); border-radius: 4px; background: rgba(10,10,10,.94); color: var(--den-pl-fg-1); cursor: pointer;
+  font: 400 12px/1.25 'Geist', ui-sans-serif, system-ui, sans-serif; }
+.home-den-pipeline-card:hover, .home-den-pipeline-card[aria-expanded="true"] { border-color: rgba(255,255,255,.34); }
+.home-den-pipeline-card:focus-visible { outline: 1px solid #0072f5; outline-offset: 2px; }
+.home-den-pipeline-role { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.home-den-pipeline-system { font: 500 11.5px/1.2 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-pl-fg-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-den-pipeline-badge { flex: 0 0 auto; font: 500 9.5px/1 'Geist Mono', ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; color: var(--den-pl-fg-3);
+  padding: 2px 5px; border: 1px solid rgba(255,255,255,.2); border-radius: 3px; }
+.home-den-pipeline-value { font: 600 14.5px/1.3 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-pl-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin: 0 -4px; padding: 0 4px; border-radius: 2px; transition: background .6s; font-variant-numeric: tabular-nums; }
+.home-den-pipeline-card[data-changed="true"] .home-den-pipeline-value { background: rgba(255,255,255,.1); transition: none; }
+.home-den-pipeline-card[data-node="coordinator"][data-state="live"] .home-den-pipeline-value { color: var(--den-pl-warm); }
+.home-den-pipeline-card[data-state="attention"] .home-den-pipeline-value { color: var(--den-pl-attn); }
+.home-den-pipeline-card[data-state="idle"] .home-den-pipeline-value, .home-den-pipeline-card[data-state="off"] .home-den-pipeline-value { color: var(--den-pl-fg-2); }
+.home-den-pipeline-sub { display: flex; align-items: center; gap: 5px; min-width: 0; font: 500 10.5px/1.3 'Geist Mono', ui-monospace, monospace; color: var(--den-pl-fg-3);
+  white-space: nowrap; overflow: hidden; }
+.home-den-pipeline-sub > span { overflow: hidden; text-overflow: ellipsis; }
+.home-den-pipeline-sub > span:not(:empty)::before { content: "· "; }
+.home-den-pipeline-state { font-weight: 500; color: var(--den-pl-fg-1); }
+.home-den-pipeline-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.2px var(--den-pl-fg-2); }
+.home-den-pipeline-card[data-state="live"][data-changed="true"] .home-den-pipeline-dot { background: var(--den-pl-fg-1); box-shadow: none; }
+.home-den-pipeline-card[data-state="attention"] .home-den-pipeline-dot { background: var(--den-pl-attn); box-shadow: none; border-radius: 1px; transform: rotate(45deg); }
+.home-den-pipeline-card[data-state="off"] .home-den-pipeline-dot { background: #404040; box-shadow: none; }
+.home-den-pipeline-legend { position: absolute; margin: 0; pointer-events: none; font: 500 10px/1 'Geist Mono', ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--den-pl-fg-3); transition: opacity .3s; }
+.home-den-pipeline[data-on="0"] .home-den-pipeline-legend { opacity: 0; }
+.home-den-pipeline-anchor.is-port { fill: #0a0a0a; stroke: rgba(237,237,237,.55); stroke-width: 1; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-rail { gap: 6px; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-card { padding: 6px 7px; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-sub { display: none; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-value { font-size: 12px; }
+.home-den-pipeline-toggle { position: absolute; pointer-events: auto; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 8px; background: var(--den-pl-glass); color: var(--den-pl-fg-2); cursor: pointer;
+  font: 500 12px/1 'Geist', ui-sans-serif, system-ui, sans-serif; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.home-den-pipeline-toggle::before { content: ""; width: 14px; height: 6px; background: radial-gradient(circle, currentColor 2.2px, transparent 2.6px) 0 50% / 7px 6px repeat-x;
+  border-top: 1px solid transparent; box-shadow: inset 0 -2.5px 0 -2px currentColor; }
+.home-den-pipeline-toggle:hover { color: var(--den-pl-fg); border-color: rgba(255,255,255,.3); }
+.home-den-pipeline-toggle[aria-pressed="true"] { color: var(--den-pl-fg); border-color: rgba(184,216,255,.55); background: rgba(184,216,255,.12); }
+.home-den-pipeline-toggle:focus-visible { outline: 2px solid #b8d8ff; outline-offset: 2px; }
+.home-den-pipeline-toggle[hidden] { display: none; }
+/* While the pipeline is on, the coordinator card names the lit fixture, so the room's fixture pills step back. */
+.apt-home-stage .apt-room-label { transition: opacity .3s cubic-bezier(.2,.7,.2,1), visibility 0s; }
+.apt-home-stage:has(.home-den-pipeline[data-on="1"]) .apt-room-label { opacity: 0; visibility: hidden; transition: opacity .3s cubic-bezier(.2,.7,.2,1), visibility 0s .3s; }
+.home-den-pipeline-pop { position: absolute; left: 0; top: 0; width: 264px; pointer-events: auto; padding: 10px 12px; border: 1px solid rgba(255,255,255,.18);
+  border-radius: 4px; background: rgba(10,10,10,.96); color: var(--den-pl-fg-1); font: 400 12px/1.4 'Geist', ui-sans-serif, system-ui, sans-serif; }
+.home-den-pipeline-pop[hidden] { display: none; }
+.home-den-pipeline-pop-title { margin: 0 0 6px; font-weight: 560; color: var(--den-pl-fg); }
+.home-den-pipeline-pop dl { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 3px 10px; margin: 0; }
+.home-den-pipeline-pop dt { font: 500 11px/1.5 'Geist Mono', ui-monospace, monospace; color: var(--den-pl-fg-3); }
+.home-den-pipeline-pop dd { margin: 0; overflow-wrap: anywhere; }
+.home-den-pipeline-pop-note { margin: 8px 0 0; color: var(--den-pl-fg-2); font-size: 11.5px; }
+@media (prefers-reduced-motion: reduce) { .home-den-pipeline-rail, .home-den-pipeline-wires { transition: none; } }
 /* The lighting coordinator's section (home-den-coordinator-panel.mjs): the one part of the chip that takes the pointer. */
 .home-den-live-coordinator { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hg-border, rgba(255,255,255,.1)); pointer-events: auto; }
 .home-den-live-coordinator[hidden] { display: none; }

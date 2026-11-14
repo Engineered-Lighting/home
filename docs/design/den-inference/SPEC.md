@@ -174,3 +174,38 @@ Type: Geist 600 20 px name (17 compact), Geist 500 15 px word (14 compact), Geis
 
 Not in the branch yet: the tap card (2.4), the signal strip drawer (2.3), the spot tags (2.5), and the asking
 orbit.
+
+## 10. The pipeline through the room (added 2026-11-14, from the owner's review)
+
+The owner asked for the Perception Lab's graph (design v8) to live with the 3D home: "the apartment 3D scan should adjust and shrink down to enable these graph nodes to coexist with it", and to stay minimal.
+
+- **The switch:** the pipeline icon in the den's capsule. Turning it on fades in one row of Lab cards along the canvas's top edge. The rail asks the room to fit below it (`data-apt-view-inset="top"`, which the apartment's fit reads), and the room eases down and smaller over 0.45 s. Turning it off reverses that. The choice is kept per browser.
+- **The cards (left to right):**
+
+  | Card | Value | Status line |
+  |---|---|---|
+  | Frigate · Occupancy | Occupied / Empty | — |
+  | OAK-D Pro · Camera | fps | transit |
+  | den-live · Perception | people | how far behind |
+  | Qwen · Activity | the word | seconds left |
+  | Coordinator · Light | level | for whom |
+
+  Each card has a name, a role badge, one value, and a status line in the Lab's state words (Changed with a brief highlight, Current, Stale, Unavailable, Idle). Tapping a card opens its detail in a Lab-style sheet; Escape closes it.
+- **The wires:**
+  - The camera's line runs from the camera through den-live to Qwen and the coordinator, card edge to card edge, with ports.
+  - Frigate is a dashed gate arc into Qwen, because it gates the asks; camera frames don't pass through it.
+  - den-live drops a hairline onto each person's floor marker.
+  - The coordinator drops a warm line onto where the beam lands (`target_m`), with a soft bloom.
+  - A wire brightens, and a short comet runs it, only when a record has just gone through: a people event, a new Qwen answer, or a change in the spot.
+- **Minimal while on:** the room's fixture pills step back, because the coordinator card names the lit fixture in its sheet. With the caption on, its house line still shows up close.
+- **Occupancy:** den-live doesn't send Frigate's occupancy yet. The card shows Qwen's gate, and its sheet says so. A `health.occupancy {effective, why}` field would make it Frigate's own word.
+- **The capsule:** with the caption or the pipeline on, the den's chip becomes one Lab-style row: status, then three icons (pipeline, the coordinator's controls in a sheet, and labels). It replaces the separate Labels button and the chip's drawer.
+- **Code:**
+  - `app/src/home-den-pipeline-layer.mjs`: the layer, and `pipelineCards()`, which is pure and tested by `tools/test-den-pipeline-cards.mjs`.
+  - Mounted by `home-den-live-view.mjs` when `HomeDenLive.pipeline` is set (`HOME_WEB_DEN_PIPELINE`, off by default).
+  - `aptTopOverlayInset` in `home-apartment.jsx`.
+  - The browser case is "the pipeline runs through the room" in `tools/test-den-live-serve-browser.mjs`.
+- **Seen on the owner's real den scan (v4) on the workstation's GPU,** with a synthetic seated body, caption and stream. The screenshots stayed on the workstation and weren't committed. Under SwiftShader a frame of the real scan takes longer than the body's 1 s lease, so the body correctly expires before it paints. Judge the real scan on a GPU.
+- **Not done:**
+  - Phone. The room there is still the thin strip under the Controls sheet, so the pipeline needs the sheet folded. That's the shell's job.
+  - The Layers menu entry.

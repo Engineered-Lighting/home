@@ -131,11 +131,26 @@ function aptUseSyntheticSpatialQa(simActive, qaEnabled) {
  * from the host's bottom edge to just above the toolbar, or 0 without one. */
 function aptRoomToolbarInsets(host) {
   const toolbar = host?.parentElement?.querySelector?.(".apt-ui-room-toolbar");
-  if (!host || !toolbar) return { top: 0, right: 0, bottom: 0, left: 0 };
+  const top = aptTopOverlayInset(host);
+  if (!host || !toolbar) return { top, right: 0, bottom: 0, left: 0 };
   const box = host.getBoundingClientRect(), bar = toolbar.getBoundingClientRect();
   const visible = bar.width > 0 && bar.height > 0 && getComputedStyle(toolbar).visibility !== "hidden"
     && bar.right > box.left && bar.left < box.right && bar.bottom > box.top && bar.top < box.bottom;
-  return { top: 0, right: 0, bottom: visible ? Math.max(0, Math.round(box.bottom - bar.top + 8)) : 0, left: 0 };
+  return { top, right: 0, bottom: visible ? Math.max(0, Math.round(box.bottom - bar.top + 8)) : 0, left: 0 };
+}
+
+/* Overlays that ask the room to fit below them (data-apt-view-inset="top", such as the den's pipeline rail while it
+ * is on): the room is framed under the lowest one. */
+function aptTopOverlayInset(host) {
+  const stage = host?.closest?.(".apt-home-stage") || host?.parentElement;
+  if (!host || !stage?.querySelectorAll) return 0;
+  const box = host.getBoundingClientRect();
+  let top = 0;
+  for (const el of stage.querySelectorAll('[data-apt-view-inset="top"]')) {
+    const r = el.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0 && r.bottom > box.top && r.top < box.bottom) top = Math.max(top, Math.round(r.bottom - box.top + 12));
+  }
+  return top;
 }
 
 function aptZoomTransitionDisabled(phase, targetDirection, requestedDirection) {

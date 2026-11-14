@@ -102,7 +102,9 @@ async function upstreamRequest(req, res) {
       at: fake.inference.ageS != null ? now - fake.inference.ageS : fake.inference.activity.at } };
     const people = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform',
       content_revision: den.revision, capture_ts: now, emitted_ts: now, mode: 'rgb', camera: { status: 'ok' },
-      ...(inference ? { health: { qwen: { state: 'asking', why: null, last_reply_at: inference.activity?.at ?? null, reply_s_median: 1.6, asks_per_min: 28 } } } : {}),
+      ...(inference ? { health: { qwen: { state: 'asking', why: null, last_reply_at: inference.activity?.at ?? null, reply_s_median: 1.6, asks_per_min: 28 },
+        timings_ms: { fetch: { n: 30, p50: 182, p95: 260 }, detector: { n: 30, p50: 41, p95: 63 }, lift: { n: 30, p50: 6, p95: 9 }, track: { n: 30, p50: 2, p95: 4 } },
+        fps_in: 2.9, dropped_per_min: 1, lag_s_median: .42, transit_s_median: .15, occupancy: { effective: 'on', why: 'Frigate sees a person' } } } : {}),
       tracks: [{ track_id: 'authored-person', state: 'confirmed', xy_m: [1.2, 1.5], sigma_m: .1, age_s: 0,
         camera_epoch: 1, association_revision: 1, ...(inference ? { seated: true, identity: inference.identity, activity: inference.activity } : {}) }] };
     out.write('event: people\ndata: ' + JSON.stringify(people) + '\n\n');
@@ -254,7 +256,7 @@ before(async () => {
     HOME_WEB_AUTH_FILE: path.join(folder, 'missing-auth.json'), HOME_WEB_BASIC_AUTH: 'fixture:ordinary-auth-required',
     HOME_CONTENT_PACKS_DIR: packs, HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: '1',
     HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: registration, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin,
-    HOME_WEB_DEN_LIVE: '1', HOME_WEB_DEN_BODY_V2: '1', HOME_WEB_DEN_VIRTUAL: '1', HOME_WEB_DEN_CAPTION: '1',
+    HOME_WEB_DEN_LIVE: '1', HOME_WEB_DEN_BODY_V2: '1', HOME_WEB_DEN_VIRTUAL: '1', HOME_WEB_DEN_CAPTION: '1', HOME_WEB_DEN_PIPELINE: '1',
     HOME_WEB_DEN_LIVE_TARGET: target + '/api/den-live', HOME_WEB_ENABLE_LEGACY_HA_PROXY: '1',
     HOME_WEB_HA_TARGET: target, HOME_WEB_HA_TOKEN_FILE: haFile,
     HOME_WEB_SERVE_LIGHTING_RELAY_CREDENTIAL_FILE: relayFile, HOME_WEB_AGENT_BFF_TARGET: target + '/api/agent' });
@@ -729,6 +731,49 @@ test('the live caption says who it is, what Qwen said and for how long, and what
         shown = await caption(page);
         assert.equal(shown.object, null);
         assert.equal(shown.life, '0.0 100');
+      } finally { await context.close(); }
+    }
+  } finally { fake.inference = null; fake.subject = null; Object.assign(fake.control, initial); }
+});
+
+test('the pipeline runs through the room: camera to perception to Qwen to the light, and back onto the person', { timeout: 120000 }, async () => {
+  const initial = { ...fake.control };
+  try {
+    for (const mobile of [false, true]) {
+      const now = Date.now() / 1000;
+      fake.inference = { ageS: 1, identity: { kind: 'household', label: 'Sam', score: .93, at: now - 4 },
+        activity: { word: 'reading', close_up: true, at: now - 1, facts: { held_object: 'book' }, basis: ['book_in_hands'] } };
+      fake.control.on = true; fake.control.stopped = false;
+      fake.subject = { track_id: 'authored-person', camera_epoch: 1, association_revision: 1, request_id: 'ask-1' };
+      const { page, context } = await openHome(mobile);
+      const cards = () => page.evaluate(() => window.HomeDenLiveView?.status()?.pipeline ?? null);
+      const insetTop = () => page.evaluate(() => window.__APT_ENGINE?.viewInsets?.()?.top ?? null);
+      try {
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.on === false, null, { timeout: 60000 });
+        assert.equal(await insetTop(), 0, 'off: the room has its whole canvas');
+        await page.locator('.home-den-live-chip-icon[data-icon="pipeline"]').click();
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.on === true);
+        await page.waitForFunction(() => (window.__APT_ENGINE?.viewInsets?.()?.top ?? 0) > 40, null, { timeout: 5000 });
+        await page.waitForFunction(() => /%/.test(window.HomeDenLiveView?.status()?.pipeline?.cards?.coordinator?.value ?? ''), null, { timeout: 60000 })
+          .catch(async error => { console.log('pipeline status', JSON.stringify(await cards())); throw error; });
+        const shown = await cards();
+        assert.match(shown.cards.camera.value, /^2\.9 fps$/);
+        assert.equal(shown.cards.occupancy.value, 'Occupied');
+        assert.equal(shown.cards.perception.value, '1 person');
+        assert.equal(shown.cards.qwen.value, 'Reading');
+        assert.match(shown.cards.qwen.sub, /^\d+ s left$/);
+        assert.match(shown.cards.coordinator.sub, /for Sam$/);
+        await page.waitForFunction(() => { const w = window.HomeDenLiveView?.status()?.pipeline?.wires ?? []; return w.includes('room') && w.includes('light'); }, null, { timeout: 10000 });
+        const shots = process.env.HOME_DEN_CAPTION_SHOTS;
+        if (shots) await page.screenshot({ path: path.join(shots, `pipeline-${mobile ? 'phone' : 'desktop'}.png`) });
+        await page.locator('.home-den-pipeline-card[data-node="qwen"]').click();
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.open === 'qwen');
+        if (shots) await page.screenshot({ path: path.join(shots, `pipeline-${mobile ? 'phone' : 'desktop'}-open.png`) });
+        await page.keyboard.press('Escape');
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.open === null);
+        await page.locator('.home-den-live-chip-icon[data-icon="pipeline"]').click();
+        await page.waitForFunction(() => window.__APT_ENGINE?.viewInsets?.()?.top === 0, null, { timeout: 5000 });
+        if (shots) await page.screenshot({ path: path.join(shots, `pipeline-${mobile ? 'phone' : 'desktop'}-off.png`) });
       } finally { await context.close(); }
     }
   } finally { fake.inference = null; fake.subject = null; Object.assign(fake.control, initial); }

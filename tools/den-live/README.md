@@ -61,19 +61,28 @@ python -B -X utf8 tools\den-live\test_sofa_check.py
 ## Step 2: register the camera to your scan
 
 The markers draw in your scan's frame, so the camera has to be placed in it. This is registration v2, with
-`REGISTER-LIVE-20261113.md` as its method. One paste, about 25 minutes, most of it clicking:
+`REGISTER-LIVE-20261113.md` as its method. The recommended paste finds the camera in your scan by itself, with no
+clicks; it takes about 5 minutes, most of it the two empty-room takes:
 
 ```powershell
-python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\register_now.py
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\register_now.py --auto
 ```
 
-This line is the only registration command. It registers against this PC's active scan, v4, the scan of record. Add
-nothing to it but `--again` (below). Don't run any other registration script you may have been sent, such as a wrapper
-for the v3 scan: it would register against the wrong scan, and den-live would refuse the result.
+To have one check land on fixed structure near the sofa, add your sofa mark, the `home-registered-sofa-target-1` file
+Home saved (the den simulation keeps it in `%USERPROFILE%\den-sim\private\`): `--auto --sofa-mark <its path>`. Its
+numbers are never printed.
 
-It needs the camera token (step 1's), Node on the PATH (the den simulation needs it too), and Python with numpy and
-Pillow. Before you paste: set the room light as for an evening's reading, keep the furniture where it is, don't touch
-the camera or its mount, and take two fresh tapes, as on 2026-11-11.
+Clicking, the way v2 started, stays as the fallback: the same line without `--auto` (about 25 minutes, most of it
+clicking; see "By clicking" below). Use it when `--auto` stops and says to.
+
+This line is the only registration command. It registers against this PC's active scan, v4, the scan of record. Add
+nothing to it but `--auto`, `--sofa-mark` and `--again` (below). Don't run any other registration script you may have
+been sent, such as a wrapper for the v3 scan: it would register against the wrong scan, and den-live would refuse the
+result.
+
+It needs the camera token (step 1's) and Python with numpy and Pillow; clicking also needs Node on the PATH (the den
+simulation needs it too). Before you paste: set the room light as for an evening's reading, keep the furniture where it
+is, don't touch the camera or its mount, and take two fresh tapes, as on 2026-11-11.
 
 1. **Two tapes.** The paste asks for the lens's height above the floor and the lens to the facing wall, square to it,
    in metres. They're kept privately: beside the take (`<take>.tapes.json`) as soon as it's recorded, and in the
@@ -88,33 +97,59 @@ the camera or its mount, and take two fresh tapes, as on 2026-11-11.
      receipt, and den-live applies it to every depth plane before any lift;
    - `STOP: the depth bends more than a scale can fix`: the floor and the wall disagree by more than 5 points. Nothing
      was clicked. Tell an agent the summary block. The next step is the camera's own calibration, never moving it.
-5. **Nine clicks on the camera's picture.** That's den-register's own click page, on the take's median depth.
-   - f1 and f2 at floor level, left and right: inside corners where walls meet the floor, or skirting meets a door
-     frame.
-   - f3 and f4 at mid height: the inside corner of a door or window frame, or a corner of a switch plate.
-   - f5 and f6 high: the top inside corner of a frame, or where two walls meet the ceiling.
-   - c1, c2 and c3: fixed structure beside or behind the sofa, not the sofa itself.
-
-   Fixed structure only: inside corners or flat marks, never an edge with background behind it. No furniture, rugs,
-   cushions, screens, glass or black fabric. Prefer middle depths over the far wall's corners. The edge guard then
-   names any click on a depth edge, and the page opens again for it.
-6. **The same nine in your scan.** Your scan opens on a local page, with the camera's picture beside it and your clicks
-   numbered. For each row, orbit to the feature and click it once without dragging. Then Save.
-7. **The distance check.** A rigid fit keeps distances, so all 36 pair distances are compared, camera against scan. A
+5. **The camera, found in your scan.** With `--auto`, no page opens. The camera's own floor plane gives its tilt and
+   height; its turn and place come from a search over your den's floor, all the way round, matching what the camera
+   sees above the floor against your scan. It prints `Automatic pose: it matches N% of the camera's view within 5 cm;
+   the best pose elsewhere, M%.` If no pose is clearly best, or the take or the scan shows no floor, it stops in one
+   sentence: register by clicking instead. Then it chooses nine points on stable structure (still where your scan saw
+   it, flat, at middle depths): f1-f6 to fit, spread across the picture and in height, and c1-c3 to check.
+6. **The distance check.** A rigid fit keeps distances, so all 36 pair distances are compared, camera against scan. A
    feature that disagrees with the others by more than 15 cm, den-register's gate (the median over its 8 pairs), is
    named, worst first, and the paste stops. Between 6 and 15 cm it's only noted in one line, and the paste goes on.
-8. **The fit.** den-register fits with a 0.15 m gate, then each sofa check must be within 10 cm. It prints
-   `REGISTERED den-oak@<date>.<n>` or `REFUSED` with each reason.
-9. **The held-out take, 20 s.** "Leave the view again." This take's depth is carried into the room through the new
+7. **The fit.** den-register fits with a 0.15 m gate, then each check (by clicking, each sofa check) must be within
+   10 cm. It prints `REGISTERED den-oak@<date>.<n>` or `REFUSED` with each reason.
+8. **The held-out take, 20 s.** "Leave the view again." This take's depth is carried into the room through the new
    registration and compared there with your scan: the floor against the floor, the upper walls against the scan's
    walls and ceiling, each on its own. Each needs at least 75% within noise, and no 1 m range bin's median may be off
-   by more than 10 cm.
-10. **On a pass,** your scan opens again with the camera where the fit put it, and your nine features as the camera
-    sees them. Each dot should sit on its feature. Press Done.
+   by more than 10 cm. Floor your scan saw that's now covered by something standing on it (more than 15 cm above the
+   take's own floor), or that lies outside your den's floor (through a doorway), isn't judged; one line says how much.
+   The upper walls are never left out, and a failure says which surface it was on.
 
 Tell an agent the summary block at the end, and only that: it's words and numbers, and it never holds a pose, a
-coordinate or a tape. Its last line is `QUALIFIED: yes` or `QUALIFIED: no, because ...`. den-live starts only on a
-qualified registration.
+coordinate or a tape. With `--auto` it says `Registration: automatic (no clicks).` Its last line is `QUALIFIED: yes`
+or `QUALIFIED: no, because ...`. den-live starts only on a qualified registration.
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\register_now.py --auto --again
+```
+
+That keeps the newest take and its tapes, and finds the camera again. If the held-out check couldn't run, it keeps the
+registration and takes the held-out take; after a pass, with nothing changed, it just says it's qualified already. A
+paste without `--again` asks for the tapes again and records a new take.
+
+### By clicking (the fallback)
+
+```powershell
+python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\register_now.py
+```
+
+Steps 1-4 and 6-8 are as above. Step 5 is yours, on two pages:
+
+- **Nine clicks on the camera's picture.** That's den-register's own click page, on the take's median depth.
+  - f1 and f2 at floor level, left and right: inside corners where walls meet the floor, or skirting meets a door
+    frame.
+  - f3 and f4 at mid height: the inside corner of a door or window frame, or a corner of a switch plate.
+  - f5 and f6 high: the top inside corner of a frame, or where two walls meet the ceiling.
+  - c1, c2 and c3: fixed structure beside or behind the sofa, not the sofa itself.
+
+  Fixed structure only: inside corners or flat marks, never an edge with background behind it. No furniture, rugs,
+  cushions, screens, glass or black fabric. Prefer middle depths over the far wall's corners. The edge guard then
+  names any click on a depth edge, and the page opens again for it.
+- **The same nine in your scan.** Your scan opens on a local page, with the camera's picture beside it and your clicks
+  numbered. For each row, orbit to the feature and click it once without dragging. Then Save.
+
+On a pass, your scan opens again with the camera where the fit put it, and your nine features as the camera sees
+them. Each dot should sit on its feature. Press Done.
 
 **If it names features,** re-click them on the camera page or re-pick them in the scan, then paste:
 
@@ -132,27 +167,35 @@ and agents, never for your registration session.
 If the distance check names most features and says every feature fits with their own scale, it's the depth scale or a
 tape, which re-clicking won't fix: check the tapes, then tell an agent.
 
+### What the lines mean
+
 | Line | Means |
 |---|---|
 | `Depth corrected at the camera: x0.889 on all N frames.` | The camera service's correction is on; the paste goes on |
 | `stopped: the camera's depth isn't corrected at its source ...` | Some frame says the correction is off, or has no record. Nothing was clicked. Tell an agent the line |
 | `stopped: the camera's depth correction isn't the one the take ... was made on ...` | `--again` only: a camera release changed the correction since that take. Paste the line without `--again`; it records a new take |
-| `Depth check: ... no scale` or `... scale x... applied` | The depth agrees with your tapes, or will once den-live's scale is applied; the clicking goes on |
+| `Depth check: ... no scale` or `... scale x... applied` | The depth agrees with your tapes, or will once den-live's scale is applied; the paste goes on |
 | `Depth check: ... STOP: ...` | The depth bends, or it's off by more than 10%, or the check can't find the floor or the facing wall. Tell an agent the summary block |
-| `Edge guard: f3 sits on a depth edge ...` | Click f3 a little inside one surface; the page opens again for it |
-| `Distance check: f4 disagrees with ...` | Re-pick f4 or re-click it, then paste with `--again` |
+| `Automatic pose: it matches ...` | `--auto` found the camera in your scan; the second share is the best pose elsewhere, which must be clearly lower |
+| `stopped: the automatic search can't tell two poses apart ...` | `--auto` only: two places in your scan fit the camera's view about as well. Register by clicking: paste the line without `--auto` |
+| `stopped: the scan shows no floor ...` or `... the camera's floor plane isn't found ...` | `--auto` only: it needs the floor in both. Tell an agent the summary block, or register by clicking |
+| `Checks near the sofa: yes ...`, `no ...` or `not known ...` | `--auto` only: whether a check landed on fixed structure near your sofa mark; `not known` without `--sofa-mark` |
+| `Edge guard: f3 sits on a depth edge ...` | Clicking: click f3 a little inside one surface; the page opens again for it |
+| `Distance check: f4 disagrees with ...` | Clicking: re-pick f4 or re-click it, then paste with `--again`. With `--auto`, tell an agent the summary block |
 | `REGISTERED den-oak@...` | den-register wrote the registration to the private `room-model.jsonl`. It still has to qualify |
-| `REFUSED` | The reasons name the features. Re-click or re-pick them and paste with `--again` |
-| `Held-out take: ...` | How well your scan, seen from the new registration, matches a fresh take of the empty den. It must be on the registration take's camera correction, or nothing qualifies |
+| `REFUSED` | The reasons name the features. Re-click or re-pick them and paste with `--again`; with `--auto`, register by clicking |
+| `Held-out take: ...` | How well your scan, seen from the new registration, matches a fresh take of the empty den, and on a failure which surface it was on. It must be on the registration take's camera correction, or nothing qualifies |
+| `Held-out take: N% of the scan's floor view is now covered ...` | How much of the floor your scan saw is now under something, or outside your den's floor; that part isn't judged |
 | `QUALIFIED: yes` | Step 3 and the LA service will start on it |
 
 What's kept, all under `%USERPROFILE%\den-live\private\register\`: the takes (`takes\`: the take, its tapes
 `<take>.tapes.json`, its median copy `<take>-x<scale>-m` and the held-out take), the camera's `/calibration` reply,
-the worksheet, your clicks, every `fit-N.json`, `room-model.jsonl`, and a `register-now-N.json` receipt per paste. The
-receipt is `den-live-register-now-2`: your tapes, the depth check, `depth_scale`, the sofa checks, the held-out numbers
-and `qualified`. Agents never open the folder. The scan page runs on 127.0.0.1 only, and reaches nothing beyond this PC.
-Receipts from before v2 (`den-live-register-now-1`, method `REGISTER-LIVE-20261111.md`) still read, but nothing starts
-on them: register again.
+the worksheet, the clicks (yours, or `--auto`'s), every `fit-N.json`, `room-model.jsonl`, and a `register-now-N.json`
+receipt per paste. The receipt is `den-live-register-now-2`: your tapes, the depth check, `depth_scale`,
+`registration` (`auto` or `clicked`), the checks (`sofa_check_errors_m`; with `--auto`, `checks: auto` and
+`checks_near_sofa`), the held-out numbers with the covered and outside shares, and `qualified`. Agents never open the
+folder. The scan page runs on 127.0.0.1 only, and reaches nothing beyond this PC. Receipts from before v2
+(`den-live-register-now-1`, method `REGISTER-LIVE-20261111.md`) still read, but nothing starts on them: register again.
 
 ### Tests
 
@@ -160,13 +203,19 @@ on them: register again.
 python -B -X utf8 tools\den-live\test_register_now.py
 ```
 
-- No camera, LA or ssh. The depth check, the edge guard, the distance check and the held-out check run on synthetic
-  depth and synthetic rooms.
+- No camera, LA or ssh. The depth check, the edge guard, the distance check, the held-out check and the automatic
+  search run on synthetic depth and synthetic rooms. Among them: furniture that isn't in the scan is covered and not
+  judged, floor past the den's polygon or in a hole isn't judged, the covered floor is the take's own so a pose 20 cm
+  too high still fails on the floor, and a box room's camera is found to a few centimetres, while a room that looks the
+  same turned round, or a take or scan with no floor, stops in one sentence.
 - The end-to-end part runs on the den simulation's rendered marks take, through a fake camera, or a copy of it with its
   depth scaled. den-register's own click session clicks nine features found on the render. The real scan page, on the
   authored room, is saved over HTTP with their room positions, and the held-out check reads a points.ply made from the
   render. Among the cases:
   - a clean pass registers and qualifies, and prints the summary block in its exact shape, with no tape or coordinate;
+  - `--auto` registers the render with no page, recovers the render's pose to within 3 cm and 1 degree, and qualifies;
+    with a sofa mark it puts a check near the sofa, never printing the mark; `--auto --again` is qualified already;
+    with no floor in the scan, or no scan, it stops in one sentence;
   - a 3% long depth is measured, scaled, registered and qualified;
   - a 7-point bend stops before any click;
   - two swapped scan picks are named by the distance check;
@@ -175,7 +224,7 @@ python -B -X utf8 tools\den-live\test_register_now.py
   - a sofa check at 12 cm fails qualification while den-register's 0.15 m gate passes;
   - `--again` keeps the take and the tapes, carries the clicks to a new scale, takes the held-out take again, and says
     it's qualified already when nothing changed.
-- It needs Node and a prepared den-sim set. It takes about three minutes.
+- It needs Node and a prepared den-sim set. It takes about five minutes.
 
 ## Step 3: your marker, live, on this PC
 

@@ -40,7 +40,7 @@ SETTINGS = {
     "ambient_restore_s": 1.5,     # when the task ends the room comes back as the spot goes out: no one sits in the dark
 }
 LIMITS = {"page_lift": (0.0, 0.5), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
-          "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 3.0), "leave_fade_s": (0.0, 1.0), "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
+          "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 2.5), "leave_fade_s": (0.0, 1.0), "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
           "ambient_dim_s": (0.0, 20.0), "ambient_delay_s": (0.0, 5.0), "ambient_restore_s": (0.0, 10.0),
           "shift_m": (0.0, 1.0), "shift_hold_s": (0.0, 10.0)}
 
@@ -53,6 +53,9 @@ LEVEL_CODES = 254               # the board's spot level, 0-254 (contract 5's ro
 # replace the train with one MOVE per cue where the board has it.
 LEVEL_STEP_S = 0.1
 RADIO_STEP_S = 0.5
+# No exit fades for longer than this: a fade to dark sends no keep-lit (the desk sender treats a level-0 MOVE as unlit),
+# and the board's lease lapses 3 s after the last one, which would cut a longer fade-out short.
+EXIT_MAX_S = 2.5
 
 
 def capabilities(profile):

@@ -5548,6 +5548,9 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     // AL-4: a person's change pauses only that fixture and posts the brain
     // override before the change is applied.
     try { lightingBrainRef.current?.follower.handChange(fixtureId, { reason: reason || "change" }); } catch (_) { /* as above */ }
+    // While den-live's coordinator owns the spots, the change also holds this fixture for the hand until Resume, the
+    // coordinator turning on, or 10 min of it directing (equipment-virtual-fixtures.mjs holdForHand).
+    try { engineRef.current?.overlay?.holdVirtualFixtureForHand?.(fixtureId, { reason: reason || "change" }); } catch (_) { /* as above */ }
     return { released, restored: false, excluded: false };
   };
   const changeVirtualFixtureByHand = (patch, fixtureId = selectedVirtualFixture?.fixture_id, options) => {

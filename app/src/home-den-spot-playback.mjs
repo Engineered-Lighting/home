@@ -172,9 +172,22 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         if (version !== controlVersion || !revision(value?.stop_counter) || value.stop_counter < stopCounter
             || typeof value.on !== 'boolean' || typeof value.stopped !== 'boolean') return;
         const changed = control?.on !== value.on || control?.stopped !== value.stopped || control?.stop_counter !== value.stop_counter;
+        const turnedOn = control?.on === false && value.on === true;
         stopCounter = value.stop_counter;
         control = { on: value.on, stopped: value.stopped, stop_counter: value.stop_counter };
+        // The coordinator turning on takes back every fixture a person held (equipment-virtual-fixtures.mjs).
+        if (turnedOn) handBack();
         if (changed) { controlVersion += 1; onChange(); }
+    }
+    /* The fixtures a person holds ({fixture_id, label, reason, remaining_s}), and handing them all back. */
+    function handHolds() {
+        try { return overlay?.virtualFixtureHandHolds?.() || []; } catch (_) { return []; }
+    }
+    function handBack() {
+        let count = 0;
+        try { count = overlay?.releaseVirtualFixtureHands?.() || 0; } catch (_) { count = 0; }
+        if (count) onChange();
+        return count;
     }
     function block(kind) {
         const entry = { after: stopCounter };
@@ -223,7 +236,8 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             const glide = row.glide && renderOffset !== null && localGlideCurve(row.glide, row.glide.start_mono * 1000 + renderOffset);
             return glide ? { ...row, glide_local: glide } : row;
         });
-        if (!overlay.applyCoordinatorSpots(fixtures, scope.generation, { ambient: ambientOf(value.ambient) })) {
+        if (!overlay.applyCoordinatorSpots(fixtures, scope.generation,
+            { ambient: ambientOf(value.ambient), directing: value.on && !value.stopped })) {
             overlay.applyCoordinatorSpots(null); clear(); return;
         }
         stampPaint(value.epoch, value.seq, fixtures.some(fixture => fixture.on === true));
@@ -233,7 +247,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         onChange();
     }
 
-    return { attach, block, acknowledge, release, disconnect, observeControl, check, sourceLost: clear,
+    return { attach, block, acknowledge, release, disconnect, observeControl, check, sourceLost: clear, handHolds, handBack,
         connect(start) { disconnect(); openedAt = start; },
         tracking(value, revision) { transform = value ?? null; scan = revision ?? null; if (!scan) clear(); else applyCandidate(); },
         anchor(value) {

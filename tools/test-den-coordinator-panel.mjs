@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    SETTINGS, changedSettings, learnedLines, lightName, percent, planLines, reasonWords, situationWords, summaryWords, whyLines,
+    SETTINGS, changedSettings, learnedLines, lightName, manualWords, percent, planLines, reasonWords, situationWords, summaryWords, whyLines,
 } from '../app/src/home-den-coordinator-panel.mjs';
 
 // The shapes den-live's coordinator_live.py serves, as tools/den-core's Coordinator makes them.
@@ -65,6 +65,12 @@ test('the summary line', () => {
     assert.equal(summaryWords({ on: true, stopped: false, situation: DECISION.situation }), 'Lighting coordinator · On · A close-up task, evening');
     assert.equal(summaryWords({ on: false, stopped: true, situation: null }), 'Lighting coordinator · Off · Stop holds · No decision yet');
     assert.equal(summaryWords(null), 'Lighting coordinator');
+    // The fixtures a person holds while the coordinator owns the spots (equipment-virtual-fixtures.mjs holdForHand).
+    const holds = [{ fixture_id: 'F3', label: 'Desk spot', reason: 'aim', remaining_s: 600 }, { fixture_id: 'F1', label: '', reason: 'change' }];
+    assert.equal(manualWords(holds), 'Manual: Desk spot, F1');
+    assert.equal(manualWords([]), '');
+    assert.equal(summaryWords({ on: true, stopped: false, situation: DECISION.situation }, holds.slice(0, 1)),
+        'Lighting coordinator · On · A close-up task, evening · Manual: Desk spot');
 });
 
 test('Save sends only the settings that changed, and only ones den-live has', () => {

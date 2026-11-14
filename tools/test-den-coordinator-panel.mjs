@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    SETTINGS, changedSettings, learnedLines, lightName, manualWords, percent, planLines, reasonWords, situationWords, summaryWords, whyLines,
+    SETTINGS, allLearnedLines, changedSettings, learnedFromYouLines, learnedLines, lightName, manualWords, percent, planLines, reasonWords, situationWords, summaryWords, whyLines,
 } from '../app/src/home-den-coordinator-panel.mjs';
 
 // The shapes den-live's coordinator_live.py serves, as tools/den-core's Coordinator makes them.
@@ -57,12 +57,16 @@ test('the bulb plan and what it learned', () => {
         'gaming/night': { 'light.ceiling': { on: false, brightness: null, kelvin: null, n: 1 } } };
     assert.deepEqual(learnedLines(learned), ['Gaming, night · ceiling: off (1 change)', 'A close-up task, evening · reading lamp: 59% · 2900 K (2 changes)']);
     assert.deepEqual(learnedLines({}), ['Nothing yet']);
-    // What the virtual spot and the room glow learned from the hand (den-manual-1), beside the bulbs.
-    assert.deepEqual(learnedLines({ 'reading/evening': { spot: { lux_scale: 1.2, offset_m: [0, .06, 0], off: false, n: 2 },
-        room: { level: .3, cct_k: 2700, n: 1 }, 'light.ceiling': { on: false, n: 1 } } }),
-        ['reading, evening: spot 6 cm off its aim, 20% brighter; room glow 30% · 2700 K. Learned from you (3 changes)',
-            'reading, evening · ceiling: off (1 change)']);
-    assert.deepEqual(learnedLines({ 'task/day': { spot: { off: true, n: 1 } } }), ['A close-up task, day: spot off. Learned from you (1 change)']);
+    // What the virtual spot and the room glow learned from the hand: den-live's learned_from_you, beside the bulbs' learned.
+    const fromYou = { 'reading/evening': { spot: { lux_scale: .8, offset_m: .06, off: false, n: 2 }, room: { level: .3, cct_k: 2700, n: 1 } },
+        'task/day': { spot: { off: true, n: 1 } } };
+    assert.deepEqual(learnedFromYouLines(fromYou), ['reading, evening: spot aimed 6 cm off the page, 20% dimmer; room glow 30% · 2700 K. Learned from you (3 changes)',
+        'A close-up task, day: spot off. Learned from you (1 change)']);
+    assert.deepEqual(learnedFromYouLines(undefined), []);
+    assert.deepEqual(allLearnedLines({ learned: {}, learned_from_you: fromYou }), learnedFromYouLines(fromYou));
+    assert.deepEqual(allLearnedLines({ learned, learned_from_you: { 'task/day': fromYou['task/day'] } }),
+        [...learnedLines(learned), 'A close-up task, day: spot off. Learned from you (1 change)']);
+    assert.deepEqual(allLearnedLines({}), ['Nothing yet']);
     assert.equal(lightName('light.den_desk_lamp'), 'den desk lamp');
     assert.equal(percent(255), '100%'); assert.equal(percent(null), '');
 });

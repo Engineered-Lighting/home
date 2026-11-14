@@ -851,8 +851,8 @@ test('manual always wins: with the coordinator on, a drag aim, the pan slider, a
   const snapshot = (patch = {}, options = {}) => preview.applyCoordinatorSpots(ids.map(id => row(id, patch)), generation,
     { ambient: { level: .3, cct_k: 2700 }, ...options });
   const draw = () => preview.advancePresentation(performance.now() + 1000);
-  const events = [];
-  const stop = preview.onHandChange(event => events.push(event));
+  const events = [], starts = [];
+  const stop = preview.onHandChange(event => (event.phase === 'start' ? starts : events).push(event));
   assert.equal(snapshot(), true); draw();
   // No change is refused, even with no hand hold (the owner, 2026-11-14): only the hold keeps it from the next snapshot.
   assert.equal(preview.setFixtureState(others[0], { tilt_deg: 44 }).ok, true);
@@ -866,8 +866,10 @@ test('manual always wins: with the coordinator on, a drag aim, the pan slider, a
   assert.equal(preview.aimAtTarget(held, target, { sweep: true }).ok, true);
   const tilt = state(held).tilt_deg;
   assert.ok(tilt > 30, 'the drag aimed it down at the floor');
+  assert.deepEqual(starts, [{ phase: 'start', fixture_id: held }], 'the burst starts before the change is applied');
   settle();
   assert.equal(events.length, 1, 'the drop is one settled change');
+  assert.equal(events[0].phase, 'settled');
   assert.deepEqual(Object.keys(events[0].after).sort(), ['pan_deg', 'target', 'tilt_deg']);
   assert.equal(events[0].before.tilt_deg, 30); assert.equal(events[0].after.tilt_deg, tilt);
   assert.equal(events[0].before.target, null); assert.deepEqual(events[0].after.target.point, target.point);
@@ -878,6 +880,7 @@ test('manual always wins: with the coordinator on, a drag aim, the pan slider, a
   preview.holdForHand(held); assert.equal(preview.setFixtureState(held, { spotlight: { brightness: .8 } }).ok, true);
   assert.equal(timers.size, 1, 'one settle timer for the burst');
   assert.equal(events.length, 1, 'nothing is reported mid-burst');
+  assert.equal(starts.length, 2, 'one start for the whole burst');
   settle();
   assert.equal(events.length, 2);
   assert.deepEqual(Object.keys(events[1].after).sort(), ['pan_deg', 'radials', 'spotlight', 'target']);

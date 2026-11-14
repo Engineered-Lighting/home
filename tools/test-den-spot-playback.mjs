@@ -247,13 +247,13 @@ function handSetup({ answer = (path, body) => ({ status: 200, answer: { ok: true
     player.connect(at);
     player.anchor({ epoch: lit.epoch, server_mono: 10 });
     player.tracking(binding.transform_id, binding.scan_revision);
-    const change = (patch = {}) => {
-        holds.set(fixture, { fixture_id: fixture, label: 'Desk spot', reason: 'aim', since_ms: 1 });
-        listener?.({ fixture_id: fixture, label: 'Desk spot', reason: 'aim', before: { tilt_deg: 30 }, after: { tilt_deg: 41 }, at_ms: 1700000000000, ...patch });
-    };
+    const start = () => { holds.set(fixture, { fixture_id: fixture, label: 'Desk spot', reason: 'aim', since_ms: 1 }); listener?.({ phase: 'start', fixture_id: fixture }); };
+    const settle = (patch = {}) => listener?.({ phase: 'settled', fixture_id: fixture, label: 'Desk spot', reason: 'aim', before: { tilt_deg: 30 },
+        after: { tilt_deg: 41 }, at_ms: 1700000000000, ...patch });
+    const change = patch => { start(); settle(patch); };
     const snap = (seq, hand) => player.receive({ ...lit, seq, fixtures: { [fixture]: { ...lit.fixtures[fixture], hand } } });
     const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
-    return { player, overlay, posts, released, queued, holds, change, snap, flush, listener: () => listener };
+    return { player, overlay, posts, released, queued, holds, start, settle, change, snap, flush, listener: () => listener };
 }
 
 test('a settled hand change goes to den-live once, with the snapshot Home was drawing, and its hold ends only when den-live releases it', async () => {
@@ -327,4 +327,18 @@ test('a dropped report retries with the same event_id; a look-only page sends no
     assert.equal(look.posts.length, 0);
     assert.equal(look.player.handHolds()[0].learning, 'none');
     assert.equal(look.player.handBack(), 1);
+});
+
+test('the report names the snapshot drawn before the burst started, and the hold counts in the run den-live replies with', async () => {
+    const { posts, released, start, settle, snap, flush } = handSetup({ answer: (path, body) => ({ status: 200, answer: { ok: true,
+        event_id: body.event_id, recorded: true, from_seq: 4, epoch: 'preview-b' } }) });
+    snap(1, null);
+    start();
+    snap(2, null); snap(3, null);   // den-live glides on while the hand works
+    settle();
+    await flush();
+    assert.deepEqual(posts[0].body.snapshot, { epoch: lit.epoch, seq: 1 });
+    // den-live answered from another run: only that run's snapshots can end the hold.
+    snap(4, { event_id: 'home-1' }); snap(5, null);
+    assert.deepEqual(released, []);
 });

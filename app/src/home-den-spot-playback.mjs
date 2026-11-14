@@ -162,6 +162,8 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
      * failed), from_seq, seen, why_not, learned}. A hold ends from den-live's snapshot only after that snapshot's epoch
      * and seq (≥ from_seq) have shown the fixture's hand, and then show it null. */
     const manual = new Map();
+    // fixture id → the snapshot Home had applied just before a burst of changes started: den-live checks "before" at it.
+    const burstFrom = new Map();
 
     function clear() {
         if (timer !== null) cancel(timer);
@@ -182,15 +184,22 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
     function reportManual(change) {
         const id = change?.fixture_id;
         if (typeof id !== 'string' || !post) return;
-        if (!applied) {   // no snapshot to learn against: the hold stands, and nothing is sent
+        if (change.phase === 'start') {
+            if (applied) burstFrom.set(id, { epoch: applied.epoch, seq: applied.seq, subject: applied.subject, situation: applied.situation });
+            else burstFrom.delete(id);
+            return;
+        }
+        const from = burstFrom.get(id);
+        burstFrom.delete(id);
+        if (!from) {   // no snapshot to learn against: the hold stands, and nothing is sent
             manual.set(id, { event_id: null, epoch: null, state: 'unsent', from_seq: null, seen: false, why_not: null, learned: null });
             onChange(); return;
         }
         const body = { schema: MANUAL_SCHEMA, event_id: makeEventId(), fixture_id: id, before: change.before, after: change.after,
-            at_ms: change.at_ms, snapshot: { epoch: applied.epoch, seq: applied.seq },
-            ...(applied.subject !== undefined ? { subject: applied.subject } : {}),
-            ...(applied.situation !== undefined ? { situation: applied.situation } : {}) };
-        const entry = { event_id: body.event_id, epoch: applied.epoch, state: 'sending', from_seq: null, seen: false, why_not: null, learned: null };
+            at_ms: change.at_ms, snapshot: { epoch: from.epoch, seq: from.seq },
+            ...(from.subject !== undefined ? { subject: from.subject } : {}),
+            ...(from.situation !== undefined ? { situation: from.situation } : {}) };
+        const entry = { event_id: body.event_id, epoch: from.epoch, state: 'sending', from_seq: null, seen: false, why_not: null, learned: null };
         manual.set(id, entry);
         onChange();
         void send(body, entry, 0);
@@ -202,6 +211,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         if (status === 200 && answer?.ok === true && answer.event_id === body.event_id) {
             entry.state = answer.recorded === false ? 'not_recorded' : 'recorded';
             entry.from_seq = revision(answer.from_seq) ? answer.from_seq : null;
+            if (text(answer.epoch)) entry.epoch = answer.epoch;   // the run den-live's from_seq counts in
             entry.why_not = typeof answer.why_not === 'string' ? answer.why_not.slice(0, 160) : null;
             entry.learned = answer.learned ?? null;
         } else if ((status === 0 || status >= 500) && attempt < MANUAL_RETRIES) {
@@ -254,7 +264,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         let ids = [];
         try { ids = overlay?.releaseVirtualFixtureHands?.() || []; } catch (_) { ids = []; }
         for (const id of ids) {
-            manual.delete(id);
+            manual.delete(id); burstFrom.delete(id);
             if (post) void Promise.resolve().then(() => post('manual/resume', { fixture_id: id })).catch(() => {});
         }
         if (ids.length) onChange();

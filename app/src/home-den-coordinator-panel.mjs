@@ -106,40 +106,49 @@ export function planLines(plan) {
 }
 
 const changes = n => `${n} ${n === 1 ? 'change' : 'changes'}`;
-/* What the virtual spot and the room glow learned from your hand changes (den-manual-1, plan-04b): "spot 6 cm off its
- * aim, 20% brighter" and "room glow 30% · 2700 K". */
-function spotLearnedWords(spot) {
-    if (spot.off === true) return 'spot off';
-    const offset = Array.isArray(spot.offset_m) ? Math.hypot(...spot.offset_m.filter(Number.isFinite))
-        : Number.isFinite(spot.offset_m) ? Math.abs(spot.offset_m) : 0;
-    const parts = [];
-    if (offset >= .005) parts.push(`${Math.round(offset * 100)} cm off its aim`);
-    if (Number.isFinite(spot.lux_scale) && Math.abs(spot.lux_scale - 1) >= .005)
-        parts.push(`${Math.round(Math.abs(spot.lux_scale - 1) * 100)}% ${spot.lux_scale > 1 ? 'brighter' : 'dimmer'}`);
-    return `spot ${parts.join(', ') || 'as it was'}`;
-}
-function roomLearnedWords(room) {
-    return `room glow ${[percent(Number.isFinite(room.level) ? room.level * 255 : null), Number.isFinite(room.cct_k) ? `${Math.round(room.cct_k)} K` : '']
-        .filter(Boolean).join(' · ') || 'as it was'}`;
-}
-
-/* What it learned: per situation and light, the scene and how many of your changes it rests on; and per situation, what
- * the virtual spot and the room glow learned from your hand. */
+/* What it learned: per situation and light, the scene and how many of your changes it rests on. */
 export function learnedLines(learned) {
     const lines = [];
     for (const [key, lights] of Object.entries(learned && typeof learned === 'object' ? learned : {}).sort(([a], [b]) => a.localeCompare(b))) {
-        const rows = lights && typeof lights === 'object' ? lights : {};
-        const virtual = [['spot', spotLearnedWords], ['room', roomLearnedWords]].filter(([name]) => rows[name] && typeof rows[name] === 'object');
-        if (virtual.length) {
-            const n = virtual.reduce((sum, [name]) => sum + (Number.isFinite(rows[name].n) ? rows[name].n : 0), 0);
-            lines.push(`${situationWords(key)}: ${virtual.map(([name, words]) => words(rows[name])).join('; ')}. Learned from you (${changes(n)})`);
-        }
-        for (const [light, row] of Object.entries(rows).filter(([name]) => name !== 'spot' && name !== 'room').sort(([a], [b]) => a.localeCompare(b))) {
+        for (const [light, row] of Object.entries(lights && typeof lights === 'object' ? lights : {}).sort(([a], [b]) => a.localeCompare(b))) {
             const n = Number.isFinite(row?.n) ? row.n : 0;
             lines.push(`${situationWords(key)} · ${lightName(light)}: ${sceneWords(row)} (${changes(n)})`);
         }
     }
     return lines.length ? lines : ['Nothing yet'];
+}
+
+/* What the virtual spot and the room glow learned from your hand (den-live's learned_from_you, den-manual-1):
+ * lux_scale is the light against the coordinator's own choice, offset_m metres from the page. */
+function spotLearnedWords(spot) {
+    if (spot.off === true) return 'spot off';
+    const offset = Array.isArray(spot.offset_m) ? Math.hypot(...spot.offset_m.filter(Number.isFinite))
+        : Number.isFinite(spot.offset_m) ? Math.abs(spot.offset_m) : 0;
+    const parts = [];
+    if (offset >= .005) parts.push(`aimed ${Math.round(offset * 100)} cm off the page`);
+    if (Number.isFinite(spot.lux_scale) && Math.abs(spot.lux_scale - 1) >= .005)
+        parts.push(`${Math.round(Math.abs(spot.lux_scale - 1) * 100)}% ${spot.lux_scale > 1 ? 'brighter' : 'dimmer'}`);
+    return `spot ${parts.join(', ') || 'as it chose'}`;
+}
+function roomLearnedWords(room) {
+    return `room glow ${[percent(Number.isFinite(room.level) ? room.level * 255 : null), Number.isFinite(room.cct_k) ? `${Math.round(room.cct_k)} K` : '']
+        .filter(Boolean).join(' · ') || 'as it chose'}`;
+}
+/* "Reading, evening: spot aimed 6 cm off the page, 20% dimmer; room glow 30% · 2700 K. Learned from you (3 changes)". */
+export function learnedFromYouLines(fromYou) {
+    const lines = [];
+    for (const [key, rows] of Object.entries(fromYou && typeof fromYou === 'object' ? fromYou : {}).sort(([a], [b]) => a.localeCompare(b))) {
+        const parts = [['spot', spotLearnedWords], ['room', roomLearnedWords]].filter(([name]) => rows?.[name] && typeof rows[name] === 'object');
+        if (!parts.length) continue;
+        const n = parts.reduce((sum, [name]) => sum + (Number.isFinite(rows[name].n) ? rows[name].n : 0), 0);
+        lines.push(`${situationWords(key)}: ${parts.map(([name, words]) => words(rows[name])).join('; ')}. Learned from you (${changes(n)})`);
+    }
+    return lines;
+}
+/* The Learned list: the bulbs' lines, then what the virtual lights learned from your hand. */
+export function allLearnedLines(state) {
+    const fromYou = learnedFromYouLines(state?.learned_from_you), bulbs = learnedLines(state?.learned);
+    return fromYou.length && bulbs[0] === 'Nothing yet' ? fromYou : [...bulbs, ...fromYou];
 }
 
 export function summaryWords(state) {
@@ -412,7 +421,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
             why.title = typeof state.decision?.why === 'string' ? state.decision.why.slice(0, 600) : '';
         }
         fillList(plan, spots ? ['Existing Hue automation'] : planLines(state.plan));
-        fillList(learned, learnedLines(state.learned));
+        fillList(learned, allLearnedLines(state));
         if (!lookOnly) {
             setText(switchButton, shownOn ? 'Turn off' : 'Turn on');
             switchButton.setAttribute('aria-pressed', shownOn ? 'true' : 'false');
@@ -421,7 +430,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
             setText(clearButton, armed ? 'Clear: sure?' : 'Clear');
             clearButton.dataset.armed = armed ? '1' : '';
             for (const button of spots ? [clearButton] : [switchButton, deskButton, clearButton]) button.disabled = busy;
-            clearButton.hidden = learnedLines(state.learned)[0] === 'Nothing yet' && !armed;
+            clearButton.hidden = allLearnedLines(state)[0] === 'Nothing yet' && !armed;
             renderSettings(state.settings);
             renderSettingsButton();
         }

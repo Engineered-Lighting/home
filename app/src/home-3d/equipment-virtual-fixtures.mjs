@@ -48,7 +48,8 @@ const SPOT_EASE_MS = 120, SPOT_SETTLED_LEVEL = .002;
 // change holds its fixture, and the coordinator's rows, room glow and Stop pass it by until den-live has a new reason
 // to act (home-den-spot-playback.mjs ends the hold from den-live's snapshot), Resume, or the coordinator turning on.
 // Changes to one fixture that follow each other within this long are one settled change, reported once to
-// onHandChange's listeners: {fixture_id, label, reason, before, after, at_ms}, with only the keys that changed.
+// onHandChange's listeners: {phase: 'settled', fixture_id, label, reason, before, after, at_ms}, with only the keys that
+// changed (and {phase: 'start', fixture_id} as the burst starts).
 export const HAND_SETTLE_MS = 800;
 const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
 // SPEC Aim lifecycle: Set aim moves the warm beam to its new target with a
@@ -682,7 +683,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         hold.before = null;
         const change = from && states.has(id) ? handDiff(from, handState(id)) : null;
         if (!change) return;
-        const event = copy({ fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id, reason: hold.reason, ...change, at_ms: Date.now() });
+        const event = copy({ phase: 'settled', fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id, reason: hold.reason, ...change, at_ms: Date.now() });
         for (const listener of [...handListeners]) try { listener(event); } catch (_) { /* a listener never blocks the hand */ }
     }
     function releaseHold(id) {
@@ -874,7 +875,11 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         if (disposed || !coordinatorOwned || status !== 'ready' || !states.has(fixtureId)) return false;
         const hold = handHolds.get(fixtureId) || { since: Date.now(), before: null, timer: null };
         hold.reason = typeof reason === 'string' && reason ? reason.slice(0, 40) : 'change';
-        hold.before ??= handState(fixtureId);
+        if (!hold.before) {
+            hold.before = handState(fixtureId);
+            // A burst starts: listeners note what they were drawing before the change ({phase: 'start', fixture_id}).
+            for (const listener of [...handListeners]) try { listener({ phase: 'start', fixture_id: fixtureId }); } catch (_) { /* as below */ }
+        }
         if (hold.timer !== null) cancel(hold.timer);
         hold.timer = later(() => settleHand(fixtureId, hold), HAND_SETTLE_MS);
         handHolds.set(fixtureId, hold);
@@ -890,7 +895,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         return [...handHolds].map(([id, hold]) => ({ fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id,
             reason: hold.reason, since_ms: hold.since }));
     }
-    /* listener({fixture_id, label, reason, before, after, at_ms}) once per settled change; returns the unsubscribe. */
+    /* listener({phase: 'start', fixture_id}) as a burst of changes starts, and listener({phase: 'settled', fixture_id,
+     * label, reason, before, after, at_ms}) once it settles; returns the unsubscribe. */
     function onHandChange(listener) {
         if (typeof listener !== 'function') return () => {};
         handListeners.add(listener);

@@ -4,6 +4,7 @@ import math
 from collections import deque
 
 from contracts import INFERENCE_S
+from den_live_scene import close_up_verdict
 
 
 def field(record, name, default=None):
@@ -38,19 +39,13 @@ def seated(track, captured):
     return False, None
 
 
+SAMPLE = {"yes": "playing", "no": "idle", "unknown": "unknown"}   # contract 3's verdict, as need's sample words
+
+
 def activity(facts):
-    word = field(facts, "activity_hypothesis")
-    if field(facts, "people_visible") != "one" or word in (None, "unclear"):
-        return "unknown"
-    visible = field(facts, "visible_basis") or ()
-    phone = "phone_screen_toward_face" in visible or (
-        field(facts, "held_object") == "phone" and field(facts, "gaze_target") == "phone")
-    screen = "hands_on_keyboard" in visible or field(facts, "typing_visible") == "yes" or (
-        field(facts, "screen_facing_subject") == "yes" and field(facts, "gaze_target") == "screen")
-    closed_book = field(facts, "book_state") == "closed" or "book_closed" in visible
-    if phone or screen or (word == "reading" and closed_book):
-        return "idle"
-    return "playing" if word in ("reading", "hobby", "desk_hobby", "craft") else "idle"
+    """need's sample from a reply's facts: contract 3's one verdict (den_live_scene.close_up_verdict, the same function
+    Home's Qwen line reads), as playing, idle or unknown."""
+    return SAMPLE[close_up_verdict(facts)]
 
 
 class Episode:

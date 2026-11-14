@@ -59,7 +59,7 @@ class PreviewTest(unittest.TestCase):
                                clock=lambda: self.now, **{"threaded": False, "append": self.encoded.append, **overrides})
 
     def track(self, *, seated=True, epoch=1, more=False, turned=False, posed=True, association="confident", revision=2,
-              age=0.0):
+              age=0.0, eligible=True, eligibility=1):
         self.seq += 1
         if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
             self.rule, self.rule_epoch = seated_rule.Published(), epoch
@@ -69,8 +69,8 @@ class PreviewTest(unittest.TestCase):
                  "seated": self.rule.update("t1", revision, self.now, pose)}   # perception's one answer
         frame = {**BINDING, "capture_mono": self.now - age}
         self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": epoch, "seq": self.seq, "frame": frame,
-                                     "status": "fresh", "presence": "present", "eligibility_revision": 1,
-                                     "eligible_track_id": "t1" if seated and not more else None,
+                                     "status": "fresh", "presence": "present", "eligibility_revision": eligibility,
+                                     "eligible_track_id": "t1" if seated and not more and eligible else None,
                                      "tracks": [track, track] if more else [track]})
 
     def read(self, *, at=None, start=None, kind="reading", frames=None, safe=True, **facts):
@@ -303,6 +303,27 @@ class PreviewTest(unittest.TestCase):
                 self.assertTrue(self.row()["on"], "the next good frame lights again, with no new answer")
                 self.now += .25
                 self.track(seated=False)
+
+    def test_a_reply_in_flight_over_a_bad_frame_still_counts(self):
+        """On a bad frame the ask publishes no eligible track with the same eligibility revision. The person stays
+        eligible: the reply already in flight is taken, and the next good frame lights. A new revision drops it."""
+        self.seat()
+        asked = self.now
+        self.now += .25
+        self.track(association="ambiguous", eligible=False)
+        self.assertEqual(self.preview.eligible_track, "t1")
+        self.read(at=asked)
+        self.assertEqual(len(self.preview.episode.requests), 1, "the reply in flight is taken")
+        for _ in range(12):   # good frames again, while the first (dark) move settles
+            self.now += .25
+            self.track()
+        self.assertTrue(self.row()["on"])
+        episode = self.preview.episode
+        self.now += .25
+        self.track(eligible=False, eligibility=2)
+        self.assertIsNone(self.preview.eligible_track, "a new eligibility revision ends it")
+        self.assertIsNot(self.preview.episode, episode, "and its episode")
+        self.assertFalse(self.row()["on"])
 
     def test_a_stale_tick_darkens_but_keeps_the_episode(self):
         self.light()

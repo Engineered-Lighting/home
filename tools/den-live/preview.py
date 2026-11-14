@@ -197,8 +197,12 @@ class Preview:
                 if self.eligibility is not None and eligibility != self.eligibility:
                     self.episode = self.shift = self.target_basis = None
                 self._track(tracks[0], captured, deadline, now)
+                # The ask names the eligible track only on a frame that may start an ask. A bad frame publishes None
+                # with the same eligibility revision, and the person stays eligible for the reply already in flight.
+                eligible = field(snapshot, "eligible_track_id")
+                if eligible is not None or eligibility != self.eligibility:
+                    self.eligible_track = eligible
                 self.eligibility = eligibility
-                self.eligible_track = field(snapshot, "eligible_track_id")
             self._evaluate(now)
 
     offer_snapshot = tracking

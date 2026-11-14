@@ -10,6 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import coordinator_live
+import fixture_learning
 import preview
 import seated as seated_rule
 import sofa_check
@@ -251,6 +252,111 @@ class PreviewManualTest(unittest.TestCase):
         self.assertIsNone(self.fixtures()["F4"]["hand"])
         self.assertEqual(len(self.lit()), 1)
 
+    def on(self, name="F3", level=.5):
+        return self.change(name, {"spotlight": {"on": False, "brightness": 0}},
+                           {"spotlight": {"on": True, "brightness": level}})
+
+    def test_a_learned_no_spot_is_taught_back_by_turning_the_light_on(self):
+        """Review R1/R3: two offs teach "no spot"; a light the owner then turns on during the unlit read is their
+        reading light (it's the task's, it lasts the episode, through a phone break), and it votes: two such reads
+        bring the coordinator's own light back."""
+        for _ in range(2):
+            name = self.light()
+            self.change(name, {"spotlight": {"on": True}}, {"spotlight": {"on": False}})
+            self.stand()
+        self.assertTrue(self.learned()["task/evening"]["spot"]["off"])
+        self.seat()
+        self.read()
+        self.frames(3)
+        self.assertEqual(self.lit(), [])   # unlit, as taught
+        status, reply = self.on()
+        self.assertEqual((reply["learned"], reply["why_not"], reply["hand"]["ends"]), (True, None, {"spot": "episode_end"}))
+        self.assertTrue(self.learned()["task/evening"]["spot"]["off"])   # one vote; den-core's rule takes two
+        task_scale = self.preview.settings["ambient_task_scale"]
+        self.assertEqual(self.preview.latest["ambient"]["goal_scale"], task_scale)   # served: the room dims
+        self.frames(11)   # a phone break: the reply's validity runs out
+        self.assertIsNone(self.preview.task_until())
+        self.assertIsNotNone(self.fixtures()["F3"]["hand"])
+        self.read()   # back to the book: still their light
+        self.frames(1)
+        self.assertIsNotNone(self.fixtures()["F3"]["hand"])
+        self.assertEqual(self.preview.latest["ambient"]["goal_scale"], task_scale)
+        self.stand()
+        self.assertIsNone(self.fixtures()["F3"]["hand"])
+        self.seat()
+        self.read()
+        self.frames(3)
+        self.assertEqual(self.lit(), [])
+        self.on()
+        self.assertFalse(self.learned()["task/evening"]["spot"]["off"])   # the second vote undoes "no spot"
+        self.stand()
+        self.light()   # the coordinator's own light is back
+
+    def test_a_hold_is_one_correction_however_many_changes_it_takes(self):
+        """Review R4: dim, dim again, then off, in one hold. Each later change is read against the hand's own last
+        state (Home's `before`), and the hold teaches once: from where it began, toward where the owner left it."""
+        name = self.light()
+        row = self.fixtures()[name]
+        level, target = row["level"], row["target_m"]
+        replies = [self.change(name, {"spotlight": {"brightness": level}}, {"spotlight": {"brightness": .6 * level}}),
+                   self.change(name, {"spotlight": {"brightness": .6 * level}}, {"spotlight": {"brightness": .3 * level}}),
+                   self.change(name, {"spotlight": {"on": True}}, {"spotlight": {"on": False}})]
+        self.assertEqual([reply["learned"] for _status, reply in replies], [True, True, True])
+        spot = self.preview.learning.entries["task/evening"]["spot"]
+        expected = fixture_learning.halfway(1.0, self.preview._lux(name, target, .3 * level))
+        self.assertEqual(spot["n"], 1)
+        self.assertAlmostEqual(spot["lux_scale"], min(max(expected, .25), 4.0))
+        self.assertEqual((spot["off"], spot["pending"]), (False, True))   # the hold's last word: an off vote
+        self.assertEqual(self.make_preview().learning.public(), self.preview.learning.public())   # replay agrees
+
+    def test_the_glow_held_is_one_correction_too(self):
+        self.seat()
+        house = self.preview.latest["ambient"]["level"]
+        self.change("F3", {"radials": [{"number": 1, "brightness": house}]}, {"radials": [{"number": 1, "brightness": .35}]})
+        status, reply = self.change("F3", {"radials": [{"number": 1, "brightness": .35}]},
+                                    {"radials": [{"number": 1, "brightness": .2}]})
+        self.assertEqual((reply["learned"], reply["why_not"]), (True, None))
+        room = self.preview.learning.entries["sitting/evening"]["room"]
+        self.assertEqual(room["n"], 1)
+        self.assertAlmostEqual(room["level"], (house + .2) / 2)
+
+    def test_a_yes_in_a_camera_gap_still_gets_what_was_learned(self):
+        """Review L2: the yes lands while nobody is tracked (the situation reads unknown); what was learned is fixed at
+        the next frame, not skipped for the session."""
+        name = self.light()
+        page = list(self.preview.track["target"])
+        self.change(name, {"target": None}, {"target": {"point": [page[0] + .1, page[1], page[2]]}})
+        self.stand()
+        self.seat()
+        self.now += 1.6   # the newest frame is too old: nobody tracked
+        self.preview.tick()
+        self.assertIsNone(self.preview.track)
+        self.read(at=self.preview.captured)
+        self.assertIsNone(self.preview.spot_applied)
+        self.frames(3)
+        name = self.lit()[0]
+        self.assertEqual(self.fixtures()[name]["learned"]["offset_m"], [.05, 0, 0])
+
+    def test_an_aim_or_an_off_teaches_no_brightness(self):
+        """Review L3: an aim-only first correction learns the aim, and nothing about the light."""
+        name = self.light()
+        page = list(self.preview.track["target"])
+        self.change(name, {"target": None}, {"target": {"point": [page[0] + .1, page[1], page[2]]}})
+        self.assertIsNone(self.learned()["task/evening"]["spot"]["lux_scale"])
+
+    def test_a_torn_or_corrupt_log_never_stops_the_coordinator(self):
+        """Review L1/L4: a torn tail doesn't swallow the next change, and bad bytes are skipped, not fatal."""
+        name = self.light()
+        log = Path(self.path) / "coordinator" / "manual-events.jsonl"
+        self.dim(name)
+        with log.open("ab") as raw:
+            raw.write(b'\xff\xfe{"event": {"event_id": "torn')
+        self.dim(name, level=.1)
+        restarted = self.make_preview()
+        self.assertEqual(len(restarted.manual_log.read()), 2)
+        self.assertEqual(restarted.state()[1]["manual_log"]["skipped"], 1)
+        self.assertEqual(restarted.learning.public(), self.preview.learning.public())
+
     # ---- the room's glow -----------------------------------------------------------------------------------------
 
     def test_the_glow_the_owner_set_while_sitting_comes_back_at_the_next_cue(self):
@@ -294,6 +400,19 @@ class PreviewManualTest(unittest.TestCase):
         self.assertEqual(after[0], 2200)   # no step at the cue: it starts from the learned warmth
         self.assertEqual(after[-1], direction.AMBIENT_CCT_K[0])
         self.assertEqual(after, sorted(after))   # and cools steadily over the restore
+        # Review R5: a learned warmth at the level the glow is already at glides over the cue's time, both ways.
+        held = direction.Ambient()
+        held.direct(False, settings, 0.0, goal=1.0, cct_k=2538)
+        steps = [held.published(settings, t / 8)["cct_k"] for t in range(0, 17)]
+        self.assertEqual(steps[0], direction.AMBIENT_CCT_K[0])
+        self.assertEqual(steps[-1], 2538)
+        self.assertEqual(steps, sorted(steps, reverse=True))
+        self.assertGreater(len(set(steps)), 6)   # a glide, not a step
+        held.direct(False, settings, 5.0)
+        back = [held.published(settings, 5.0 + t / 8)["cct_k"] for t in range(0, 17)]
+        self.assertEqual((back[0], back[-1]), (2538, direction.AMBIENT_CCT_K[0]))
+        self.assertEqual(back, sorted(back))
+        self.assertGreater(len(set(back)), 6)
 
     # ---- the gates -----------------------------------------------------------------------------------------------
 
@@ -362,17 +481,50 @@ class PreviewManualTest(unittest.TestCase):
         self.assertIsNone(self.fixtures()[name]["hand"])
         self.assertEqual(self.preview.manual_resume({"fixture_id": "F9"})[0], 400)
 
-    def test_an_empty_den_ends_a_hold(self):
+    def snapshot(self, status, presence, frame=True):
+        """Perception with nobody on it: fresh and empty, fresh but too dark to tell (degraded), or stale."""
+        self.seq += 1
+        self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": 1, "seq": self.seq,
+                                     "frame": {**base.BINDING, "capture_mono": self.now} if frame else None,
+                                     "status": status, "presence": presence, "eligibility_revision": 1,
+                                     "eligible_track_id": None, "tracks": []})
+
+    def own_light_and_glow(self):
+        """Seated, no task: the owner puts F3's spot on for themselves and sets its downlight."""
         self.seat()
+        self.change("F3", {"spotlight": {"on": False, "brightness": 0}}, {"spotlight": {"on": True, "brightness": .5}})
         self.change("F3", {"downward": {"on": False}}, {"downward": {"on": True, "brightness": .4}})
+        self.assertEqual(self.fixtures()["F3"]["hand"]["parts"], ["downward", "spot"])
+
+    def test_an_empty_den_ends_a_hold(self):
+        """Only fresh frames that show the den empty count, for VACANT_S from the last one with someone on it."""
+        self.own_light_and_glow()
+        for _ in range(round((preview.VACANT_S - 1) / .5)):
+            self.now += .5
+            self.snapshot("fresh", "empty")
         self.assertIsNotNone(self.fixtures()["F3"]["hand"])
-        self.now += 5
-        self.preview.tick()   # a camera gap, nobody tracked for now: not yet an empty den
-        self.assertIsNone(self.preview.track)
-        self.assertIsNotNone(self.fixtures()["F3"]["hand"])
-        self.now += preview.VACANT_S
-        self.preview.tick()
+        for _ in range(4):
+            self.now += .5
+            self.snapshot("fresh", "empty")
         self.assertIsNone(self.fixtures()["F3"]["hand"])
+
+    def test_a_camera_gap_or_a_dark_room_ends_no_hold(self):
+        """Review R2: a camera outage, a too-dark den or stale snapshots say nothing about who's there. The owner's own
+        spot and their downlight stay theirs for well past VACANT_S."""
+        for kind in ("stale", "degraded", "ticks"):
+            with self.subTest(kind):
+                self.setUp()
+                self.own_light_and_glow()
+                for _ in range(round((preview.VACANT_S + 10) / .5)):
+                    self.now += .5
+                    if kind == "stale":
+                        self.snapshot("stale", "unknown", frame=False)
+                    elif kind == "degraded":
+                        self.snapshot("degraded", "unknown")
+                    else:
+                        self.preview.tick()
+                self.assertIsNone(self.preview.track)
+                self.assertEqual(self.fixtures()["F3"]["hand"]["parts"], ["downward", "spot"])
 
     def test_clear_forgets_keeps_the_old_log_and_the_light_goes_back_to_the_page(self):
         name = self.light()

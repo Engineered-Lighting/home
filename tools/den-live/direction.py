@@ -467,7 +467,8 @@ class Ambient:
         self.ramp = None
         self.goal = 1.0
         self.cct_goal = None
-        self.cue = None   # a cue's warmth as a line in scale, (scale0, k0, scale1, k1), once a learned warmth is in play
+        # A cue's warmth once a learned warmth is in play: (scale0, k0, scale1, k1, started, duration).
+        self.cue = None
 
     def direct(self, task, settings, now, goal=None, cct_k=None):
         """goal and cct_k: the room glow the owner taught for this situation (plan 04b), as a scale of the house level
@@ -476,17 +477,19 @@ class Ambient:
         if (goal, cct_k) == (self.goal, self.cct_goal):
             return
         current = self.value(now)
-        k0 = self._warmth(current, settings)
+        k0 = self._warmth(current, settings, now)
         k1 = cct_k if cct_k is not None else self.kelvin(goal, settings)
-        # Off the direction's own curve (a learned warmth now, or one still being left), the warmth follows the cue's
-        # scale on a straight line between its ends, so it never jumps.
-        self.cue = None if cct_k is None and k0 == self.kelvin(current, settings) else (current, k0, goal, k1)
         self.goal, self.cct_goal = goal, cct_k
         if goal < current:
             self.ramp = Ramp(current, goal, settings["ambient_dim_s"], "ease_in_out", now + settings["ambient_delay_s"],
                              "ambient_dim")
         else:
             self.ramp = Ramp(current, goal, settings["ambient_restore_s"], "ease_in_out", now, "ambient_restore")
+        # Off the direction's own curve (a learned warmth now, or one still being left), the warmth runs from where it
+        # is to the cue's warmth: on a line in the cue's scale, or, when the level doesn't change, on the cue's own
+        # time and curve. It never jumps.
+        self.cue = (None if cct_k is None and k0 == self.kelvin(current, settings)
+                    else (current, k0, goal, k1, self.ramp.started, self.ramp.duration))
 
     def value(self, now):
         if self.ramp is None:
@@ -504,13 +507,16 @@ class Ambient:
         warm = 0.0 if task >= 1.0 else min(1.0, max(0.0, (1.0 - scale) / (1.0 - task)))
         return round(AMBIENT_CCT_K[0] + (AMBIENT_CCT_K[1] - AMBIENT_CCT_K[0]) * warm)
 
-    def _warmth(self, scale, settings):
+    def _warmth(self, scale, settings, now=None):
+        """The warmth at this scale (and, for a cue that holds the level, at `now`; None is where the cue lands)."""
         if self.cue is None:
             return self.kelvin(scale, settings)
-        s0, k0, s1, k1 = self.cue
-        if s1 == s0:
+        s0, k0, s1, k1, started, duration = self.cue
+        if abs(s1 - s0) > 1e-6:
+            return round(k0 + (k1 - k0) * min(1.0, max(0.0, (scale - s0) / (s1 - s0))))
+        if now is None or duration <= 0:
             return k1
-        return round(k0 + (k1 - k0) * min(1.0, max(0.0, (scale - s0) / (s1 - s0))))
+        return round(k0 + (k1 - k0) * ease("ease_in_out", (now - started) / duration))
 
     def published(self, settings, now):
         """The one ambient record (Home's glow now, den_lighting's bulb plan later): the value now, and the cue it's on.
@@ -519,7 +525,7 @@ class Ambient:
         ramp = self.ramp
         scale = self.value(now)
         out = {"level": round(min(1.0, settings["ambient_level"] * scale), 4), "scale": round(scale, 4),
-               "cct_k": self._warmth(scale, settings),
+               "cct_k": self._warmth(scale, settings, now),
                "goal_level": round(min(1.0, settings["ambient_level"] * self.goal), 4),
                "goal_scale": round(self.goal, 4), "goal_cct_k": self._warmth(self.goal, settings),
                "phase": "steady", "ramp_s": 0.0, "ramp_starts_mono": None}

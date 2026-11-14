@@ -35,6 +35,28 @@ class LearningTest(unittest.TestCase):
         self.assertEqual(learning.spot(KEY)["n"], 3)
         self.assertIsNone(learning.spot("task/day"))
 
+    def test_a_first_correction_without_brightness_teaches_no_light(self):
+        """Review L3: an aim or an off, first in its situation, learns no light from whatever the snapshot showed (a
+        rise at 4 %), and a brightness correction starts from a coordinator scale held in range."""
+        learning = Learning()
+        learning.apply(KEY, spot(lux_before=.04, offset_m=[.1, 0, 0]), 1)
+        self.assertIsNone(learning.spot(KEY)["lux_scale"])
+        learning.apply("task/day", spot(lux_before=.04, lux_scale=.5), 2)
+        self.assertAlmostEqual(learning.spot("task/day")["lux_scale"], (.25 + .5) / 2)
+
+    def test_a_hold_supersedes_its_own_first_change(self):
+        """A hand hold's later changes redo its first one: one halfway step, n counted once, and replay agrees."""
+        lines = [{"event": {"event_id": "a", "at_ms": 1}, "key": KEY, "learn": spot(lux_before=1.0, lux_scale=.6)},
+                 {"event": {"event_id": "b", "at_ms": 2}, "key": KEY, "learn": spot(lux_before=1.0, lux_scale=.4),
+                  "supersedes": {"spot": "a"}, "keys": {"spot": KEY}}]
+        learning = Learning.replay(lines)
+        self.assertEqual((learning.spot(KEY)["lux_scale"], learning.spot(KEY)["n"]), (.7, 1))
+        learning.apply(KEY, spot(lux_before=1.0, lux_scale=.2, off=True), 3, "c", {"spot": "a"}, {"spot": KEY})
+        self.assertEqual((learning.spot(KEY)["lux_scale"], learning.spot(KEY)["n"]), (.6, 1))
+        self.assertTrue(learning.entries[KEY]["spot"]["pending"])
+        broken = Learning.replay([{"event": {"event_id": "x"}, "key": KEY, "learn": {"spot": "not a dict"}}])
+        self.assertEqual(broken.skipped, 1)
+
     def test_back_and_forth_settles_in_between_and_the_scale_stays_in_range(self):
         learning = Learning()
         for scale in (.5, 1.5, .5, 1.5, .5, 1.5):

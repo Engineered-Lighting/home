@@ -135,27 +135,54 @@ class Log:
 
     def __init__(self, folder):
         self.path = Path(folder) / self.NAME
+        self.skipped = 0   # lines read() couldn't use: torn, corrupt, or not an event
 
     def append(self, line):
-        with self.path.open("a", encoding="utf-8") as log:
-            log.write(json.dumps(line, allow_nan=False, separators=(",", ":"), sort_keys=True) + "\n")
-            log.flush()
-            os.fsync(log.fileno())
+        """One line, fsynced. A torn tail (a crash or a full disk mid-write) is closed off with a newline first, so the
+        fragment never swallows this line; a write that fails is cut back to where the file was, so a retry starts on
+        a clean line."""
+        data = (json.dumps(line, allow_nan=False, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
+        with self.path.open("a+b") as log:
+            size = log.seek(0, os.SEEK_END)
+            if size:
+                log.seek(size - 1)
+                if log.read(1) != b"\n":
+                    data = b"\n" + data
+            try:
+                log.write(data)
+                log.flush()
+                os.fsync(log.fileno())
+            except OSError:
+                try:
+                    log.truncate(size)
+                except OSError:
+                    pass
+                raise
 
     def read(self):
-        """Every whole line, in order. A torn last line (a crash mid-write, before the reply) is skipped."""
+        """Every whole event line, in order. Torn, corrupt or undecodable lines are skipped and counted, and a log that
+        can't be read at all reads as empty: the log never stops the coordinator from starting."""
+        self.skipped = 0
         try:
-            text = self.path.read_text(encoding="utf-8")
+            raw = self.path.read_bytes()
         except FileNotFoundError:
             return []
+        except OSError:
+            self.skipped = 1
+            return []
         lines = []
-        for raw in text.splitlines():
+        for chunk in raw.split(b"\n"):
+            if not chunk.strip():
+                continue
             try:
-                line = json.loads(raw)
-            except ValueError:
+                line = json.loads(chunk.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                self.skipped += 1
                 continue
             if isinstance(line, dict) and isinstance(line.get("event"), dict):
                 lines.append(line)
+            else:
+                self.skipped += 1
         return lines
 
     def archive(self, stamp):

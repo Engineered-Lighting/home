@@ -178,7 +178,9 @@ def verify_move(row, state, codec, seq, payload, effective):
         raise ReplayError("preview MOVE must have coordinator provenance")
     if not move.flags & codec.FLAG_HAS_VELOCITY and (move.vel_pan_cdeg_s or move.vel_tilt_cdeg_s):
         raise ReplayError("MOVE carries velocity without the velocity flag")
-    if move.effective_valid_ms > 1500 or (move.spot_level == 0 and move.flags & codec.FLAG_LIT_DURING_MOVE):
+    fading_out = move.flags & getattr(codec, "FLAG_TIMED", 0) and move.fade_ms > 0   # a lit glide's fade to dark
+    if move.effective_valid_ms > 1500 or (move.spot_level == 0 and move.flags & codec.FLAG_LIT_DURING_MOVE
+                                          and not fading_out):
         raise ReplayError("MOVE exceeds preview validity or requests lit travel at zero level")
     expected = {
         "pan_cdeg": move.pan_cdeg,

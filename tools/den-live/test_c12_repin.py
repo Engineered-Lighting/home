@@ -94,6 +94,44 @@ class RepinTest(unittest.TestCase):
             with self.subTest(reason=reason), self.assertRaisesRegex(c12_fc13.Refusal, reason):
                 c12_fc13.encode(dict(base, timed=timed, **extra), profile, seq=1, current_joints=[0, 0])
 
+    def test_a_timed_fade_to_dark_during_a_lit_glide_keeps_lit_travel(self):
+        lit_glide = {"fixture_id": "F3", "action": "aim_move", "decision_id": "d", "pan_cdeg": 1500, "tilt_cdeg": -300,
+                     "level": 0, "cct_k": 2700, "lit_during_move": True, "motion_style": "lit"}
+        out = c12_fc13.encode(dict(lit_glide, timed={"fade_ms": 1500, "fade_curve": "ease_out"}), PROFILE, seq=4,
+                              current_joints=[1200, -300])
+        payload = out["payload"]
+        self.assertEqual((payload[2] & 0x01, payload[7], out["effective"]["lit_during_move"]), (1, 0, True),
+                         "bit 0 with level 0: the board fades out while it flies on")
+        self.assertTrue(self.codec.payload_ok(self.codec.CMD_MOVE, payload))
+        self.assertEqual(self.codec.check_move(self.codec.parse_move(payload), -17500, 17500, -9000, 8500),
+                         self.codec.ACCEPTED)
+        for intent, why in ((lit_glide, "untimed: the cut, as before"),
+                            (dict(lit_glide, timed={"min_duration_ms": 3000}), "timed without a fade"),
+                            (dict(lit_glide, timed={"fade_ms": 1500}, motion_style="dark", lit_during_move=False),
+                             "dark travel")):
+            with self.subTest(why=why):
+                self.assertEqual(c12_fc13.encode(intent, PROFILE, seq=5, current_joints=[1200, -300])["payload"][2]
+                                 & 0x01, 0)
+        at_rest = c12_fc13.encode(dict(lit_glide, timed={"fade_ms": 1500}), PROFILE, seq=6, current_joints=[1500, -300])
+        self.assertEqual(at_rest["payload"][2] & 0x01, 0, "not moving: the fade applies at once anyway")
+
+        r = self.rig()
+        r.emit("aim_move", decision_id="d1", move=test_c12_send.move())
+        out_row = r.emit("aim_move", decision_id="d2", move=dict(test_c12_send.move(level=0, target=(1500, -300)),
+                                                                start_cdeg=(1200, -300), travel="lit", lit_motion=True,
+                                                                timed={"fade_ms": 1500}))
+        self.assertEqual(out_row["effective"]["flags"] & 0x01, 1)
+        rows = [r.trace.header, *r.rows]
+        c12_replay.verify_trace(test_trace_v2.jsonl(rows), self.codec)
+        cut = copy.deepcopy(rows)
+        plain = next(x for x in cut if x.get("trace_id") == out_row["trace_id"])
+        payload = bytearray(bytes.fromhex(plain["payload_hex"]))
+        payload[2] &= ~0x10 & 0xFF   # the same MOVE untimed: lit travel at level 0 is refused
+        payload[12:14] = bytes(2)
+        plain["payload_hex"] = plain["frame"]["payload_hex"] = payload.hex()
+        with self.assertRaisesRegex(c12_replay.ReplayError, "lit travel at zero level"):
+            c12_replay.verify_trace(test_trace_v2.jsonl(cut), self.codec)
+
     def test_the_trace_carries_a_timed_move_and_the_replay_checks_it(self):
         r = self.rig()
         row = r.emit("aim_move", decision_id="d1", move=timed_move())

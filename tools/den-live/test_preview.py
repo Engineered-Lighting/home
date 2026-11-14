@@ -981,6 +981,16 @@ class DirectionTest(PreviewTest):
         self.assertEqual(self.row()["level"], goal)
         self.assertEqual(len(self.moves(since)), 1, "and nothing more is sent for it")
 
+    def test_no_exit_outlasts_the_lease(self):
+        """A fade to dark sends no keep-lit, and the board's lease lapses 3 s after the last one: every exit is at most
+        direction.EXIT_MAX_S, and the setting can't ask for more."""
+        self.assertEqual(self.preview.configure({"fade_out_s": 2.6})[0], 400)
+        self.assertEqual(self.preview.configure({"fade_out_s": 2.5, "crossfade_s": 4.0})[0], 200)
+        self.lit_by_direction()
+        row = self.preview.rows["F3"]
+        self.preview._exit("F3", row, self.now, "task_released", handoff=True)
+        self.assertLessEqual(row["ramp"].duration, direction.EXIT_MAX_S)
+
     def test_a_dark_move_then_a_bloom_is_one_timed_move(self):
         self.timed_board(pre_aim=False)
         self.seat()
@@ -1027,12 +1037,8 @@ class DirectionTest(PreviewTest):
         self.assertEqual((tuple(exit_moves[0]["requested"]["target_cdeg"]), exit_moves[0]["effective"]["spot_level"]),
                          (target, 0), "one MOVE to the target being flown: it joins the flight")
         self.assertEqual(exit_moves[0]["requested"]["timed"]["fade_ms"], 300)
-        if exit_moves[0]["effective"]["lit_during_move"]:
-            self.assertTrue(self.row()["on"], "lit while it flies on, it fades rather than cuts")
-        else:
-            # The pinned codec sets lit_during_move only above level 0, so the board would go dark at once; the light
-            # follows what was encoded. (The re-pinned codec should set it for a timed fade to 0.)
-            self.assertFalse(self.row()["on"])
+        self.assertTrue(exit_moves[0]["effective"]["lit_during_move"], "lit travel kept for a timed fade to dark (64a83b53)")
+        self.assertTrue(self.row()["on"], "lit while it flies on, it fades rather than cuts")
         self.now = round(self.now + .35, 6)
         self.preview.tick()
         self.assertFalse(self.row()["on"], "dark within the leave fade")

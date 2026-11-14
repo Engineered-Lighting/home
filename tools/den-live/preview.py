@@ -98,7 +98,7 @@ class Preview:
                                    target=None, basis=None, job=None, reason="waiting_for_tracking", pre_at=None,
                                    eye_hold=None, glide=None, ramp=None, ramp_at=None, goal=0.0, exiting=None,
                                    lit_until=None, ended_at=None, dip=None, arrive_level=None,
-                                   lit_subject=None)
+                                   lit_subject=None, step_at=None, step_s=direction.level_step_s(profile))
         self.wall = time.time   # the trace's day files and its run header's wall anchor
         self.trace_day = None   # the UTC day file this run last wrote to: a new one starts with the run header
         self.trace = PreviewTrace(self.epoch, append or self._append, binding=self.binding,
@@ -108,7 +108,6 @@ class Preview:
         self.retired_runs = set()
         self.track_seq = -1
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
-        self.darkened = None    # why the track was last darkened (the direction's exit speed)
         self.hold_until = None   # while lit, the track holds to here through a camera gap (GAP_HOLD_S)
         self.eligible_track = None
         self.captured = None   # the newest frame taken for the track
@@ -193,20 +192,15 @@ class Preview:
         """The person binding changed (any of its four keys), or a control reset it: the episode, its onset, the need
         state and its requests all go."""
         self.track_binding = self.track = self.track_until = self.hold_until = self.episode = self.eligibility = None
-        self.darkened = "unsafe"
         self.eligible_track = None
         self.captured = self.since = None
         self.shift = self.target_basis = None
         self.facing = direction.FacingFilter()
 
-    def _darken(self, why="unsafe"):
+    def _darken(self):
         """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens. No light until a current, posed,
-        seated frame of the same person; the episode, its onset, the need state and the requests stay.
-        why (for the direction only: how the light leaves): "unsafe" (someone else, or not this person for sure) and
-        "expired" leave quickly; "unposed" (this person, measured badly on one frame) fades slowly, so the next good
-        frame catches it on the way down."""
+        seated frame of the same person; the episode, its onset, the need state and the requests stay."""
         self.track = self.track_until = self.hold_until = None
-        self.darkened = why
 
     def tracking(self, snapshot):
         with self.lock:
@@ -261,11 +255,9 @@ class Preview:
             self._drop_track()
             self.track_binding = key
         joints = pose(track)
-        if field(track, "state") != "confirmed" or field(track, "association_status") != "confident":
+        if (field(track, "state") != "confirmed" or field(track, "association_status") != "confident"
+                or field(track, "position_basis") != "stereo" or not field(track, "current_obs_ids") or not joints):
             self._darken()
-            return
-        if field(track, "position_basis") != "stereo" or not field(track, "current_obs_ids") or not joints:
-            self._darken("unposed")
             return
         if self.captured is not None and captured <= self.captured:
             return
@@ -301,7 +293,6 @@ class Preview:
             self.target_basis = basis
         self.track = {"track_id": key[2], "head": head, "shoulder_mid": shoulders, "facing": facing,
                       "target": target, "basis": basis, "seated": seated}
-        self.darkened = None
 
     def inference(self, reply):
         with self.lock:
@@ -332,7 +323,7 @@ class Preview:
 
     def _expire(self, now):
         if self.track_until is not None and now >= self.track_until and (now >= self.hold_until or not self._lit()):
-            self._darken("expired")
+            self._darken()
         if self.episode is not None:
             self.episode.expire(now, self.settings["phone_patience_s"])
 
@@ -445,14 +436,15 @@ class Preview:
             if not directing:
                 continue
             if name != chosen or not task:
-                if self._lighting(row) and not row["exiting"]:
-                    # Standing up, leaving or an unsafe frame: the quick exit; a task that ended with the person still
+                if self._lighting(row) and (person is None or row["job"] != person["track_id"]):
+                    # Contract 2's consumer rule, unchanged: a stale or unsafe snapshot, or another person binding,
+                    # darkens at once. Only the normal exits below fade.
+                    self._release(name, row, now, reasons.get(name, "task_released"))
+                elif self._lighting(row) and not row["exiting"]:
+                    # Standing up, seen on a fresh frame: the quick exit; a task that ended with the person still
                     # seated (an answer, the patience): the slow one; another fixture taking the job: the crossfade.
-                    self._exit(name, row, now, reasons.get(name, "task_released"),
-                               handoff=task and chosen is not None and person is not None,
-                               leaving=(person is None and self.darkened != "unposed")
-                               or bool(person and not person["seated"]),
-                               unsure=person is None and self.darkened == "unposed")
+                    self._exit(name, row, now, reasons.get(name, "task_released"), handoff=task and chosen is not None,
+                               leaving=not person["seated"])
             elif self._ending(row, now):
                 # A planned end (the phone patience, or the reply's validity) is played so it's dark at the deadline.
                 self._exit(name, row, now, "task_ending", ending=self.task_until())
@@ -506,7 +498,7 @@ class Preview:
             if (task and row["job"] == person["track_id"]
                     and (row["exiting"] == "task_released" or (row["exiting"] == "task_ending" and extended))):
                 row.update(exiting=None, ended_at=None, reason="task", goal=self._goal(row, person))
-                row["ramp"] = direction.Ramp(row["level"], row["goal"], self.settings["fade_in_s"], "smooth", now,
+                row["ramp"] = direction.Ramp(row["level"], row["goal"], self.settings["fade_in_s"], "bloom", now,
                                              "fade_in")
             return
         if row["dip"] is not None:
@@ -524,25 +516,33 @@ class Preview:
         goal = self._goal(row, person)
         if not lit:
             if glide:
-                return   # landing first; it rises once it's there
-            if target != effective_target:
+                return   # landing first (P3 holds a MOVE that arrives during a move); it rises once it's there
+            if target != effective_target and not self._in_beam(row, person["target"]):
                 self._move(name, row, target, 0.0, "dark", now, person, "task")   # a dark move, then the rise
                 return
+            # Aimed, or near enough that the page is already in the beam: rise now, where it points. A page that's off
+            # centre is settled onto by one lit glide once the rise is done.
             # Aimed: rise. A hand-off (another fixture fading out for this person) rises over the crossfade.
             handoff = any(other is not row and other["exiting"] and other["job"] == person["track_id"]
                           for other in self.rows.values())
             fade = self.settings["crossfade_s" if handoff else "fade_in_s"]
             row.update(goal=goal, job=person["track_id"], target=person["target"], basis=person["basis"],
                        reason="task", ended_at=None)
+            curve = "smooth" if handoff else "bloom"
             # Back from a dip (a dark move while lit) it returns over the crossfade, not the slow first rise.
             back = row["move"] is not None and row["move"].get("requested", {}).get("cue") == "dip_move"
             fade = self.settings["crossfade_s"] if back else fade
-            row["ramp"] = direction.Ramp(row["level"], goal, fade, "smooth", now,
+            # A rise's first step goes with the yes: the bloom starts one step in, already visible.
+            start = now - row["step_s"] if curve == "bloom" and not back else now
+            row["ramp"] = direction.Ramp(row["level"], goal, fade, "smooth" if back else curve, start,
                                          "crossfade_in" if handoff or back else "fade_in")
             return
         if target != effective_target:
             if glide and not row["profile"].get("retarget_mid_move"):
                 return
+            ramp = row["ramp"]
+            if ramp is not None and ramp.end > ramp.start and not ramp.done(now):
+                return   # a rise finishes before the glide: one change at a time
             travel = self.settings["move_style"] if row["profile"].get("lit_motion") else "dark"
             if travel != "dark":
                 # The owner's path rule (the beam's centre never sweeps through the lit person's head), with the same
@@ -550,7 +550,11 @@ class Preview:
                 _, closest = self.core.eye.path_clear(row["aim_origin_m"], row["horizontal_world_reference"],
                     tuple(x / 100 for x in row["current"]), tuple(x / 100 for x in target),
                     math.dist(row["aim_origin_m"], person["target"]), person["head"])
-                if closest < direction.GLARE_KEEP_M:
+                # The head target inflated by the profile's path_margin (the measured off-path residual) at the head's
+                # distance; the board adds its own half-tick corridor.
+                margin = math.dist(row["aim_origin_m"], person["head"]) * math.tan(
+                    math.radians(row["profile"].get("path_margin_cdeg", 0) / 100))
+                if closest < direction.GLARE_KEEP_M + margin:
                     travel = "dark"
             if travel == "lit":
                 # One movement, one command: the glide carries the level the train has reached, and a rise in progress
@@ -568,6 +572,18 @@ class Preview:
             row["goal"] = goal
             row["ramp"] = direction.Ramp(row["level"], goal, self.settings["crossfade_s"], "smooth", now, "level")
         row.update(job=person["track_id"], target=person["target"], basis=person["basis"])
+
+    def _in_beam(self, row, point):
+        """The beam as it points now has `point` well inside it: within 80 % of half its FWHM."""
+        joints = self.core.joints
+        aim = joints.direction(row["current"][0] / 100, row["current"][1] / 100, row["horizontal_world_reference"])
+        to = [point[i] - row["aim_origin_m"][i] for i in range(3)]
+        length = math.sqrt(sum(c * c for c in to))
+        if length <= 0:
+            return False
+        cos = sum(aim[i] * to[i] for i in range(3)) / length
+        half = row["profile"].get("beam_fwhm_deg", 20.0) / 2
+        return math.degrees(math.acos(max(-1.0, min(1.0, cos)))) <= .8 * half
 
     def _standby(self, chosen, task, held, person):
         """The runner-up for the lit person: the best other admitted fixture (the same pick, keeping the current one)."""
@@ -591,20 +607,23 @@ class Preview:
             return
         self._move(name, row, joints, 0.0, "dark", now, person, "standby")
 
-    def _exit(self, name, row, now, reason, *, handoff=False, ending=None, leaving=False, unsure=False):
+    def _exit(self, name, row, now, reason, *, handoff=False, ending=None, leaving=False):
         """The light leaves: a fade-out on the exit curve, or a crossfade when another fixture takes the job. It's dark
         by the light's last published validity, so an exit never keeps a beam on longer than a snapshot promised. A
         planned end (ending: the task's deadline) starts early enough to be dark at it. Off, Stop, expiry and a zero
         fade stay instant."""
         fade = self.settings["crossfade_s" if handoff else "leave_fade_s" if leaving else "fade_out_s"]
         bound = row["lit_until"] if ending is None else min(row["lit_until"] or ending, ending)
-        if fade <= 0 or bound is None or now >= bound or row["level"] <= 0:
-            if ending is None:
+        if (fade < 2 * row["step_s"] or bound is None or now >= bound or row["level"] <= 0
+                or row["glide"] is not None):
+            # A fade too short for this fixture's train, a spent validity, or a fixture in the middle of a glide: one
+            # MOVE, dark. The board can't fade during a move (P3: a MOVE that arrives during a move waits for the
+            # landing), so a train would stall.
+            if ending is None or row["glide"] is not None:
                 self._release(name, row, now, reason)
             return
-        # The curves: a crossfade is smooth; an exit lets most of the light go first ("out"); a frame that measured
-        # this person badly holds the light for a beat and lets go late ("in"), so the next good frame catches it high.
-        curve = "smooth" if handoff else "in" if unsure else "out"
+        # The curves: a crossfade is smooth; an exit lets most of the light go first ("out").
+        curve = "smooth" if handoff else "out"
         row["ramp"] = direction.Ramp(row["level"], 0.0, min(fade, bound - now), curve, now,
                                      "crossfade_out" if handoff else "fade_out")
         row.update(exiting=reason, reason=reason, dip=None, lit_until=bound, ended_at=ending)
@@ -626,8 +645,11 @@ class Preview:
             if last is not None:
                 ramp.paused(now - last)
             return
+        if row["step_at"] is not None and now - row["step_at"] < row["step_s"] - 1e-9:
+            return   # the train's cap: at most one level MOVE per step_s (direction.level_step_s)
         code = direction.level_code(ramp.value(now))
         if code != direction.level_code(row["level"]):
+            row["step_at"] = now
             gliding = row["glide"] is not None
             self._move(name, row, row["glide"].target if gliding else row["current"], code / direction.LEVEL_CODES,
                        ("lit" if code else "dark") if gliding else "none", now, None, row["reason"],
@@ -645,12 +667,19 @@ class Preview:
             row.update(job=None, target=None, basis=None, exiting=None, lit_until=None, goal=0.0, token=None)
 
     def _release(self, name, row, now, reason, *, trace=True):
-        changed = row["level"] or row["pending"] or row["motion"] or row["glide"] or row["token"] is not None
+        """Dark at once: one level-0 MOVE. During a glide it goes to the target being flown, dark, so the board never
+        turns back to a point it has passed. Untraced (Stop), the axes hold where they are."""
+        glide = row["glide"]
+        changed = row["level"] or row["pending"] or row["motion"] or glide or row["token"] is not None
         row.update(level=0.0, token=None, pending=None, motion=None, job=None, reason=reason, target=None, basis=None,
                    glide=None, ramp=None, goal=0.0, exiting=None, lit_until=None, dip=None, arrive_level=None,
                    ended_at=None)
         if trace and changed:
-            self._move(name, row, row["current"], 0.0, "none", now, None, reason)
+            if glide is not None:
+                row["glide"] = glide
+                self._move(name, row, glide.target, 0.0, "dark", now, None, reason)
+            else:
+                self._move(name, row, row["current"], 0.0, "none", now, None, reason)
 
     def _move(self, name, row, target, level, travel, now, person, reason, *, deadline=None, step=False,
               exiting=False, cue=None):

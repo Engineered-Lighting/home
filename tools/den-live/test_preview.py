@@ -721,7 +721,8 @@ class DirectionTest(PreviewTest):
             self.track()
             levels.append(self.row()["level"])
         goal = self.preview.rows["F3"]["goal"]
-        self.assertLess(levels[1], .2 * goal, "it blooms: dim at first")
+        self.assertTrue(0 < levels[0] < .15 * goal, "it blooms: visible with the yes itself, dim")
+        self.assertLess(levels[1], .4 * goal, "and well short of full a quarter-second on")
         self.assertTrue(all(b >= a for a, b in zip(levels, levels[1:])), "never dips on the way up")
         self.assertEqual(levels[-1], direction.level_code(goal) / 254)
         steps = self.moves(since)
@@ -815,19 +816,80 @@ class DirectionTest(PreviewTest):
         self.preview.switch({"on": False})
         self.assertIsNone(self.preview.latest["ambient"], "Off: the coordinator directs no room light")
 
-    def test_a_poseless_frame_dips_but_never_blinks(self):
-        self.lit_by_direction()
-        goal = self.row()["level"]
+    def test_a_stale_or_unsafe_frame_still_darkens_at_once(self):
+        """Contract 2's consumer rule is the rules', unchanged: only the normal exits fade."""
+        for bad in ({"posed": False}, {"more": True}, {"association": "ambiguous"}):
+            with self.subTest(bad=bad):
+                self.lit_by_direction()
+                goal = self.row()["level"]
+                self.now += .25
+                self.track(**bad)
+                self.assertFalse(self.row()["on"], "dark at once, no fade")
+                self.assertIsNone(self.row()["fade"])
+                self.frames(self.preview.settings["fade_in_s"] + .5)
+                self.assertEqual(self.row()["level"], goal, "the next good frames rise again")
+                self.now += .25
+                self.track(seated=False)
+                self.frames(1, seated=False)
+
+    def test_the_level_train_is_capped_at_ten_a_second(self):
+        self.seat()
+        self.frames(6)
+        since = len(self.encoded)
+        self.read()
+        for _ in range(150):   # ticks far faster than the cap, for 3 s
+            self.now = round(self.now + .02, 6)
+            self.preview.tick()
+        steps = [row["at"] for row in self.moves(since)]
+        self.assertGreater(len(steps), 10)
+        self.assertGreaterEqual(min(b - a for a, b in zip(steps, steps[1:])), direction.LEVEL_STEP_S - 1e-9)
+        self.assertLessEqual(len(steps), self.preview.settings["fade_in_s"] / direction.LEVEL_STEP_S + 2)
+
+    def test_a_real_fixture_steps_at_two_a_second_with_no_keep_lit_between(self):
+        """A profile that isn't fictional has a radio path: its train steps each RADIO_STEP_S, the steps renew the
+        lease themselves, so it never sends more than 2 commands a second."""
+        real = {"F3": {**FIXTURES["F3"], "profile": {**self.core.scurve.FICTIONAL_PROFILE, "fictional": False,
+                                                       "label": "measured-test"}}}
+        self.preview = preview.Preview(self.core, binding=BINDING, fixtures=real, state=self.path,
+                                       clock=lambda: self.now, threaded=False, append=self.encoded.append)
+        self.preview.configure({"pre_aim": True})
+        self.seat()
+        self.frames(6)
+        since = len(self.encoded)
+        self.read()
+        for _ in range(250):
+            self.now = round(self.now + .02, 6)
+            self.preview.tick()
+        sent = [row for row in self.encoded[since:] if row["action"] in ("aim_move", "keep_lit")]
+        times = [row["at"] for row in sent]
+        self.assertTrue(all(b - a >= direction.RADIO_STEP_S - 1e-9 for a, b in zip(times, times[1:])),
+                        "at most 2 commands a second, keep-lit included")
+        rise = [row for row in sent if row["action"] == "aim_move"]
+        self.assertLessEqual(len(rise), self.preview.settings["fade_in_s"] / direction.RADIO_STEP_S + 1)
+        self.assertEqual(self.row()["level"], direction.level_code(self.preview.rows["F3"]["goal"]) / 254)
         self.now += .25
-        self.track(posed=False)
-        lowest = goal
+        self.track(seated=False)
+        self.assertFalse(self.row()["on"], "a 0.3 s exit is too short for a 0.5 s train: one MOVE, dark")
+
+    def test_an_exit_during_a_glide_is_one_dark_move_to_where_it_is_going(self):
+        """P3 holds a MOVE that arrives during a move until the landing, so an exit mid-glide never sends a train: one
+        level-0 MOVE to the glide's own target, never back to a point it has passed."""
+        self.lit_by_direction()
         for _ in range(12):
             self.now = round(self.now + .25, 6)
-            self.track()
-            lowest = min(lowest, self.row()["level"])
-            self.assertTrue(self.row()["on"])
-        self.assertGreater(lowest, .6 * goal, "the next good frame catches it high")
-        self.assertEqual(self.row()["level"], goal, "and it comes back")
+            self.track(shift=-.3)
+            if self.row()["glide"]:
+                break
+        glide = self.preview.rows["F3"]["glide"]
+        self.assertIsNotNone(glide)
+        since = len(self.encoded)
+        self.now += .05
+        self.track(seated=False, shift=-.3)
+        self.assertFalse(self.row()["on"])
+        moves = self.moves(since)
+        self.assertEqual(len(moves), 1)
+        self.assertEqual((tuple(moves[0]["requested"]["target_cdeg"]), moves[0]["effective"]["spot_level"]),
+                         (glide.target, 0))
 
     def test_a_hand_off_is_a_crossfade_from_the_standby(self):
         fixtures = {"F3": FIXTURES["F3"], "F4": {"aim_origin_m": [.6, .2, 2.5], "horizontal_world_reference": [0, 1, 0]}}

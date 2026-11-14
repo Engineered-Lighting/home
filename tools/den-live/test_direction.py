@@ -83,12 +83,13 @@ class SCurveTest(unittest.TestCase):
 
 class FadeTest(unittest.TestCase):
     def test_the_curves(self):
-        for curve in ("smooth", "out", "in", "linear"):
+        for curve in ("bloom", "smooth", "out", "linear"):
             values = [direction.ease(curve, k / 50) for k in range(51)]
             self.assertEqual((values[0], values[-1]), (0.0, 1.0))
             self.assertTrue(all(b >= a for a, b in zip(values, values[1:])))
         self.assertGreater(direction.ease("out", .5), .7, "an exit lets most of the light go first")
-        self.assertLess(direction.ease("in", .5), .3, "an unsure exit holds the light first")
+        self.assertGreater(direction.ease("bloom", .05), .07, "a rise is visible at its first step")
+        self.assertAlmostEqual(direction.ease("bloom", 1 / 3), .5, msg="and half way at a third of its time")
         self.assertAlmostEqual(direction.ease("smooth", .5), .5)
 
     def test_a_ramp_pauses(self):
@@ -183,15 +184,24 @@ class AmbientTest(unittest.TestCase):
     def test_the_room_dims_after_the_spot_and_comes_back_with_its_exit(self):
         settings = dict(direction.SETTINGS)
         room = direction.Ambient()
-        self.assertEqual(room.published(settings, 0.0), {"level": .75, "scale": 1.0, "cct_k": 3000})
+        self.assertEqual(room.published(settings, 0.0), {"level": .75, "scale": 1.0, "cct_k": 3000, "goal_level": .75,
+                                                         "goal_scale": 1.0, "goal_cct_k": 3000, "phase": "steady",
+                                                         "ramp_s": 0.0, "ramp_starts_mono": None})
         room.direct(True, settings, 10.0)
-        self.assertEqual(room.published(settings, 10.4)["scale"], 1.0, "a beat after the spot")
+        cue = room.published(settings, 10.4)
+        self.assertEqual(cue["scale"], 1.0, "a beat after the spot")
+        self.assertEqual({key: cue[key] for key in ("goal_level", "goal_scale", "goal_cct_k", "phase", "ramp_s",
+                                                    "ramp_starts_mono")},
+                         {"goal_level": .3, "goal_scale": .4, "goal_cct_k": 2700, "phase": "dim", "ramp_s": 4.0,
+                          "ramp_starts_mono": 10.5}, "the cue's goal and time, for a bulb that fades itself")
         middle = room.published(settings, 10.5 + 2.0)
         self.assertAlmostEqual(middle["scale"], .7, places=3)
         low = room.published(settings, 10.5 + 4.0)
         self.assertEqual((low["scale"], low["level"], low["cct_k"]), (.4, .3, 2700), "dimmed and warmed")
         room.direct(False, settings, 20.0)
-        self.assertEqual(room.published(settings, 21.5)["scale"], 1.0, "back with the exit")
+        self.assertEqual(room.published(settings, 20.0)["phase"], "restore")
+        back = room.published(settings, 21.5)
+        self.assertEqual((back["scale"], back["phase"]), (1.0, "steady"), "back with the exit")
 
 
 if __name__ == "__main__":

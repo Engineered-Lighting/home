@@ -23,7 +23,7 @@ import statistics
 # ---- The direction's settings: preview-owned, beside den-core's. Every one is changeable from Home's panel. ----------
 
 SETTINGS = {
-    "fade_in_s": 2.0,             # the spot's rise on a new task: slow, so it blooms rather than switches on
+    "fade_in_s": 2.0,             # the spot's rise on a new task: it blooms (visible at once, full in 2 s)
     "fade_out_s": 1.0,            # the spot lets go when the task ends (book closed, phone): no hurry
     "leave_fade_s": 0.3,          # when you stand up or leave, it gets out of the way: dark within 1 s of standing
                                   # (Stop, Off and expiry stay instant)
@@ -44,6 +44,21 @@ LIMITS = {"page_lift": (0.0, 0.5), "ambient_level": (0.0, 1.0), "ambient_task_sc
 
 AMBIENT_CCT_K = (3000, 2700)    # the house glow's white, and the warmer white it dims to under a task (dim to warm)
 LEVEL_CODES = 254               # the board's spot level, 0-254 (contract 5's rounding: floor(x * 254 + 0.5))
+# The level train's cap, per fixture: one level MOVE per step. A virtual fixture has no radio, so it steps each 0.1 s
+# tick. A real one shares HA, ZHA and Zigbee with one frame in flight, and until that path is measured the firmware's
+# rule for one follower holds: 2 commands a second, Stop and keep-lit included (a lit step renews the lease itself, so
+# no keep-lit goes while a train runs). A profile's own level_step_s wins. The timed MOVE (flag bit 4, fade_ms) will
+# replace the train with one MOVE per cue where the board has it.
+LEVEL_STEP_S = 0.1
+RADIO_STEP_S = 0.5
+
+
+def level_step_s(profile):
+    """Seconds between a fixture's level MOVEs."""
+    given = profile.get("level_step_s")
+    if isinstance(given, (int, float)) and given > 0:
+        return float(given)
+    return LEVEL_STEP_S if profile.get("fictional") else RADIO_STEP_S
 SEATED_AIM_M = 0.03             # a dark pre-aim for a seated person tracks the book this closely: dark moves are free
 DARK_WINDOW_S = 0.6             # and on a shorter window, so the book coming up off the lap is followed before the yes
 SETTLE_S = 0.5                  # the book's settled place must stay past shift_m this long before a lit spot glides
@@ -169,17 +184,18 @@ class Glide:
 def ease(curve, x):
     """0 to 1 over x in 0..1. Levels are already close to perceived lightness (Home's dimming curve is CIE lightness), so
     the curves act on what the eye sees.
-    - smooth: a cosine in-out, the default for rises and crossfades: no visible start or landing;
+    - bloom: a quarter sine, for a rise: visible at the first step (8 % of the goal at 0.1 s into a 2 s rise), half way
+      by a third of the time, and settling softly, the way a warm lamp comes up;
+    - smooth: a cosine in-out, for crossfades: no visible start or landing, so two fixtures trade evenly;
     - out: fast at first, soft at the end, for exits: most of the light goes in the first half;
-    - in: slow at first, for an exit that may be a mistake (one badly measured frame): it holds, then lets go;
     - linear."""
     x = min(1.0, max(0.0, x))
+    if curve == "bloom":
+        return math.sin(math.pi * x / 2.0)
     if curve == "smooth":
         return (1.0 - math.cos(math.pi * x)) / 2.0
     if curve == "out":
         return 1.0 - (1.0 - x) ** 2
-    if curve == "in":
-        return x * x
     return x
 
 
@@ -349,12 +365,23 @@ class Ambient:
             self.ramp = None
         return self.scale
 
-    def published(self, settings, now):
-        scale = self.value(now)
+    def kelvin(self, scale, settings):
+        """Dim to warm: 3000 K at the house level, 2700 K at the task scale."""
         task = settings["ambient_task_scale"]
         warm = 0.0 if task >= 1.0 else min(1.0, max(0.0, (1.0 - scale) / (1.0 - task)))
-        kelvin = round(AMBIENT_CCT_K[0] + (AMBIENT_CCT_K[1] - AMBIENT_CCT_K[0]) * warm)
-        out = {"level": round(settings["ambient_level"] * scale, 4), "scale": round(scale, 4), "cct_k": kelvin}
-        if self.ramp is not None:
-            out["cue"] = self.ramp.purpose
+        return round(AMBIENT_CCT_K[0] + (AMBIENT_CCT_K[1] - AMBIENT_CCT_K[0]) * warm)
+
+    def published(self, settings, now):
+        """The one ambient record (Home's glow now, den_lighting's bulb plan later): the value now, and the cue it's on.
+        phase: dim, restore or steady; goal_*: where the cue lands; ramp_s and ramp_starts_mono: its time (a dim starts
+        ambient_delay_s after it's called, so ramp_starts_mono can be ahead of now)."""
+        ramp = self.ramp
+        scale = self.value(now)
+        out = {"level": round(settings["ambient_level"] * scale, 4), "scale": round(scale, 4),
+               "cct_k": self.kelvin(scale, settings), "goal_level": round(settings["ambient_level"] * self.goal, 4),
+               "goal_scale": round(self.goal, 4), "goal_cct_k": self.kelvin(self.goal, settings),
+               "phase": "steady", "ramp_s": 0.0, "ramp_starts_mono": None}
+        if ramp is not None and self.ramp is not None:
+            out.update(phase="dim" if ramp.end < ramp.start else "restore", ramp_s=ramp.duration,
+                       ramp_starts_mono=ramp.started, cue=ramp.purpose)
         return out

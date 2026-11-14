@@ -159,8 +159,11 @@ class TraceV3Test(unittest.TestCase):
         refused(count_from_zero, "refuse this wire seq as stale")   # check 4
 
         def repeated(broken):
+            # The first keep-lit takes the seq of the send before it (the lit move it renews), so its lit_seq still
+            # names that move and only the repeat is wrong. A directed rise sends a dark move, then a lit level step.
             moves = [s for s in self.sends(broken) if s["wire"] and s["action"] != "stop"]
-            earlier, later = moves[0], moves[1]
+            keep = next(i for i, s in enumerate(moves) if s["action"] == "keep_lit")
+            earlier, later = moves[keep - 1], moves[keep]
             payload = bytearray(bytes.fromhex(later["wire"]["payload_hex"]))
             payload[0:2] = struct.pack("<H", earlier["wire"]["seq"])
             later["wire"].update(seq=earlier["wire"]["seq"], payload_hex=payload.hex())

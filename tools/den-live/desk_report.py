@@ -2,6 +2,10 @@
 """The desk stage's check on LA (plan 05, the D-1 runbook): one day's fixture trace, in words and counts only.
 
     sudo /usr/bin/python3.12 -B /opt/den-live/current/tools/den-live/desk_report.py [--day YYYY-MM-DD]
+    /usr/bin/python3.12 -B /opt/den-live/current/tools/den-live/desk_report.py --now
+
+--now reads the coordinator's state on LA's loopback instead: Home on or off, stopped or not and its Stop counter, and
+the desk board's last readback (its latch, state and fault), in words only.
 
 It reads <state>/days/<UTC day>/coordinator-fixture_calls.jsonl (--state, default /var/lib/den-live) and says, per run,
 whether it was virtual or the desk (the fixture, and lit or dark), what was sent and how the board answered, and then
@@ -20,9 +24,11 @@ import datetime
 import json
 import struct
 import sys
+import urllib.request
 from pathlib import Path
 
 STATE = Path("/var/lib/den-live")
+COORDINATOR = "http://127.0.0.1:8111/api/den-live/v1/homes/den/coordinator"
 FILE = "coordinator-fixture_calls.jsonl"
 SEQ_WINDOW = 1024
 MOVE, KEEP_LIT, STOP, RESUME = 0, 1, 2, 3
@@ -141,11 +147,46 @@ def report(rows):
     return lines, not failed and not unreadable
 
 
+def now_lines(state):
+    """The coordinator's GET, in words: never its targets, angles or the device reference."""
+    snapshot = state.get("snapshot") or {}
+    lines = ["Home: %s, %s, Stop counter %s." % ("on" if state.get("on") else "off",
+                                                "stopped" if state.get("stopped") else "not stopped",
+                                                state.get("stop_counter"))]
+    devices = snapshot.get("devices")
+    if not devices:
+        lines.append("The desk: none (virtual only).")
+    for fixture, board in sorted((devices or {}).items()):
+        values = board.get("values") or {}
+        spot = (snapshot.get("fixtures") or {}).get(fixture) or {}
+        age = None
+        if isinstance(board.get("read_mono"), (int, float)) and isinstance(state.get("server_mono"), (int, float)):
+            age = state["server_mono"] - board["read_mono"]
+        lines.append("The desk: %s, %s. Home shows it %s (%s). The board: latched %s, state %s, fault %s, read %s; "
+                     "%s commands acknowledged, %s released%s." % (
+                         fixture, "lit" if board.get("light") else "dark", "lit" if spot.get("on") else "dark",
+                         spot.get("reason"), values.get("stop_latched"), values.get("state"), values.get("fault_code"),
+                         "never" if age is None else "%.1f s ago" % age, board.get("sent"), board.get("released"),
+                         "" if not board.get("problem") else "; readback: %s" % board["problem"]))
+    return lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--day", help="the UTC day, YYYY-MM-DD (default today, UTC)")
     parser.add_argument("--state", type=Path, default=STATE, help="den-live's state folder (default %(default)s)")
+    parser.add_argument("--now", action="store_true", help="the coordinator's state now, from LA's loopback")
     args = parser.parse_args(argv)
+    if args.now:
+        try:
+            with urllib.request.urlopen(COORDINATOR, timeout=3) as reply:
+                state = json.loads(reply.read(1 << 22).decode("utf-8"))
+        except Exception as exc:   # a type name only
+            print("den-live's coordinator didn't answer (%s): is den-live running?" % type(exc).__name__)
+            return 2
+        for line in now_lines(state if isinstance(state, dict) else {}):
+            print(line)
+        return 0
     day = args.day or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
     path = args.state / "days" / day / FILE
     if not path.is_file():

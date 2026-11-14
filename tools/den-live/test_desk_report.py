@@ -114,6 +114,24 @@ class DeskReportTest(unittest.TestCase):
         self.assertIn("No fixture trace for %s yet" % DAY, text)
 
 
+class NowTest(unittest.TestCase):
+    def test_now_says_home_and_the_board_in_words_only(self):
+        state = {"on": True, "stopped": False, "stop_counter": 3, "server_mono": 120.5, "snapshot": {
+            "fixtures": {"F3": {"on": True, "reason": "task", "target_m": [1.23456, 2.34567, 0.9], "pan_deg": 12.5}},
+            "devices": {"F3": {"device": DEVICE, "light": False, "read_mono": 120.0, "sent": 7, "released": 0,
+                               "problem": None, "values": {"stop_latched": False, "state": "holding",
+                                                           "fault_code": 0, "pan_cdeg": 1250}}}}}
+        lines = desk_report.now_lines(state)
+        self.assertEqual(lines[0], "Home: on, not stopped, Stop counter 3.")
+        self.assertEqual(lines[1], "The desk: F3, dark. Home shows it lit (task). The board: latched False, state "
+                                   "holding, fault 0, read 0.5 s ago; 7 commands acknowledged, 0 released.")
+        text = " ".join(lines)
+        for private in (DEVICE, "1.23456", "12.5", "1250"):
+            self.assertNotIn(private, text)
+        self.assertEqual(desk_report.now_lines({"on": False, "stopped": True, "stop_counter": 4, "snapshot": {}})[1],
+                         "The desk: none (virtual only).")
+
+
 class DeskCheckTest(unittest.TestCase):
     def files(self, desk_doc, geometry):
         folder = tempfile.TemporaryDirectory()

@@ -57,6 +57,8 @@ POST_TIMEOUT_S = 20.0
 POOL_S = 5.0              # frames the pool keeps; the detector's process keeps about as many (stills.RING)
 UNAVAILABLE_AFTER = 3     # failed asks in a row before the health line says Qwen isn't answering
 RETENTION_DAYS = 14
+# The reply's facts Home's caption reads on the published activity (the den inference spec, section 1), as Qwen gave them.
+CAPTION_FACTS = ("held_object", "book_state", "gaze_target", "subject_posture")
 BACKOFF_STALE_S = 600.0   # the monitor writes its status each minute: older than this, it isn't running
 STILLS_SPAN_S = 1.0       # the stills reach back at most this far from the newest frame (contract 3, decision 4)
 # Event-triggered asks (latency A4): seated began, or the hands or upper body moved and settled.
@@ -695,9 +697,13 @@ class Asker:
                 # Contract 3's one verdict, the same one the coordinator reads (preview_evidence.activity), so Home's
                 # line never says close-up work while the light refuses it.
                 verdict = scene.close_up_verdict(facts)
+                # What Qwen saw, for Home's caption (the held-object tag and the "Qwen saw" line, which Home reads
+                # when present): the reply's own facts and visible_basis tokens, no confidence invented.
                 self.activity = (track.track_id, ask["valid_until_mono"],
                                  {"word": facts["activity_hypothesis"], "close_up": verdict == "yes", "verdict": verdict,
-                                  "at": round(answered_at, 3)})
+                                  "at": round(answered_at, 3),
+                                  "facts": {key: facts[key] for key in CAPTION_FACTS},
+                                  "basis": list(facts["visible_basis"])})
             else:
                 # The coordinator needs the current negative observation to revoke support.
                 self.counts["unbound"] += 1

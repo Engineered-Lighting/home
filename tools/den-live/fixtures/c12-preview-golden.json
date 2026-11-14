@@ -22,7 +22,7 @@
         "endpoint": 18, "cluster": 64531, "command_id": 0, "seq": 7,
         "payload_hex": "070009941148f4c87201000000000000"
       },
-      "sim_reply": "800700080000"
+      "sim_reply": "800700050000"
     },
     {
       "seq": 8,
@@ -56,7 +56,7 @@
         "endpoint": 18, "cluster": 64531, "command_id": 0, "seq": 11,
         "payload_hex": "0b0008941148f400720100000000dc05"
       },
-      "sim_reply": "800b00080000"
+      "sim_reply": "800b00050000"
     }
   ]
 }

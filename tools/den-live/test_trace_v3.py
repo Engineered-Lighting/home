@@ -192,28 +192,30 @@ class TraceV3Test(unittest.TestCase):
     def test_the_boards_answers_replay_in_the_simulator(self):
         sim = test_c12_send.simulator()
         if not sim:
-            self.skipTest("set C12_TEST_SIM to the pinned v2-a simulator")
-        board = fake_c12_ha.SimBoard(sim)
+            self.skipTest("set C12_TEST_SIM to the pinned simulator")
+        record = test_c12_send.vector_record()
+        board = fake_c12_ha.SimBoard(sim, record)   # commissioned, as Light 1 will be
         self.addCleanup(board.close)
         runs, integration = self.record(board)
         rows = runs[0] + runs[1]
         wire = c12_replay.WireCheck(self.codec)
         self.verify(rows, wire)
         delivered = sum(frame.delivered for frames in wire.frames.values() for frame in frames)
-        self.assertEqual(c12_replay.replay_wire(sim, preview_trace.SIMULATOR_SHA256, wire), delivered)
+        self.assertEqual(c12_replay.replay_wire(sim, preview_trace.SIMULATOR_SHA256, wire, record), delivered)
         self.assertEqual(delivered, len(integration.air))
         answers = {row["answer"]["result"] for row in self.sends(rows, "aim_move") if row["answer"]}
-        self.assertEqual(answers, {"lights_only"}, "v2-a sets no spot from a MOVE")
-        self.assertTrue(all(row["outcome"] == "dropped_superseded" for row in self.sends(rows, "keep_lit")))
+        self.assertEqual(answers, {"accepted"}, "a commissioned board accepts each MOVE")
+        self.assertTrue(all(row["outcome"] == "acked" for row in self.sends(rows, "keep_lit")))
+        with self.assertRaisesRegex(c12_replay.ReplayError, "answers this MOVE otherwise"):
+            c12_replay.replay_wire(sim, preview_trace.SIMULATOR_SHA256, wire)   # without the board's record
 
-        for action, key, value, reason in (("aim_move", "result", "accepted", "answers this MOVE otherwise"),
-                                           ("stop", "stop_latched", False, "Stop latch differs")):
+        for action, key, value, reason in (("stop", "stop_latched", False, "Stop latch differs"),):
             broken = copy.deepcopy(rows)
             next(row for row in self.sends(broken, action) if row["answer"])["answer"][key] = value
             other = c12_replay.WireCheck(self.codec)
             self.verify(broken, other)   # checks 1-4 can't see it: only the simulator knows the board's answer
             with self.assertRaisesRegex(c12_replay.ReplayError, reason):
-                c12_replay.replay_wire(sim, preview_trace.SIMULATOR_SHA256, other)
+                c12_replay.replay_wire(sim, preview_trace.SIMULATOR_SHA256, other, record)
 
         with tempfile.TemporaryDirectory() as folder:   # the command line, a file per run as LA writes them
             files = []
@@ -221,8 +223,11 @@ class TraceV3Test(unittest.TestCase):
                 path = Path(folder) / f"run-{index}.jsonl"
                 path.write_bytes(jsonl(log).getvalue())
                 files.append(str(path))
+            held = Path(folder) / "light-1-record.hex"   # as c12.get_profile's record_hex gives it
+            held.write_text(record.hex() + "\n", encoding="utf-8")
             done = subprocess.run([sys.executable, "-B", str(HERE / "c12_replay.py"), *files, "--firmware-zip",
-                                   str(self.archive), "--sim", sim, "--sim-sha256", preview_trace.SIMULATOR_SHA256],
+                                   str(self.archive), "--sim", sim, "--sim-sha256", preview_trace.SIMULATOR_SHA256,
+                                   "--sim-record", str(held)],
                                   capture_output=True, text=True, timeout=120)
         self.assertEqual(done.returncode, 0, done.stderr)
         self.assertIn(f"{delivered} of them replayed per board", done.stdout)

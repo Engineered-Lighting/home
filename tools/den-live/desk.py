@@ -38,9 +38,11 @@ FILE = "desk.json"
 KEYS = {"schema", "fixture_id", "device", "light", "profile"}
 READBACK = ("state", "controller", "stop_latched", "last_seq", "pan_cdeg", "tilt_cdeg", "fault_code")
 NUMBERS = ("last_seq", "pan_cdeg", "tilt_cdeg", "fault_code")
-# den-core's profile shape (scurve.FICTIONAL_PROFILE's keys): the measured one must have exactly these.
+# den-core's profile shape (scurve.FICTIONAL_PROFILE's keys): the measured one must have exactly these, and may carry
+# the board's `capabilities` as c12.get_profile answers them (the lighting direction plays timed cues by them).
 PROFILE_KEYS = {"label", "fictional", "axes", "range", "lit_motion", "dim_motion", "retarget_mid_move",
                 "path_margin_cdeg", "settle_s", "beam_fwhm_deg", "lumens"}
+CAPABILITIES = {"bits", "timed_move", "fade_curves", "join_flight", "at_rest"}
 DEVICE = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
 ENTITY = re.compile(r"[a-z_]+\.[a-z0-9_]+\Z")
 WORD = re.compile(r"[a-z0-9_]{1,32}\Z")
@@ -55,8 +57,14 @@ def _finite(value, low=-math.inf, high=math.inf):
 
 
 def check_profile(profile):
-    if not isinstance(profile, dict) or set(profile) != PROFILE_KEYS or profile["fictional"] is not False:
+    if (not isinstance(profile, dict) or not PROFILE_KEYS <= set(profile) <= PROFILE_KEYS | {"capabilities"}
+            or profile["fictional"] is not False):
         raise DeskError("the desk needs the board's measured profile, in den-core's shape with fictional false")
+    caps = profile.get("capabilities")
+    if caps is not None and (not isinstance(caps, dict) or not set(caps) <= CAPABILITIES
+                             or not all(type(v) is bool for k, v in caps.items() if k != "bits")
+                             or type(caps.get("bits", 0)) is not int):
+        raise DeskError("the desk profile's capabilities must be c12.get_profile's")
     axes, ranges = profile["axes"], profile["range"]
     if (not isinstance(profile["label"], str) or not profile["label"].strip()
             or not isinstance(axes, list) or len(axes) != 2
@@ -165,6 +173,7 @@ class Desk:
                                       clock=preview.clock, threaded=threaded, light=desk["light"])
         trace.append = self.sender.after(locked)
         self.values, self.read_mono = None, None
+        self.client_factory, self.capabilities, self.capability_problem = client_factory, None, "not read yet"
         self.poller = None
         if desk["readback"]:
             self.poller = ha_link.Poller(client_factory(), list(desk["readback"].values()), self.read,
@@ -177,7 +186,26 @@ class Desk:
         self.sender.start()
         if self.poller is not None and self.sender.threaded:
             self.poller.start()
+        if self.sender.threaded:
+            threading.Thread(target=self.read_capabilities, name="den-c12-desk-capabilities", daemon=True).start()
+        else:
+            self.read_capabilities()
         return self
+
+    def read_capabilities(self):
+        """What the board itself advertises (c12.get_profile's capabilities, attribute 0x0012), once, at the start.
+        Until it's read, and for a board before v2-b, no timed MOVE goes."""
+        client = self.client_factory()
+        try:
+            answer = client.call("c12", "get_profile", {"fixture": self.device}, response=True, timeout_s=10.0)
+        except ha_link.HaError as exc:
+            self.capability_problem = str(exc)
+            return
+        finally:
+            getattr(client, "close", lambda: None)()
+        self.capabilities = answer.get("capabilities") if isinstance(answer, dict) else None
+        self.capability_problem = None
+        self.sender.set_capabilities(self.fixture, self.capabilities)
 
     def close(self):
         if self.poller is not None:
@@ -205,9 +233,12 @@ class Desk:
 
     def devices(self):
         problem = "no readback" if self.poller is None else self.poller.problem
+        caps = self.capabilities
         return {self.fixture: {"device": self.device, "light": self.desk["light"], "read_mono": self.read_mono,
                                "values": self.values, "problem": problem, "sent": self.sender.counts["acked"],
-                               "released": len(self.released)}}
+                               "released": len(self.released), "timed": self.sender.timed[self.fixture],
+                               "capabilities": caps.get("bits") if isinstance(caps, dict) else None,
+                               "capability_problem": self.capability_problem}}
 
     def publishing(self, publish):
         def with_devices(snapshot):

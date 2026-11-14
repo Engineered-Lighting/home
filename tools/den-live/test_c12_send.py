@@ -1,9 +1,9 @@
 """The FC13 sender (plan 05, step 05-2) against a fake Home Assistant whose `c12` integration owns the wire seq.
 
-The boards: fake_c12_ha.ModelBoard (P3's rules: MOVE accepted, the 3 s lease) always, and the firmware's own v2-a host
-simulator as well when C12_TEST_SIM names it (its SHA-256 must be preview_trace.SIMULATOR_SHA256). v2-a answers a
-MOVE `lights_only`, so on it nothing lights and no keep-lit goes; the seq, Stop and reboot rules are the board's own.
-The pinned firmware codec (test_trace_v2.firmware_zip) checks every frame on the air when it's here.
+The boards: fake_c12_ha.ModelBoard (P3's rules: MOVE accepted, the 3 s lease) always, and the firmware's own host
+simulator as well when C12_TEST_SIM names it (its SHA-256 must be preview_trace.SIMULATOR_SHA256) and the pinned
+firmware bundle is here: it's commissioned with the firmware's vector record, so it answers as a ready board does. The
+pinned firmware codec (test_trace_v2.firmware_zip) checks every frame on the air when it's here.
 """
 import hashlib
 import json
@@ -32,9 +32,15 @@ def move(level=.5, target=(1200, -300), valid_ms=1000):
             "level": level, "cct_k": 2700, "travel": "dark", "valid_ms": valid_ms, "lit_motion": False}
 
 
+def vector_record():
+    """The firmware's own commissioned vector record, from the pinned bundle; None without it."""
+    archive = test_trace_v2.firmware_zip()
+    return c12_replay.vector_record(c12_replay.firmware_codec(archive)[1]) if archive else None
+
+
 def simulator():
     path = os.environ.get("C12_TEST_SIM")
-    if not path or not Path(path).is_file():
+    if not path or not Path(path).is_file() or vector_record() is None:
         return None
     if hashlib.sha256(Path(path).read_bytes()).hexdigest() != preview_trace.SIMULATOR_SHA256:
         raise AssertionError("C12_TEST_SIM is not the pinned v2-a simulator build")
@@ -105,11 +111,11 @@ class SenderTest(unittest.TestCase):
         return h
 
     def boards(self, clock):
-        """(name, board, what v2-a or P3 answers a valid MOVE with)."""
+        """(name, board, what it answers a valid MOVE with)."""
         found = [("model", fake_c12_ha.ModelBoard(clock=clock), "accepted")]
         sim = simulator()
         if sim:
-            found.append(("sim", fake_c12_ha.SimBoard(sim), "lights_only"))
+            found.append(("sim", fake_c12_ha.SimBoard(sim, vector_record()), "accepted"))
         for _name, board, _ok in found:
             self.addCleanup(board.close)
         return found

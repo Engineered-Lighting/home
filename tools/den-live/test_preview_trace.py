@@ -16,9 +16,9 @@ import preview_trace as trace
 HERE = Path(__file__).resolve().parent
 F3 = json.loads((HERE / "fixtures" / "preview-f3.json").read_text(encoding="utf-8"))
 BUNDLE = Path("artifacts/human-context-architecture-v2-20261027/review/end-to-end-20261111/firmware-bundle/") / (
-    "c12-firmware-for-codex-20261112.zip"
+    "c12-firmware-62ea043.zip"
 )
-CODEC_HASH = "0f534b0fd739c756d91fd3870df569d171fe030277319641fb1fdb718c702361"
+CODEC_HASH = "af87ad8f901ce6744852a49af3e51eef40068f467057bb821190124c2b09a789"   # tools/c12v2/fc13.py at 62ea043
 
 
 def f3_trace():

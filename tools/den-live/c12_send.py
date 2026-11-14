@@ -18,6 +18,10 @@ c12-service-1 as the firmware chat built it (P5, `ha/custom_components/c12`, fit
   nothing on the air), and `seq_unknown`, `dropped_expired` and `dropped_stopped` (nothing sent). keep_lit, stop and
   resume answer `status` (`sent`, `send_failed`, `seq_unknown`, `dropped_stopped`); stop and resume also the
   `stop_latched` the integration read back, which is fresh.
+- The timed MOVE (firmware 62ea043, flag bit 4): `c12.move` takes `min_duration_ms`, `fade_ms` and `fade_curve`, and
+  firmware before v2-b answers it bad_payload. So a timed MOVE goes only to a board whose capabilities (attribute
+  0x0012, from `c12.get_profile`) say `timed_move`: until `set_capabilities` says so, it's dropped unsent
+  (`dropped_unsupported`), and a bad_payload answer to one takes the capability back.
 - Nothing configures attribute reporting for 0xFC13 yet, so the readback's entities can hold old values. The Stop copy
   takes a latch read only when Home Assistant saw it change after den-live's own last Resume (`observe`'s
   `changed_wall`).
@@ -62,8 +66,10 @@ KEEP_LIT_FAILURES = 2
 RESUME_GUARD_S = 2.0
 CLOCK_SKEW_S = 1.0   # LA's and Home Assistant's wall clocks, both on NTP: a latch change this close to a Resume is ours
 HAS_VELOCITY = 0x04
+TIMED = 0x10
 CONTROL = "control"   # the Stop and Resume lane
-OUTCOMES = ("acked", "refused", "no_answer", "dropped_expired", "dropped_superseded", "dropped_dark")
+OUTCOMES = ("acked", "refused", "no_answer", "dropped_expired", "dropped_superseded", "dropped_dark",
+            "dropped_unsupported")
 
 
 class _Job:
@@ -129,6 +135,7 @@ class Sender:
         self.resumed_at = dict.fromkeys(self.devices, -math.inf)   # den-live's latest Resume answer
         self.resumed_wall = dict.fromkeys(self.devices, -math.inf)   # the same, on the wall clock
         self.own_stop = dict.fromkeys(self.devices, False)   # den-live's own Stop taken, and no Resume answered since
+        self.timed = dict.fromkeys(self.devices, False)   # the board advertises the timed MOVE (set_capabilities)
         self.lit = dict.fromkeys(self.devices)   # (trace seq, wire seq, trace_id) of the latest accepted lit move
         self.keep_failures = dict.fromkeys(self.devices, 0)
         self.counts = dict.fromkeys((*OUTCOMES, "errors"), 0)
@@ -168,6 +175,12 @@ class Sender:
             self.changed.notify_all()
         for old in dropped:
             self._log(old, outcome="dropped_superseded", reason="replaced_before_its_call")
+
+    def set_capabilities(self, fixture_id, capabilities):
+        """c12.get_profile's `capabilities` for the fixture's board (None before firmware v2-b)."""
+        if fixture_id in self.devices:
+            with self.lock:
+                self.timed[fixture_id] = isinstance(capabilities, dict) and capabilities.get("timed_move") is True
 
     def observe(self, fixture_id, stop_latched, changed_wall=None):
         """The board's `stop_latched` as the readback polled it, and, when known, when Home Assistant saw it change
@@ -284,12 +297,22 @@ class Sender:
             self._release(fid, row["trace_id"], "expired_before_send")
             return
         e = row["effective"]
+        with self.lock:
+            timed_ok = self.timed[fid]
+        if e["flags"] & TIMED and not timed_ok:   # bit 4 goes only to a board that advertises it
+            self._log(job, outcome="dropped_unsupported", reason="the board doesn't advertise the timed MOVE")
+            self._release(fid, row["trace_id"], "timed_move_unsupported")
+            return
         data = {"fixture": self.devices[fid], "pan_cdeg": e["pan_cdeg"], "tilt_cdeg": e["tilt_cdeg"],
                 "spot_level": e["spot_level"] if self.light else 0, "spot_mired": e["spot_mired"],
                 "lit_during_move": e["lit_during_move"] and self.light,
                 "source": e["source"], "valid_ms": e["valid_ms"]}
         if e["flags"] & HAS_VELOCITY:   # given at all, the field sets has_velocity
             data["velocity_cdeg_s"] = list(e["velocity_cdeg_s"])
+        if e["flags"] & TIMED:   # given at all, either sets timed; fade_curve only with a fade
+            data["min_duration_ms"], data["fade_ms"] = e["min_duration_ms"], e["fade_ms"]
+            if e["fade_ms"]:
+                data["fade_curve"] = e["fade_curve"]
         expected = row["payload_hex"] if self.light else dark_payload(bytes.fromhex(row["payload_hex"])).hex()
         answer, called, answered, problem = self._call(client, "move", data, CALL_TIMEOUT_S)
         result = answer.get("result") if isinstance(answer, dict) else None
@@ -307,6 +330,9 @@ class Sender:
                 lit = self.light and e["spot_level"] > 0 and e["source"] == "coordinator"
                 self.lit[fid] = (row["sequence"], wire["seq"], row["trace_id"]) if lit else None
             return
+        if result == "bad_payload" and e["flags"] & TIMED:   # the board doesn't take it after all
+            with self.lock:
+                self.timed[fid] = False
         self._release(fid, row["trace_id"], "c12_" + result if isinstance(result, str) else "no_answer")
         if result == "stopped":
             self._copy(fid, called, "move_refused_stopped")

@@ -235,6 +235,11 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                     ? { name: id.name, known: true, source: id.basis === 'carried' ? 'carried over' : 'face', confidence: id.score } : null;
             },
             activity: () => { const track = bodyTrack(owned); return track ? inferenceKit.answerOf(track, latest, since())?.words ?? null : null; },
+            // "Qwen saw …": the answer's visible basis, while that answer is live (the System caption shows it up close)
+            evidence: () => {
+                const track = bodyTrack(owned), answer = track ? inferenceKit.answerOf(track, latest, since()) : null;
+                return answer?.basis.length ? answer.basis.join(' · ') : null;
+            },
             house: () => {
                 const track = bodyTrack(owned), house = track ? inferenceKit.houseOf(track, spots?.current() ?? null, names()) : null;
                 return house ? `${house.words}${!house.dark && house.level != null ? ` · ${Math.round(house.level * 100)}%` : ''}` : null;

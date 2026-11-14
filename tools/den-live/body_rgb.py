@@ -5,7 +5,7 @@ from typing import Optional
 
 from body import FAR_MM, HEAD_SHOWN, MIN_TORSO_SEEDS, NEAR_MM
 from stream import BODY_LEASE_S
-from body_clock import capture_bounds, lease_clock
+from body_clock import capture_bounds, lease_clock, receipt_arrival
 from body_head import HeadProfile, head_evidence, torso_cut
 from body_input import BodyInput
 
@@ -53,25 +53,44 @@ class RgbBodyProfile:
         return profile
 
 
+def arrival_capture(bundle, capture_mono):
+    """The frame's capture on the body lease's clock, from perception's estimate on the source's clock: the receipt
+    clock's arrival stamp less the frame's estimated age at arrival (never negative). None when either is missing."""
+    arrival, lease_arrival = getattr(bundle, "arrival_mono", None), receipt_arrival(bundle)
+    if not all(_finite(value) for value in (capture_mono, arrival, lease_arrival)):
+        return None
+    return lease_arrival - max(0.0, arrival - capture_mono)
+
+
 class RgbBodyInput:
     def __init__(self, profile, camera, *, clock=lease_clock):
         self.profile, self.camera, self.clock = profile, camera, clock
 
-    def __call__(self, bundle, meta, depth, *, frame_key, mode, observations, tracks, supported, association):
+    def __call__(self, bundle, meta, depth, *, frame_key, mode, observations, tracks, supported, association,
+                 capture_mono=None):
+        """capture_mono: perception's own estimate of the frame's capture, on the source's clock (the camera's stamp
+        plus the arrival-anchored offset the people stream uses)."""
         profile = self.profile
         if mode != "rgb" or self.camera.transform_id != profile.transform_id:
             return None
-        bounds = capture_bounds(bundle, meta)
+        if profile.head is None:
+            # The owner shows the head: no head cut, so no exposure separation to bound, and no camera receipt to
+            # require. The frame is dated as the people stream dates it, and gets the same lease.
+            earliest, separation = arrival_capture(bundle, capture_mono), None
+        else:
+            bounds = capture_bounds(bundle, meta)
+            if bounds is None or bounds.evidence_id != profile.clock_evidence_id:
+                return None
+            earliest, separation = bounds.earliest_mono, bounds.separation_s
         now_mono = self.clock()
-        if (bounds is None or bounds.evidence_id != profile.clock_evidence_id
-                or not bounds.earliest_mono <= now_mono < bounds.earliest_mono + BODY_LEASE_S):
+        if earliest is None or not earliest <= now_mono < earliest + BODY_LEASE_S:
             return None
         if not self._depth_qualified(bundle, meta, depth):
             return None
 
         run_id, track_epoch, _ = frame_key
         common = (frame_key, run_id, track_epoch, profile.scan_revision, profile.transform_id,
-                  profile.qualification_id, bounds.earliest_mono, "rgb")
+                  profile.qualification_id, earliest, "rgb")
         people = [o for o in observations if o["kind"] in ("keypoints", "person_box")]
         if not people and not tracks:
             return BodyInput(*common, "empty")
@@ -96,7 +115,7 @@ class RgbBodyInput:
         if profile.head is None:   # the owner shows the head: the whole measured person, nothing masked
             return replace(value, head_evidence={"frame_key": frame_key, "binding": value.binding(), "head": HEAD_SHOWN})
         evidence = dict(frame_key=frame_key, binding=value.binding(), profile=profile.head,
-                        separation_s=bounds.separation_s)
+                        separation_s=separation)
         head = head_evidence(pose, self.camera, **evidence)
         cut = torso_cut(pose, self.camera, **evidence)
         if (head is None and cut is None) or (profile.head.torso_cut_m is not None and cut is None):

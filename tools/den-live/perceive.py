@@ -569,7 +569,8 @@ class Perceiver:
         try:
             value = self.body_provider(bundle, meta, depth, frame_key=frame_key, mode=self.mode,
                                     observations=observations, tracks=tracks, supported=supported,
-                                    association={} if association is None else association)
+                                    association={} if association is None else association,
+                                    capture_mono=ref.capture_mono)
             arrival = receipt_arrival(bundle)
             if (qualified_body_input(value, self.scope) and value.frame_key == frame_key
                     and value.run_id == ref.service_run_id and value.track_epoch == ref.camera_epoch

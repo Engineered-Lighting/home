@@ -213,6 +213,46 @@ class RgbBodyTests(unittest.TestCase):
         self.assertTrue(inside.any(), "the head the qualified profile cuts is in the figure")
         self.assertGreater(len(shown_ys), len(ys))
 
+    def test_a_profile_that_shows_the_head_needs_no_camera_receipt(self):
+        from body_rgb import arrival_capture
+        from stream import BODY_LEASE_S
+        import numpy as np
+        from test_body import decode
+
+        f = self.f
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True, receipt=False)
+        self.assertIsNotNone(f.channel.maker.background, "the room is learned without receipts")
+        for n in range(55, 70):
+            f.frame(n, receipt=False)
+        self.assertEqual(f.last.observation, "person")
+        _, output = next(((s, fields) for s, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+        self.assertIsNotNone(output, f.link.why)
+        self.assertGreater(len(decode(output["frame"])["key"]), 0)
+        # Dated as the people stream dates the frame: perception's capture estimate, on the lease's clock.
+        self.assertLessEqual(f.last.capture_earliest_mono, f.clock())
+        self.assertGreater(f.last.capture_earliest_mono, f.clock() - BODY_LEASE_S)
+        bundle = SimpleNamespace(arrival_mono=50.0, receipt_arrival_mono=200.0)
+        self.assertEqual(arrival_capture(bundle, 49.6), 199.6)
+        self.assertEqual(arrival_capture(bundle, 50.2), 200.0, "never later than the arrival")
+        for missing in (None, float("nan")):
+            self.assertIsNone(arrival_capture(bundle, missing))
+        self.assertIsNone(arrival_capture(SimpleNamespace(arrival_mono=50.0), 49.6))
+        # A frame older than the lease, by that estimate, still gives no body.
+        late = f.provider(SimpleNamespace(arrival_mono=50.0, receipt_arrival_mono=f.clock()), None, None,
+                          frame_key=f.last.frame_key, mode="rgb", observations=(), tracks=(), supported=(), association={},
+                          capture_mono=50.0 - BODY_LEASE_S - 0.1)
+        self.assertIsNone(late)
+
+    def test_a_profile_with_the_cut_still_needs_the_receipt(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        f.frame(0, empty=True, receipt=False)
+        self.assertIsNone(f.last)
+
     def test_a_profile_with_the_cut_never_publishes_on_the_face_envelope_alone(self):
         f = self.f
         f.block["head"]["torso_cut_m"] = 0.08

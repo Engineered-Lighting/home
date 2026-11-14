@@ -261,6 +261,23 @@ class BodyTest(unittest.TestCase):
         self.assertEqual(maker.step(hole, observation="person", person=person, now=20, frame_key="fixture-7",
                                     binding=BINDING), (None, "head_mask_unavailable"))
 
+    def test_a_cut_wider_than_the_cap_clears_rather_than_thinning(self):
+        near = np.full((B.HEIGHT, B.WIDTH), 400, np.uint16)   # someone half a metre from the camera
+        cut = ((320.0, 200.0), (0.0, -1.0), 0.30, ((300.0, 200.0), (340.0, 200.0)), 3.0)
+        self.assertIsNone(B.cut_pixels(cut, near, FX), "0.30 m at 0.4 m is 300 px: past the cap")
+        cut = ((320.0, 200.0), (0.0, -1.0), 0.15, ((300.0, 200.0), (340.0, 200.0)), 3.0)
+        self.assertAlmostEqual(B.cut_pixels(cut, near, FX)[2], 150.0)
+
+    def test_a_cut_that_does_not_read_never_falls_back_to_the_envelope(self):
+        fixture = scene()
+        maker = self.learned(fixture)
+        person = subject(fixture)   # a good envelope
+        person["head_evidence"]["cut"] = dict(cut_subject(fixture)["head_evidence"]["cut"], axis_px=[0, 2])
+        self.assertEqual(self.render(maker, fixture, person), (None, "head_mask_unavailable"))
+        self.assertFalse(B.head_mask_available(person["head_evidence"], frame_key="fixture-7", binding=BINDING))
+        person["head_evidence"].pop("cut")
+        self.assertIsNone(self.render(maker, fixture, person)[1], "the envelope alone, where no cut was ever made")
+
     def test_nothing_above_the_tracked_shoulders_is_kept(self):
         fixture = scene("standing")
         maker = self.learned(fixture)

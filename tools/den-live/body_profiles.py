@@ -84,11 +84,23 @@ def passed(qualification):
 
 
 def qualification_record(qualification, candidate_bytes):
-    """What install_la.py checks a profile against: counts and provenance only."""
+    """What install_la.py and run_local.py check a profile against: counts and provenance only."""
     return {"schema": "den-live-body-rgb-qualification-1",
             "candidate_sha256": hashlib.sha256(candidate_bytes).hexdigest(),
             "mask": qualification["mask"], "den_live_commit": qualification.get("den_live_commit"),
-            "scope": qualification.get("scope")}
+            "annotations_sha256": qualification.get("annotations_sha256"),
+            "pose_digest": qualification.get("pose_digest"), "scope": qualification.get("scope")}
+
+
+def qualified_bytes(data, record_path):
+    """True when record_path is a passing qualification record that names exactly these profile bytes."""
+    try:
+        record = json.loads(Path(record_path).read_text(encoding="utf-8"))
+        mask = record["mask"]
+        return (record["candidate_sha256"] == hashlib.sha256(data).hexdigest() and mask["verdict"] == "pass"
+                and mask["basis"] in PASSING_BASES)
+    except (OSError, TypeError, KeyError, ValueError):
+        return False
 
 
 def build(session, *, frame_meta, candidate_path=None):
@@ -101,8 +113,10 @@ def build(session, *, frame_meta, candidate_path=None):
     if not passed(qualification):
         raise Refused("the session's head-cut score didn't pass; no profile is written")
     scored = qualification.get("candidate_sha256")
-    if scored is not None and scored != hashlib.sha256(candidate_path.read_bytes()).hexdigest():
-        raise Refused("that candidate isn't the one the passing score used")
+    if scored != hashlib.sha256(candidate_path.read_bytes()).hexdigest():
+        raise Refused("that candidate isn't the one the passing score used (or the score names none)")
+    if not qualification.get("annotations_sha256") or not qualification.get("pose_digest"):
+        raise Refused("the score doesn't record its marks and poses; score it again with this sofa_qualify.py")
     fps = session_fps(read_json(session / "manifest.json")["frames"], frame_meta)
     clock = clock_profile(read_json(session / "camera-calibration.json"), fps, candidate["clock_evidence_id"])
     candidate_bytes = candidate_path.read_bytes()

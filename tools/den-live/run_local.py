@@ -41,6 +41,7 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import body_link  # noqa: E402  the live body, made in the detector's process and never waited for
+import body_profiles  # noqa: E402  the record of the profile's passing head-cut score
 import body_rgb  # noqa: E402
 import perceive  # noqa: E402
 import person_state  # noqa: E402  contract 2's den-person-state-1 log, the LA service's only
@@ -268,12 +269,16 @@ def local_body_profile(profile_file, room_model, roommodel, camera_id, scan_revi
     if receipt is None:
         raise Stop("the RGB figure needs the matching successful registration receipt")
     try:
+        data = Path(profile_file).read_bytes()
         profile = body_rgb.RgbBodyProfile.from_config(
-            json.loads(Path(profile_file).read_text(encoding="utf-8-sig")),
+            json.loads(data.decode("utf-8-sig")),
             json.loads(receipt.read_text(encoding="utf-8")),
         )
     except (OSError, TypeError, KeyError, ValueError, OverflowError):
         raise Stop("the RGB figure profile does not match the camera registration") from None
+    if not body_profiles.qualified_bytes(data, Path(profile_file).parent / body_profiles.QUALIFICATION_FILE):
+        raise Stop("the RGB figure profile isn't the one a passing head-cut score used (%s beside it)"
+                   % body_profiles.QUALIFICATION_FILE)
     if profile.scan_revision != scan_revision:
         raise Stop("the RGB figure profile does not match the active scan in the selected packs")
     return profile

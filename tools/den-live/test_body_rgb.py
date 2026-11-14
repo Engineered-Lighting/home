@@ -262,6 +262,7 @@ class RgbBodyTests(unittest.TestCase):
             receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
             profile = root / "body.json"
             profile.write_text(json.dumps(f.block), encoding="utf-8-sig")
+            record = root / run_local.body_profiles.QUALIFICATION_FILE
             renderer = root / "app" / "src" / "home-3d" / "apartment-people-layer.mjs"
             renderer.parent.mkdir(parents=True)
             renderer.touch()
@@ -278,6 +279,11 @@ class RgbBodyTests(unittest.TestCase):
                   patch.object(run_local.sc, "open_camera") as camera,
                   patch.object(run_local, "serve") as serve,
                   patch.object(run_local, "page", return_value=(None, "http://127.0.0.1:1/")) as page):
+                with self.assertRaisesRegex(run_local.Stop, "passing head-cut score"):
+                    run_local.run(**args)   # the local preview holds the profile to the installer's gate
+                import hashlib
+                record.write_text(json.dumps({"candidate_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+                                              "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
                 with self.assertRaisesRegex(run_local.Stop, "active scan"):
                     run_local.run(**args)
                 camera.assert_not_called()

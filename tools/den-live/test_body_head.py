@@ -198,6 +198,25 @@ class HeadEvidenceTests(unittest.TestCase):
             unseen["keypoints"][index][2] = 0.1
         self.assertIsNone(self.cut(unseen), "no face or ear point seen: clear")
 
+    def test_a_face_point_the_detector_sees_but_that_cannot_be_placed_clears(self):
+        pose = self.with_hips(self.pose())
+        self.assertIsNotNone(self.cut(pose))
+        pose["keypoints"][3] = [640 * 1.4, 100, 0.6]   # a seen ear far outside the band
+        self.assertIsNone(self.cut(pose))
+        pose = self.with_hips(self.pose())
+        rig = self.camera.rig
+        with unittest.mock.patch.object(rig, "left_pixel", side_effect=lambda ray, z: None):
+            self.assertIsNone(self.cut(pose), "a ray that misses")
+        with unittest.mock.patch.object(rig, "left_pixel", side_effect=lambda ray, z: (float("nan"), 1.0)):
+            self.assertIsNone(self.cut(pose), "a placement that isn't finite")
+        pose["keypoints"][3] = [640 * 1.4, 100, 0.1]   # an ear the detector barely saw is left out instead
+        self.assertIsNotNone(self.cut(pose))
+
+    def test_the_evidence_stays_inside_the_consumers_bounds(self):
+        wide = replace(PROFILE, torso_cut_m=0.5, localization_m=0.4, max_motion_m_s=2.0)
+        self.assertIsNone(self.cut(profile=wide), "a margin over 1 m is refused where it's made, not where it's read")
+        self.assertIsNotNone(self.cut())
+
     def test_hips_without_depth_come_from_their_keypoints_at_the_shoulders_depth(self):
         lifted = self.cut()
         pose = self.with_hips(self.pose())

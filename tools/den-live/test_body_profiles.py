@@ -31,8 +31,14 @@ class Profiles(unittest.TestCase):
         scratch = tempfile.TemporaryDirectory()
         self.addCleanup(scratch.cleanup)
         self.session = Path(scratch.name)
-        self.write(body_rgb_candidate=CANDIDATE, registration=REGISTRATION, camera_calibration=CALIBRATION,
-                   manifest={"frames": []}, qualification={"mask": {"verdict": "pass", "basis": "zero_separation"}})
+        self.write(body_rgb_candidate=CANDIDATE, registration=REGISTRATION, camera_calibration=CALIBRATION, manifest={"frames": []})
+        self.write(qualification=self.passing(self.session / "body-rgb-candidate.json"))
+
+    @staticmethod
+    def passing(candidate_path):
+        import hashlib
+        return {"mask": {"verdict": "pass", "basis": "zero_separation"}, "annotations_sha256": "a" * 64,
+                "pose_digest": "b" * 64, "candidate_sha256": hashlib.sha256(candidate_path.read_bytes()).hexdigest()}
 
     def write(self, **files):
         for name, data in files.items():
@@ -45,11 +51,28 @@ class Profiles(unittest.TestCase):
         import hashlib
         self.assertEqual(record["candidate_sha256"], hashlib.sha256(data).hexdigest())
         self.assertEqual(record["mask"]["basis"], "zero_separation")
+        self.assertEqual((record["annotations_sha256"], record["pose_digest"]), ("a" * 64, "b" * 64))
+        out = self.session / "out"
+        out.mkdir()
+        (out / bp.RGB_FILE).write_bytes(data)
+        (out / bp.QUALIFICATION_FILE).write_text(json.dumps(record), encoding="utf-8")
+        self.assertTrue(bp.qualified_bytes(data, out / bp.QUALIFICATION_FILE))
+        self.assertFalse(bp.qualified_bytes(data + b" ", out / bp.QUALIFICATION_FILE))
+
         self.assertEqual(clock["schema"], "den-body-clock-profile-1")
         self.assertEqual((clock["evidence_id"], clock["device_id"], clock["calibration_sha256"], clock["fps"]),
                          ("clock-test", "fictional-device", DIGEST, 30))
         self.assertEqual((clock["rgb"], clock["depth"]), (bp.SDK_BOUNDS["rgb"], bp.SDK_BOUNDS["depth"]))
         self.assertTrue(all(0 < v <= 1 for plane in ("rgb", "depth") for v in clock[plane].values()))
+
+    def test_refuses_a_score_that_names_no_candidate_or_no_inputs(self):
+        for missing in ("candidate_sha256", "annotations_sha256", "pose_digest"):
+            with self.subTest(missing=missing):
+                qualification = self.passing(self.session / "body-rgb-candidate.json")
+                qualification.pop(missing)
+                self.write(qualification=qualification)
+                with self.assertRaises(bp.Refused):
+                    bp.build(self.session, frame_meta=frames())
 
     def test_fps_is_read_from_the_session(self):
         self.assertEqual(bp.build(self.session, frame_meta=frames(fps=15, step=6))[0]["fps"], 15)
@@ -80,8 +103,7 @@ class Profiles(unittest.TestCase):
         newer = self.session / "candidate-2.json"
         block = dict(CANDIDATE, head=dict(CANDIDATE["head"], torso_cut_m=0.1))
         newer.write_text(json.dumps(block), encoding="utf-8")
-        self.write(qualification={"mask": {"verdict": "pass", "basis": "zero_separation"},
-                                  "candidate_sha256": hashlib.sha256(newer.read_bytes()).hexdigest()})
+        self.write(qualification=self.passing(newer))
         self.assertEqual(bp.build(self.session, frame_meta=frames(), candidate_path=newer)[1], block)
         with self.assertRaises(bp.Refused):
             bp.build(self.session, frame_meta=frames())   # the capture's own candidate wasn't the one scored

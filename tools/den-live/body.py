@@ -112,7 +112,8 @@ CUT_BAND_PX, CUT_MIN_DEPTH_PX, CUT_MAX_PX = 12, 8, 200
 def cut_pixels(cut, depth_mm, fx):
     """(shoulder_px, axis_px, margin_px, ceiling_m) on this frame, or None: the margin in pixels at the nearest 5% of
     the measured depth across the shoulder band (both shoulders and the midpoint, CUT_BAND_PX around), so a head or
-    neck nearer the camera than the shoulders still gets enough pixels."""
+    neck nearer the camera than the shoulders still gets enough pixels. A margin wider than CUT_MAX_PX (someone close
+    to the camera) is None, never capped: a capped cut would be thinner than the qualified one."""
     if cut is None:
         return None
     (u, v), axis, margin_m, shoulders, ceiling = cut
@@ -124,7 +125,10 @@ def cut_pixels(cut, depth_mm, fx):
     if len(measured) < CUT_MIN_DEPTH_PX:
         return None
     z = measured[len(measured) // 20] / 1000
-    return (u, v), axis, min(CUT_MAX_PX, margin_m * fx / z), ceiling
+    margin_px = margin_m * fx / z
+    if not margin_px <= CUT_MAX_PX:
+        return None
+    return (u, v), axis, margin_px, ceiling
 
 
 def cut_side(cols, rows, cut_px, extra_px=0.0):
@@ -134,9 +138,12 @@ def cut_side(cols, rows, cut_px, extra_px=0.0):
 
 
 def head_mask_available(evidence, *, frame_key, binding):
-    """True when this frame's evidence bounds the head: the depth-pixel envelope, the shoulder-line cut, or both."""
-    return (head_exclusion(evidence, frame_key=frame_key, binding=binding) is not None
-            or torso_cut(evidence, frame_key=frame_key, binding=binding) is not None)
+    """True when this frame's evidence bounds the head: the depth-pixel envelope, the shoulder-line cut, or both. A cut
+    the evidence carries but that doesn't read is no mask at all: the envelope never stands in for it."""
+    cut = torso_cut(evidence, frame_key=frame_key, binding=binding)
+    if isinstance(evidence, dict) and "cut" in evidence and cut is None:
+        return False
+    return head_exclusion(evidence, frame_key=frame_key, binding=binding) is not None or cut is not None
 
 
 class BodyMaker:
@@ -226,8 +233,9 @@ class BodyMaker:
         exclusion = head_exclusion(evidence, frame_key=frame_key, binding=binding)
         cut_evidence = torso_cut(evidence, frame_key=frame_key, binding=binding)
         cut = cut_pixels(cut_evidence, raw, self.fx)
-        if (exclusion is None and cut is None) or (cut_evidence is not None and cut is None):
-            return None, "head_mask_unavailable"   # a cut that can't be placed never falls back to the envelope
+        carries_cut = isinstance(evidence, dict) and "cut" in evidence
+        if (exclusion is None and cut is None) or (carries_cut and cut is None):
+            return None, "head_mask_unavailable"   # a cut that doesn't read or can't be placed never falls back
         if self.background is None:
             return None, "warming_background"
         joints, masked = {}, {}

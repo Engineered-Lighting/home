@@ -119,20 +119,24 @@ def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
     width, height = rig.rgb_size
     shoulder_depth = _mean([[z] for z in rgb_depths])[0]
 
-    def placed(index, min_score):
-        """The keypoint's rectified-left pixel at the shoulders' depth, or None."""
+    def seen(index, min_score):
+        """The detector scored this keypoint at least min_score."""
         pixel = keypoints[index]
-        if (isinstance(pixel, (tuple, list)) and len(pixel) == 3 and all(map(_finite, pixel))
-                and min_score <= pixel[2] <= 1.5 and -HIP_OUTSIDE * width <= pixel[0] < (1 + HIP_OUTSIDE) * width
-                and -HIP_OUTSIDE * height <= pixel[1] < (1 + HIP_OUTSIDE) * height):
-            where = rig.left_pixel(rig.rgb_ray(pixel[0], pixel[1]), shoulder_depth)
-            if where is not None and all(map(_finite, where)):
-                return where
-        return None
+        return (isinstance(pixel, (tuple, list)) and len(pixel) == 3 and _finite(pixel[2]) and pixel[2] >= min_score)
+
+    def placed(index):
+        """The keypoint's rectified-left pixel at the shoulders' depth, or None: outside the band, or a ray that
+        misses."""
+        pixel = keypoints[index]
+        if (not all(map(_finite, pixel[:2])) or not -HIP_OUTSIDE * width <= pixel[0] < (1 + HIP_OUTSIDE) * width
+                or not -HIP_OUTSIDE * height <= pixel[1] < (1 + HIP_OUTSIDE) * height):
+            return None
+        where = rig.left_pixel(rig.rgb_ray(pixel[0], pixel[1]), shoulder_depth)
+        return where if where is not None and all(map(_finite, where)) else None
 
     for index in HIPS:
-        if index not in lifted:
-            where = placed(index, HIP_MIN_SCORE)
+        if index not in lifted and seen(index, HIP_MIN_SCORE):
+            where = placed(index)
             if where is not None:
                 pixels[index] = where
     hip_pixels = [pixels[index] for index in HIPS if index in pixels]
@@ -149,12 +153,22 @@ def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
     if span >= SHOULDER_LINE_MIN * length and abs(axis[0] * across[0] + axis[1] * across[1]) > AXIS_MAX_COS * span * length:
         return None
     unit = (axis[0] / length, axis[1] / length)
-    head = [placed(index, HEAD_MIN_SCORE) for index in FACE]
-    head = [where for where in head if where is not None]
+    head = []
+    for index in FACE:
+        if seen(index, HEAD_MIN_SCORE):
+            where = placed(index)
+            if where is None:
+                return None   # a face or ear point the detector sees but that can't be placed: clear
+            head.append(where)
     if not head or any((x - shoulder[0]) * unit[0] + (y - shoulder[1]) * unit[1] <= 0 for x, y in head):
         return None   # unsure which side the head is on: clear
     margin = profile.torso_cut_m + profile.localization_m + profile.max_motion_m_s * profile.max_separation_s
     ceiling = _mean([lifted[index] for index in SHOULDERS])[2]
+    depth_width, depth_height = rig.depth_size
+    inside = lambda p: -depth_width <= p[0] <= 2 * depth_width and -depth_height <= p[1] <= 2 * depth_height
+    if (not 0 < margin <= 1.0 or not _finite(ceiling) or not -1.0 <= ceiling <= 3.0
+            or not all(inside(p) for p in [shoulder, *(pixels[index] for index in SHOULDERS)])):
+        return None   # the same bounds body.torso_cut holds the evidence to
     return {"frame_key": frame_key, "binding": binding,
             "cut": {"shoulder_px": [float(shoulder[0]), float(shoulder[1])], "axis_px": list(unit), "margin_m": margin,
                     "shoulders_px": [[float(x) for x in pixels[index]] for index in SHOULDERS],

@@ -211,7 +211,14 @@ def den_live_commit():
     return head.stdout.strip() + ("+changes" if dirty.stdout.strip() else "")
 
 
-def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE, candidate_sha256=None):
+def pose_digest(frames):
+    """sha256 over each scored frame's key, status and pose, as scored: the poses a qualification stands on."""
+    rows = [[list(frame.key), frame.status, frame.pose] for frame in frames]
+    return hashlib.sha256(json.dumps(rows, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE, candidate_sha256=None,
+           annotations_sha256=None, poses_sha256=None):
     passed = (clock_check == "measured" and mask_score["verdict"] == "pass"
               and mask_score["basis"] in ("measured_separation", "zero_separation"))
     pair_delta = clock_score.get("max_rgb_depth_stamp_delta_s")
@@ -221,7 +228,8 @@ def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE, c
         passed = pairing == "pass" and mask_score["verdict"] == "pass"
         verdict = "camera_trial_pass" if passed else "camera_trial_open"
     summary = {"verdict": verdict, "scope": scope, "rgb_pairing": pairing, "candidate_sha256": candidate_sha256,
-               "den_live_commit": den_live_commit(),
+               "den_live_commit": den_live_commit(), "annotations_sha256": annotations_sha256,
+               "pose_digest": poses_sha256,
                "clock_check": clock_check,
                "clock": {key: value for key, value in clock_score.items() if key != "candidate_separations"},
                "mask": mask_score}
@@ -355,13 +363,15 @@ def main(argv=None):
         room_model = session / "room-model.jsonl"
     witness = read_json(args.witness) if args.witness is not None else None
     annotations = read_json(args.annotations)
+    annotations_sha256 = hashlib.sha256(Path(args.annotations).read_bytes()).hexdigest()
     clock_score = score_clock(samples, witness)
     separations, clock_check = clock_for_mask(clock_score, rows, profile)
     frames, camera = sofa_mask_score.prepare_session(session, rows, tools_root=tools_root,
                                                      room_model=room_model,
                                                      registration=registration, profile=profile)
     mask_score = sofa_mask_score.score(frames, annotations, camera, profile=profile.head, separations=separations)
-    return report(session, clock_score, clock_check, mask_score, scope=scope, candidate_sha256=candidate_sha256)
+    return report(session, clock_score, clock_check, mask_score, scope=scope, candidate_sha256=candidate_sha256,
+                  annotations_sha256=annotations_sha256, poses_sha256=pose_digest(frames))
 
 
 if __name__ == "__main__":

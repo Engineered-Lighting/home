@@ -28,6 +28,8 @@ SETTINGS = {
     "leave_fade_s": 0.3,          # when you stand up or leave, it gets out of the way: dark within 1 s of standing
                                   # (Stop, Off and expiry stay instant)
     "crossfade_s": 1.2,           # a hand-off: the old fixture's fall and the new one's rise overlap
+    "glide_min_s": 1.0,           # a board with the timed MOVE flies a lit glide no faster than this: the same S-curve,
+                                  # slower (a board without it flies at its profile's pace)
     "shift_m": 0.06,              # how far the book's settled place must move before a lit spot glides after it
     "shift_hold_s": 1.5,          # the window whose median is the book's settled place (a page turn is shorter)
     "page_lift": 0.2,             # the page's centre: this fraction of the way from the hands toward the eyes
@@ -38,7 +40,7 @@ SETTINGS = {
     "ambient_restore_s": 1.5,     # when the task ends the room comes back as the spot goes out: no one sits in the dark
 }
 LIMITS = {"page_lift": (0.0, 0.5), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
-          "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 3.0), "leave_fade_s": (0.0, 1.0), "crossfade_s": (0.0, 5.0),
+          "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 3.0), "leave_fade_s": (0.0, 1.0), "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
           "ambient_dim_s": (0.0, 20.0), "ambient_delay_s": (0.0, 5.0), "ambient_restore_s": (0.0, 10.0),
           "shift_m": (0.0, 1.0), "shift_hold_s": (0.0, 10.0)}
 
@@ -51,6 +53,15 @@ LEVEL_CODES = 254               # the board's spot level, 0-254 (contract 5's ro
 # replace the train with one MOVE per cue where the board has it.
 LEVEL_STEP_S = 0.1
 RADIO_STEP_S = 0.5
+
+
+def capabilities(profile):
+    """The board's capabilities as c12.get_profile reports them (firmware 62ea043, FC13 attribute 0x0012):
+    timed_move, fade_curves, join_flight and at_rest. A profile without them (a virtual fixture, a v2-a board) has
+    none."""
+    caps = profile.get("capabilities")
+    return {key: bool(isinstance(caps, dict) and caps.get(key)) for key in ("timed_move", "fade_curves", "join_flight",
+                                                                         "at_rest")}
 
 
 def level_step_s(profile):
@@ -76,87 +87,118 @@ def level_code(level):
 
 # ---- The board's S-curve ---------------------------------------------------------------------------------------------
 
-def _time_to_speed(v, a, j):
-    return v / a + a / j if v >= a * a / j else 2.0 * math.sqrt(v / j)
+class _Ramp:
+    """One side of the S-curve: rest to peak speed vp under acceleration A and jerk J (the firmware's Ramp,
+    tools/c12v2/duration.py at 62ea043, arithmetic for arithmetic)."""
+
+    def __init__(self, vp, A, J):
+        self.vp, self.A, self.J = vp, A, J
+        if vp <= 0:
+            self.tj = self.T = 0.0
+        elif vp * J >= A * A:
+            self.tj, self.T = A / J, vp / A + A / J
+        else:
+            self.tj = math.sqrt(vp / J)
+            self.T = 2 * self.tj
+
+    def distance(self):
+        return self.vp * self.T / 2
+
+    def at(self, t):
+        """(distance, speed) t seconds into the ramp."""
+        if self.T <= 0 or t <= 0:
+            return 0.0, 0.0
+        if t >= self.T:
+            return self.distance(), self.vp
+        J, tj, T, vp = self.J, self.tj, self.T, self.vp
+        alim = J * tj
+        if t < tj:
+            return J * t ** 3 / 6, J * t * t / 2
+        if t < T - tj:
+            return alim / 6 * (3 * t * t - 3 * t * tj + tj * tj), alim * (t - tj / 2)
+        r = T - t
+        return self.distance() - vp * r + J * r ** 3 / 6, vp - J * r * r / 2
 
 
 class SCurve:
-    """A rest-to-rest move of the shared path parameter s from 0 to 1, limited by speed v, acceleration a and jerk j
-    (per second, per second squared, per second cubed of s): seven segments of constant jerk. Its duration is den-core's
-    scurve.scurve_time(1, v, a, j), found the same way, and s(t) integrates the jerk profile."""
+    """A rest-to-rest move of the shared path parameter s from 0 to 1 under speed v, acceleration a, jerk j and
+    deceleration d (per second, squared, cubed and squared, of s; d defaults to a): the board's own S-curve, ported
+    from the firmware's duration.py (62ea043) with its 100-step bisection, and checked against its planner vectors.
+    With d = a its duration is den-core's scurve.scurve_time(1, v, a, j)."""
 
-    def __init__(self, v, a, j):
-        if not (v > 0 and a > 0 and j > 0):
-            raise ValueError("speed, acceleration and jerk limits must all be above 0")
-        self.limits = (v, a, j)
-        peak = v
-        if v * _time_to_speed(v, a, j) > 1.0:   # never reaches v: den-core's bisection for the peak speed
+    def __init__(self, v, a, j, d=None):
+        d = a if d is None else d
+        if not (v > 0 and a > 0 and j > 0 and d > 0):
+            raise ValueError("speed, acceleration, jerk and deceleration limits must all be above 0")
+        self.limits = (v, a, j, d)
+        up, down = _Ramp(v, a, j), _Ramp(v, d, j)
+        if up.distance() + down.distance() <= 1.0:
+            peak, cruise = v, (1.0 - up.distance() - down.distance()) / v
+        else:
             low, high = 0.0, v
             for _ in range(100):
-                middle = (low + high) / 2.0
-                if middle * _time_to_speed(middle, a, j) < 1.0:
-                    low = middle
-                else:
+                middle = (low + high) / 2
+                if _Ramp(middle, a, j).distance() + _Ramp(middle, d, j).distance() > 1.0:
                     high = middle
-            peak = high
-        if peak >= a * a / j:
-            jerk_s, flat_s = a / j, peak / a - a / j
-        else:
-            jerk_s, flat_s = math.sqrt(peak / j), 0.0
-        accelerate = 2.0 * jerk_s + flat_s
-        cruise = max(0.0, (1.0 - peak * accelerate) / peak)
-        self.segments = ((jerk_s, j), (flat_s, 0.0), (jerk_s, -j), (cruise, 0.0), (jerk_s, -j), (flat_s, 0.0), (jerk_s, j))
-        self.duration = 2.0 * accelerate + cruise
-        self.peak = peak
-        self.total = self._integrate(self.duration)[0] or 1.0
+                else:
+                    low = middle
+            peak, cruise = low, 0.0
+            up, down = _Ramp(low, a, j), _Ramp(low, d, j)
+        self.up, self.down, self.peak, self.cruise = up, down, peak, cruise
+        self.duration = up.T + cruise + down.T
 
-    def _integrate(self, t):
-        position = speed = acceleration = 0.0
-        for length, jerk in self.segments:
-            if t <= 0:
-                break
-            step = min(length, t)
-            if step <= 0:
-                continue
-            position += speed * step + acceleration * step * step / 2.0 + jerk * step ** 3 / 6.0
-            speed += acceleration * step + jerk * step * step / 2.0
-            acceleration += jerk * step
-            t -= step
-        return position, speed
+    def _at(self, t):
+        if t <= 0:
+            return 0.0, 0.0
+        if t >= self.duration:
+            return 1.0, 0.0
+        if t < self.up.T:
+            return self.up.at(t)
+        if t < self.up.T + self.cruise:
+            return self.up.distance() + self.peak * (t - self.up.T), self.peak
+        gone, speed = self.down.at(self.duration - t)
+        return 1.0 - gone, speed
 
     def s(self, t):
-        """The path parameter at t seconds into the move: 0 before, 1 after."""
-        if t <= 0:
-            return 0.0
-        if t >= self.duration:
-            return 1.0
-        return min(1.0, max(0.0, self._integrate(t)[0] / self.total))
+        """The path parameter at t seconds into the move: 0 before, 1 from the end on (exactly, as the board clamps)."""
+        return min(1.0, max(0.0, self._at(t)[0]))
 
     def speed(self, t):
         """ds/dt at t (per second)."""
-        if t <= 0 or t >= self.duration:
-            return 0.0
-        return self._integrate(t)[1] / self.total
+        return self._at(t)[1]
 
 
 def path_limits(delta_deg, axes):
-    """The shared path parameter's (v, a, j) for a move of (d_pan, d_tilt) degrees under the profile's per-axis limits:
-    whichever axis is tighter, as the board plans it. None for no move."""
-    moving = [(abs(d), axis) for d, axis in zip(delta_deg, axes) if abs(d) > 1e-9]
+    """The shared path parameter's (v, a, j, d) for a move of (d_pan, d_tilt) degrees under the profile's per-axis
+    limits (v_max, a_max, j_max, and d_max, which defaults to a_max): whichever axis is tighter, limit by limit, as the
+    board plans it. None for no move."""
+    moving = [(abs(dd), axis) for dd, axis in zip(delta_deg, axes) if abs(dd) > 1e-9]
     if not moving:
         return None
-    return (min(axis["v_max"] / d for d, axis in moving), min(axis["a_max"] / d for d, axis in moving),
-            min(axis["j_max"] / d for d, axis in moving))
+    return (min(axis["v_max"] / dd for dd, axis in moving), min(axis["a_max"] / dd for dd, axis in moving),
+            min(axis["j_max"] / dd for dd, axis in moving),
+            min(axis.get("d_max", axis["a_max"]) / dd for dd, axis in moving))
+
+
+def stretch(limits, k):
+    """A timed MOVE's time stretch (firmware 62ea043, motion.md): the same S-curve k times slower is the S-curve of
+    speed / k, acceleration and deceleration / k^2, and jerk / k^3."""
+    v, a, j, d = limits
+    return v / k, a / (k * k), j / (k ** 3), d / (k * k)
 
 
 class Glide:
     """One MOVE's motion from start_cdeg to target_cdeg (integer centidegrees, contract 5's joints) begun at `started`
-    (the coordinator's monotonic seconds), as the board flies it."""
+    (the coordinator's monotonic seconds), as the board flies it. min_duration_s is a timed MOVE's floor: the board
+    stretches its S-curve to at least that long (k = max(1, min_duration / T)), and the published limits are the
+    stretched ones, so Home draws the move the board makes from the same duration function."""
 
-    def __init__(self, start_cdeg, target_cdeg, axes, started):
+    def __init__(self, start_cdeg, target_cdeg, axes, started, min_duration_s=0.0):
         self.start, self.target, self.started = tuple(start_cdeg), tuple(target_cdeg), started
         limits = path_limits(tuple((b - a) / 100 for a, b in zip(self.start, self.target)), axes)
         self.curve = SCurve(*limits) if limits else None
+        if self.curve is not None and min_duration_s > self.curve.duration > 0:
+            self.curve = SCurve(*stretch(limits, min_duration_s / self.curve.duration))
         self.duration = self.curve.duration if self.curve else 0.0
 
     def at(self, now):
@@ -205,6 +247,7 @@ class Ramp:
     def __init__(self, start, end, duration, curve, started, purpose):
         self.start, self.end, self.duration, self.curve = start, end, max(0.0, duration), curve
         self.started, self.purpose = started, purpose
+        self.sent = False   # a timed MOVE carries it: the board plays it, and the coordinator follows its curve
 
     def value(self, now):
         if self.duration <= 0:
@@ -220,7 +263,7 @@ class Ramp:
     def published(self, now):
         return {"from": round(self.start, 4), "to": round(self.end, 4), "start_mono": self.started,
                 "duration_s": self.duration, "curve": self.curve, "purpose": self.purpose,
-                "value": round(self.value(now), 4)}
+                "value": round(self.value(now), 4), "board": self.sent}
 
 
 # ---- The aim: where the page is ---------------------------------------------------------------------------------------

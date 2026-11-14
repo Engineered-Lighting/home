@@ -19,6 +19,7 @@ from pathlib import Path
 import direction
 from contracts import PERCEPTION_S
 from preview_evidence import Episode, field, finite, head as published_head, pose, seated as published_seated
+import preview_trace
 from preview_trace import PreviewTrace
 
 
@@ -78,6 +79,9 @@ class Preview:
         self.jobs = queue.Queue(maxsize=64)
         self.halt = threading.Event()
         self.rows = {}
+        # A timed MOVE goes only where the board advertises it and the pinned codec can encode it (the desk-stage
+        # re-pin to firmware 62ea043 adds preview_trace.supports_timed); elsewhere the level train plays each fade.
+        timed_codec = bool(getattr(preview_trace, "supports_timed", lambda: False)())
         for name, row in fixtures.items():
             profile = row.get("profile") or core.scurve.FICTIONAL_PROFILE
             origin, reference = row["aim_origin_m"], row["horizontal_world_reference"]
@@ -98,7 +102,9 @@ class Preview:
                                    target=None, basis=None, job=None, reason="waiting_for_tracking", pre_at=None,
                                    eye_hold=None, glide=None, ramp=None, ramp_at=None, goal=0.0, exiting=None,
                                    lit_until=None, ended_at=None, dip=None, arrive_level=None,
-                                   lit_subject=None, step_at=None, step_s=direction.level_step_s(profile))
+                                   lit_subject=None, step_at=None, step_s=direction.level_step_s(profile),
+                                   timed=timed_codec and direction.capabilities(profile)["timed_move"],
+                                   join=direction.capabilities(profile)["join_flight"])
         self.wall = time.time   # the trace's day files and its run header's wall anchor
         self.trace_day = None   # the UTC day file this run last wrote to: a new one starts with the run header
         self.trace = PreviewTrace(self.epoch, append or self._append, binding=self.binding,
@@ -518,6 +524,14 @@ class Preview:
             if glide:
                 return   # landing first (P3 holds a MOVE that arrives during a move); it rises once it's there
             if target != effective_target and not self._in_beam(row, person["target"]):
+                if row["timed"]:
+                    # One timed MOVE: dark on the way, blooming from dark on arrival (the board starts the fade then).
+                    row.update(goal=goal, ended_at=None)
+                    row["ramp"] = direction.Ramp(0.0, goal, self.settings["fade_in_s"], "ease_out", now, "fade_in")
+                    row["ramp"].sent = True
+                    self._move(name, row, target, direction.level_code(goal) / direction.LEVEL_CODES, "dark", now,
+                               person, "task", timed=self._timed(row["ramp"]))
+                    return
                 self._move(name, row, target, 0.0, "dark", now, person, "task")   # a dark move, then the rise
                 return
             # Aimed, or near enough that the page is already in the beam: rise now, where it points. A page that's off
@@ -559,8 +573,10 @@ class Preview:
             if travel == "lit":
                 # One movement, one command: the glide carries the level the train has reached, and a rise in progress
                 # waits for it to land.
+                timed = {"min_duration_ms": round(self.settings["glide_min_s"] * 1000), "fade_ms": 0,
+                         "fade_curve": "linear"} if row["timed"] else None
                 self._move(name, row, target, direction.level_code(row["level"]) / direction.LEVEL_CODES, "lit", now,
-                           person, "task")
+                           person, "task", timed=timed)
                 return
             # Dim or dark travel (or a path past the head): fade down, move, rise again.
             down = min(self.settings["move_dim_level"] if travel == "dim" else 0.0, row["level"])
@@ -614,8 +630,9 @@ class Preview:
         fade stay instant."""
         fade = self.settings["crossfade_s" if handoff else "leave_fade_s" if leaving else "fade_out_s"]
         bound = row["lit_until"] if ending is None else min(row["lit_until"] or ending, ending)
-        if (fade < 2 * row["step_s"] or bound is None or now >= bound or row["level"] <= 0
-                or row["glide"] is not None):
+        joins = row["timed"] and row["join"]
+        too_short = fade <= 0 if row["timed"] else fade < 2 * row["step_s"]
+        if too_short or bound is None or now >= bound or row["level"] <= 0 or (row["glide"] is not None and not joins):
             # A fade too short for this fixture's train, a spent validity, or a fixture in the middle of a glide: one
             # MOVE, dark. The board can't fade during a move (P3: a MOVE that arrives during a move waits for the
             # landing), so a train would stall.
@@ -628,10 +645,14 @@ class Preview:
                                      "crossfade_out" if handoff else "fade_out")
         row.update(exiting=reason, reason=reason, dip=None, lit_until=bound, ended_at=ending)
 
+    def _timed(self, ramp):
+        """A ramp as a timed MOVE's fade: its time and its curve, as the board plays them."""
+        return {"min_duration_ms": 0, "fade_ms": round(ramp.duration * 1000), "fade_curve": ramp.curve}
+
     def _play(self, name, row, now, held):
         """The level train: the ramp's next step as one stationary MOVE when its 0-254 code changes, one in flight at a
         time. A rise waits through a glide and a camera gap (the gap hold keeps the level as it is); an exit never
-        waits."""
+        waits. On a board with the timed MOVE the whole ramp is one MOVE, and the light follows the board's curve."""
         ramp, last = row["ramp"], row["ramp_at"]
         row["ramp_at"] = now
         if ramp is None:
@@ -640,6 +661,9 @@ class Preview:
             self._release(name, row, now, row["exiting"])
             return
         if row["pending"] is not None:
+            return
+        if row["timed"]:
+            self._play_timed(name, row, now, held, ramp)
             return
         if not row["exiting"] and (row["glide"] is not None or held):
             if last is not None:
@@ -666,6 +690,34 @@ class Preview:
         elif row["exiting"] and code == 0:
             row.update(job=None, target=None, basis=None, exiting=None, lit_until=None, goal=0.0, token=None)
 
+    def _play_timed(self, name, row, now, held, ramp):
+        """One timed MOVE per ramp (firmware 62ea043): fade_ms and its curve, from the level the board shows now. While
+        the board plays it, the published level is its curve's, so the light shown is still the one committed."""
+        if not ramp.sent:
+            gliding = row["glide"] is not None
+            if not row["exiting"] and (gliding or held):
+                return   # a rise waits for the landing and through a gap, as the train does
+            ramp.start, ramp.started, ramp.sent = row["level"], now, True
+            if row["exiting"]:
+                ramp.duration = max(0.0, min(ramp.duration, row["lit_until"] - now))
+            target = row["glide"].target if gliding else row["current"]   # mid-glide: joining the flight
+            travel = ("lit" if row["level"] > 0 else "dark") if gliding else "none"
+            self._move(name, row, target, direction.level_code(ramp.end) / direction.LEVEL_CODES, travel, now, None,
+                       row["reason"], deadline=row["lit_until"] if row["exiting"] else None, step=True,
+                       exiting=bool(row["exiting"]), cue=ramp.purpose, timed=self._timed(ramp))
+            return
+        row["level"] = ramp.value(now) if now >= ramp.started else ramp.start
+        if not ramp.done(now):
+            return
+        row["level"] = ramp.end
+        row["ramp"] = None
+        if ramp.purpose == "dip":
+            target, down, person = row["dip"]
+            row["dip"] = None
+            self._move(name, row, target, down, "lit" if down else "dark", now, person, "task", cue="dip_move")
+        elif row["exiting"] and ramp.end == 0:
+            row.update(job=None, target=None, basis=None, exiting=None, lit_until=None, goal=0.0, token=None)
+
     def _release(self, name, row, now, reason, *, trace=True):
         """Dark at once: one level-0 MOVE. During a glide it goes to the target being flown, dark, so the board never
         turns back to a point it has passed. Untraced (Stop), the axes hold where they are."""
@@ -682,7 +734,7 @@ class Preview:
                 self._move(name, row, row["current"], 0.0, "none", now, None, reason)
 
     def _move(self, name, row, target, level, travel, now, person, reason, *, deadline=None, step=False,
-              exiting=False, cue=None):
+              exiting=False, cue=None, timed=None):
         """One MOVE ticket. step: a level step of the train, which leaves the fixture's job as it is; exiting: a step of
         an exit, valid to the light's last published validity rather than the task's."""
         end = (deadline if exiting else min(self.task_until(), self.track_until)) if level else None
@@ -694,6 +746,8 @@ class Preview:
                    "deadline": end, "cue": cue or reason}
         if travel == "dim":
             details["dim_level"] = self.settings["move_dim_level"]
+        if timed is not None:
+            details["timed"] = dict(timed)   # min_duration_ms, fade_ms, fade_curve: flag bit 4 and bits 5-6
         # Contract 5: a lit MOVE names the reply it answers. An exit's step is the tail of the light that reply lit, so
         # it names that reply's subject even once the task (and its reply) has gone.
         subject = self.latest_decision["subject"]
@@ -796,16 +850,30 @@ class Preview:
         details = ticket["details"]
         start, target = tuple(details["start_cdeg"]), tuple(effective["target_cdeg"])
         level, moving = effective["level"], tuple(details["start_cdeg"]) != tuple(effective["target_cdeg"])
+        timed = details.get("timed")
+        ramp = row["ramp"]
+        fading = bool(timed and timed["fade_ms"] > 0 and ramp is not None and ramp.sent)
         if moving:
             glide = row["glide"]
-            if glide is None or glide.target != target:
-                row["glide"], row["current"] = direction.Glide(start, target, row["profile"]["axes"], now), start
+            if glide is None or glide.target != target:   # a MOVE to the target being flown joins that flight
+                floor = timed["min_duration_ms"] / 1000 if timed else 0.0
+                row["glide"] = direction.Glide(start, target, row["profile"]["axes"], now, floor)
+                row["current"] = start
         row["arrive_level"] = None
-        if moving and effective["travel"] != "lit":
+        if fading:
+            # The board fades from what it shows to the MOVE's level, on the ramp's curve. Dark on the way, it blooms
+            # from dark when it lands.
+            if moving and effective["travel"] != "lit":
+                ramp.start, ramp.started = 0.0, row["glide"].started + row["glide"].duration
+                row["level"] = 0.0
+            else:
+                row["level"] = ramp.value(now)
+        elif moving and effective["travel"] != "lit":
             row["level"], row["arrive_level"] = 0.0, (level or None)
         else:
             row["level"] = level
-        row.update(move=record, token=record["sequence"] if level > 0 else None, keep_at=now + LEASE_S)
+        lit = level > 0 or row["level"] > 0   # a fade to 0 holds the lease until it ends
+        row.update(move=record, token=record["sequence"] if lit else None, keep_at=now + LEASE_S)
         if not ticket["step"]:
             person = ticket["person"]
             row.update(target=person and person["target"], basis=person and person["basis"],

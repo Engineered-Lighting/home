@@ -17,18 +17,26 @@ VECTORS = HERE / "fixtures" / "direction-scurve-vectors.json"
 AXES = [{"v_max": 30.0, "a_max": 100.0, "j_max": 400.0}, {"v_max": 30.0, "a_max": 100.0, "j_max": 400.0}]
 
 
+# A measured profile can decelerate harder than it accelerates (the firmware's d_max); den-core's fictional one can't.
+ASYMMETRIC = [{"v_max": 120.0, "a_max": 60.0, "j_max": 2000.0, "d_max": 120.0},
+              {"v_max": 90.0, "a_max": 40.0, "j_max": 1500.0, "d_max": 80.0}]
+
+
 def vectors():
-    """The shared S-curve vectors: limits, then s and ds/dt at fractions of the duration. Home's copy of the S-curve
-    (home-den-spot-motion.mjs) is tested against the same file."""
+    """The shared S-curve vectors: the glide's published limits [v, a, j, d] (stretched where a timed MOVE's floor
+    applies), then s and ds/dt at fractions of the duration. Home's copy of the S-curve (home-den-spot-playback.mjs) is
+    tested against the same file."""
     cases = []
-    for delta in ((0.5, 0.0), (4.6, -1.2), (20.0, 5.0), (90.0, 30.0), (0.0, 12.0)):
-        limits = direction.path_limits(delta, AXES)
-        curve = direction.SCurve(*limits)
+    for axes, delta, floor in ((AXES, (0.5, 0.0), 0.0), (AXES, (4.6, -1.2), 0.0), (AXES, (20.0, 5.0), 0.0),
+                               (AXES, (90.0, 30.0), 0.0), (AXES, (0.0, 12.0), 0.0), (AXES, (4.6, -1.2), 1.5),
+                               (ASYMMETRIC, (35.0, -10.0), 0.0), (ASYMMETRIC, (3.0, 1.0), 2.0)):
+        glide = direction.Glide((0, 0), tuple(round(d * 100) for d in delta), axes, 0.0, floor)
+        curve = glide.curve
         points = [round(curve.duration * k / 10, 9) for k in range(11)]
-        cases.append({"delta_deg": list(delta), "limits": [round(x, 12) for x in limits],
+        cases.append({"delta_deg": list(delta), "min_duration_s": floor, "limits": glide.published()["limits"],
                       "duration_s": round(curve.duration, 9),
                       "samples": [[t, round(curve.s(t), 9), round(curve.speed(t), 9)] for t in points]})
-    return {"schema": "den-direction-scurve-vectors-1", "axes": AXES, "cases": cases}
+    return {"schema": "den-direction-scurve-vectors-2", "cases": cases}
 
 
 class SCurveTest(unittest.TestCase):
@@ -75,6 +83,30 @@ class SCurveTest(unittest.TestCase):
         self.assertEqual((published["from_deg"], published["to_deg"]), ([-10.0, 5.0], [-14.6, 6.2]))
         self.assertEqual(published["shape"], "scurve-7")
         self.assertIsNone(direction.Glide((5, 5), (5, 5), AXES, 0.0).published())
+
+    def test_a_timed_moves_floor_stretches_the_same_curve(self):
+        """The firmware's min_duration_ms (62ea043): k = max(1, min/T), and the S-curve k times slower is the one with
+        speed / k, acceleration and deceleration / k^2 and jerk / k^3 (its duration.position_at uses t / k)."""
+        base = direction.Glide((0, 0), (460, -120), AXES, 0.0)
+        slow = direction.Glide((0, 0), (460, -120), AXES, 0.0, 1.5)
+        self.assertAlmostEqual(slow.duration, 1.5, places=9)
+        k = 1.5 / base.duration
+        for f in (.1, .25, .5, .8, .97):
+            self.assertAlmostEqual(slow.curve.s(f * slow.duration), base.curve.s(f * base.duration), places=9)
+        self.assertEqual(direction.Glide((0, 0), (460, -120), AXES, 0.0, .1).duration, base.duration,
+                         "never faster than the profile")
+        self.assertAlmostEqual(slow.curve.limits[0], base.curve.limits[0] / k, places=12)
+
+    def test_a_harder_brake_lands_sooner(self):
+        """With d_max above a_max the deceleration ramp is shorter, as the board plans it (two ramps, one shared
+        jerk); the path still runs from 0 to 1, never back."""
+        even = direction.Glide((0, 0), (3500, -1000), [dict(axis, d_max=axis["a_max"]) for axis in ASYMMETRIC], 0.0)
+        hard = direction.Glide((0, 0), (3500, -1000), ASYMMETRIC, 0.0)
+        self.assertLess(hard.duration, even.duration)
+        self.assertLess(hard.curve.down.T, hard.curve.up.T)
+        s = [hard.curve.s(hard.duration * k / 200) for k in range(201)]
+        self.assertTrue(all(b >= a - 1e-12 for a, b in zip(s, s[1:])))
+        self.assertEqual((s[0], s[-1]), (0.0, 1.0))
 
     def test_the_shared_vectors_are_this_curve(self):
         """fixtures/direction-scurve-vectors.json is what this S-curve gives; Home's test reads the same file."""

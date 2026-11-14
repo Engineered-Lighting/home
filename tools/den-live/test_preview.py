@@ -16,6 +16,7 @@ import coordinator_live
 import direction
 from contracts import PERCEPTION_S, FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
 import preview
+import preview_trace
 import run_local
 import run_service
 import seated as seated_rule
@@ -938,6 +939,104 @@ class DirectionTest(PreviewTest):
                     self.assertEqual((row["level"], row["keep_lit_token"]), (0, None))
                 self.assertEqual(row["glide"] is not None, row["motion_phase"] == "moving")
 
+
+    # ---- a board with the timed MOVE (firmware 62ea043): one MOVE per cue ----------------------------------------------
+
+    def timed_board(self, join=True, pre_aim=True):
+        """F3 as a board that advertises the timed MOVE. Until the desk stage re-pins the codec to 62ea043, the codec's
+        echo of a timed MOVE is stubbed: only the encoding is stubbed, the planning and the light are the preview's."""
+        caps = {"timed_move": True, "fade_curves": True, "join_flight": join, "at_rest": True}
+        board = {"F3": {**FIXTURES["F3"], "profile": {**self.core.scurve.FICTIONAL_PROFILE, "fictional": False,
+                                                        "label": "timed-test", "capabilities": caps}}}
+        frame = preview_trace._frame
+
+        def echo(fixture_id, action, seq, decision_id, move_token, move):
+            out = frame(fixture_id, action, seq, decision_id, move_token, move)
+            if action == "aim_move" and move.get("timed"):
+                out["effective"].update(timed=True, fade_supported=True, **move["timed"])
+            return out
+        for stub in (patch.object(preview_trace, "supports_timed", lambda: True, create=True),
+                     patch.object(preview_trace, "_frame", echo)):
+            stub.start()
+            self.addCleanup(stub.stop)
+        self.preview = preview.Preview(self.core, binding=BINDING, fixtures=board, state=self.path,
+                                       clock=lambda: self.now, threaded=False, append=self.encoded.append)
+        self.preview.configure({"pre_aim": pre_aim})
+        self.preview.connect(lambda snapshot: self.snapshots.append(json.loads(json.dumps(snapshot))))
+
+    def test_a_timed_board_rises_in_one_move_on_its_own_curve(self):
+        self.timed_board()
+        self.seat()
+        self.frames(6)
+        since = len(self.encoded)
+        self.read()
+        rise = self.moves(since)
+        self.assertEqual(len(rise), 1, "one MOVE carries the whole rise")
+        self.assertEqual(rise[0]["requested"]["timed"], {"min_duration_ms": 0, "fade_ms": 2000, "fade_curve": "ease_out"})
+        goal = self.preview.rows["F3"]["goal"]
+        self.now = round(self.now + 2 / 3, 6)
+        self.preview.tick()
+        self.assertAlmostEqual(self.row()["level"], goal / 2, delta=.02, msg="half way at a third of its time")
+        self.assertEqual(self.row()["keep_lit_token"], rise[0]["sequence"], "the timed MOVE holds the lease")
+        self.frames(3)
+        self.assertEqual(self.row()["level"], goal)
+        self.assertEqual(len(self.moves(since)), 1, "and nothing more is sent for it")
+
+    def test_a_dark_move_then_a_bloom_is_one_timed_move(self):
+        self.timed_board(pre_aim=False)
+        self.seat()
+        since = len(self.encoded)
+        self.read()
+        moves = self.moves(since)
+        self.assertEqual(len(moves), 1)
+        self.assertEqual((moves[0]["requested"]["travel"], moves[0]["requested"]["timed"]["fade_curve"]), ("dark", "ease_out"))
+        glide = self.preview.rows["F3"]["glide"]
+        self.assertIsNotNone(glide)
+        self.assertFalse(self.row()["on"], "dark on the way")
+        while self.preview.rows["F3"]["glide"] is not None:
+            self.assertEqual(self.row()["level"], 0.0)
+            self.now = round(self.now + .1, 6)
+            self.preview.tick()
+        self.now = round(self.now + .5, 6)
+        self.preview.tick()
+        self.assertTrue(self.row()["on"], "it blooms from dark when it lands")
+        self.assertEqual(len(self.moves(since)), 1)
+
+    def test_a_timed_glide_takes_the_gentle_floor_and_an_exit_joins_the_flight(self):
+        self.timed_board()
+        self.seat()
+        self.frames(6)
+        self.read()
+        self.frames(2.5)
+        glide = None
+        for _ in range(16):
+            self.now = round(self.now + .25, 6)
+            self.track(shift=-.3)
+            glide = glide or self.row()["glide"]
+            if glide:
+                break
+        self.assertIsNotNone(glide)
+        move = next(row for row in reversed(self.moves()) if row["requested"]["start_cdeg"] != row["requested"]["target_cdeg"])
+        self.assertEqual(move["requested"]["timed"]["min_duration_ms"], 1000)
+        self.assertGreaterEqual(glide["duration_s"], 1.0, "the same S-curve, slower: Home draws the stretched one")
+        target = self.preview.rows["F3"]["glide"].target
+        since = len(self.encoded)
+        self.now = round(self.now + .1, 6)
+        self.track(seated=False, shift=-.3)
+        exit_moves = self.moves(since)
+        self.assertEqual(len(exit_moves), 1)
+        self.assertEqual((tuple(exit_moves[0]["requested"]["target_cdeg"]), exit_moves[0]["effective"]["spot_level"]),
+                         (target, 0), "one MOVE to the target being flown: it joins the flight")
+        self.assertEqual(exit_moves[0]["requested"]["timed"]["fade_ms"], 300)
+        if exit_moves[0]["effective"]["lit_during_move"]:
+            self.assertTrue(self.row()["on"], "lit while it flies on, it fades rather than cuts")
+        else:
+            # The pinned codec sets lit_during_move only above level 0, so the board would go dark at once; the light
+            # follows what was encoded. (The re-pinned codec should set it for a timed fade to 0.)
+            self.assertFalse(self.row()["on"])
+        self.now = round(self.now + .35, 6)
+        self.preview.tick()
+        self.assertFalse(self.row()["on"], "dark within the leave fade")
 
 for _name in [name for name in vars(PreviewTest) if name.startswith("test_")]:
     setattr(DirectionTest, _name, None)   # the rules' tests run once, in PreviewTest

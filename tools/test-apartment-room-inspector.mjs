@@ -225,7 +225,7 @@ function callbackFixture(site = 'echo') {
     { id: 'fan', name: 'Other domain', room_id: 'den', ha_entity_id: 'switch.authored_fan' },
     { id: 'unmapped', name: 'No mapping', room_id: 'den' },
   ], targets: [{ id: 'desk', name: 'Desk', pos: [1, 2, 0] }] };
-  const virtualDocument = site === 'victoria' ? { binding, revision: 7, digest: 'b'.repeat(64) } : null;
+  const virtualDocument = site === 'victoria' ? { binding, scope: { site_id: 'victoria' }, revision: 7, digest: 'b'.repeat(64) } : null;
   if (virtualDocument) model._equipment_registration = { authored: true };
   const engine = { siteId: site, contentRevision: 'authored-' + site + '-r1', overlay,
     sceneIdentity: { siteId: site, contentRevision: 'authored-' + site + '-r1', registrationVersion: 1, frameDigest: frame } };

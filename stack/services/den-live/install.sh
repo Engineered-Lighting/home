@@ -17,7 +17,9 @@
 #     the Qwen ask set up (settings.json's asks block), the drop-in also allows Home Assistant's one address and loads
 #     its token as a credential.
 #  6. Installs the three private inputs root-only in /etc/den-live/private/, and the unit. With the Qwen ask set up, a
-#     fourth: ha-token.txt; without it, an old one is removed. A supplied Home preview geometry is root-only too.
+#     fourth: ha-token.txt; without it, an old one is removed. A supplied Home preview geometry is root-only too. So is
+#     the desk's desk.json (install_la.py --desk): one fixture's commands to its board. Without it, an old one is
+#     removed, so den-live is virtual only again.
 #  7. Points /opt/den-live/current at this release and (re)starts den-live, then waits for its stream to answer.
 # It prints words only, never a token or a coordinate, and ends with its undo lines. Any stop, an unexpected one too
 # (the ERR trap), prints why, the undo lines and, once this run has switched releases, the line back to the old one.
@@ -135,6 +137,14 @@ if "${python}" -c 'import json, sys; block = json.load(open(sys.argv[1], encodin
 elif [[ -e "${here}/virtual-fixtures.json" ]]; then
   refuse "the private Home geometry is present, but settings.json does not enable the preview"
 fi
+# The desk (plan 05, step D-1): desk.json comes only with settings that map it, and only with the preview's geometry and
+# Home Assistant's token, the link its commands go through. The drop-in's LoadCredential follows the settings.
+if "${python}" -c 'import json, sys; sys.exit(0 if json.load(open(sys.argv[1], encoding="utf-8")).get("desk") is True else 1)' "${here}/settings.json"; then
+  [[ -s "${here}/desk.json" ]] || refuse "settings.json maps the desk, but desk.json isn't beside install.sh"
+  [[ -s "${here}/virtual-fixtures.json" && -s "${here}/ha-token.txt" ]] || refuse "the desk needs the preview's geometry and Home Assistant's token beside install.sh"
+elif [[ -e "${here}/desk.json" ]]; then
+  refuse "desk.json is beside install.sh, but settings.json doesn't map the desk"
+fi
 work="$(mktemp -d)"
 say "The tarball matches its sha256 (${want:0:12})."
 
@@ -239,6 +249,13 @@ fi
 if [[ -s "${here}/virtual-fixtures.json" ]]; then
   install -m 0600 -o root -g root -- "${here}/virtual-fixtures.json" "${etc}/private/virtual-fixtures.json"
   say "Virtual preview: private Home geometry installed root-only."
+fi
+# The desk: brought this time, or none. An old desk.json never outlives an install without --desk.
+if [[ -s "${here}/desk.json" ]]; then
+  install -m 0600 -o root -g root -- "${here}/desk.json" "${etc}/private/desk.json"
+  say "The desk: its file installed root-only. One fixture's commands go to its board through Home Assistant."
+else
+  rm -f -- "${etc}/private/desk.json"
 fi
 
 # ---- 7. this release, live -------------------------------------------------------------------------------------

@@ -15,7 +15,9 @@ Its inputs, all from systemd:
   register-receipt.json (the step 2 receipt that registered and qualified it, den-live-register-now-2, which says
   the scan revision its picks were made on and the camera's depth correction its take was made on: a frame with
   another factor or calibration hash is refused, and the status line says to paste register_now.py without --again,
-  which records a new take, then install_la.py again).
+  which records a new take, then install_la.py again). Optionally desk.json (desk.py, den-c12-desk-1): one fixture's
+  commands then go to its board through the den home's Home Assistant. Without it, the coordinator is virtual only.
+  install_la.py brings it only with --desk, each time: an install without it removes LA's old one.
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
   its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot with
   someone in view, about one a second with nobody, numbers only, with a mono-and-wall anchor; person_state.py), beside
@@ -53,6 +55,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ask  # noqa: E402  the Qwen ask (inference plan, step 2)
 import coordinator_live  # noqa: E402  the den lighting coordinator (coordinator plan, step 3)
+import desk  # noqa: E402  the desk switch: one fixture's commands to its board (plan 05, step 05-4)
 import ha_link  # noqa: E402  its Home Assistant link
 import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
@@ -108,6 +111,7 @@ def read_config(path):
 
 
 HA_TOKEN = "ha-token.txt"       # the den home's Home Assistant: the den-live user's long-lived token (a credential)
+DESK_FILE = desk.FILE   # the desk switch's credential (desk.py): brought only by install_la.py --desk
 LABELS_SEED = "room-labels.json"   # your PC's labels, brought by install_la.py (a credential): taken once, when LA has none
 ENTITY = re.compile(r"^binary_sensor\.[a-z0-9_]{1,80}$")
 ZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
@@ -303,20 +307,49 @@ def coordinator_settings(config, fixed, *, credentials=None):
             "switch_entity": block.get("switch_entity") or coordinator_live.SWITCH_ENTITY}, None
 
 
-def coordinator_starter(settings, fixed, *, state, tree):
-    """serve()'s coordinator: (service, stop), or None when it can't start. Its failure never stops the markers."""
+def coordinator_starter(settings, fixed, *, state, tree, credentials=None):
+    """serve()'s coordinator: (service, stop), or None when it can't start. Its failure never stops the markers.
+
+    With the desk.json credential (desk.py, plan 05 §3.6), one fixture's commands also go to its board through the den
+    home's Home Assistant, on the asks block's link. Without it, virtual only: no Home Assistant write client."""
     def start():
         if settings.get("preview") is not True:
             return None
+        fixtures = settings["fixtures"]
+        try:
+            mapping = desk.load(credentials, fixtures)
+        except desk.DeskError as exc:
+            say("The lighting coordinator is off: %s. The markers go on." % exc)
+            return None
+        if mapping is not None:
+            if fixed is None or not fixed.get("token"):
+                say("The lighting coordinator is off: the desk needs the asks block's Home Assistant link (ha_url, and "
+                    "the ha-token.txt credential). The markers go on.")
+                return None
+            fid = mapping["fixture_id"]
+            fixtures = {**fixtures, fid: dict(fixtures[fid], profile=mapping["profile"])}
+        attached = None
         try:
             core, _learn = coordinator_live.load_core(tree)
-            service = preview.Preview(core, state=state, fixtures=settings["fixtures"],
+            service = preview.Preview(core, state=state, fixtures=fixtures,
                                       binding=settings["binding"], seat_mark=settings["seat_mark"])
+            if mapping is not None:
+                attached = desk.attach(service, mapping, fixed)
             service.start()
         except Exception as exc:   # a type name only: its text could hold the URL
+            if attached is not None:
+                attached.close()
             say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
             return None
-        return service, service.close
+        if attached is None:
+            return service, service.close
+        say("The desk: %s's commands go to its board through Home Assistant%s." % (
+            mapping["fixture_id"], "" if mapping["light"] else ", dark (light false: the spot stays at level 0)"))
+
+        def stop():
+            service.close()
+            attached.close()
+        return service, stop
     return start
 
 
@@ -415,8 +448,15 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     preview_geometry = isinstance(coordinator, dict) and coordinator.get("preview") is True
     if preview_geometry:
         config["coordinator"] = {"preview": True, "transform_id": coordinator.get("transform_id"), "hue_overlay": False}
+    # The desk (desk.py): only from this install's own settings, never kept from the last one, and only with this
+    # install's preview and Home Assistant link, which its commands go through.
+    desk_on = settings.get("desk") is True
+    own = settings.get("coordinator")
+    if desk_on and not (isinstance(own, dict) and own.get("preview") is True and ha is not None):
+        raise Refusal("settings.json maps the desk, but the desk needs this install's preview and the Qwen ask's Home "
+                      "Assistant link")
     for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"),
-                       (Path(dropin), dropin_text(address, packs, ha, seed, preview_geometry))):
+                       (Path(dropin), dropin_text(address, packs, ha, seed, preview_geometry, desk_on))):
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         part.write_text(text, encoding="utf-8", newline="\n")
@@ -425,11 +465,12 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     return config
 
 
-def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=False):
+def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=False, desk=False):
     """The unit's local settings: the one camera address it may reach, and the content packs, read only. With the packs
     under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through.
     With the Qwen ask set up (ha: Home Assistant's address), that address too, and the Home Assistant token credential,
-    which only then must exist. With labels brought from your PC (labels_seed), their credential, which then must exist."""
+    which only then must exist. With labels brought from your PC (labels_seed), their credential, which then must exist.
+    With the desk mapped (desk), the desk.json credential, which then must exist."""
     lines = ["# Written by den-live's install.sh from this host's settings. Not in git.", "[Service]",
              "IPAddressAllow=%s" % address, "BindReadOnlyPaths=%s" % packs]
     if ha is not None:
@@ -438,6 +479,8 @@ def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=Fal
         lines.append("LoadCredential=%s:/etc/den-live/private/%s" % (LABELS_SEED, LABELS_SEED))
     if preview_geometry:
         lines.append("LoadCredential=virtual-fixtures.json:/etc/den-live/private/virtual-fixtures.json")
+    if desk:
+        lines.append("LoadCredential=%s:/etc/den-live/private/%s" % (DESK_FILE, DESK_FILE))
     if packs.parts[1:2] in (("home",), ("root",)):
         lines.append("ProtectHome=tmpfs")
     return "\n".join(lines) + "\n"
@@ -550,10 +593,11 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     if fixed is None:
         say("The Qwen ask is off: %s." % why)
     starter = None if fixed is None else asks_starter(fixed, config_path, site=config["site"], state=state, camera_id=camera_id)
-    lighting, why = coordinator_settings(config, fixed, credentials=Path(env["CREDENTIALS_DIRECTORY"]) if env.get("CREDENTIALS_DIRECTORY") else None)
+    held = Path(env["CREDENTIALS_DIRECTORY"]) if env.get("CREDENTIALS_DIRECTORY") else None
+    lighting, why = coordinator_settings(config, fixed, credentials=held)
     if lighting is None:
         say("The lighting coordinator is off: %s." % why)
-    coordinator = (coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"])
+    coordinator = (coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"], credentials=held)
                    if lighting and lighting.get("preview") else None)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,

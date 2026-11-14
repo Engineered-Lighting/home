@@ -415,7 +415,10 @@ class Preview:
         person = self.track
         # A light needs a current, posed, seated frame: a reply that lands while the frames are stale, poseless or
         # unsafe (say, an ask sent as the person stood up) is taken into the episode but lights nothing.
-        task = self.task_until() is not None and bool(person and person["seated"])
+        # Gaming is dark (the owner's default, plan 04): while den_lighting's gaming signal reads playing, no spot
+        # lights a task. The bulbs play den_lighting's gaming scene instead.
+        gaming = self._gaming()
+        task = self.task_until() is not None and bool(person and person["seated"]) and not gaming
         # In a camera gap (the newest frame older than POSE_AGE_S, held while lit up to GAP_HOLD_S): the fixture lit for
         # this person keeps its job, aim and level, and nothing new is aimed or lit.
         held = person is not None and now >= self.track_until
@@ -435,7 +438,7 @@ class Preview:
             chosen, target, reasons = self._candidate(person, now)
         diagnostic = {"kind": "task" if task else "pre_aim", "fixture": chosen, "refused": reasons,
                       "target_basis": person and person["basis"], "joints_cdeg": list(target) if target else None,
-                      "gap_hold": held}
+                      "gap_hold": held, "gaming": gaming}
         subject = self._subject()
         previous = self.latest_decision or {}
         if diagnostic != previous.get("proposal") or subject != previous.get("subject"):
@@ -913,6 +916,10 @@ class Preview:
             self.bulb = current
             if self.hue is not None:
                 self.hue.wake()
+
+    def _gaming(self):
+        inputs = self.hue.inputs() if self.hue is not None else None
+        return bool(inputs) and inputs["attrs"].get("gaming_signal") == "playing"
 
     def bulb_desired(self):
         """For the overlay's worker: the plan as the preview last published it."""

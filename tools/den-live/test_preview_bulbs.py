@@ -138,6 +138,28 @@ class PreviewBulbsTest(unittest.TestCase):
         self.assertIsNone(ha.plan)
         self.assertTrue(set(ha.plan or {}) <= set(LIGHTS))
 
+    def test_gaming_is_dark_for_the_spots_and_den_lightings_scene_for_the_bulbs(self):
+        ha = FakeDenLighting()
+        ha.state_of = ha.state
+
+        def playing(entity):
+            row = ha.state_of(entity)
+            if entity == "sensor.den_lighting_control":
+                row["attributes"]["gaming_signal"] = "playing"
+            return row
+        ha.state = playing
+        overlay = self.attach(ha)
+        overlay.step()
+        self.seat()
+        self.read()
+        for _ in range(12):
+            self.now += .25
+            self.track()
+        self.assertFalse(self.row()["on"])
+        self.assertTrue(self.preview.latest_decision["proposal"]["gaming"])
+        self.assertEqual(self.bulbs()["reason"], "gaming")
+        self.assertEqual(ha.calls, [])
+
 
 if __name__ == "__main__":
     unittest.main()

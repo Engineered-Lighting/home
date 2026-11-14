@@ -104,6 +104,9 @@ const POINT_FIELDS = ['count', 'key', 'position_mm', 'normal', 'kind'];
 const CLEAR_REASONS = new Set(['empty', 'ambiguous', 'pose_unavailable', 'warming_background', 'insufficient_depth',
     'head_mask_unavailable', 'scope_changed', 'stale', 'unavailable']);
 const liveId = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
+// The lease den-live gives a frame, from its earliest possible capture: 1 s, or 2 s since den-live's frames reach Home
+// about a second after capture on the den camera. Either is exact; nothing else is a lease.
+const LIVE_LEASES_S = [1, 2];
 const exactFields = (object, fields) => !!object && Object.keys(object).length === fields.length
     && fields.every(key => Object.hasOwn(object, key));
 
@@ -117,7 +120,8 @@ export function decodeLiveBodyEvent(event) {
         return exactFields(event, [...LIVE_FIELDS, 'reason']) && CLEAR_REASONS.has(event.reason) ? { event } : null;
     }
     if (event.status !== 'ready' || event.mode === 'none' || !exactFields(event, [...LIVE_FIELDS, ...READY_FIELDS])
-        || !liveId(event.track_id) || !finite(event.capture_ts) || event.expires_ts !== event.capture_ts + 1
+        || !liveId(event.track_id) || !finite(event.capture_ts)
+        || !LIVE_LEASES_S.some(lease => event.expires_ts === event.capture_ts + lease)
         || !(event.facing_deg === null || finite(event.facing_deg) && event.facing_deg >= 0 && event.facing_deg < 360)
         || !(event.shoulder_midpoint_m === null || finite3(event.shoulder_midpoint_m))
         || !(event.pelvis_z_m === null || finite(event.pelvis_z_m) && Math.abs(event.pelvis_z_m) <= 100)) return null;

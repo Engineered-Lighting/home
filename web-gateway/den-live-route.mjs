@@ -11,13 +11,16 @@ export const DEN_LABELS_CSRF_HEADER = "x-home-den-labels";
 export const DEN_LABELS_MAX_BYTES = 65536;
 export const DEN_LIVE_CSRF_HEADER = "x-home-den-live-csrf";
 export const DEN_LIVE_WRITE_MAX_BYTES = 65536;
+// A person's change for the coordinator to learn from, and its hand-back (den-manual-1): small, and virtual only.
+export const DEN_MANUAL_MAX_BYTES = 8192;
 
 const HOME = "/v1/homes/den";
 export const DEN_LIVE_BODY_PATH = DEN_LIVE_PREFIX + HOME + "/body";
 export const DEN_LIVE_BODY_UPSTREAM_PATH = DEN_LIVE_BODY_PATH + "-v2";
 const COORDINATOR = HOME + "/coordinator";
 const READ = new Set([HOME + "/state", HOME + "/stream", HOME + "/labels"]);
-const COORDINATOR_WRITES = new Set(["switch", "settings", "learned/clear", "desk", "stop", "resume"]
+const MANUAL_WRITES = new Set(["manual", "manual/resume"].map(operation => COORDINATOR + "/" + operation));
+const COORDINATOR_WRITES = new Set(["switch", "settings", "learned/clear", "desk", "stop", "resume", "manual", "manual/resume"]
   .map(operation => COORDINATOR + "/" + operation));
 
 export function denLiveRouteKind(method, suffix) {
@@ -50,7 +53,7 @@ export function hasDenLiveCsrf(headers) {
 export function denLiveWriteRefusal(method, suffix, headers = {}) {
   if (denLiveRouteKind(method, suffix) !== "coordinator-write") return { status: 403, error: "den_live_write_not_allowed" };
   const problem = hasDenLiveCsrf(headers)
-    ? jsonFrameProblem(headers, DEN_LIVE_WRITE_MAX_BYTES, "json_required")
+    ? jsonFrameProblem(headers, MANUAL_WRITES.has(suffix) ? DEN_MANUAL_MAX_BYTES : DEN_LIVE_WRITE_MAX_BYTES, "json_required")
     : [403, "den_live_csrf_required"];
   return problem ? { status: problem[0], error: problem[1] } : null;
 }
@@ -62,6 +65,7 @@ export function denLiveEnabled(env = process.env) {
 export function denLiveUpstreamSuffix(suffix, kind, { bodyV2, virtual, serve }) {
   if (kind === "body") return bodyV2 ? DEN_LIVE_BODY_UPSTREAM_PATH.slice(DEN_LIVE_PREFIX.length) : null;
   if (kind !== "coordinator" && kind !== "coordinator-write") return suffix;
+  if (MANUAL_WRITES.has(suffix) && !virtual) return null;
   if (virtual) {
     if (suffix === COORDINATOR + "/desk") return null;
     return COORDINATOR + "/virtual" + suffix.slice(COORDINATOR.length);

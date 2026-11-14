@@ -57,6 +57,12 @@ test('the bulb plan and what it learned', () => {
         'gaming/night': { 'light.ceiling': { on: false, brightness: null, kelvin: null, n: 1 } } };
     assert.deepEqual(learnedLines(learned), ['Gaming, night · ceiling: off (1 change)', 'A close-up task, evening · reading lamp: 59% · 2900 K (2 changes)']);
     assert.deepEqual(learnedLines({}), ['Nothing yet']);
+    // What the virtual spot and the room glow learned from the hand (den-manual-1), beside the bulbs.
+    assert.deepEqual(learnedLines({ 'reading/evening': { spot: { lux_scale: 1.2, offset_m: [0, .06, 0], off: false, n: 2 },
+        room: { level: .3, cct_k: 2700, n: 1 }, 'light.ceiling': { on: false, n: 1 } } }),
+        ['reading, evening: spot 6 cm off its aim, 20% brighter; room glow 30% · 2700 K. Learned from you (3 changes)',
+            'reading, evening · ceiling: off (1 change)']);
+    assert.deepEqual(learnedLines({ 'task/day': { spot: { off: true, n: 1 } } }), ['A close-up task, day: spot off. Learned from you (1 change)']);
     assert.equal(lightName('light.den_desk_lamp'), 'den desk lamp');
     assert.equal(percent(255), '100%'); assert.equal(percent(null), '');
 });
@@ -65,12 +71,15 @@ test('the summary line', () => {
     assert.equal(summaryWords({ on: true, stopped: false, situation: DECISION.situation }), 'Lighting coordinator · On · A close-up task, evening');
     assert.equal(summaryWords({ on: false, stopped: true, situation: null }), 'Lighting coordinator · Off · Stop holds · No decision yet');
     assert.equal(summaryWords(null), 'Lighting coordinator');
-    // The fixtures a person holds while the coordinator owns the spots (equipment-virtual-fixtures.mjs holdForHand).
-    const holds = [{ fixture_id: 'F3', label: 'Desk spot', reason: 'aim', remaining_s: 600 }, { fixture_id: 'F1', label: '', reason: 'change' }];
-    assert.equal(manualWords(holds), 'Manual: Desk spot, F1');
+    // The fixtures a person holds while the coordinator owns the spots, said plainly (the owner, 2026-11-14).
+    const holds = [{ fixture_id: 'F3', label: 'Desk spot', learning: 'recorded' }, { fixture_id: 'F1', label: '', learning: 'unsupported' }];
+    assert.equal(manualWords(holds.slice(0, 1)), "You're in control of Desk spot · the coordinator will learn from this");
+    assert.equal(manualWords([{ ...holds[0], learning: 'pending' }]), "You're in control of Desk spot · the coordinator will learn from this");
+    assert.equal(manualWords(holds), "You're in control of Desk spot and F1 · the coordinator will learn from this");
+    assert.equal(manualWords([holds[1]]), "You're in control of F1", 'no promise to learn when den-live takes no change');
+    assert.equal(manualWords([{ ...holds[0], learning: 'not_recorded' }]), "You're in control of Desk spot");
     assert.equal(manualWords([]), '');
-    assert.equal(summaryWords({ on: true, stopped: false, situation: DECISION.situation }, holds.slice(0, 1)),
-        'Lighting coordinator · On · A close-up task, evening · Manual: Desk spot');
+    assert.equal(summaryWords({ on: true, stopped: false, situation: DECISION.situation }), 'Lighting coordinator · On · A close-up task, evening');
 });
 
 test('Save sends only the settings that changed, and only ones den-live has', () => {

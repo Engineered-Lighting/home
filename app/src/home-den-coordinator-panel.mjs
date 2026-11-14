@@ -105,27 +105,56 @@ export function planLines(plan) {
     return lights.map(([light, scene]) => `${lightName(light)}: ${sceneWords(scene)}`);
 }
 
-/* What it learned: per situation and light, the scene and how many of your changes it rests on. */
+const changes = n => `${n} ${n === 1 ? 'change' : 'changes'}`;
+/* What the virtual spot and the room glow learned from your hand changes (den-manual-1, plan-04b): "spot 6 cm off its
+ * aim, 20% brighter" and "room glow 30% · 2700 K". */
+function spotLearnedWords(spot) {
+    if (spot.off === true) return 'spot off';
+    const offset = Array.isArray(spot.offset_m) ? Math.hypot(...spot.offset_m.filter(Number.isFinite))
+        : Number.isFinite(spot.offset_m) ? Math.abs(spot.offset_m) : 0;
+    const parts = [];
+    if (offset >= .005) parts.push(`${Math.round(offset * 100)} cm off its aim`);
+    if (Number.isFinite(spot.lux_scale) && Math.abs(spot.lux_scale - 1) >= .005)
+        parts.push(`${Math.round(Math.abs(spot.lux_scale - 1) * 100)}% ${spot.lux_scale > 1 ? 'brighter' : 'dimmer'}`);
+    return `spot ${parts.join(', ') || 'as it was'}`;
+}
+function roomLearnedWords(room) {
+    return `room glow ${[percent(Number.isFinite(room.level) ? room.level * 255 : null), Number.isFinite(room.cct_k) ? `${Math.round(room.cct_k)} K` : '']
+        .filter(Boolean).join(' · ') || 'as it was'}`;
+}
+
+/* What it learned: per situation and light, the scene and how many of your changes it rests on; and per situation, what
+ * the virtual spot and the room glow learned from your hand. */
 export function learnedLines(learned) {
     const lines = [];
     for (const [key, lights] of Object.entries(learned && typeof learned === 'object' ? learned : {}).sort(([a], [b]) => a.localeCompare(b))) {
-        for (const [light, row] of Object.entries(lights && typeof lights === 'object' ? lights : {}).sort(([a], [b]) => a.localeCompare(b))) {
+        const rows = lights && typeof lights === 'object' ? lights : {};
+        const virtual = [['spot', spotLearnedWords], ['room', roomLearnedWords]].filter(([name]) => rows[name] && typeof rows[name] === 'object');
+        if (virtual.length) {
+            const n = virtual.reduce((sum, [name]) => sum + (Number.isFinite(rows[name].n) ? rows[name].n : 0), 0);
+            lines.push(`${situationWords(key)}: ${virtual.map(([name, words]) => words(rows[name])).join('; ')}. Learned from you (${changes(n)})`);
+        }
+        for (const [light, row] of Object.entries(rows).filter(([name]) => name !== 'spot' && name !== 'room').sort(([a], [b]) => a.localeCompare(b))) {
             const n = Number.isFinite(row?.n) ? row.n : 0;
-            lines.push(`${situationWords(key)} · ${lightName(light)}: ${sceneWords(row)} (${n} ${n === 1 ? 'change' : 'changes'})`);
+            lines.push(`${situationWords(key)} · ${lightName(light)}: ${sceneWords(row)} (${changes(n)})`);
         }
     }
     return lines.length ? lines : ['Nothing yet'];
 }
 
-export function summaryWords(state, manual = []) {
+export function summaryWords(state) {
     if (!state) return 'Lighting coordinator';
-    return `Lighting coordinator · ${state.on ? 'On' : 'Off'}${state.stopped ? ' · Stop holds' : ''} · ${situationWords(state.situation)}`
-        + (manual.length ? ` · ${manualWords(manual)}` : '');
+    return `Lighting coordinator · ${state.on ? 'On' : 'Off'}${state.stopped ? ' · Stop holds' : ''} · ${situationWords(state.situation)}`;
 }
 
-/* The fixtures a person holds (home-den-spot-playback.mjs handHolds): "Manual: Desk spot, Sofa spot", or ''. */
+/* The fixtures a person holds (home-den-spot-playback.mjs handHolds), in plain words: "You're in control of Desk spot ·
+ * the coordinator will learn from this", or '' with none. The second half only while den-live takes the change. */
 export function manualWords(holds) {
-    return holds?.length ? `Manual: ${holds.map(hold => hold.label || hold.fixture_id).join(', ')}` : '';
+    if (!holds?.length) return '';
+    const names = holds.map(hold => hold.label || hold.fixture_id);
+    const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    const learning = holds.some(hold => hold.learning === 'pending' || hold.learning === 'recorded');
+    return `You're in control of ${list}${learning ? ' · the coordinator will learn from this' : ''}`;
 }
 
 /* The settings den-live changed, as a POST body: only the ones that differ from what it has. */
@@ -191,6 +220,16 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
     // Steps and limits only set the arrows' increments: any value goes to den-live, which says what it refuses.
     settings.noValidate = true;
     if (!lookOnly) learnedHead.append(clearButton);
+    // A person holding a fixture, said plainly outside the drawer, with the Resume chip that hands it back.
+    const manualRow = element('p', 'home-den-live-coordinator-manual');
+    manualRow.dataset.denCoordinatorManual = '1'; manualRow.setAttribute('role', 'status'); manualRow.hidden = true;
+    const manualText = element('span', 'home-den-live-coordinator-manual-text');
+    const handBackButton = element('button', 'home-den-live-coordinator-button home-den-live-coordinator-inline', 'Resume');
+    handBackButton.type = 'button'; handBackButton.dataset.denCoordinatorHandBack = '1';
+    handBackButton.setAttribute('aria-label', 'Resume: hand the lights back to the coordinator');
+    manualRow.append(manualText, handBackButton);
+    const wrapper = element('div', 'home-den-live-coordinator-wrap');
+    wrapper.append(manualRow, root);
     body.append(...(lookOnly ? [] : [controls]), facts, error, whyHead, why, planHead, plan, learnedHead, learned,
         ...(lookOnly ? [] : [settingsHead, settings]));
 
@@ -258,11 +297,8 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         else if (state) void post('switch', { on: !state.on }, state.on ? 'Turning it off' : 'Turning it on');
     });
     stopButton.addEventListener('click', () => { void control('stop'); });
-    // Resume hands back the fixtures a person holds, and releases a Stop when one holds.
-    resumeButton.addEventListener('click', () => {
-        if (spots?.handHolds?.().length) { spots.handBack(); render(); }
-        if (spots?.control()?.stopped) void control('resume');
-    });
+    resumeButton.addEventListener('click', () => { void control('resume'); });
+    handBackButton.addEventListener('click', () => { spots?.handBack?.(); render(); });
     deskButton.addEventListener('click', () => {
         const on = !deskOn();
         void post('desk', { on }, on ? 'Starting the desk test' : 'Stopping the desk test');
@@ -339,20 +375,21 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         const shownOn = spots ? controlState?.on === true && !spots.holds().off : state?.on === true;
         const shownStop = spots ? controlState?.stopped === true || !!spots.holds().stop : state?.stopped === true;
         const applied = spots?.current();
-        const manual = spots?.handHolds?.() || [];
+        const manual = lookOnly ? [] : spots?.handHolds?.() || [];
         const handHeld = new Set(manual.map(hold => hold.fixture_id));
+        manualRow.hidden = !manual.length;
+        setText(manualText, manualWords(manual));
         const shown = state && { ...state, on: shownOn, stopped: shownStop };
-        setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown, manual));
+        setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown));
         setText(error, controlProblem || problem);
         if (spots) {
-            fillList(why, applied?.fixtures.map(row => handHeld.has(row.fixture_id) ? `${row.fixture_id} · Manual: in your hands until Resume`
+            fillList(why, applied?.fixtures.map(row => handHeld.has(row.fixture_id) ? `${row.fixture_id} · in your hands`
                 : `${row.fixture_id} · ${reasonWords(row.reason)}${row.target_basis ? ` · ${words(row.target_basis)}` : ''}${row.last_move_trace_id ? ` · Trace ${row.last_move_trace_id}` : ''}`)
                 || ['No fresh spot snapshot']);
             why.title = '';
             stopButton.disabled = false;
-            // Resume shows while a Stop holds, or while a person holds a fixture (handing it back needs no den-live).
-            resumeButton.hidden = controlState?.stopped !== true && !manual.length;
-            resumeButton.disabled = controlState?.stopped === true ? kind !== 'running' : false;
+            resumeButton.hidden = controlState?.stopped !== true;
+            resumeButton.disabled = kind !== 'running';
             switchButton.disabled = !controlState || !shownOn && kind !== 'running';
         }
         if (!state) {
@@ -364,7 +401,6 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         const lines = [];
         if (kind === 'unreachable') lines.push('den-live is not answering; this is what it last said');
         if (shownStop) lines.push('A Stop holds the spots until Resume');
-        if (manual.length) lines.push(`${manualWords(manual)}: yours until Resume, or 10 min of the coordinator running`);
         if (!spots && deskOn()) lines.push(`Desk test on until ${new Date(state.desk_until * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
         if (ha.fresh === false) {
             lines.push(`Home Assistant ${Number.isFinite(ha.age_s) ? `hasn't answered for ${Math.round(ha.age_s)} s` : "hasn't answered yet"}`
@@ -415,7 +451,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
     }
 
     return {
-        element: root,
+        element: wrapper,
         tick() {
             paused = false;
             if (clock() - lastPoll >= (kind === 'absent' ? ABSENT_POLL_MS : POLL_MS)) void poll();
@@ -432,6 +468,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         },
         refresh: render,
         status: () => ({ kind, on: spots ? spots.control()?.on ?? null : state ? state.on === true : null, situation: state ? situationWords(state.situation) : null,
-            polls, posts, problem: controlProblem || problem, hidden: root.hidden, open: root.open, buttons: !lookOnly }),
+            polls, posts, problem: controlProblem || problem, hidden: root.hidden, open: root.open, buttons: !lookOnly,
+            manual: manualRow.hidden ? null : manualText.textContent }),
     };
 }

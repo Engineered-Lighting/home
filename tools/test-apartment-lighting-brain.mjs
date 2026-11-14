@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
-import { createEquipmentVirtualFixtures, HAND_HOLD_MS } from '../app/src/home-3d/equipment-virtual-fixtures.mjs';
+import { createEquipmentVirtualFixtures, HAND_SETTLE_MS } from '../app/src/home-3d/equipment-virtual-fixtures.mjs';
 import { sealRegisteredDeskTarget } from '../app/src/home-3d/registered-desk-target.mjs';
 import { buildBrainGeometry, prepareBrainGeometryFile, parseArgs } from './den-room/brain-targets.mjs';
 
@@ -836,9 +836,12 @@ test('the coordinator spot eases between level steps, glides on its S-curve, dim
   preview.dispose();
 });
 
-test('a hand on a fixture takes it from the coordinator: a drag aim, the pan slider and a radial paint answer and stay; Resume and 10 min hand it back', () => {
+test('manual always wins: with the coordinator on, a drag aim, the pan slider, a radial paint and the level go through, hold across snapshots and a Stop, report once per settled change, and Resume hands back', () => {
   const registration = registrationFor();
-  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding });
+  const timers = new Map(); let nextTimer = 1;
+  const later = (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; };
+  const settle = () => { const due = [...timers.values()]; timers.clear(); for (const timer of due) timer.fn(); };
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding, later, cancel: id => timers.delete(id) });
   preview.setDocument(registration, { coordinator: true });
   const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
   const state = id => preview.readback().fixtures.find(row => row.fixture_id === id).state;
@@ -847,66 +850,75 @@ test('a hand on a fixture takes it from the coordinator: a drag aim, the pan sli
     target_m: null, reason: 'task', motion_phase: 'settled', ...patch });
   const snapshot = (patch = {}, options = {}) => preview.applyCoordinatorSpots(ids.map(id => row(id, patch)), generation,
     { ambient: { level: .3, cct_k: 2700 }, ...options });
-  const settle = () => preview.advancePresentation(performance.now() + 1000);
-  assert.equal(snapshot(), true); settle();
-  // Without a hand the coordinator owns the spot, as before: an aim and a pan refuse.
+  const draw = () => preview.advancePresentation(performance.now() + 1000);
+  const events = [];
+  const stop = preview.onHandChange(event => events.push(event));
+  assert.equal(snapshot(), true); draw();
+  // No change is refused, even with no hand hold (the owner, 2026-11-14): only the hold keeps it from the next snapshot.
+  assert.equal(preview.setFixtureState(others[0], { tilt_deg: 44 }).ok, true);
+  snapshot(); draw();
+  assert.equal(state(others[0]).tilt_deg, 30, 'without a hold the coordinator directs it again');
+  // The hand-change seam holds the fixture first; then the drag's Set aim, the pan slider, a radial paint and the
+  // level slider all go through.
   const origin = preview.interactionDescriptor(held).display_origin_m;
   const target = { point: [origin[0] + .8, origin[1] + .3, origin[2] - 1.2], normal: [0, 0, 1] };
-  assert.equal(preview.aimAtTarget(held, target).reason, 'equipment_preview_coordinator_owned');
-  assert.equal(preview.setFixtureState(held, { pan_deg: 25 }).reason, 'equipment_preview_coordinator_owned');
-  assert.equal(preview.restoreAim(held, { fixture_id: held, generation, state: state(held) }).reason, 'equipment_preview_coordinator_owned');
-  // The hand-change seam holds the fixture first; then the drag's Set aim, the pan slider and a radial paint go through.
   assert.equal(preview.holdForHand(held, { reason: 'aim' }), true);
   assert.equal(preview.aimAtTarget(held, target, { sweep: true }).ok, true);
-  const tilt = state(held).tilt_deg, pan = state(held).pan_deg + 5;
+  const tilt = state(held).tilt_deg;
   assert.ok(tilt > 30, 'the drag aimed it down at the floor');
-  assert.equal(preview.setFixtureState(held, { pan_deg: pan }).ok, true);
-  assert.equal(preview.setFixtureState(held, { radials: [{ number: 1, on: true, brightness: .9 }] }).ok, true);
-  assert.deepEqual(preview.handHolds().map(hold => [hold.fixture_id, hold.reason]), [[held, 'aim']]);
-  assert.ok(preview.handHolds()[0].remaining_s > 590 && preview.handHolds()[0].label);
-  // Snapshot after snapshot, with the room's glow on every one, the held fixture stays as the hand left it.
-  for (let i = 0; i < 5; i++) assert.equal(snapshot({ pan_deg: -10, tilt_deg: 20, level: .7 }), true);
   settle();
-  assert.deepEqual([state(held).pan_deg, state(held).tilt_deg], [pan, tilt]);
+  assert.equal(events.length, 1, 'the drop is one settled change');
+  assert.deepEqual(Object.keys(events[0].after).sort(), ['pan_deg', 'target', 'tilt_deg']);
+  assert.equal(events[0].before.tilt_deg, 30); assert.equal(events[0].after.tilt_deg, tilt);
+  assert.equal(events[0].before.target, null); assert.deepEqual(events[0].after.target.point, target.point);
+  assert.equal(events[0].reason, 'aim'); assert.ok(events[0].label && Number.isFinite(events[0].at_ms));
+  // A slider sweep is many inputs and one settled change; so is a burst of paint and level.
+  for (const pan of [2, 4, 6, 8]) { preview.holdForHand(held, { reason: 'change' }); assert.equal(preview.setFixtureState(held, { pan_deg: pan }).ok, true); }
+  preview.holdForHand(held); assert.equal(preview.setFixtureState(held, { radials: [{ number: 1, on: true, brightness: .9 }] }).ok, true);
+  preview.holdForHand(held); assert.equal(preview.setFixtureState(held, { spotlight: { brightness: .8 } }).ok, true);
+  assert.equal(timers.size, 1, 'one settle timer for the burst');
+  assert.equal(events.length, 1, 'nothing is reported mid-burst');
+  settle();
+  assert.equal(events.length, 2);
+  assert.deepEqual(Object.keys(events[1].after).sort(), ['pan_deg', 'radials', 'spotlight', 'target']);
+  assert.equal(events[1].before.pan_deg, events[0].after.pan_deg); assert.equal(events[1].after.pan_deg, 8);
+  assert.equal(events[1].after.target, null, 'a slider retires the surface target');
+  assert.deepEqual(events[1].after.radials.map(zone => [zone.number, zone.on, zone.brightness]), [[1, true, .9]]);
+  assert.equal(events[1].before.radials.length, 1, 'only the painted zone');
+  assert.deepEqual([events[1].before.spotlight.brightness, events[1].after.spotlight.brightness], [.5, .8]);
+  // Snapshot after snapshot, with the room's glow on each, the held fixture stays as the hand left it; the others follow.
+  for (let i = 0; i < 5; i++) assert.equal(snapshot({ pan_deg: -10, tilt_deg: 20, level: .7 }), true);
+  draw();
+  assert.deepEqual([state(held).pan_deg, state(held).tilt_deg, state(held).spotlight.brightness], [8, tilt, .8]);
   assert.equal(state(held).radials.find(zone => zone.number === 1).brightness, .9, 'the painted zone stays painted');
-  assert.equal(state(held).spotlight.brightness, .5, 'its spot stays as the coordinator left it');
   for (const id of others) {
     assert.deepEqual([state(id).pan_deg, state(id).tilt_deg, state(id).spotlight.brightness], [-10, 20, .7]);
     assert.ok(state(id).radials.every(zone => zone.brightness === .3));
   }
-  // A Stop blanks the coordinator's spots, not the hand's.
-  snapshot({ on: false, level: 0, reason: 'stopped' }, { ambient: null, directing: false });
-  assert.equal(state(held).spotlight.brightness, .5);
+  // A Stop, and an expiry, blank the coordinator's spots, never the hand's.
+  snapshot({ on: false, level: 0, reason: 'stopped' }, { ambient: null });
+  preview.applyCoordinatorSpots(null, generation);
+  assert.equal(state(held).spotlight.brightness, .8);
   for (const id of others) assert.equal(state(id).spotlight.brightness, 0);
-  // Resume hands it back: the next snapshot directs it again, and the coordinator's lock returns.
-  assert.equal(preview.releaseHands(), 1);
+  assert.deepEqual(preview.handHolds().map(hold => [hold.fixture_id, hold.reason]), [[held, 'change']]);
+  // Resume hands it back: the next snapshot directs it again, and its zones take the room glow.
+  assert.deepEqual(preview.releaseHands(), [held]);
   assert.deepEqual(preview.handHolds(), []);
-  snapshot(); settle();
+  snapshot(); draw();
   assert.deepEqual([state(held).pan_deg, state(held).tilt_deg, state(held).spotlight.brightness], [0, 30, .5]);
-  assert.ok(state(held).radials.every(zone => zone.brightness === .3), 'its zones take the room glow again');
-  assert.equal(preview.setFixtureState(held, { tilt_deg: 40 }).reason, 'equipment_preview_coordinator_owned');
-  // 10 min of the coordinator directing hands it back by itself; while it is off, the time doesn't run.
-  const skewed = Object.getOwnPropertyDescriptor(performance, 'now'), real = performance.now.bind(performance);
-  let skew = 0;
-  performance.now = () => real() + skew;
-  try {
-    assert.equal(preview.holdForHand(held), true);
-    skew = HAND_HOLD_MS + 1000;
-    snapshot({ on: false, level: 0, reason: 'off' }, { ambient: null, directing: false });
-    assert.equal(preview.handHolds().length, 1, 'off: the hold waits');
-    skew += HAND_HOLD_MS - 5000;
-    snapshot();
-    assert.equal(preview.handHolds().length, 1, 'counted from when the coordinator directs again');
-    skew += 10000;
-    snapshot(); settle();
-    assert.deepEqual(preview.handHolds(), []);
-    assert.equal(state(held).spotlight.brightness, .5, 'the coordinator directs it again');
-  } finally {
-    if (skewed) Object.defineProperty(performance, 'now', skewed); else delete performance.now;
-  }
-  // A fixture outside the coordinator's ownership has nothing to hold.
+  assert.ok(state(held).radials.every(zone => zone.brightness === .3));
+  // den-live's release hands back one fixture; a burst not settled when it ends is not reported.
+  preview.holdForHand(held); preview.setFixtureState(held, { tilt_deg: 50 });
+  assert.deepEqual(preview.releaseHand(held), [held]);
+  settle();
+  assert.equal(events.length, 2);
+  assert.deepEqual(preview.releaseHand(held), [], 'nothing left to release');
+  stop();
+  preview.holdForHand(held); preview.setFixtureState(held, { tilt_deg: 40 }); settle();
+  assert.equal(events.length, 2, 'an unsubscribed listener hears nothing');
+  // Outside the coordinator's ownership there is nothing to hold.
   preview.setDocument(registration, { coordinator: false });
   assert.equal(preview.holdForHand(held), false);
-  assert.equal(preview.setFixtureState(held, { pan_deg: 12 }).ok, true);
+  assert.equal(HAND_SETTLE_MS, 800);
   preview.dispose();
 });

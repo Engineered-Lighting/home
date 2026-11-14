@@ -11,7 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_UPSTREAM_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
-  denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind, denLiveWriteRefusal } from "../web-gateway/den-live-route.mjs";
+  denLabelsSaveProblem, denLiveHeaders, denLiveRouteKind, denLiveUpstreamSuffix, denLiveWriteRefusal } from "../web-gateway/den-live-route.mjs";
 import { isTailnetAddress, lookOnlyKind, lookOnlyPackIndex } from "../web-gateway/look-only.mjs";
 import { REGISTRATION_ROUTE, initRegistration, readActiveBinding } from "../web-gateway/equipment-registration.mjs";
 import { SITES } from "../web-gateway/home-location.mjs";
@@ -87,7 +87,7 @@ function unitTests() {
   assert("den-live's coordinator state is its own kind, GET only", denLiveRouteKind("GET", "/v1/homes/den/coordinator") === "coordinator"
     && denLiveRouteKind("HEAD", "/v1/homes/den/coordinator") === null && denLiveRouteKind("GET", "/v1/homes/den/coordinator?x") === null
     && denLiveRouteKind("POST", "/v1/homes/den/coordinator") === null);
-  for (const write of ["switch", "settings", "learned/clear", "desk"]) {
+  for (const write of ["switch", "settings", "learned/clear", "desk", "manual", "manual/resume"]) {
     assert(`the coordinator's ${write} is a POST write`, denLiveRouteKind("POST", `/v1/homes/den/coordinator/${write}`) === "coordinator-write"
       && denLiveRouteKind("GET", `/v1/homes/den/coordinator/${write}`) === null && denLiveRouteKind("PUT", `/v1/homes/den/coordinator/${write}`) === null
       && denLiveRouteKind("POST", `/v1/homes/den/coordinator/${write}?x=1`) === null);
@@ -110,6 +110,14 @@ function unitTests() {
     "transfer-encoding": "chunked" }) === "length_required" && refusal("POST", "/v1/homes/den/coordinator/desk", { ...write, "content-length": "x" }) === "length_required");
   assert("a coordinator write is at most 64 KB", refusal("POST", "/v1/homes/den/coordinator/settings", { ...write, "content-length": "65537" }) === "too_large"
     && refusal("POST", "/v1/homes/den/coordinator/settings", { ...write, "content-length": "65536" }) === null);
+  assert("a person's change for the coordinator to learn from is at most 8 KB", refusal("POST", "/v1/homes/den/coordinator/manual", { ...write, "content-length": "8193" }) === "too_large"
+    && refusal("POST", "/v1/homes/den/coordinator/manual", { ...write, "content-length": "8192" }) === null
+    && refusal("POST", "/v1/homes/den/coordinator/manual/resume", { ...write, "content-length": "8193" }) === "too_large");
+  assert("a person's change reaches only the virtual coordinator", denLiveUpstreamSuffix("/v1/homes/den/coordinator/manual", "coordinator-write", { virtual: true })
+    === "/v1/homes/den/coordinator/virtual/manual"
+    && denLiveUpstreamSuffix("/v1/homes/den/coordinator/manual/resume", "coordinator-write", { virtual: true }) === "/v1/homes/den/coordinator/virtual/manual/resume"
+    && denLiveUpstreamSuffix("/v1/homes/den/coordinator/manual", "coordinator-write", { virtual: false, serve: false }) === null
+    && denLiveUpstreamSuffix("/v1/homes/den/coordinator/manual/resume", "coordinator-write", { virtual: false, serve: false }) === null);
   assert("any other write is refused", refusal("POST", "/v1/homes/den/state", write) === "den_live_write_not_allowed"
     && refusal("DELETE", "/v1/homes/den/coordinator/switch", write) === "den_live_write_not_allowed");
   const writeHeaders = denLiveHeaders({ cookie: "home_web_auth=x", authorization: "Basic abc", "content-type": "application/json",
@@ -369,7 +377,7 @@ async function fullServeTests(base, upstream, temp, fake) {
     assert("same-origin label write preserves framing and strips cookie", r.status === 200 &&
       upstream.seen.at(-1)?.body === body && upstream.seen.at(-1)?.method === "PUT" && !upstream.seen.at(-1)?.headers.cookie, r.status);
     const controls = { "X-Home-Den-Live-CSRF": "1", "Content-Type": "application/json", Origin: ORIGIN };
-    for (const action of ["switch", "settings", "learned/clear", "stop", "resume"]) {
+    for (const action of ["switch", "settings", "learned/clear", "stop", "resume", "manual", "manual/resume"]) {
       r = await exchange(servePort, { method: "POST", url: DEN_HOME + "/coordinator/" + action, headers: controls, body: "{}" });
       assert("virtual Den forwards only the virtual " + action + " route", r.status === 200 &&
         upstream.seen.at(-1)?.url === DEN_HOME + "/coordinator/virtual/" + action, r.status);

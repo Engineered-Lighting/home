@@ -1197,6 +1197,12 @@ button.hg-no-press:active {
 /* The lighting coordinator's section (home-den-coordinator-panel.mjs): the one part of the chip that takes the pointer. */
 .home-den-live-coordinator { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hg-border, rgba(255,255,255,.1)); pointer-events: auto; }
 .home-den-live-coordinator[hidden] { display: none; }
+/* A person holding a fixture: one plain line with its Resume chip, shown even with the drawer closed. */
+.home-den-live-coordinator-wrap { display: contents; }
+.home-den-live-coordinator-manual { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin: 6px 0 0; color: var(--hg-fg-0, #fff);
+  overflow-wrap: anywhere; pointer-events: auto; }
+.home-den-live-coordinator-manual[hidden] { display: none; }
+.home-den-live-chip--capsule .home-den-live-coordinator-manual { flex: 1 0 100%; }
 .home-den-live-coordinator-summary { cursor: pointer; color: var(--hg-fg-1, #ededed); font-weight: 520; overflow-wrap: anywhere; }
 .home-den-live-coordinator-summary:focus-visible { outline: 2px solid var(--hg-fg-3, #8f8f8f); outline-offset: 2px; border-radius: 4px; }
 .home-den-live-coordinator[data-on="1"] > .home-den-live-coordinator-summary { color: var(--hg-fg-0, #fff); }

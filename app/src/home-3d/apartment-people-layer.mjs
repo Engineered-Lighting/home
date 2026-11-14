@@ -3,6 +3,9 @@
  * registered to, and are drawn as Home's person marker is: a disc, a 2-sigma ring, and Home's own critically damped
  * spring (omega 3.5, at most 2.5 m/s). It adds a facing arrow when the stream gives a heading, a trail of the last
  * TRAIL_S, and dims coasting tracks. A track gone from the stream fades over FADE_S after GRACE_S and is removed.
+ * While the live body figure shows a track (setBodies), its floor marker (disc, 2-sigma ring and facing arrow) steps
+ * back: the body, its label and the label's ring under it carry the person (design A). The marker stays the fallback for
+ * a track with no body; the faint trail stays either way.
  * This layer has no network, identity, lighting or model API: whoever holds the stream calls update(). */
 import * as THREE from 'three';
 
@@ -38,6 +41,7 @@ export function attachApartmentPeopleLayer(engine, { now = () => performance.now
     parent.add(root);
     const markers = new Map();
     let disposed = false, rafId = null, last = null, status = { mode: null, camera: null, health: null, at: null };
+    let bodied = new Set();   // tracks the live body figure shows
 
     function marker(id, xy, at) {
         const group = new THREE.Group();
@@ -105,6 +109,7 @@ export function attachApartmentPeopleLayer(engine, { now = () => performance.now
             s.x += s.vx * step; s.y += s.vy * step;
             m.group.position.set(s.x, s.y, 0);
             m.ring.scale.setScalar(Math.max(.18, 2 * m.sigma));
+            m.group.visible = !bodied.has(m.id);
             m.pivot.visible = m.heading != null;
             if (m.heading != null) m.pivot.rotation.z = -m.heading * Math.PI / 180;   // a bearing runs clockwise from +y
             const strength = fade * (m.coasting ? COASTING : 1);
@@ -137,7 +142,14 @@ export function attachApartmentPeopleLayer(engine, { now = () => performance.now
         /* What the page shows beside the markers: the stream's mode and camera status, and how long since an event. */
         status: () => ({ ...status, tracks: markers.size, since_s: status.at == null ? null : now() - status.at }),
         markers: () => [...markers.values()].map(m => ({ track_id: m.id, xy_m: [m.spring.x, m.spring.y], coasting: m.coasting,
-            heading_deg: m.heading, trail: m.points.length, near: m.near ?? null })),
+            heading_deg: m.heading, trail: m.points.length, near: m.near ?? null, dot: !bodied.has(m.id) })),
+        /* The tracks the live body figure shows now (track ids). Theirs is the body; everyone else keeps the marker. */
+        setBodies(ids = []) {
+            const next = new Set((Array.isArray(ids) ? ids : []).filter(validId));
+            if (next.size === bodied.size && [...next].every(id => bodied.has(id))) return;
+            bodied = next;
+            for (const m of markers.values()) m.group.visible = !bodied.has(m.id);
+        },
         dispose() {
             if (disposed) return;
             disposed = true;

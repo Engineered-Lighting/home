@@ -227,6 +227,9 @@
   ];
 
   var DEFAULT_SITE_ID = "echo";
+  /* Look-only (window.HomeLookOnly, a tailnet device with no session): the den's site is the only home, and the
+   * world view, which shows the others, stays off. */
+  var LOOK_ONLY_SITE = window.HomeLookOnly && window.HomeLookOnly.active ? window.HomeLookOnly.site : null;
 
   function readStorage(key) {
     try {
@@ -246,6 +249,7 @@
   }
 
   function siteById(id) {
+    if (LOOK_ONLY_SITE && id !== LOOK_ONLY_SITE) return null;
     for (var index = 0; index < SITES.length; index += 1) {
       if (SITES[index].id === id) return siteWithContent(SITES[index]);
     }
@@ -282,7 +286,7 @@
    * naming a site that no longer exists must not strand the viewport. */
   var selectedSiteId = (function restoreSelection() {
     var stored = readStorage(SELECTED_SITE_STORAGE_KEY);
-    return stored && siteById(stored) ? stored : DEFAULT_SITE_ID;
+    return stored && siteById(stored) ? stored : LOOK_ONLY_SITE || DEFAULT_SITE_ID;
   })();
 
   var listeners = [];
@@ -356,6 +360,7 @@
    * whole feature revertible by doing nothing.
    */
   function isWorldZoomEnabled() {
+    if (LOOK_ONLY_SITE) return false;
     var raw = "";
     try {
       raw = new URLSearchParams(window.location.search || "").get("worldZoom") || "";
@@ -383,7 +388,7 @@
     WORLD_ZOOM_STORAGE_KEY: WORLD_ZOOM_STORAGE_KEY,
 
     getSites: function getSites() {
-      return SITES.map(siteWithContent);
+      return SITES.filter(function (site) { return !LOOK_ONLY_SITE || site.id === LOOK_ONLY_SITE; }).map(siteWithContent);
     },
 
     getSite: function getSite(id) {

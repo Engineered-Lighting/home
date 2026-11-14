@@ -16,7 +16,7 @@ function read(file, maximum) {
 
 // Operator-owned file, never a browser payload. Secrets are separate mounted
 // files, so configuration receipts can omit their contents entirely.
-export function loadEchoLinkProvision(file) {
+export function loadEchoLinkProvision(file, env = process.env) {
   const value = JSON.parse(read(file, 8192));
   const fields = ["version", "commitmentKeyFile", "journalKeyFile", "pairingDbPath",
     "proofDbPath", "revocationDbPath", "sessionRevocation", "proofIngress",
@@ -40,6 +40,19 @@ export function loadEchoLinkProvision(file) {
     if (!/^[a-f0-9]{64}$/.test(credential)) throw new Error("link_provision_credential_rejected");
     return { [field]: entry[field], credential };
   };
+  const lighting = Object.hasOwn(value, "lighting") ? transport("lighting", "origin") : undefined;
+  const relayFile = env.HOME_AGENT_SERVE_LIGHTING_RELAY_CREDENTIAL_FILE;
+  const coreFile = env.HOME_AGENT_SERVE_LIGHTING_CORE_CREDENTIAL_FILE;
+  let serveLighting;
+  if (relayFile || coreFile) {
+    if (!lighting || !relayFile || !coreFile) throw new Error("serve_lighting_configuration_rejected");
+    const relayCredential = read(relayFile, 65), credential = read(coreFile, 65);
+    if (![relayCredential, credential].every(secret => /^[a-f0-9]{64}$/.test(secret)) ||
+        new Set([relayCredential, credential, lighting.credential]).size !== 3) {
+      throw new Error("serve_lighting_credentials_must_be_distinct");
+    }
+    serveLighting = { origin: lighting.origin, credential, relayCredential };
+  }
   return {
     commitmentKey: key("commitmentKeyFile"), journalKey: key("journalKeyFile"),
     pairingDbPath: value.pairingDbPath, proofDbPath: value.proofDbPath,
@@ -48,7 +61,8 @@ export function loadEchoLinkProvision(file) {
     linkIssuance: transport("linkIssuance"), victoriaHandoff: transport("victoriaHandoff"),
     linkReview: transport("linkReview", "origin"),
     ...(Object.hasOwn(value,"personalMemory") ? {personalMemory:transport("personalMemory","origin")} : {}),
-    ...(Object.hasOwn(value,"lighting") ? {lighting:transport("lighting","origin")} : {}),
+    ...(lighting ? { lighting } : {}),
+    ...(serveLighting ? { serveLighting } : {}),
     personalMemoryHomeOrigins:value.personalMemoryHomeOrigins ?? [],
   };
 }

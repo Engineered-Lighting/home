@@ -386,3 +386,36 @@ def test_journal_refuses_unsafe_result_transitions(harness):
         harness.journal.record_result(uuid.UUID(int=7), 0, "pending", **SCOPE)
     harness.journal.record_result(uuid.UUID(int=7), 1, "indeterminate", **SCOPE)
     assert harness.journal.record_result(uuid.UUID(int=7), 1, "succeeded", **SCOPE).results[1] == "indeterminate"
+
+
+def test_serve_lookup_waits_for_both_homes(tmp_path):
+    started, finish = asyncio.Event(), asyncio.Event()
+    victoria = Home("victoria")
+
+    async def slow_victoria(request):
+        if request.url.path.endswith("/execute"):
+            started.set()
+            await finish.wait()
+        assert not request.url.path.endswith("/outcome")
+        return victoria(request)
+
+    harness = Harness(tmp_path, homes={"echo": Home("echo"), "victoria": slow_victoria})
+    request = LightingProposalRequest(operation_id=uuid.UUID(int=11), sites=("echo", "victoria"),
+                                      targets=("kitchen",), operation="off")
+
+    async def run():
+        action = asyncio.create_task(harness.service.serve_action(request))
+        try:
+            await asyncio.wait_for(started.wait(), 1)
+            assert (await harness.service.serve_outcome(request.operation_id))["status"] == "unknown"
+            assert (await harness.service.serve_action(request))["status"] == "unknown"
+        finally:
+            finish.set()
+            result = await action
+        assert result["status"] == "done"
+        assert len(victoria.executed) == 1
+
+    try:
+        asyncio.run(run())
+    finally:
+        harness.journal.close()

@@ -45,6 +45,8 @@
     { id: "wheel-zoom", label: "Scroll wheel", action: "Zoom" },
     { id: "pinch-zoom", label: "Pinch with two fingers", action: "Zoom one step at a time" },
     { id: "select", label: "Click a light", action: "Select it and open its controls" },
+    { id: "drag-spotlight", label: "Drag a virtual spotlight", homes: ["victoria"],
+      action: "Grab its housing, label or visible pool. Release over a reachable room surface to set its modeled aim." },
     { id: "aim-handle", label: "Drag the aim handle", homes: ["victoria"],
       action: "Propose where the selected modeled light points; nothing physical moves" },
   ].map(Object.freeze));

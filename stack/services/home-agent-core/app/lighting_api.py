@@ -17,6 +17,7 @@ from .lighting_service import LightingService
 from .personal_memory_api import PersonalMemoryBinding
 
 PREFIX = "/internal/lighting/v1/"
+SERVE_PREFIX = "/internal/lighting/serve/v1/"
 OPERATIONS = ("status", "propose", "confirm", "outcome", "consent-propose", "consent-confirm", "consent-outcome")
 MAX_BODY = 4096
 
@@ -37,10 +38,22 @@ def _operation_id(value):
     return UUID(raw)
 
 
-def create_lighting_ingress(*, binding, service):
+def _lookup(value):
+    if (type(value) is not dict or set(value) != {"version", "operation_id"}
+            or type(value["version"]) is not int or value["version"] != 1):
+        raise ValueError("invalid lookup")
+    return _operation_id(value)
+
+
+def create_lighting_ingress(*, binding, service, serve_credential=None):
     if (type(binding) is not PersonalMemoryBinding or binding.issuer_id != "home-assistant:echo"
             or type(service) is not LightingService):
         raise TypeError("separately provisioned Echo lighting ingress required")
+    if serve_credential is not None and (
+        type(serve_credential) is not bytes or not re.fullmatch(b"[a-f0-9]{64}", serve_credential)
+        or hmac.compare_digest(serve_credential, binding.credential)
+    ):
+        raise ValueError("distinct Serve lighting credential required")
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     active = 0
 
@@ -49,9 +62,20 @@ def create_lighting_ingress(*, binding, service):
 
     @app.post(PREFIX + "{operation}")
     async def handle(operation: str, request: Request):
-        nonlocal active
         if operation not in OPERATIONS:
             return reply(404, {"error": "not_found"})
+        return await dispatch(operation, request, binding.credential)
+
+    if serve_credential is not None:
+        @app.post(SERVE_PREFIX + "{operation}")
+        async def handle_serve(operation: str, request: Request):
+            if (operation not in ("action", "outcome")
+                    or request.scope.get("raw_path") != (SERVE_PREFIX + operation).encode()):
+                return reply(404, {"error": "not_found"})
+            return await dispatch(operation, request, serve_credential, serve=True)
+
+    async def dispatch(operation, request, credential, *, serve=False):
+        nonlocal active
         if request.scope.get("scheme") != "https":
             return reply(403, {"error": "secure_transport_required"})
         if request.headers.get("origin") is not None or request.headers.get("cookie") is not None:
@@ -59,7 +83,7 @@ def create_lighting_ingress(*, binding, service):
         if any(name.startswith("x-authenticated-") for name in request.headers):
             return reply(400, {"error": "identity_headers_forbidden"})
         auth = request.headers.getlist("authorization")
-        if len(auth) != 1 or not hmac.compare_digest(auth[0].encode("latin-1"), b"Bearer " + binding.credential):
+        if len(auth) != 1 or not hmac.compare_digest(auth[0].encode("latin-1"), b"Bearer " + credential):
             return reply(401, {"error": "unauthorized"})
         if request.url.query or request.headers.get("content-encoding") is not None:
             return reply(400, {"error": "invalid_request"})
@@ -75,14 +99,28 @@ def create_lighting_ingress(*, binding, service):
         try:
             # Homes run concurrently and an operation starts only with 14 s of review left,
             # so a dispatch ends within ~66 s of confirmation (60 s review + 20 s client
-            # timeout - 14 s budget); lookups are shorter.
-            async with asyncio.timeout(75):
+            # timeout - 14 s budget). Serve also resolves inventory before dispatch.
+            async with asyncio.timeout(95 if serve else 75):
                 body = bytearray()
                 async for chunk in request.stream():
                     if len(chunk) > MAX_BODY - len(body):
                         return reply(413, {"error": "body_too_large"})
                     body.extend(chunk)
                 value = json.loads(body.decode("utf8"), object_pairs_hook=_unique)
+                if serve:
+                    if operation == "action":
+                        _operation_id(value)
+                        if set(value) != {"version", "operation_id", "sites", "targets", "operation", "brightness"}:
+                            raise ValueError("invalid action")
+                        parsed = from_wire(LightingProposalRequest, value)
+                        dispatched = True
+                        result = await service.serve_action(parsed)
+                    else:
+                        parsed = _lookup(value)
+                        dispatched = True
+                        result = await service.serve_outcome(parsed)
+                    return reply(200, {"version": 1, "result": result})
+
                 if (type(value) is not dict or set(value) != {"version", "subject", "session_commitment", "request"}
                         or type(value["version"]) is not int or value["version"] != 1):
                     raise ValueError("invalid envelope")
@@ -103,10 +141,7 @@ def create_lighting_ingress(*, binding, service):
                 elif operation == "consent-confirm":
                     parsed = from_wire(LightingConsentConfirmation, supplied)
                 else:
-                    if (set(supplied) != {"version", "operation_id"} or type(supplied["version"]) is not int
-                            or supplied["version"] != 1):
-                        raise ValueError("invalid lookup")
-                    parsed = _operation_id(supplied)
+                    parsed = _lookup(supplied)
                 dispatched = True
                 if operation == "status":
                     result = await service.status(session)

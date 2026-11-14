@@ -1,0 +1,30 @@
+{
+  "schema": "den-sim-refs-1",
+  "tools": {
+    "rung-2-observe": "257eca52",
+    "claude/rung-3-track-local-514d6b": "a3298878",
+    "rung-5-bundle": "358a09d2",
+    "den-core-live": "f9d63320",
+    "den-register": "d310ef57",
+    "den-take": "257eca52",
+    "den-light": "8bcb37b3",
+    "den-verify": "82a8ef38",
+    "den-coordinator": "11f694de"
+  },
+  "lifted": {
+    "files": {
+      "tools/sofa-look/ask.py": {
+        "commit": "0a9371a2a5e8e08a6d56392705aa21fd054e43af",
+        "blob": "3f1ea21117703f92d397f1fb07d183819a43da05"
+      },
+      "tools/sofa-look/la.py": {
+        "commit": "0a9371a2a5e8e08a6d56392705aa21fd054e43af",
+        "blob": "3a1356b879d16e3af06297df14d792f50e12272b"
+      },
+      "stack/services/perception-lab/qwen_scene.py": {
+        "commit": "037216304d1fb3becd7b74db1bff6b8f6703f487",
+        "blob": "d11dd1011cc7828772df83263e4c8039a16f0df1"
+      }
+    }
+  }
+}

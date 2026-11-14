@@ -49,10 +49,11 @@ const SPEC_LUMENS = { spot: 450, down: 350, zone: 120 };
 const binding = { content_revision: 'authored-victoria-lit-r1', registration_version: 1,
   manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
 
-function world(t) {
+function world(t, { createBakeEndpoint, now = settledClock() } = {}) {
   const scene = new THREE.Scene(), root = new THREE.Group(); root.rotation.x = -Math.PI / 2; scene.add(root);
   const fixtures = createEquipmentVirtualFixtures(root, { binding });
-  assert.equal(fixtures.setDocument(authoredDocument(binding, Core)).status, 'ready');
+  const document = authoredDocument(binding, Core);
+  assert.equal(fixtures.setDocument(document).status, 'ready');
   const hook = shader => { shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\n// display-hook'); };
   const display = new THREE.MeshBasicMaterial({ map: new THREE.Texture(), toneMapped: false });
   display.onBeforeCompile = hook; display.customProgramCacheKey = () => 'home-scan-display-floor-0-1';
@@ -60,11 +61,48 @@ function world(t) {
   const mesh = new THREE.Group(), face = new THREE.Mesh(displayGeometry, display); mesh.add(face); root.add(mesh);
   const renderer = { shadowMap: { enabled: false, type: THREE.BasicShadowMap, autoUpdate: true, needsUpdate: false }, toneMapping: THREE.NoToneMapping };
   let current = mesh;
-  const lit = Lit.createLitView({ scene, renderer, getMesh: () => current, getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20, now: settledClock() });
+  const lit = Lit.createLitView({ scene, renderer, getMesh: () => current, getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20,
+    now, createBakeEndpoint });
   t.after(() => { lit.disable(); fixtures.dispose(); });
-  return { scene, root, fixtures, mesh, face, display, displayGeometry, hook, renderer, lit, setMesh: next => { current = next; } };
+  return { scene, root, fixtures, document, mesh, face, display, displayGeometry, hook, renderer, lit, setMesh: next => { current = next; } };
 }
 const lights = w => w.lit.group.children.filter(node => node.isSpotLight);
+
+test('coordinator-owned spots start dark, block manual writes and snap in Lit without a bounce contribution', async t => {
+  const posted = [];
+  const w = world(t, { now: () => 1, createBakeEndpoint: () => {
+    const inner = Bake.createLocalBakeEndpoint({ gpu: null });
+    return { ...inner, postMessage(data, transfer) { posted.push(data); inner.postMessage(data, transfer); } };
+  } });
+  const id = w.fixtures.readback().fixtures[0].fixture_id;
+  assert.equal(w.fixtures.setFixtureState(id, { spotlight: { on: true, brightness: .7 } }).ok, true);
+  const remembered = w.fixtures.interactionDescriptor(id).state;
+  assert.equal(remembered.spotlight.on, true);
+  assert.equal(w.fixtures.setDocument(w.document, { coordinator: true }).status, 'ready');
+  const scope = w.fixtures.coordinatorSpotScope();
+  assert.equal(w.fixtures.setFixtureState(id, remembered).ok, false, 'a remembered lit preview cannot take ownership');
+  assert.equal(w.fixtures.interactionDescriptor(id).state.spotlight.on, false);
+  assert.equal(w.fixtures.setFixtureState(id, { spotlight: { on: true } }).ok, false);
+  assert.equal(w.fixtures.aimAtTarget(id, { point: [0, 0, 1], normal: [0, 0, 1] }).ok, false);
+  assert.equal(w.fixtures.setFixtureState(id, { downward: { brightness: .2 } }).ok, true);
+  w.lit.enable();
+  assert.ok(lights(w).filter(light => light.name === 'lit-spot').every(light => light.intensity === 0));
+  const rows = scope.fixture_ids.map(fixture_id => ({ fixture_id, on: true, level: .7, cct_k: 3100, pan_deg: 3.2, tilt_deg: 41.5 }));
+  assert.equal(w.fixtures.applyCoordinatorSpots(rows, scope.generation), true);
+  w.lit.sync();
+  assert.ok(lights(w).find(light => light.name === 'lit-spot').intensity > 0, 'the 160 ms easing clock did not advance');
+  for (let i = 0; i < 40 && !posted.some(message => message.type === 'lights'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    w.lit.sync();
+  }
+  const update = posted.find(message => message.type === 'lights');
+  assert.ok(update?.lights.length);
+  assert.ok(update.lights.every(light => light.mode !== 'vpl'), 'the moving spot never enters the mesh lightmap');
+  assert.equal(w.fixtures.applyCoordinatorSpots(null), true);
+  w.lit.sync();
+  assert.ok(lights(w).filter(light => light.name === 'lit-spot').every(light => light.intensity === 0));
+  assert.equal(w.fixtures.interactionDescriptor(id).state.downward.brightness, .2);
+});
 
 test('the light model is renderer-independent and pure', () => {
   const source = fs.readFileSync(sourceFile('lit-model.mjs'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');

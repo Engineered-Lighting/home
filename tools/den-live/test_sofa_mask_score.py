@@ -179,8 +179,9 @@ class ReplayTests(unittest.TestCase):
                                   "box_xyxy": [8.0, 12.0, 90.0, 65.0], "keypoints": None})
         self.assertEqual(replay(self.bundle()), (None, "multiple_people"))
         row["detections"].pop()
-        row["detections"][0]["box_xyxy"][0] = 0
-        self.assertEqual(replay(self.bundle()), (None, "unsupported_pose"))
+        row["detections"][0]["box_xyxy"][0] = 0   # an edge-touching box is partial: head_evidence decides the head
+        pose, status = replay(self.bundle())
+        self.assertEqual((pose["visibility"], status), ("partial", "supported_pose"))
         row["detections"].clear()
         self.assertEqual(replay(self.bundle()), (None, "no_detection"))
 

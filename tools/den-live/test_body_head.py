@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 import tempfile
 import unittest
+import unittest.mock
 
 from body import head_exclusion
 from body_head import HeadProfile, head_evidence
@@ -76,7 +77,7 @@ class HeadEvidenceTests(unittest.TestCase):
             "missing ear": lambda pose: pose["joints_room"].pop(3),
             "plane fallback": lambda pose: pose["joints_room"][0].update(lift="plane:1.2"),
             "duplicate depth anchor": lambda pose: pose["joints_room"][1].update(xyz=pose["joints_room"][0]["xyz"]),
-            "partial visibility": lambda pose: pose.update(visibility="partial"),
+            "occluded visibility": lambda pose: pose.update(visibility="occluded"),
             "wrong transform": lambda pose: pose.update(transform_id="other"),
             "wrong rgb pixel": lambda pose: pose["keypoints"][2].__setitem__(0, 10),
             "implausible shoulder reach": lambda pose: pose["joints_room"][5]["xyz"].__setitem__(0, 10),
@@ -86,6 +87,29 @@ class HeadEvidenceTests(unittest.TestCase):
                 pose = self.pose()
                 mutate(pose)
                 self.assertIsNone(self.evidence(pose))
+
+    def test_a_partial_pose_with_the_whole_head_in_view_is_accepted(self):
+        pose = self.pose()
+        pose["visibility"] = "partial"   # e.g. legs leaving the RGB frame on the sofa
+        self.assertEqual(self.evidence(pose), self.evidence())
+
+    def test_a_head_the_rgb_view_cuts_off_is_refused_even_with_its_landmarks_inside(self):
+        import body_head
+
+        def anchors_inside(pose):
+            return all(0 <= x < 640 and 0 <= y < 360 for x, y, _ in pose["keypoints"][:7])
+
+        refused_by_rgb_edge = []
+        for step in range(150):
+            pose = self.pose(centre_z=1.45 + step * 0.01)
+            if not anchors_inside(pose):
+                break
+            if self.evidence(pose) is None:
+                with unittest.mock.patch.object(body_head, "_head_inside_rgb", return_value=True):
+                    if self.evidence(pose) is not None:
+                        refused_by_rgb_edge.append(step)
+        self.assertTrue(refused_by_rgb_edge, "near the RGB edge, the head check alone refuses")
+        self.assertIsNotNone(self.evidence(self.pose()))
 
     def test_motion_budget_expands_the_mask_and_refuses_excess_or_edge_crops(self):
         slow = self.evidence(separation_s=0.020)

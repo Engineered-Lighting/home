@@ -48,10 +48,14 @@ def _mean(points):
 
 
 def _measured_points(pose):
-    """Use the supported stereo anchors from a single complete pose."""
+    """Use the supported stereo anchors from a single pose.
+
+    den-observe calls a pose partial when its RGB box touches the image edge or a 2D torso joint is missing: on the
+    sofa, legs leaving the frame or a hip behind a book. That says nothing about the head, so a partial pose is
+    accepted here; head_evidence then requires the whole padded head to lie inside the RGB image."""
     if (not isinstance(pose, dict) or pose.get("kind") != "keypoints"
             or pose.get("joint_set") != "coco17" or pose.get("validity") != "valid"
-            or pose.get("visibility") != "visible"):
+            or pose.get("visibility") not in ("visible", "partial")):
         return None
     joints = pose.get("joints_room")
     if not isinstance(joints, (tuple, list)):
@@ -100,6 +104,23 @@ def _matches_native_pixels(pose, rig, points):
         # Reprojection is a consistency check, not the localization margin.
         if (reprojection is None or not all(map(_finite, reprojection))
                 or math.dist(pixel[:2], reprojection) > PATCH_RADIUS_PX):
+            return False
+    return True
+
+
+def _head_inside_rgb(rig, head_left, radius_m):
+    """True when every corner of the cube around the head, in the left camera's frame, projects inside the RGB image:
+    the detector saw the whole head, so its face landmarks aren't guesses at a head the RGB view cuts off."""
+    width, height = rig.rgb_size
+    for corner in product(*[(axis - radius_m, axis + radius_m) for axis in head_left]):
+        if corner[2] <= 1e-6:
+            return False
+        try:
+            pixel = rig.to_rgb(corner)
+        except ZeroDivisionError:   # rational distortion is undefined for this point
+            return False
+        if (pixel is None or not all(map(_finite, pixel))
+                or not (0 <= pixel[0] < width and 0 <= pixel[1] < height)):
             return False
     return True
 
@@ -157,6 +178,8 @@ def head_evidence(pose, camera, *, frame_key, binding, profile, separation_s):
         return None
     head = apply(*to_depth, head)
     neck_base = apply(*to_depth, neck_base)
+    if not _head_inside_rgb(camera.rig, head, profile.head_radius_m + profile.localization_m):
+        return None
     volumes = (((head,), profile.head_radius_m), ((head, neck_base), profile.neck_radius_m))
     intrinsics = camera.rig.left_k
     bounds = _projection(volumes, intrinsics, 0)

@@ -107,8 +107,10 @@ def pose_for_mask(bundle, meta, depth, detector, tools, camera, settings, provid
     if float(plane[:detect.HEIGHT].mean()) < DARK_LUMA:
         return None, "unusable_rgb"
     rgb = detector.decode(plane, detect.WIDTH, detect.HEIGHT)
-    result, _, compute_s = detector.run(np.ascontiguousarray(rgb[:, :, ::-1]), "rgb-%d" % bundle.rgb_seq)
-    row = detector.row_of(result, capture_ts=bundle.t_host, available_ts=bundle.t_host + compute_s,
+    result, _, _compute_s = detector.run(np.ascontiguousarray(rgb[:, :, ::-1]), "rgb-%d" % bundle.rgb_seq)
+    # Offline, the result counts as available at capture: this scores the head cut, and the workstation's detector
+    # latency (often seconds under load) isn't the service's. Live freshness is the runtime's own check.
+    row = detector.row_of(result, capture_ts=bundle.t_host, available_ts=bundle.t_host,
                           rgb_seq=bundle.rgb_seq, width=detect.WIDTH, height=detect.HEIGHT,
                           boxes_version="yolo26s-8.4.0", keypoints_version=detector.pose.manifest["model_version"])
     observations = tools.observe.observe(row, meta, depth, camera, settings, offset_s=0)
@@ -117,7 +119,7 @@ def pose_for_mask(bundle, meta, depth, detector, tools, camera, settings, provid
         return None, "multiple_people" if people else "no_detection"
     pose = people[0]
     fresh = pose["freshness"]
-    if (pose["kind"] != "keypoints" or pose["validity"] != "valid" or pose["visibility"] != "visible"
+    if (pose["kind"] != "keypoints" or pose["validity"] != "valid" or pose["visibility"] not in ("visible", "partial")
             or fresh["status"] != "fresh" or fresh["depth"] != "used"):
         return None, "unsupported_pose"
     stereo_torso = {joint["j"] for joint in pose["joints_room"]

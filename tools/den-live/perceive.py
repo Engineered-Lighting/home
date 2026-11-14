@@ -94,6 +94,7 @@ EPOCH_BACK_S = 1.0   # the camera's own clock going back more than this within a
 EPOCH_GAP_S = 3.0    # this long without a fresh frame is a new epoch; a shorter gap keeps the epoch and the tracker
 HEALTH_S = 10.0      # frames a second and lag are over this window only: an old frame never speaks for now
 PERSON_MIN = 0.5     # den-detect's pose line, and plan L3's marker line
+ERROR_NAMES_MAX = 8  # distinct detector error type names kept by name; any more count as "other"
 TRANSIT_MAX_S = 5.0  # arrival less captured_unix_ns counts only between 0 and this (plan L1)
 NOT_CORRECTED = "depth not corrected at the camera"
 CORRECTION_CHANGED = ("the camera's depth correction isn't the one step 2 registered on: paste register_now.py without "
@@ -435,6 +436,7 @@ class Perceiver:
         self.mode, self.dark_since, self.light_since = "rgb", None, None
         self.counts = {"frames": 0, "refused_depth": 0, "unreadable": 0, "detector_errors": 0, "expired": 0, "out_of_order": 0,
                        "observations": 0, "weak_only_hidden": 0}
+        self.error_names = {}   # detector_errors by the worker's exception type name (a type name only, never text)
         self.last_t_host = self.last_capture = None
         self.arrivals, self.lags, self.drops, self.transits = deque(), deque(), deque(), deque()
         self.problem = None
@@ -567,7 +569,8 @@ class Perceiver:
         try:
             value = self.body_provider(bundle, meta, depth, frame_key=frame_key, mode=self.mode,
                                     observations=observations, tracks=tracks, supported=supported,
-                                    association={} if association is None else association)
+                                    association={} if association is None else association,
+                                    capture_mono=ref.capture_mono)
             arrival = receipt_arrival(bundle)
             if (qualified_body_input(value, self.scope) and value.frame_key == frame_key
                     and value.run_id == ref.service_run_id and value.track_epoch == ref.camera_epoch
@@ -738,6 +741,12 @@ class Perceiver:
         if ref.camera_epoch != self.sessions or now_mono >= capture_mono + FRESH_S:
             return self._drop("expired", now_mono, "detector result expired")
         if "error" in reply:
+            name = reply["error"]
+            if type(name) is not str or not name.isidentifier() or len(name) > 40:
+                name = "other"
+            if name not in self.error_names and len(self.error_names) >= ERROR_NAMES_MAX:
+                name = "other"
+            self.error_names[name] = self.error_names.get(name, 0) + 1
             self._drop("detector_errors", now_mono, "detector errors")
             return self.idle(camera_state, now_mono)
         self.problem = None

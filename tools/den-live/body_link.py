@@ -6,6 +6,10 @@ from body_clock import lease_clock
 from stream import BODY_LEASE_S
 
 MIN_INTERVAL_S = 0.3
+# A frame's misses for the same person: the last published frame keeps its own lease through them, so one frame
+# without a pose or enough depth doesn't blank the figure. Anything that changes the scene (empty, ambiguous, a new
+# scope or track, the detector stopping) clears at once.
+HOLD_REASONS = frozenset(("pose_unavailable", "insufficient_depth", "stale"))
 
 
 class BodyLink:
@@ -19,6 +23,7 @@ class BodyLink:
         self.request_id, self.generation = 0, 0
         self.facing = self.facing_candidate = None
         self.last_sent = self.last_clear = self.why = self.stopped = self.compute_s = None
+        self.shown_until = None   # the lease end of the last published frame
         self.closed = False
         self.counts = dict(sent=0, skipped_busy=0, skipped_rate=0, frames=0, empty=0, errors=0)
         detector.on_body = self._reply
@@ -29,6 +34,9 @@ class BodyLink:
         if reset:
             self.reset_learning = True
         self.why = reason
+        if reason in HOLD_REASONS and self.shown_until is not None and self.clock() < self.shown_until:
+            return   # the figure stays until its own lease ends (Home clears it then) or the next frame replaces it
+        self.shown_until = None
         if self.scope is not None and reason != self.last_clear:
             self.stream.publish_body(self.scope, reason=reason)
             self.last_clear = reason
@@ -36,7 +44,7 @@ class BodyLink:
     def _scope(self, scope, binding, track):
         if (scope, binding, track) != (self.scope, self.binding, self.track):
             self.scope, self.binding, self.track = scope, binding, track
-            self.last_sent = self.last_clear = None
+            self.last_sent = self.last_clear = self.shown_until = None
             self._clear("scope_changed")
 
     def clear(self, reason, *, scope=None):
@@ -122,7 +130,9 @@ class BodyLink:
             if self.stream.publish_body(self.scope, frame=frame, capture_mono=capture_mono):
                 self.counts["frames"] += 1
                 self.why = self.last_clear = None
+                self.shown_until = capture_mono + BODY_LEASE_S
             else:
+                self.shown_until = None
                 self._clear("stale")
 
     def submit(self, frame_id, *, frame_key, scope, setup, capture_mono, observation, person=None):

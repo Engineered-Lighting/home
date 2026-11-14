@@ -10,9 +10,39 @@ a pin update and a release switch. Never edit a release in place. The repo copy 
 | --- | --- | --- |
 | `pilot-20260926` | `installed-oak-capture-20261016.py` | Causal JPEG timing pilot |
 | `pilot-20261111-depth` | `installed-oak-capture-20261111.py` | Measured depth correction (`DEPTH_CORRECTION`) |
+| `pilot-20261114-slim` | `installed-oak-capture-20261114.py` | `/frame-slim.npz` (`den-camera-slim-1`) for den-live across the link |
 
 Keep earlier release directories in place: perception-lab releases already on the Jetson read their own
 pinned `capture.py` by path.
+
+## The slim bundle (`pilot-20261114-slim`)
+
+den-live on LA pulls the newest bundle across the routed link between the homes, a round trip of about 47 ms. A
+new TCP connection for every pull, and a 650–770 kB bundle, held it to about 2 fps, with a p50 fetch of 463 ms. It
+reads only `depth_mm`, `rgb_nv12` and the metadata. `/frame-slim.npz` is that frame without `left` and `right`
+(about half the bytes, lossless). It's compressed in about 20 ms and published before the full bundle (about
+110 ms), and it keeps its connection open: one round trip per frame, and `304` with no body while the frame is the
+same (`If-None-Match`). Its metadata is the full bundle's, plus `bundle_schema: den-camera-slim-1` and
+`bundle_omits`. Every other path, `/frame.npz` included, answers exactly as `pilot-20261111-depth` does.
+
+- **The Lab's pin stays at `pilot-20261111-depth`.** This release changes no clock check
+  (`test_slim_release.py` proves it), so keep that directory: the Lab reads it by path. No perception-lab deploy.
+- **den-live falls back by itself.** On a camera without the slim path (`404`, for example after a rollback), it
+  pulls `/frame.npz` as before and asks for the slim path again a minute later.
+- **Measure it offline** on any recorded bundle, or on the camera host with a bundle piped in:
+  `python -I -B tools/den-camera/slim_bundle_bench.py <bundle.npz>`.
+- **Ship it** as below, with these names. Stage it in step 1's folder, from the running release's dependencies
+  (the same wheels):
+
+  ```bash
+  mkdir -m 700 pilot-20261114-slim
+  cp -a pilot-20261111-depth/dependencies pilot-20261111-depth/wheels pilot-20261111-depth/requirements.txt pilot-20261114-slim/
+  install -m 600 installed-oak-capture-20261114.py pilot-20261114-slim/capture.py && rm installed-oak-capture-20261114.py
+  sha256sum pilot-20261114-slim/capture.py   # must equal the repo copy's SHA256
+  ```
+
+  Then `switch-capture-release.sh check` and `switch` with `pilot-20261114-slim` and that SHA256. Its rollback
+  is the switcher's own: den-live falls back to `/frame.npz` meanwhile.
 
 ## Depth correction
 
@@ -58,6 +88,8 @@ ssh <account>@victoria-den-jetson "~/victoria-camera/venv/bin/python -I ~/victor
 3. Verify with `depth_tape_check.py`: `declared_depth_correction.applied` must be true, and both tape errors
    must be within a few percent.
 
-4. Deploy perception-lab as usual so its pin follows the new release.
+4. Deploy perception-lab as usual so its pin follows the new release, when the release changes a clock check.
+   `pilot-20261114-slim` doesn't; for it, stage `pilot-20261114-slim` and switch to it with the same three
+   commands, then skip this step.
 
 The switched drop-in is owned by `switch-capture-release.sh`; `pilot-service.py` refuses to touch it.

@@ -1,5 +1,9 @@
 const SCHEMA = 'den-virtual-spots-1';
 const finite = Number.isFinite;
+const AMBIENT_KELVIN = [2200, 6500];
+// The render clock's creep: Home maps the coordinator's monotonic clock to its own by the lowest transit seen, and lets
+// that floor rise this much per snapshot so a slow drift between the two clocks can't strand it.
+const RENDER_CREEP_MS = .5;
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 const text = value => typeof value === 'string' && value.length > 0;
 const object = value => value != null && typeof value === 'object' && !Array.isArray(value);
@@ -43,10 +47,102 @@ function stampPaint(epoch, seq, lit) {
     });
 }
 
+/* The den spot's motion, drawn the way the fixture makes it (den-live's direction.py; the lighting-direction note).
+ *
+ * The coordinator sends one MOVE per glide, and the board's planner (C12 v2 plan 5.1) flies both axes along one
+ * jerk-limited S-curve on a shared path parameter s, from rest to rest. Each den-virtual-spots-1 row that is moving
+ * carries that move as `glide {from_deg, to_deg, start_mono, duration_s, limits: [v, a, j], shape: "scurve-7"}`, and
+ * Home evaluates the same curve every frame instead of stepping between 10 Hz snapshots. A row's level comes as the
+ * level train's committed steps; Home eases between them over SPOT_EASE_MS, about one coordinator tick.
+ *
+ * Shared vectors: tools/den-live/fixtures/direction-scurve-vectors.json (den-live's test_direction.py writes them). */
+export const SPOT_EASE_MS = 120;
+const SHAPE = 'scurve-7';
+
+function timeToSpeed(v, a, j) {
+    return v >= a * a / j ? v / a + a / j : 2 * Math.sqrt(v / j);
+}
+
+/* A rest-to-rest move of s from 0 to 1 under speed v, acceleration a and jerk j (per second, squared, cubed):
+ * den-core's scurve_time for its duration, and the jerk profile integrated for s(t). */
+export function scurve(v, a, j) {
+    if (!(v > 0 && a > 0 && j > 0)) throw RangeError('scurve_limits');
+    let peak = v;
+    if (v * timeToSpeed(v, a, j) > 1) {
+        let low = 0, high = v;
+        for (let i = 0; i < 100; i++) {
+            const middle = (low + high) / 2;
+            if (middle * timeToSpeed(middle, a, j) < 1) low = middle; else high = middle;
+        }
+        peak = high;
+    }
+    const [jerkS, flatS] = peak >= a * a / j ? [a / j, peak / a - a / j] : [Math.sqrt(peak / j), 0];
+    const accelerate = 2 * jerkS + flatS, cruise = Math.max(0, (1 - peak * accelerate) / peak);
+    const segments = [[jerkS, j], [flatS, 0], [jerkS, -j], [cruise, 0], [jerkS, -j], [flatS, 0], [jerkS, j]];
+    const duration = 2 * accelerate + cruise;
+    function integrate(t) {
+        let position = 0, speed = 0, acceleration = 0;
+        for (const [length, jerk] of segments) {
+            if (t <= 0) break;
+            const step = Math.min(length, t);
+            if (step <= 0) continue;
+            position += speed * step + acceleration * step * step / 2 + jerk * step ** 3 / 6;
+            speed += acceleration * step + jerk * step * step / 2;
+            acceleration += jerk * step;
+            t -= step;
+        }
+        return [position, speed];
+    }
+    const total = integrate(duration)[0] || 1;
+    return {
+        duration,
+        s: t => t <= 0 ? 0 : t >= duration ? 1 : Math.min(1, Math.max(0, integrate(t)[0] / total)),
+        speed: t => t <= 0 || t >= duration ? 0 : integrate(t)[1] / total,
+    };
+}
+
+/* A snapshot row's glide, checked, on Home's clock: startMs is the glide's start as Home's performance clock reads
+ * it, and at(nowMs) the [pan_deg, tilt_deg] it has reached. Null when the row has no glide Home can draw. */
+function localGlideCurve(glide, startMs) {
+    if (!glide || glide.shape !== SHAPE || !Array.isArray(glide.limits) || glide.limits.length !== 3
+        || !glide.limits.every(value => finite(value) && value > 0) || !finite(startMs)
+        || ![glide.from_deg, glide.to_deg].every(pair => Array.isArray(pair) && pair.length === 2 && pair.every(finite))) return null;
+    try {
+        const curve = scurve(...glide.limits);
+        const from = glide.from_deg.slice(), to = glide.to_deg.slice(), endMs = startMs + curve.duration * 1000;
+        const at = nowMs => glideAt({ from, to, startMs, curve }, nowMs);
+        return { from, to, startMs, endMs, curve, at };
+    } catch (_) { return null; }
+}
+
+/* [pan_deg, tilt_deg] of a local glide at nowMs: the board's straight line in joint space, along s(t). */
+export function glideAt(glide, nowMs) {
+    const s = glide.curve.s((nowMs - glide.startMs) / 1000);
+    return [glide.from[0] + (glide.to[0] - glide.from[0]) * s, glide.from[1] + (glide.to[1] - glide.from[1]) * s];
+}
+
+/* One frame of the level's ease toward its committed step: a first-order lag of SPOT_EASE_MS. */
+export function easeLevel(shown, target, elapsedMs) {
+    if (!(elapsedMs > 0)) return shown;
+    const next = shown + (target - shown) * -Math.expm1(-elapsedMs / SPOT_EASE_MS);
+    return Math.abs(target - next) <= .002 ? target : next;
+}
+
+export { localGlideCurve as localGlide };
+
+/* The snapshot's room glow (den-live's direction: dimmed under a task light), checked: {level, cct_k}, null for "the
+ * coordinator directs none" (Off), undefined when the producer sends none. */
+export function ambientOf(value) {
+    if (value === undefined) return undefined;
+    if (!object(value) || !finite(value.level) || value.level < 0 || value.level > 1 || !finite(value.cct_k)) return null;
+    return { level: value.level, cct_k: Math.min(AMBIENT_KELVIN[1], Math.max(AMBIENT_KELVIN[0], value.cct_k)) };
+}
+
 export function createSpotPlayback({ home, site, clock = () => performance.now(), onChange = () => {},
     later = setTimeout, cancel = clearTimeout }) {
     let overlay = null, applied = null, candidate = null, control = null, controlVersion = 0;
     let anchor = null, openedAt = null, transform = null, scan = null, highestSeq = -1, stopCounter = -1, timer = null;
+    let renderOffset = null;   // Home's clock minus the coordinator's, in ms: the lowest transit seen, creeping up
     const hold = { off: null, stop: null };
 
     function clear() {
@@ -64,7 +160,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         overlay = nextOverlay;
     }
     function disconnect() {
-        openedAt = null; anchor = null; transform = null; scan = null; highestSeq = -1;
+        openedAt = null; anchor = null; transform = null; scan = null; highestSeq = -1; renderOffset = null;
         clear();
     }
     function observeControl(value, version = controlVersion) {
@@ -116,8 +212,13 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         if (stop && !value.stopped && stop.observed != null && value.stop_counter >= stop.observed) hold.stop = null;
         observeControl(value);
         if ((hold.off || hold.stop) && value.on && !value.stopped) { clear(); return; }
-        const fixtures = scope.fixture_ids.map(id => ({ fixture_id: id, ...value.fixtures[id] }));
-        if (!overlay.applyCoordinatorSpots(fixtures, scope.generation)) {
+        // A moving row's glide goes to the overlay on Home's own clock, so each frame draws the board's S-curve.
+        const fixtures = scope.fixture_ids.map(id => {
+            const row = { fixture_id: id, ...value.fixtures[id] };
+            const glide = row.glide && renderOffset !== null && localGlideCurve(row.glide, row.glide.start_mono * 1000 + renderOffset);
+            return glide ? { ...row, glide_local: glide } : row;
+        });
+        if (!overlay.applyCoordinatorSpots(fixtures, scope.generation, { ambient: ambientOf(value.ambient) })) {
             overlay.applyCoordinatorSpots(null); clear(); return;
         }
         stampPaint(value.epoch, value.seq, fixtures.some(fixture => fixture.on === true));
@@ -134,6 +235,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             if (openedAt === null || !text(value?.epoch) || !finite(value.server_mono) || value.epoch === anchor?.epoch) return;
             if (anchor) { clear(); highestSeq = -1; }
             anchor = { epoch: value.epoch, server: value.server_mono };
+            renderOffset = null;
         },
         receive(value) {
             if (!anchor) return;
@@ -142,6 +244,8 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             if (revision(value.seq)) highestSeq = value.seq;
             if (!validSnapshot(value, home, site)) { clear(); return; }
             if (value.stop_counter < stopCounter) return;
+            const transit = clock() - value.sampled_mono * 1000;
+            renderOffset = renderOffset === null ? transit : Math.min(transit, renderOffset + RENDER_CREEP_MS);
             candidate = value;
             applyCandidate();
         },

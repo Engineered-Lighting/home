@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createSpotPlayback } from '../app/src/home-den-spot-playback.mjs';
+import { createSpotPlayback, scurve, localGlide, ambientOf } from '../app/src/home-den-spot-playback.mjs';
 
 const { snapshot: lit, stopped_snapshot: stopped } = JSON.parse(readFileSync(
     new URL('./den-live/fixtures/preview-f3.json', import.meta.url), 'utf8'));
@@ -170,4 +170,57 @@ test("den-live's current snapshot plays: a top-level subject and the v4 scan at 
     const behind = setup({ ...v4, scan_revision: 'local-2026-10-15-den-view-r1-v3', equipment_revision: 2 });
     behind.player.receive(current);
     assert.equal(behind.drawn(), null, 'a Home still on the v3 room never plays a v4 snapshot');
+});
+
+/* ---- the light direction (den-live's direction.py): the glide drawn on the board's S-curve, and the room's glow ---- */
+
+const vectors = JSON.parse(readFileSync(new URL('./den-live/fixtures/direction-scurve-vectors.json', import.meta.url), 'utf8'));
+const near = (actual, expected, tolerance, message) => assert.ok(Math.abs(actual - expected) <= tolerance,
+    `${message ?? ''} ${actual} vs ${expected}`);
+
+test('Home draws the S-curve den-live plans with: the shared vectors', () => {
+    assert.equal(vectors.schema, 'den-direction-scurve-vectors-1');
+    for (const { limits, duration_s: duration, samples } of vectors.cases) {
+        const curve = scurve(...limits);
+        near(curve.duration, duration, 1e-8, 'duration');
+        for (const [t, s, speed] of samples) {
+            near(curve.s(t), s, 1e-8, `s(${t})`);
+            near(curve.speed(t), speed, 1e-7, `speed(${t})`);
+        }
+    }
+    assert.throws(() => scurve(0, 1, 1), /scurve_limits/);
+});
+
+test('a moving row reaches the overlay with its glide on Home\'s clock, and the room glow with it', () => {
+    let at = 5000, rows = null, options = null;
+    const scope = { generation: 1, binding: { content_revision: binding.scan_revision },
+        equipment_revision: binding.equipment_revision, equipment_digest: binding.equipment_digest, fixture_ids: [fixture] };
+    const player = createSpotPlayback({ home: 'den', site: lit.site, clock: () => at, later: () => 1, cancel() {} });
+    player.attach({ coordinatorSpotScope: () => scope,
+        applyCoordinatorSpots(next, _generation, extra) { rows = next; options = extra; return true; } });
+    player.connect(at);
+    player.anchor({ epoch: lit.epoch, server_mono: lit.sampled_mono });
+    player.tracking(binding.transform_id, binding.scan_revision);
+    const { limits, duration_s } = vectors.cases[1];
+    const glide = { from_deg: [-10, 20], to_deg: [-14.6, 21.2], start_mono: lit.sampled_mono - .2, duration_s, limits,
+        shape: 'scurve-7' };
+    at += 40;   // this snapshot's transit
+    player.receive({ ...lit, seq: 20, ambient: { level: .3, scale: .4, cct_k: 2700 },
+        fixtures: { [fixture]: { ...lit.fixtures[fixture], motion_phase: 'moving', glide } } });
+    const drawn = rows[0].glide_local;
+    near(drawn.startMs, at - 200, 1e-6, 'started 0.2 s before the sample, on Home\'s clock');
+    assert.deepEqual(drawn.at(drawn.startMs), [-10, 20]);
+    assert.deepEqual(drawn.at(drawn.endMs), [-14.6, 21.2]);
+    const middle = drawn.at((drawn.startMs + drawn.endMs) / 2);
+    near(middle[0], -12.3, 1e-9, 'half way along the symmetric curve');
+    assert.deepEqual(options.ambient, { level: .3, cct_k: 2700 });
+    at += 100;
+    player.receive({ ...lit, seq: 21 });
+    assert.equal(rows[0].glide_local, undefined, 'a settled row has no glide');
+    assert.equal(options.ambient, undefined, 'an older producer sends no ambient: the room is left alone');
+    player.receive({ ...lit, seq: 22, ambient: null });
+    assert.equal(options.ambient, null, 'Off: the coordinator directs no room light');
+    assert.equal(ambientOf({ level: 2, cct_k: 2700 }), null);
+    assert.deepEqual(ambientOf({ level: .5, cct_k: 1000 }), { level: .5, cct_k: 2200 });
+    assert.equal(localGlide({ ...glide, shape: 'linear' }, 0), null, 'only the board\'s own curve is drawn');
 });

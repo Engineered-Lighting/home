@@ -39,29 +39,9 @@ FACING_REFUSALS = ("in_front_of_reader", "no_facing")
 # A light on someone refused for these is in, or can't be checked against, their head or eyes: it's cut at once (one
 # level-0 MOVE), never eased out. Easing is for ordinary hand-offs and exits.
 EYE_REFUSALS = ("beam_through_head", "no_head")
-# The head's clearance from a beam is checked where the head is going as well as where the newest frame saw it: a
-# velocity fitted over the last HEAD_V_FRAMES frames (within HEAD_V_WINDOW_S; with fewer, none: two noisy frames read
-# 9-44 cm a second for a still head), at most HEAD_SPEED_MAX_M_S, carried over a horizon. Keeping a lit beam: the
-# frame's age plus HEAD_LEAD_S, at most HEAD_LEAD_MAX_S. Admitting a fixture, rising in place or handing over: the age
-# plus ADMIT_LEAD_S, at most ADMIT_LEAD_MAX_S, because that beam will stay. Through a camera gap: the gap's age plus
-# HEAD_LEAD_S, with GAP_DRIFT_M_S of extra margin for each second of gap.
-HEAD_V_FRAMES = 4
-HEAD_V_WINDOW_S = 2.5
-HEAD_SPEED_MAX_M_S = 1.0
-HEAD_LEAD_S = 0.4
-HEAD_LEAD_MAX_S = 0.8
-ADMIT_LEAD_S = 1.0
-ADMIT_LEAD_MAX_S = 1.5
-GAP_DRIFT_M_S = 0.01
 # The clearance is to each eye as well as to den-core's head point (the face joints' median, ears included, about 3 cm
 # behind the eyes): the eye keypoints, or without them the head point this far along the facing.
 EYES_AHEAD_M = 0.03
-# A seated reader can slide along the sofa, across their facing, faster than a 2.6 frame-a-second camera and its lag
-# can follow (40 cm a second covers 30 cm before a cut lands). So a beam must also clear the head and the eyes moved
-# this far to either side. In the reading sim a sideways reach of 25 cm keeps a lean-then-slide's closest pass at 12-15 cm
-# with no time under 12 cm, at about half a cut and a second of dark more a session; 15 cm costs nothing and keeps it
-# at 10-11 cm.
-SLIDE_REACH_M = 0.25
 # After a cut for the head or the eyes, the fixture isn't admitted again for this long: no cut-and-relight cycles.
 CUT_HOLD_S = 1.5
 # The direction's choice hysteresis (lighting-direction note): a dark pre-aim moves at most once a second, and while the
@@ -77,22 +57,6 @@ RECOVERABLE = ("task_released", "task_ending")
 THROUGH_ANOTHER_HEAD = "beam_through_another_head"   # den-core eye's own is beam_through_head
 CONTROL_KEYS = ("on", "stopped", "stop_counter")
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
-
-
-def fitted_velocity(frames):
-    """The head's velocity from (capture_mono, xyz) frames: the least-squares slope on each axis, at most
-    HEAD_SPEED_MAX_M_S. None if the frames span no time."""
-    times = [t for t, _ in frames]
-    mean_t = sum(times) / len(times)
-    spread = sum((t - mean_t) ** 2 for t in times)
-    if spread <= 0:
-        return None
-    means = [sum(p[i] for _, p in frames) / len(frames) for i in range(3)]
-    velocity = [sum((t - mean_t) * (p[i] - means[i]) for t, p in frames) / spread for i in range(3)]
-    speed = math.sqrt(sum(c * c for c in velocity))
-    if speed > HEAD_SPEED_MAX_M_S:
-        velocity = [c * HEAD_SPEED_MAX_M_S / speed for c in velocity]
-    return velocity
 
 
 class Preview:
@@ -355,13 +319,6 @@ class Preview:
         head = published_head(track) or body.head(joints)   # contract 2's head_point_m, perception's
         if head and not body.head(joints):
             joints["nose"] = [*head, 1.0]
-        before = self.track if self.track and self.track.get("track_id") == key[2] else None
-        frames = [(c, h) for c, h in (getattr(self, "head_frames", None) if before else None) or []
-                  if c > captured - HEAD_V_WINDOW_S]
-        if head:
-            frames.append((captured, tuple(head)))
-        self.head_frames = frames[-HEAD_V_FRAMES:]
-        head_v = fitted_velocity(self.head_frames) if len(self.head_frames) >= HEAD_V_FRAMES else None
         self.captured = captured
         self.track_until, self.hold_until = deadline, hold
         # Contract 2's seated, published once by perception: the episode starts at its since_mono, the same instant
@@ -393,7 +350,7 @@ class Preview:
             target, basis = self.shift.update(captured, page, fallback, fallback_basis, self._lit_for(key[2]))
             self.target_basis = basis
         self.track = {"track_id": key[2], "head": head, "shoulder_mid": shoulders, "facing": facing,
-                      "target": target, "basis": basis, "seated": seated, "head_v": head_v, "eyes": eyes}
+                      "target": target, "basis": basis, "seated": seated, "eyes": eyes}
 
     def inference(self, reply):
         with self.lock:
@@ -505,7 +462,7 @@ class Preview:
                 if row["cut_at"] is not None and now - row["cut_at"] < CUT_HOLD_S:
                     reasons[name] = "cut_hold"
                     continue
-                if not self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M, target, self._admit_horizon()):
+                if not self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M, target):
                     reasons[name] = "beam_through_head"
                     continue
             candidates[name], joints[name] = result, target
@@ -567,14 +524,9 @@ class Preview:
         if person is not None and directing:
             # Every beam the board emits, whatever den-core says and whether or not a candidate was chosen (a task's
             # fade-out with pre-aim off, the leave fade), clears the head and the eyes, or is cut at once. Through a
-            # camera gap it's judged from the last frame, the head carried on its path for the gap's age, with
-            # GAP_DRIFT_M_S more margin for each second of gap.
-            gap = self._age() if held else 0.0
-            clearance = direction.AIM_KEEP_M + GAP_DRIFT_M_S * gap
-            horizon = gap + HEAD_LEAD_S if held else None
+            # camera gap it's judged from the last frame.
             for name, row in self.rows.items():
-                if (name not in self.cut and self._lighting(row)
-                        and not self._beam_clear(row, person, clearance, horizon)):
+                if name not in self.cut and self._lighting(row) and not self._beam_clear(row, person):
                     self.cut[name] = "beam_through_head"
                 elif name not in self.cut and self._lighting(row) and not self._others_clear(row):
                     self.cut[name] = THROUGH_ANOTHER_HEAD   # someone else's head in the beam as it points
@@ -677,7 +629,7 @@ class Preview:
             if glide:
                 return   # landing first (P3 holds a MOVE that arrives during a move); it rises once it's there
             if target != effective_target and not (self._in_beam(row, person["target"]) and self._clear(
-                    row, person, self.core.eye.HEAD_CLEARANCE_M, None, self._admit_horizon())):
+                    row, person, self.core.eye.HEAD_CLEARANCE_M)):
                 # Pointing elsewhere, or near the page but with the beam as it points too close to the head: a dark
                 # move to the target den-core's eye rule cleared, then the rise.
                 if not self._can_send(row, now):
@@ -723,6 +675,8 @@ class Preview:
             ramp = row["ramp"]
             if ramp is not None and ramp.end > ramp.start and not ramp.done(now):
                 return   # a rise finishes before the glide: one change at a time
+            if row["profile"].get("lit_motion") and self._in_beam(row, person["target"], direction.FRAME_HOLD):
+                return   # the frame holds: the page is still well inside the beam, so nothing moves while they read
             if not row["profile"].get("lit_motion"):
                 # A board that can't move lit makes every re-aim a blink. So it holds its aim while the page is still
                 # well inside the beam; once the page has gone, a standby on its way there takes the job when it lands
@@ -761,8 +715,12 @@ class Preview:
                     return
                 # One movement, one command: the glide carries the level the train has reached, and a rise in progress
                 # waits for it to land.
-                timed = {"min_duration_ms": round(self.settings["glide_min_s"] * 1000), "fade_ms": 0,
-                         "fade_curve": "linear"} if row["timed"] else None
+                # Its pace is a camera move's: a small reframe creeps, a big one is a dolly (direction.glide_seconds).
+                # A board with the timed MOVE stretches its S-curve to it; so does a virtual one, which Home draws.
+                moved = math.dist(row["target"], person["target"]) if row["target"] is not None else 0.0
+                pace = direction.glide_seconds(moved, self.settings)
+                timed = {"min_duration_ms": round(pace * 1000), "fade_ms": 0, "fade_curve": "linear"} if (
+                    row["timed"] or row["profile"].get("fictional")) else None
                 self._move(name, row, target, direction.level_code(row["level"]) / direction.LEVEL_CODES, "lit", now,
                            person, "task", timed=timed)
                 return
@@ -808,18 +766,16 @@ class Preview:
         return (not row["profile"].get("lit_motion") and self._lighting(row) and not row["exiting"]
                 and row["glide"] is None and not self._in_beam(row, person["target"], direction.DARK_HOLD))
 
-    def _beam_clear(self, row, person, clearance=None, horizon=None):
-        """Every beam the board emits clears the head and the eyes by AIM_KEEP_M (or `clearance`), on its aim now. A MOVE
-        still flying dark is judged where it will light, at its landing aim. A dark fixture with nothing in flight
-        emits nothing."""
-        clearance = direction.AIM_KEEP_M if clearance is None else clearance
+    def _beam_clear(self, row, person):
+        """Every beam the board emits clears the head and the eyes by AIM_KEEP_M, on its aim now. A MOVE still flying
+        dark is judged where it will light, at its landing aim. A dark fixture with nothing in flight emits nothing."""
         glide = row["glide"]
         if row["level"] > 0:
-            return self._clear(row, person, clearance, None, horizon)
+            return self._clear(row, person, direction.AIM_KEEP_M)
         landing = glide is not None and (row["arrive_level"] or (row["ramp"] is not None and row["ramp"].sent
                                                                  and row["ramp"].end > 0))
         if landing:
-            return self._clear(row, person, clearance, glide.target, horizon)
+            return self._clear(row, person, direction.AIM_KEEP_M, glide.target)
         return True
 
     def _others_clear(self, row):
@@ -850,38 +806,17 @@ class Preview:
         head by admission's margin: it can take the job as a crossfade."""
         return (not self._lighting(row) and row["glide"] is None and row["pending"] is None
                 and self._in_beam(row, person["target"], direction.DARK_HOLD)
-                and self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M, None, self._admit_horizon()))
+                and self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M))
 
-    def _age(self):
-        return max(0.0, self.clock() - self.captured) if self.captured is not None else 0.0
-
-    def _admit_horizon(self):
-        """How far ahead a beam that's about to light is checked against the head's path."""
-        return min(ADMIT_LEAD_MAX_S, self._age() + ADMIT_LEAD_S)
-
-    def _clear(self, row, person, clearance, joints=None, horizon=None):
-        """The beam as the fixture points now (its joints mid-glide, or `joints`) passes the head with at least
-        `clearance`: the distance from the beam's centre ray to den-core's head point and to each eye, where the newest
-        frame saw them and along their fitted path for `horizon` seconds (by default a lit beam's: the frame's age plus
-        HEAD_LEAD_S, at most HEAD_LEAD_MAX_S). False without a head."""
+    def _clear(self, row, person, clearance, joints=None):
+        """The beam's centre as the fixture points now (its joints mid-glide, or `joints`) passes den-core's head point
+        and each eye with at least `clearance`, as the newest frame saw them. False without a head."""
         head = person.get("head")
         if not head:
             return False
         joints = row["current"] if joints is None else joints
         aim = self.core.joints.direction(joints[0] / 100, joints[1] / 100, row["horizontal_world_reference"])
-        points = [head] + list(person.get("eyes") or [])
-        heads = list(points)
-        velocity = person.get("head_v")
-        if horizon is None:
-            horizon = min(HEAD_LEAD_MAX_S, self._age() + HEAD_LEAD_S)
-        if velocity and horizon > 0:
-            heads += [[point[i] + velocity[i] * horizon * k for i in range(3)]
-                      for point in points for k in (.25, .5, .75, 1.0)]
-        facing = person.get("facing")
-        if person.get("seated") and facing and SLIDE_REACH_M > 0:
-            side = (-facing[1], facing[0], 0.0)   # along the sofa, where a seated reader slides
-            heads += [[point[i] + sign * SLIDE_REACH_M * side[i] for i in range(3)]
-                      for point in points for sign in (1, -1)]
+        heads = [head] + list(person.get("eyes") or [])
         for point in heads:
             to = [point[i] - row["aim_origin_m"][i] for i in range(3)]
             along = sum(aim[i] * to[i] for i in range(3))

@@ -4,7 +4,6 @@ two people with no binding light nothing, and the bulbs get no reading scene whi
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import coordinator_live
 import preview
@@ -29,11 +28,6 @@ class PreviewPeopleTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = tmp.name
-        # The shared test room's F3 sits at the reader's side, so the direction's slide reach (a head 25 cm along the
-        # sofa) is always under its beam: these rules run without it, as test_preview's do; it has a test of its own.
-        reach = patch.object(preview, "SLIDE_REACH_M", 0.0)
-        reach.start()
-        self.addCleanup(reach.stop)
         self.now, self.seq, self.encoded = 100.0, 0, []
         self.rule, self.rule_epoch = seated_rule.Published(), 1
         self.preview = preview.Preview(self.core, binding=base.BINDING, fixtures=base.FIXTURES, state=self.path,

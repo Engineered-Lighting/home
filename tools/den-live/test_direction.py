@@ -151,6 +151,15 @@ class FadeTest(unittest.TestCase):
         self.assertLess(direction.output(level_down.value(.6)) + direction.output(level_up.value(.6)), .4)
         self.assertEqual(up.published(.6)["space"], "light")
 
+    def test_a_lit_move_has_a_camera_moves_pace(self):
+        """A small reframe creeps, a big one (the reader moved) is a dolly's move, and between them the pace is in
+        proportion to how far the page moved."""
+        settings = direction.SETTINGS
+        self.assertEqual(direction.glide_seconds(.05, settings), settings["creep_s"], "5 cm creeps")
+        self.assertEqual(direction.glide_seconds(.35, settings), settings["glide_s"], "35 cm: a dolly")
+        self.assertAlmostEqual(direction.glide_seconds(.14, settings), (settings["creep_s"] + settings["glide_s"]) / 2)
+        self.assertGreater(settings["creep_s"], settings["glide_s"], "the smaller the move, the slower")
+
     def test_level_codes_are_contract_fives(self):
         for level in (0, .002, .5, 1 / 254, 0.99, 1):
             self.assertEqual(direction.level_code(level), math.floor(level * 254 + .5))

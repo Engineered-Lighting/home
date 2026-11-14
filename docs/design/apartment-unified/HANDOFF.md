@@ -111,7 +111,7 @@ Named in the brief, to verify in the local checkout:
 - **Direct selection:** click S4's label, its cylinder, or its list row; each opens the same Light inspector. N/P cycles lights; Escape clears the selection and focus returns.
 - **Drag aim:** drag S4's reticle onto the painting. The chip reads "Snaps to “Painting” · 1.85 m · 59° tilt". Release shows the Proposed callout while the warm beam stays on the desk. "Set aim" (the Aim header reads Modeled) sweeps the beam and toasts "no hardware command sent".
 - **Unreachable:** Echo Front left → Living room art reads "Out of reach · 80° from straight down, limit 75°", and Set is unavailable.
-- **Escape order:** during a drag, Escape cancels the drag only. Next, it discards the proposal (⌘Z restores it), then clears the selection, then offers Close.
+- **Escape order:** during a drag, Escape cancels the drag only. Next, it discards the proposal (⌘Z restores it), then clears the selection, then does nothing.
 - **Frame honesty:** in the stale scenario the frame is greyed, the overlay is dashed at reduced opacity, and the dock says "Not used for lighting". Choosing Live never shows the analyzed skeleton.
 - **JEV abstains:** Interpreted reads "Abstained", Proposed reads "Nothing", and the reason is shown. Detector, pose and JEV values are labeled separately in Details.
 - **No session:** an empty state, no body layer, and no start button.

@@ -53,7 +53,9 @@ For trace-3's send rows, pass every run a board took part in, in time order. The
 - `profile`, the board's measured profile in den-core's shape (`fictional: false`). It replaces the fictional one for that fixture, so the run header's `profile_sha256` names it;
 - `readback` (optional): the board's Home Assistant entities (`state`, `controller`, `stop_latched`, `last_seq`, `pan_cdeg`, `tilt_cdeg`, `fault_code`), read every second. Their values become the snapshot's `devices` key, and a `kind: device` row in the trace when they change. A latch read feeds the Stop copy.
 
-A desk file that's there but doesn't check, or a desk with no Home Assistant link in the asks block, keeps the coordinator off with the reason on the status line, rather than letting it run virtual by mistake. The room geometry stays `physical_commands: false`. `install_la.py` doesn't bring the file yet; that comes with the desk stage's first run. `test_desk.py` covers all of it with the fake Home Assistant.
+A desk file that's there but doesn't check, or a desk with no Home Assistant link in the asks block, keeps the coordinator off with the reason on the status line, rather than letting it run virtual by mistake. The room geometry stays `physical_commands: false`. `test_desk.py` covers all of it with the fake Home Assistant.
+
+**Installing it (the desk stage, D-1 on).** `install_la.py --preview-geometry <export> --desk <desk.json>` brings the file, and only when `--desk` is given, each time. It's checked on this PC before anything is built or copied: the fixture must be one of that geometry export's, and the Qwen ask's two Home Assistant files must be there, since the desk's commands go through them. The device reference is never printed. install.sh installs it root-only as `/etc/den-live/private/desk.json`, and the drop-in loads it as the `desk.json` credential. **To turn the desk off, install again without `--desk`:** install.sh then removes LA's old file, so den-live is virtual only again. `test_install_desk.py` covers the installer, the drop-in and install.sh's own desk blocks.
 
 ## Physical handoff
 

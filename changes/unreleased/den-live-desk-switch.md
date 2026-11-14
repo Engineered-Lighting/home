@@ -10,4 +10,4 @@ den-live gains the desk switch (plan 05, step 05-4). When the service's credenti
 - **Readback:** optionally, the board's Home Assistant entities are read every second. They feed a `devices` key in the coordinator's snapshot, device rows in the trace when they change, and the Stop copy, so a Stop pressed in Home Assistant becomes Home's Stop.
 - **Fail closed:** a desk file that doesn't check, or a desk with no Home Assistant link, keeps the coordinator off and says why.
 
-The installer doesn't bring the file yet, so physical sending stays off.
+- **The installer brings it only when asked:** `install_la.py --desk <file>` checks the file on the workstation first, and install.sh installs it root-only. An install without `--desk` removes LA's old one, so den-live is virtual only again.

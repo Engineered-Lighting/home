@@ -17,7 +17,7 @@ Its inputs, all from systemd:
   another factor or calibration hash is refused, and the status line says to paste register_now.py without --again,
   which records a new take, then install_la.py again). Optionally desk.json (desk.py, den-c12-desk-1): one fixture's
   commands then go to its board through the den home's Home Assistant. Without it, the coordinator is virtual only.
-  install_la.py doesn't bring it yet: that comes with the desk stage's first run (plan 05, step D-1).
+  install_la.py brings it only with --desk, each time: an install without it removes LA's old one.
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
   its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot with
   someone in view, about one a second with nobody, numbers only, with a mono-and-wall anchor; person_state.py), beside
@@ -111,6 +111,7 @@ def read_config(path):
 
 
 HA_TOKEN = "ha-token.txt"       # the den home's Home Assistant: the den-live user's long-lived token (a credential)
+DESK_FILE = desk.FILE   # the desk switch's credential (desk.py): brought only by install_la.py --desk
 LABELS_SEED = "room-labels.json"   # your PC's labels, brought by install_la.py (a credential): taken once, when LA has none
 ENTITY = re.compile(r"^binary_sensor\.[a-z0-9_]{1,80}$")
 ZONE = re.compile(r"^[A-Za-z_]+(/[A-Za-z0-9_+-]+){0,2}$")
@@ -447,8 +448,15 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     preview_geometry = isinstance(coordinator, dict) and coordinator.get("preview") is True
     if preview_geometry:
         config["coordinator"] = {"preview": True, "transform_id": coordinator.get("transform_id"), "hue_overlay": False}
+    # The desk (desk.py): only from this install's own settings, never kept from the last one, and only with this
+    # install's preview and Home Assistant link, which its commands go through.
+    desk_on = settings.get("desk") is True
+    own = settings.get("coordinator")
+    if desk_on and not (isinstance(own, dict) and own.get("preview") is True and ha is not None):
+        raise Refusal("settings.json maps the desk, but the desk needs this install's preview and the Qwen ask's Home "
+                      "Assistant link")
     for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"),
-                       (Path(dropin), dropin_text(address, packs, ha, seed, preview_geometry))):
+                       (Path(dropin), dropin_text(address, packs, ha, seed, preview_geometry, desk_on))):
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         part.write_text(text, encoding="utf-8", newline="\n")
@@ -457,11 +465,12 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     return config
 
 
-def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=False):
+def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=False, desk=False):
     """The unit's local settings: the one camera address it may reach, and the content packs, read only. With the packs
     under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through.
     With the Qwen ask set up (ha: Home Assistant's address), that address too, and the Home Assistant token credential,
-    which only then must exist. With labels brought from your PC (labels_seed), their credential, which then must exist."""
+    which only then must exist. With labels brought from your PC (labels_seed), their credential, which then must exist.
+    With the desk mapped (desk), the desk.json credential, which then must exist."""
     lines = ["# Written by den-live's install.sh from this host's settings. Not in git.", "[Service]",
              "IPAddressAllow=%s" % address, "BindReadOnlyPaths=%s" % packs]
     if ha is not None:
@@ -470,6 +479,8 @@ def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=Fal
         lines.append("LoadCredential=%s:/etc/den-live/private/%s" % (LABELS_SEED, LABELS_SEED))
     if preview_geometry:
         lines.append("LoadCredential=virtual-fixtures.json:/etc/den-live/private/virtual-fixtures.json")
+    if desk:
+        lines.append("LoadCredential=%s:/etc/den-live/private/%s" % (DESK_FILE, DESK_FILE))
     if packs.parts[1:2] in (("home",), ("root",)):
         lines.append("ProtectHome=tmpfs")
     return "\n".join(lines) + "\n"

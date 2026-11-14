@@ -13,7 +13,11 @@
    install.sh, and the private inputs: the room model, the camera token, that receipt, and a settings file with the
    camera's address and the den's site (both read at run time on this PC, never written into git). With labels in
    <data root>\\private\\labels\\ that read, it brings them too: den-live takes them once, only while LA has none.
-   With --preview-geometry it brings the private Home geometry export as a separate service credential.
+   With --preview-geometry it brings the private Home geometry export as a separate service credential. With --desk
+   (plan 05, the desk stage) it brings desk.json, the desk switch: one of that geometry's fixtures, its board's Home
+   Assistant device, its measured profile and light true or false. It's checked here first, and needs the geometry and
+   the Qwen ask's Home Assistant files. It's brought only when given, each time: an install without --desk removes
+   LA's old one, so den-live is virtual only again.
 4. It runs install.sh there with sudo: ssh -t, so sudo can ask for your password.
 5. Whatever happened, it removes /dev/shm/den-live-install/ from LA, and its own copies here.
 
@@ -31,6 +35,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import desk  # noqa: E402  the desk switch's file and its checks
 import perceive  # noqa: E402
 import release  # noqa: E402
 import room_labels  # noqa: E402  your labels, brought once
@@ -167,14 +172,34 @@ def preview_geometry_export(path, site):
     return payload
 
 
+def desk_mapping(path, geometry):
+    """(the checked mapping, desk.json's own bytes), before anything is built or copied. The desk maps one fixture of
+    the preview's own geometry export. Never printed: a device reference, a profile."""
+    try:
+        payload = Path(path).read_bytes()
+        data = json.loads(payload.decode("utf-8-sig"))
+    except (OSError, ValueError):
+        raise Stop("the desk file (--desk) doesn't read") from None
+    fixtures = {row.get("fixture_id"): row for row in json.loads(geometry)["fixtures"] if isinstance(row, dict)}
+    try:
+        return desk.parse(data, fixtures), payload
+    except desk.DeskError as exc:
+        raise Stop(str(exc)) from None
+
+
 def undo_lines(host):
     return ['  ssh -t %s "sudo systemctl disable --now den-live"' % host]
 
 
 def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID,
-        ha_token_file=None, ha_url_file=None, preview_geometry=None, body_profile_file=None):
+        ha_token_file=None, ha_url_file=None, preview_geometry=None, body_profile_file=None, desk_file=None):
     site = rl.den_site()
     geometry = None if preview_geometry is None else preview_geometry_export(preview_geometry, site)
+    mapping = desk_bytes = None
+    if desk_file is not None:
+        if geometry is None:
+            raise Stop("the desk needs --preview-geometry: it maps one of the preview's registered fixtures")
+        mapping, desk_bytes = desk_mapping(desk_file, geometry)
     tools_dir = root / "tools"
     observe, track = sc.archive(tools_dir, "observe"), sc.archive(tools_dir, "track")
     model, receipt, transform_id = registration(root, perceive.Tools(observe, track), camera_id)
@@ -187,6 +212,9 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
     private = Path(token_file).parent
     ha_token, ha_url = ha_inputs(ha_token_file or private / HA_TOKEN_FILE, ha_url_file or private / HA_URL_FILE)
     figure = body_profile(body_profile_file or private / BODY_PROFILE_FILE, receipt)
+    if mapping is not None and not ha_token:
+        raise Stop("the desk's commands go through Home Assistant: save %s and %s first (README, \"The Qwen ask\")"
+                   % (HA_TOKEN_FILE, HA_URL_FILE))
     say("Step 2's registration %s, from %s." % (transform_id, receipt.name))
     say("The Qwen ask: %s" % ("on, with Home Assistant's token and address." if ha_token else
                               "off. To turn it on, save %s and %s first (README, \"The Qwen ask\")." % (HA_TOKEN_FILE, HA_URL_FILE)))
@@ -194,6 +222,11 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
     say("Your labels: %s" % ("%d from this PC; LA takes them only if it has none yet." % seed[1] if seed else "none from this PC."))
     if geometry is not None:
         say("Virtual preview: bringing the private Home geometry export with Hue overlay disabled.")
+    if mapping is not None:
+        say("The desk: %s's commands go to its board through Home Assistant, %s." % (
+            mapping["fixture_id"], "lit" if mapping["light"] else "dark (light false: the spot stays at level 0)"))
+    else:
+        say("The desk: off. den-live stays virtual, and LA's old desk file, if any, goes.")
     say("Building the release...")
     out_dir = root / "private" / "release"
     built = release.build(out_dir=out_dir, source=source, token=token, models_dir=models_dir, wheel=wheel)
@@ -218,6 +251,9 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         if geometry is not None:
             settings["coordinator"] = {"preview": True, "transform_id": transform_id, "hue_overlay": False}
             (outbox / PREVIEW_GEOMETRY).write_bytes(geometry)
+        if desk_bytes is not None:
+            settings["desk"] = True
+            (outbox / rs.DESK_FILE).write_bytes(desk_bytes)
         (outbox / "settings.json").write_text(json.dumps(settings) + "\n", encoding="utf-8", newline="\n")
         (outbox / "install.sh").write_bytes(built["contents"][INSTALL_SH.as_posix()])   # the release's own, byte for byte
         say("Copying the release and the private inputs to %s:%s ..." % (host, REMOTE))
@@ -227,7 +263,8 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         files = [built["tarball"], *(outbox / name for name in ("install.sh", "room-model.jsonl", "camera-token.txt",
                                                                 "register-receipt.json", "settings.json")),
                  *([outbox / rs.HA_TOKEN] if ha_token else []), *([outbox / rs.LABELS_SEED] if seed else []),
-                 *([outbox / PREVIEW_GEOMETRY] if geometry is not None else [])]
+                 *([outbox / PREVIEW_GEOMETRY] if geometry is not None else []),
+                 *([outbox / rs.DESK_FILE] if desk_bytes is not None else [])]
         if transport.copy(files, REMOTE):
             raise Stop("scp to %s stopped part way" % host)
         say("Installing on %s (sudo asks for your password there)..." % host)
@@ -235,6 +272,8 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
         if code:
             raise Stop("install.sh stopped (exit %d); its own lines above say why" % code)
         say("Installed. Next: deploy Home (step 4's pull request), then the walk test.")
+        if mapping is not None:
+            say("To turn the desk off: paste install_la.py again without --desk.")
         return 0
     finally:
         shutil.rmtree(outbox, ignore_errors=True)
@@ -251,6 +290,8 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_
     parser.add_argument("--host", default=HOST, help="the ssh host for LA (default %(default)s)")
     parser.add_argument("--camera", help="the camera's URL as LA reaches it (default: den-take's)")
     parser.add_argument("--preview-geometry", type=Path, help="private registered Den geometry export from Home")
+    parser.add_argument("--desk", type=Path, help="private desk.json (den-c12-desk-1): one fixture's commands to its "
+                                                  "board, for the desk stage; needs --preview-geometry")
     args = parser.parse_args(argv)
     if not console():   # a background run is refused before anything: no build, no ssh
         say("install: refused, no console. Paste the line into PowerShell yourself.")
@@ -262,6 +303,8 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_
         take = rl.den_take(sc.archive(root / "tools", "observe"))
         if args.preview_geometry is not None:
             kw["preview_geometry"] = args.preview_geometry
+        if args.desk is not None:
+            kw["desk_file"] = args.desk
         code = run(root=root, host=args.host, camera_url=args.camera or take.DEFAULT_CAMERA,
                    token_file=kw.pop("token_file", None) or take.DEFAULT_TOKEN_FILE, transport=transport or SSH(args.host), **kw)
     except Stop as exc:

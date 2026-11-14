@@ -104,7 +104,7 @@ def load(folder, fixtures):
     if not path.is_file():
         return None
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))   # PowerShell 5.1 writes a byte-order mark first
     except (OSError, ValueError):
         raise DeskError("the desk file doesn't read") from None
     return parse(data, fixtures)

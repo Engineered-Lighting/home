@@ -150,7 +150,8 @@ BODY_QUALIFICATION_FILE = body_profiles.QUALIFICATION_FILE   # body_profiles.py 
 
 def body_profile(path, receipt):
     """Read the optional owner-qualified profile before copying any release files. It must be the very candidate a
-    passing head-cut score used: the qualification record beside it names its sha256 and its pass."""
+    passing head-cut score used: the qualification record beside it names its sha256 and its pass. A profile in which
+    the owner shows the head ("head": "shown") has no head cut to score, and needs no record."""
     path = Path(path)
     if not path.is_file():
         return None

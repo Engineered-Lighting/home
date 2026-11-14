@@ -1,7 +1,8 @@
-"""Build a head-free cloud from the current registered depth in the detector worker.
+"""Build a person's cloud from the current registered depth in the detector worker.
 
 Only a qualified empty observation can feed the background. A person needs a
-foreground component supported by their current measured torso joints and a
+foreground component supported by their current measured torso joints and,
+unless the owner's profile shows the head ("head": "shown", HEAD_SHOWN), a
 conservative exclusion for the head and upper neck. Every emitted point is an
 actual depth pixel from that bundle, times step 2's depth scale (the setup's
 depth_scale, as perceive.py scales the lift's depth; 1.0 changes nothing).
@@ -44,6 +45,17 @@ def _finite(value):
 
 def _b64(array):
     return base64.b64encode(array.tobytes()).decode("ascii")
+
+
+HEAD_SHOWN = "shown"
+
+
+def head_shown(evidence, *, frame_key, binding):
+    """True when this frame's evidence says the owner's profile shows the head: no envelope and no cut, the whole
+    measured person. Bound to the frame and binding like any evidence."""
+    return (isinstance(evidence, dict) and frame_key is not None and binding is not None
+            and evidence.get("frame_key") == frame_key and evidence.get("binding") == binding
+            and evidence.get("head") == HEAD_SHOWN and "cut" not in evidence and "bounds_px" not in evidence)
 
 
 def head_exclusion(evidence, *, frame_key, binding):
@@ -139,7 +151,10 @@ def cut_side(cols, rows, cut_px, extra_px=0.0):
 
 def head_mask_available(evidence, *, frame_key, binding):
     """True when this frame's evidence bounds the head: the depth-pixel envelope, the shoulder-line cut, or both. A cut
-    the evidence carries but that doesn't read is no mask at all: the envelope never stands in for it."""
+    the evidence carries but that doesn't read is no mask at all: the envelope never stands in for it. True too when
+    the owner's profile shows the head (head_shown): there is nothing to mask."""
+    if head_shown(evidence, frame_key=frame_key, binding=binding):
+        return True
     cut = torso_cut(evidence, frame_key=frame_key, binding=binding)
     if isinstance(evidence, dict) and "cut" in evidence and cut is None:
         return False
@@ -230,11 +245,12 @@ class BodyMaker:
             return None, "pose_unavailable"
 
         evidence = person.get("head_evidence")
-        exclusion = head_exclusion(evidence, frame_key=frame_key, binding=binding)
-        cut_evidence = torso_cut(evidence, frame_key=frame_key, binding=binding)
+        shown = head_shown(evidence, frame_key=frame_key, binding=binding)
+        exclusion = None if shown else head_exclusion(evidence, frame_key=frame_key, binding=binding)
+        cut_evidence = None if shown else torso_cut(evidence, frame_key=frame_key, binding=binding)
         cut = cut_pixels(cut_evidence, raw, self.fx)
         carries_cut = isinstance(evidence, dict) and "cut" in evidence
-        if (exclusion is None and cut is None) or (carries_cut and cut is None):
+        if not shown and ((exclusion is None and cut is None) or (carries_cut and cut is None)):
             return None, "head_mask_unavailable"   # a cut that doesn't read or can't be placed never falls back
         if self.background is None:
             return None, "warming_background"

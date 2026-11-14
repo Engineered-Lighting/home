@@ -308,6 +308,29 @@ class BodyTest(unittest.TestCase):
         joints.pop("left_knee")   # one joint can't anchor a part on its own
         self.assertEqual(self.render(maker, fixture, person)[1], "pose_unavailable")
 
+    def test_a_profile_that_shows_the_head_keeps_the_whole_measured_person(self):
+        fixture = scene("standing")
+        maker = self.learned(fixture)
+        person = subject(fixture)
+        person["head_evidence"] = {"frame_key": "fixture-7", "binding": BINDING, "head": B.HEAD_SHOWN}
+        self.assertTrue(B.head_mask_available(person["head_evidence"], frame_key="fixture-7", binding=BINDING))
+        frame, why = self.render(maker, fixture, person)
+        self.assertIsNone(why)
+        rows, cols = np.divmod(decode(frame)["key"].ravel(), B.WIDTH)
+        self.assertTrue(fixture[2][rows, cols].any(), "the head's measured pixels are in the cloud")
+        masked, _ = self.render(maker, fixture)
+        self.assertGreater(frame["points"]["count"], masked["points"]["count"])
+        for changes in ({"binding": "wrong"}, {"frame_key": "wrong"}, {"head": "hidden"}):
+            with self.subTest(changes=changes):
+                evidence = dict(person["head_evidence"], **changes)
+                self.assertFalse(B.head_mask_available(evidence, frame_key="fixture-7", binding=BINDING))
+                self.assertEqual(self.render(maker, fixture, dict(person, head_evidence=evidence)),
+                                 (None, "head_mask_unavailable"))
+        # "shown" beside a mask isn't shown: the mask's own rules hold.
+        broken = dict(cut_subject(fixture)["head_evidence"], head=B.HEAD_SHOWN)
+        broken["cut"] = dict(broken["cut"], axis_px=[0, 2])
+        self.assertEqual(self.render(maker, fixture, dict(person, head_evidence=broken)), (None, "head_mask_unavailable"))
+
     def test_missing_uncertain_or_unbound_head_evidence_clears(self):
         fixture = scene("reclined")
         maker = self.learned(fixture)

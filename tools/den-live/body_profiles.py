@@ -92,8 +92,19 @@ def qualification_record(qualification, candidate_bytes):
             "pose_digest": qualification.get("pose_digest"), "scope": qualification.get("scope")}
 
 
+def shows_head(block):
+    """True for a profile in which the owner shows the head ("head": "shown"): there's no head cut to qualify."""
+    return isinstance(block, dict) and block.get("head") == "shown"
+
+
 def qualified_bytes(data, record_path):
-    """True when record_path is a passing qualification record that names exactly these profile bytes."""
+    """True when record_path is a passing qualification record that names exactly these profile bytes, or when the
+    profile shows the head (shows_head), which has no head-cut score to tie to."""
+    try:
+        if shows_head(json.loads(data.decode("utf-8-sig"))):
+            return True
+    except (TypeError, ValueError):
+        return False
     try:
         record = json.loads(Path(record_path).read_text(encoding="utf-8"))
         mask = record["mask"]

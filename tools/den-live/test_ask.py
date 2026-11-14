@@ -428,6 +428,10 @@ class AskTest(unittest.TestCase):
         track = event["tracks"][0]
         self.assertEqual(track["activity"]["word"], "reading")
         self.assertTrue(track["activity"]["close_up"])
+        # What Qwen saw rides along for Home's caption: the BOOK tag and the "Qwen saw" line.
+        self.assertEqual(track["activity"]["facts"], {"held_object": "book", "book_state": "open", "gaze_target": "book",
+                                                      "subject_posture": "sitting"})
+        self.assertEqual(track["activity"]["basis"], ["person_visible", "seated_posture"])
 
     def test_the_log_line_and_the_hand_off(self):
         self.run_for(5)

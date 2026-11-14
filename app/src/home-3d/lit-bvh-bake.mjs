@@ -494,7 +494,7 @@ export const luminance = rgb => 0.2126729 * rgb[0] + 0.7151522 * rgb[1] + 0.0721
 
 /* ---- Receiver sets (L4) --------------------------------------------------------
  * L4 relights the splats and the point cloud from L3's precomputed basis; the
- * four robotic spots move, so they are not in it. Each spot's column for an
+ * robotic spots move, so they are not in it. Each spot's column for an
  * extra receiver set is re-baked here with the spot's own layer: direct light
  * through a shadow ray, plus the spot's one bounce at the nearest scan vertex
  * that faces the same way. Splats and points sit on or near the scan, not on
@@ -506,7 +506,7 @@ const NEAREST_CELL_M = 0.06, NO_RECEIVER = 0xffffffff;
 /* For each extra receiver (positions/normals xyz), the nearest scan receiver
  * (stride 8: pos, 0, normal, 0) within `radius`, preferring one that faces
  * the same way; NO_RECEIVER when none is close. */
-export function nearestReceivers(receivers, receiverCount, positions, normals, count, { radius = LIT_RECEIVER_NEAREST_M } = {}) {
+function createReceiverSearch(receivers, receiverCount, { radius = LIT_RECEIVER_NEAREST_M } = {}) {
     const cell = NEAREST_CELL_M, key = (x, y, z) => `${x},${y},${z}`;
     const grid = new Map();
     for (let r = 0; r < receiverCount; r++) {
@@ -514,27 +514,33 @@ export function nearestReceivers(receivers, receiverCount, positions, normals, c
         const list = grid.get(k);
         if (list) list.push(r); else grid.set(k, [r]);
     }
-    const out = new Uint32Array(count).fill(NO_RECEIVER), reach = Math.ceil(radius / cell), r2max = radius * radius;
-    for (let i = 0; i < count; i++) {
-        const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
-        const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
-        const cx = Math.floor(px / cell), cy = Math.floor(py / cell), cz = Math.floor(pz / cell);
-        let best = NO_RECEIVER, bestScore = Infinity;
-        for (let dx = -reach; dx <= reach; dx++) for (let dy = -reach; dy <= reach; dy++) for (let dz = -reach; dz <= reach; dz++) {
-            const list = grid.get(key(cx + dx, cy + dy, cz + dz));
-            if (!list) continue;
-            for (const r of list) {
-                const o = r * 8, ex = receivers[o] - px, ey = receivers[o + 1] - py, ez = receivers[o + 2] - pz, d2 = ex * ex + ey * ey + ez * ez;
-                if (d2 > r2max) continue;
-                // A receiver facing away counts as four times as far.
-                const facing = receivers[o + 4] * nx + receivers[o + 5] * ny + receivers[o + 6] * nz;
-                const score = facing > 0.2 ? d2 : d2 * 16 + 1e-9;
-                if (score < bestScore) { bestScore = score; best = r; }
+    const reach = Math.ceil(radius / cell), r2max = radius * radius;
+    return (positions, normals, out, from, to) => {
+        for (let i = from; i < to; i++) {
+            const px = positions[i * 3], py = positions[i * 3 + 1], pz = positions[i * 3 + 2];
+            const nx = normals[i * 3], ny = normals[i * 3 + 1], nz = normals[i * 3 + 2];
+            const cx = Math.floor(px / cell), cy = Math.floor(py / cell), cz = Math.floor(pz / cell);
+            let best = NO_RECEIVER, bestScore = Infinity;
+            for (let dx = -reach; dx <= reach; dx++) for (let dy = -reach; dy <= reach; dy++) for (let dz = -reach; dz <= reach; dz++) {
+                const list = grid.get(key(cx + dx, cy + dy, cz + dz));
+                if (!list) continue;
+                for (const r of list) {
+                    const o = r * 8, ex = receivers[o] - px, ey = receivers[o + 1] - py, ez = receivers[o + 2] - pz, d2 = ex * ex + ey * ey + ez * ez;
+                    if (d2 > r2max) continue;
+                    // A receiver facing away counts as four times as far.
+                    const facing = receivers[o + 4] * nx + receivers[o + 5] * ny + receivers[o + 6] * nz;
+                    const score = facing > 0.2 ? d2 : d2 * 16 + 1e-9;
+                    if (score < bestScore) { bestScore = score; best = r; }
+                }
             }
+            out[i] = best;
         }
-        out[i] = best;
-    }
-    return out;
+        return out;
+    };
+}
+export function nearestReceivers(receivers, receiverCount, positions, normals, count, options) {
+    const search = createReceiverSearch(receivers, receiverCount, options);
+    return search(positions, normals, new Uint32Array(count), 0, count);
 }
 
 /* One spot's column (half rgb per receiver, at unit candela and white) for
@@ -897,7 +903,7 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
             try { gpuTracer.setScene(bvh, receivers.receivers, receivers.receiverCount); }
             catch (error) { tracer = null; post({ type: 'warning', message: String(error?.message || error) }); }
         }
-        for (const extra of extras.values()) { extra.nearest = null; extra.posted.clear(); }
+        for (const extra of extras.values()) { extra.nearest = null; extra.posted.clear(); extra.direct.clear(); }
         post({ type: 'scene', seq: message.seq, ok: true, backend: tracer ? 'webgpu' : 'cpu', receivers: receivers.receiverCount,
             triangles: receivers.triangleCount, nodes: bvh.nodeCount, depth: bvh.depth, buildMs: now() - t0, layout });
         void pump();
@@ -906,22 +912,43 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
     /* L4: each spot layer's column for every extra receiver set, posted once
      * per layer version. Runs in chunks; a newer layer for the same spot (it
      * moved again) or a new scene drops the column in progress. */
-    async function postExtraColumn(name, extra, key, entry) {
+    async function postExtraColumn(name, extra, key, entry, directOnly = false) {
         const t0 = now(), seq = scene.seq, out = new Uint16Array(extra.count * 3), light = unitLight(entry.light);
-        if (!extra.nearest) extra.nearest = nearestReceivers(scene.receivers, scene.receiverCount, extra.positions, extra.normals, extra.count);
+        const invalid = () => disposed || !scene || scene.seq !== seq || extras.get(name) !== extra
+            || (!directOnly && layers.get(key) !== entry)
+            || (extra.directFirst && !latest?.lights.some(light => light.key === key && signatureOf(light) === entry.signature));
+        if (invalid()) return;
+        if (!directOnly && !extra.nearest) {
+            const search = createReceiverSearch(scene.receivers, scene.receiverCount);
+            const nearest = new Uint32Array(extra.count);
+            let since = now();
+            for (let from = 0; from < extra.count; from += 512) {
+                search(extra.positions, extra.normals, nearest, from, Math.min(extra.count, from + 512));
+                if (now() - since > LIT_BAKE_QUALITY.cpu.chunkMs) {
+                    await yieldTask();
+                    if (disposed || !scene || scene.seq !== seq || extras.get(name) !== extra) return;
+                    since = now();
+                }
+            }
+            extra.nearest = nearest;
+            if (invalid()) return;
+        }
         let since = now();
         for (let from = 0; from < extra.count;) {
             const to = Math.min(extra.count, from + 4096);
-            receiverSpotColumn(scene.bvh, light, extra, entry.data, from, to, out);
+            receiverSpotColumn(scene.bvh, light, extra, directOnly ? null : entry.data, from, to, out);
             from = to;
             if (now() - since > LIT_BAKE_QUALITY.cpu.chunkMs) {
                 await yieldTask();
-                if (disposed || !scene || scene.seq !== seq || layers.get(key) !== entry || extras.get(name) !== extra) return;
+                if (invalid()) return;
                 since = now();
             }
         }
-        extra.posted.set(key, entry.version);
-        post({ type: 'receiverLayer', scene: seq, set: name, key, version: entry.version, data: out, ms: now() - t0 }, [out.buffer]);
+        if (invalid()) return;
+        if (directOnly) extra.direct.set(key, entry.signature);
+        else extra.posted.set(key, entry.version);
+        post({ type: 'receiverLayer', scene: seq, set: name, key, version: entry.version, data: out,
+            bounced: !directOnly, ms: now() - t0 }, [out.buffer]);
     }
     async function refreshExtras() {
         if (refreshing) { refreshAgain = true; return; }
@@ -1029,6 +1056,17 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
         const spots = dirty.filter(light => light.mode === 'vpl'), statics = dirty.filter(light => light.mode !== 'vpl').slice(0, MAX_LAYER_LIGHTS);
         const R = scene.receiverCount, pending = new Map(), stats = { backend: tracer ? 'webgpu' : 'cpu', quality: quality.name, receivers: R, jobs: [] };
         if (!scene.triangleCount) { postLightmap(message, pending, true, stats); return; }
+        for (const [name, extra] of extras) {
+            if (!extra.directFirst) continue;
+            for (const key of extra.direct.keys()) if (!wantedKeys.has(key)) extra.direct.delete(key);
+            for (const key of extra.posted.keys()) if (!wantedKeys.has(key)) extra.posted.delete(key);
+            for (const light of spots) {
+                const signature = signatureOf(light);
+                if (extra.direct.get(light.key) === signature) continue;
+                await postExtraColumn(name, extra, light.key, { signature, light, version: ++layerVersion }, true);
+                if (stale(message, [[light.key, signature]])) throw ABORT;
+            }
+        }
         if (statics.length) {
             const keys = statics.map(light => [light.key, signatureOf(light)]), check = () => { if (stale(message, keys)) throw ABORT; };
             const packed = packLights(statics.map(light => ({ ...light, candela: 1, color: [1, 1, 1] })));
@@ -1058,6 +1096,7 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
             layers.set(light.key, { signature: keys[0][1], data: pending.get(light.key), light, version: ++layerVersion });
             pending.delete(light.key);
             stats.jobs.push({ kind: 'spot', key: light.key, vpl: quality.vpl, passes: quality.vplPasses, firstPassMs: firstMs, ms: now() - t0 });
+            if ([...extras.values()].some(extra => extra.directFirst)) void refreshExtras();
         }
         postLightmap(message, pending, true, stats);
         if (spots.length && extras.size) void refreshExtras();
@@ -1114,7 +1153,8 @@ export function attachBakeHost(scope, { gpu = null, allowSoftware = false, now =
             else if (message.type === 'lights') { latest = message; void pump(); }
             else if (message.type === 'receivers') {
                 if (!message.positions) extras.delete(message.set);
-                else extras.set(message.set, { positions: message.positions, normals: message.normals, count: message.count, nearest: null, posted: new Map() });
+                else extras.set(message.set, { positions: message.positions, normals: message.normals, count: message.count,
+                    directFirst: message.directFirst === true, nearest: null, posted: new Map(), direct: new Map() });
                 if (scene) void refreshExtras();
             }
             else if (message.type === 'dispose') { disposed = true; tracer?.dispose?.(); scene = null; layers.clear(); extras.clear(); }
@@ -1167,11 +1207,11 @@ export function createBakeClient({ endpoint, onScene, onLightmap, onLux, onError
         update(payload) { if (!closed && sceneSeq) endpoint.postMessage({ ...payload, type: 'lights', seq: ++seq, scene: sceneSeq }); },
         /* L4: an extra receiver set (world positions and normals, xyz each)
          * whose live-spot columns follow every spot re-bake; null removes it. */
-        setReceivers(set, positions = null, normals = null) {
+        setReceivers(set, positions = null, normals = null, { directFirst = false } = {}) {
             if (closed) return;
             if (!positions) { endpoint.postMessage({ type: 'receivers', set, positions: null }); return; }
             const count = Math.floor(positions.length / 3);
-            endpoint.postMessage({ type: 'receivers', set, positions, normals, count }, [positions.buffer, normals.buffer]);
+            endpoint.postMessage({ type: 'receivers', set, positions, normals, count, directFirst }, [positions.buffer, normals.buffer]);
         },
         get scene() { return sceneSeq; },
         dispose() {

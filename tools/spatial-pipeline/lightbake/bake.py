@@ -1,11 +1,12 @@
-"""Step 91: path-traced unit light basis, 40 B/receiver encoding, per-vertex mesh layer, manifest.
+"""Step 91: path-traced unit light basis, per-receiver and per-vertex encoding, manifest.
 
-Columns (29): 4 downlights, 24 radials (fixture-major, zones 1..6), 1 window.
+Victoria: 4 downlights, 24 radials (fixture-major, zones 1..6), 1 window.
 Fixture columns are irradiance per lumen of emitter flux (lx/lm) with assumed
 Gaussian lobes from home-den-fixtures.js defaults; the window column is the
 capture-state daylight through the detected openings (capture-relative units,
-white-balanced; its colour is lighting-manifest.json columns[28].colour_rgb).
-The four robotic spots are live (L5) and are not baked.
+white-balanced; its colour is the last manifest column's colour_rgb).
+Echo's capture-only document produces one capture column. Spotlights in both
+homes are computed at runtime from each fixture's current position and aim.
 
 Mesh: the Scaniverse atlas packs faces at about half a texel each at 2048^2
 (15 % of the atlas area is covered by UV triangles), so an atlas lightmap
@@ -203,11 +204,11 @@ def run(args):
                           if diffuse_capture else {})},
         "equipment": eq,
         "columns": columns,
-        "encoding": {"receiver_record": "albedo rgb8 sRGB | normal-oct 2xu8 | basis-u8 x29 sqrt | basis-scale fp16 | "
+        "encoding": {"receiver_record": f"albedo rgb8 sRGB | normal-oct 2xu8 | basis-u8 x{K} sqrt | basis-scale fp16 | "
                                         "bounce-tint rgb8 | flags u8 (one file per field)",
                      "decode": "b_k=(u8_k/255)^2*scale*column_scale_k; tint=t/lum(t); E=tint*sum_k w_k*c_k*b_k; "
                                "L=albedo/pi*E",
-                     "mesh_record": "capture-irradiance fp16x3 | normal-oct 2xu8 | basis-u8 x29 | basis-scale fp16 | "
+                     "mesh_record": f"capture-irradiance fp16x3 | normal-oct 2xu8 | basis-u8 x{K} | basis-scale fp16 | "
                                     "bounce-tint rgb8 | flags u8, per vertex of meshes[0].primitives[0]",
                      "mesh_albedo": "rho = clamp(pi * srgb_to_linear(atlas(uv)) / max(E_cap(interpolated), floor), "
                                     "0, rho_max) per fragment",

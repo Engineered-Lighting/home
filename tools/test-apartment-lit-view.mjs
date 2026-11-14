@@ -41,6 +41,11 @@ for (const name of ['lit-display.mjs', 'lit-basis-blend.mjs']) litSource = repla
 const Bake = await import(pathToFileURL(sourceFile('lit-bvh-bake.mjs')).href);
 const { roomBox } = await import('./fixtures/lit-bake-scenes.mjs');
 const Lit = await import(dataModule(litSource));
+let receiverSource = replaceOne(fs.readFileSync(sourceFile('lit-receivers.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL));
+for (const name of ['lit-basis-blend.mjs', 'lit-exposure.mjs', 'lit-layer-loader.mjs']) {
+  receiverSource = replaceOne(receiverSource, 'import(`./' + name + '${search}`)', fileImport(name));
+}
+const Receivers = await import(dataModule(receiverSource));
 const EXPOSURE = .038;
 // Every sync lands 10 s after the last, so the 160 ms ease has settled; the
 // easing itself is proved below and in test-lit-model.mjs on a controlled clock.
@@ -65,6 +70,75 @@ function world(t) {
   return { scene, root, fixtures, mesh, face, display, displayGeometry, hook, renderer, lit, setMesh: next => { current = next; } };
 }
 const lights = w => w.lit.group.children.filter(node => node.isSpotLight);
+
+test('Echo receiver limits admit the actual full Cloud, and refuse insufficient GPU capacity', () => {
+  const count = 1_150_854, spotCapacity = 13;
+  const common = { useBasis: false, spotCapacity };
+  const limits = { maxStorageBufferBindingSize: 128 * 2 ** 20, maxBufferSize: 256 * 2 ** 20, maxComputeWorkgroupsPerDimension: 65535 };
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, webgpu: true, limits }).bytes, count * (13 * 8 + 32));
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, webgpu: true,
+    limits: { ...limits, maxStorageBufferBindingSize: 100 * 2 ** 20 } }), null);
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, limits: { maxTextureSize: 2048, maxArrayTextureLayers: 13 } }).height, 562);
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, limits: { maxTextureSize: 2048, maxArrayTextureLayers: 12 } }), null);
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, limits: { maxTextureSize: 1024, maxArrayTextureLayers: 13 } }), null);
+});
+
+test('Echo uploads all 13 spot columns independently, reports uploaded progress, and ignores an obsolete slot lifetime', async () => {
+  const gl = { MAX_TEXTURE_SIZE: 1, MAX_ARRAY_TEXTURE_LAYERS: 2, getParameter: key => key === 1 ? 2048 : 16 };
+  const uploads = [];
+  const renderer = { getContext: () => gl, getRenderTarget: () => null, setRenderTarget() {}, info: {},
+    render(scene) {
+      const map = scene.children[0].material.uniforms.uSpots.value;
+      uploads.push([...map.layerUpdates]); map.clearLayerUpdates();
+    } };
+  const object = new THREE.Object3D();
+  // The material itself is covered by the real-renderer browser test.
+  const source = replaceOne(receiverSource, 'import(`./pointcloud.js${search}`)',
+    'Promise.resolve({ createLitPointsMaterial: () => ({ dispose() {} }) })');
+  const { createLitReceivers } = await import(dataModule(source));
+  object.geometry = new THREE.BufferGeometry();
+  object.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+  const layer = { siteId: 'echo', set: 'points', count: 1, columns: 1, columnsMeta: [{ kind: 'capture_diffuse' }],
+    albedo: Uint8Array.of(128, 128, 128), basis: Uint8Array.of(0), scale: Uint16Array.of(0), tint: Uint8Array.of(0, 0, 0),
+    flags: Uint8Array.of(0), normalOct: Uint8Array.of(128, 128) };
+  const controller = await createLitReceivers({ renderer, kind: 'points', object, layer });
+  const keys = Array.from({ length: 13 }, (_, index) => 'light-' + index + ':spot:0');
+  const placements = keys.map((key, index) => [key, index + ',0,1']);
+  assert.equal(controller.trackSpots(placements), true);
+  assert.equal(controller.state().expectedSpots, 13);
+  assert.equal(controller.state().liveSpots, 0);
+  await controller.attach(); controller.flush(); uploads.length = 0;
+  const column = new Uint16Array(3).fill(Bake.toHalf(0.5));
+  for (const key of keys) assert.equal(controller.setSpotColumn(controller.spotBakeKey(key), 1, column, false), true);
+  assert.equal(controller.state().liveSpots, 0);
+  controller.flush();
+  assert.deepEqual(uploads.at(-1), keys.map((_, index) => index));
+  assert.equal(controller.state().liveSpots, 13);
+  assert.equal(controller.state().bouncedSpots, 0);
+  const last = keys.at(-1), old = controller.spotBakeKey(last);
+  assert.equal(controller.setSpotColumn(old, 2, column, true), true);
+  controller.flush();
+  assert.deepEqual(uploads.at(-1), [12]);
+  assert.equal(controller.state().bouncedSpots, 1);
+  assert.equal(controller.trackSpots(placements), false, 'the same fixture origins preserve columns through aim and dimming');
+  assert.equal(controller.spotBakeKey(last), old);
+  const relocated = [...placements.slice(0, -1), [last, '2,3,1']];
+  controller.trackSpots(relocated);
+  assert.equal(controller.state().liveSpots, 12);
+  assert.equal(controller.state().bouncedSpots, 0);
+  assert.notEqual(controller.spotBakeKey(last), old);
+  assert.equal(controller.setSpotColumn(old, 9, column), false);
+  assert.equal(controller.setSpotColumn(controller.spotBakeKey(last), 1, column), true);
+  controller.flush();
+  assert.equal(controller.state().liveSpots, 13);
+  assert.equal(controller.state().bouncedSpots, 1);
+  const relocatedKey = controller.spotBakeKey(last);
+  controller.trackSpots(relocated.slice(0, -1));
+  controller.trackSpots(relocated);
+  assert.notEqual(controller.spotBakeKey(last), relocatedKey, 'remove and restore is a new admission');
+  assert.equal(controller.setSpotColumn(relocatedKey, 99, column), false);
+  await controller.detach(); controller.dispose(); object.geometry.dispose();
+});
 
 test('the light model is renderer-independent and pure', () => {
   const source = fs.readFileSync(sourceFile('lit-model.mjs'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');

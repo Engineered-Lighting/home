@@ -102,7 +102,7 @@ export async function loadLightingLayer({ baseUrl, pack, digest, set, fetchImpl 
     const source = receivers.source;
     if (LIT_LAYER_SETS[source] !== set || pack.assets?.[source]?.sha256 !== receivers.source_sha256
         || manifest.pack_assets?.[source]?.sha256 !== receivers.source_sha256) refuse('lighting_layer_source_mismatch:' + set);
-    const out = { set, source, sourceSha256: receivers.source_sha256, count, columns: K, columnScale: Float64Array.from(receivers.column_scale),
+    const out = { siteId: manifest.site_id, set, source, sourceSha256: receivers.source_sha256, count, columns: K, columnScale: Float64Array.from(receivers.column_scale),
         columnsMeta: columns.map(column => Object.freeze({ index: column.index, kind: column.kind, fixture_id: column.fixture_id ?? null,
             zone: column.zone ?? null, unit: column.unit ?? null })),
         binding: Object.freeze({ ...manifest.binding }), provenance: Object.freeze({ status: 'modeled', measured: false,

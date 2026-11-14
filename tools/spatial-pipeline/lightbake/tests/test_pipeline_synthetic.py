@@ -40,6 +40,29 @@ class EchoWithoutApertures(unittest.TestCase):
                 self.assertLessEqual(manifest["metrics"][kind]["capture_rerender_median_stop"], .25, kind)
             binding.verify_layer(binding.default_layer_dir(pack), pack)
 
+    def test_capture_only_input_without_fixture_positions(self):
+        from lightbake import bake, binding, cli, delight, synthetic_pack
+
+        with tempfile.TemporaryDirectory() as root:
+            _, pack, equipment = synthetic_pack.make(root, spp=64, device="cpu", site_id="echo", exterior_splats=False)
+            doc = json.loads(equipment.read_bytes())
+            doc["equipment"] = []
+            del doc["digest"]
+            doc["digest"] = binding.canonical_digest(doc)
+            equipment.write_text(json.dumps(doc))
+            before = binding.snapshot(pack)
+            common = ["--pack", str(pack), "--equipment", str(equipment), "--device", "cpu"]
+            delight.run(cli.parse(90, common + ["--capture-spp", "64"]))
+            manifest = bake.run(cli.parse(91, common + ["--spp", "16", "--mesh-spp", "16"]))
+            self.assertEqual(binding.snapshot(pack), before)
+            self.assertEqual([column["kind"] for column in manifest["columns"]], ["capture_diffuse"])
+            self.assertIn("basis-u8 x1 ", manifest["encoding"]["receiver_record"])
+            self.assertEqual(manifest["budget"]["mesh_bytes_per_vertex"], 15)
+            for kind, receivers in manifest["receivers"].items():
+                self.assertEqual(receivers["bytes_per_receiver"], 12, kind)
+                self.assertLessEqual(manifest["metrics"][kind]["capture_rerender_median_stop"], .25, kind)
+            binding.verify_layer(binding.default_layer_dir(pack), pack)
+
 
 @unittest.skipUnless(HAVE_WARP, "warp-lang not installed")
 class PipelineSynthetic(unittest.TestCase):

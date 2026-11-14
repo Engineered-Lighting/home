@@ -996,15 +996,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         siteId,
         contentRevision,
         sceneIdentity,
-        async loadEchoVirtualLighting() {
+        async loadEchoVirtualLighting(savedModel) {
             if (siteId !== 'echo' || sim || !pinnedPack?.sceneAvailable || disposed) return null;
-            const [source, frame, seed] = await Promise.all([
-                sib('echo-virtual-lighting.mjs'), readSceneFrame(),
-                window.HomeApartmentData?.getSeedModel?.('echo', { contentRevision }),
-            ]);
+            const [source, frame] = await Promise.all([sib('echo-virtual-lighting.mjs'), readSceneFrame()]);
             if (disposed) return null;
             return source.createEchoVirtualLightingDocument({
-                pack: pinnedPack, frame, devices: seed?.devices, digest: window.HomeEquipmentRegistration?.digest,
+                pack: pinnedPack, frame, savedModel, digest: window.HomeEquipmentRegistration?.digest,
             });
         },
         getEquipmentCutawayRegistrationStatus: () => equipmentCutaway.status(),

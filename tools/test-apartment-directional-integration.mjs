@@ -311,6 +311,7 @@ function fixture({ mode = 'zones' } = {}) {
     requestAnimationFrame: () => assert.fail('directional integration cannot create a new RAF loop'),
   };
   const context = vm.createContext(values), cleanups = [];
+  context.aptRetainEchoFixtureMemory = actual.evaluate(actual.component('aptRetainEchoFixtureMemory'), context);
   for (const name of ['selectionEngine', 'selectionLifecycle']) context[name] = actual.initializer(name, context);
   for (const name of ['getDirectionalSnapshot', 'isDirectionalProjectionCurrent', 'projectDirectionalFixture', 'changeFixtureInteractionMode', 'changeVirtualInspectorTab', 'selectVirtualFixture', 'changeVirtualFixture',
     // Radial painting is a hand change: it reaches changeVirtualFixture through the one switch point.

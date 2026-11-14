@@ -25,7 +25,6 @@ import Core from '../../app/src/home-equipment-registration.js';
 import { createEquipmentRegistrationGateway, initRegistration, readActiveBinding } from '../../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './apartment-home-shell-fixtures.mjs';
 import { authoredLightingLayer } from './apartment-lit-layer-fixtures.mjs';
-import { createEchoVirtualLightingDocument } from '../../app/src/home-3d/echo-virtual-lighting.mjs';
 import { authoredHdrFrame, compareFramePasses, PROOF_PARAMS, PROOF_SIZE } from './lit-frame-proof.mjs';
 import { nativeRgbaReference } from './native-rgba-reference.mjs';
 
@@ -73,7 +72,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
   assert.ok(site === 'victoria' || site === 'echo' && part === 2 && RENDERER === 'webgl' && precision === 'exact');
   assert.ok(['exact','native'].includes(precision),'known frame precision contract');
-  assert.ok(phase === 'all' || site === 'echo' && phase === 'mesh' || precision === 'native' && part === 1
+  assert.ok(phase === 'all' || site === 'echo' && ['mesh', 'receivers'].includes(phase) || precision === 'native' && part === 1
     && ['frames', 'controls', 'calibration'].includes(phase), 'known proof phase');
   const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
   const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
@@ -85,13 +84,18 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     name: 'Authored Echo light ' + (index + 1), ha_entity_id: 'light.authored_echo_' + (index + 1),
     pos, height_preset: 'ceiling' })) } : undefined;
   const echo = installPack(packs, 'echo', echoOptions), victoria = installPack(packs, 'victoria');
-  const echoDocument = echoModeled && createEchoVirtualLightingDocument({ pack: echo.manifest,
-    frame: JSON.parse(echo.files['frame.json']), devices: echo.seed.devices, digest: Core.digest });
-  if (echoModeled) assert.equal(echoDocument?.equipment.length, 8);
+  const savedEcho = { ...echo.seed, revision: 14, devices: [
+    [.63, .85, 2.3], [3.11, 2.91, 2.25], [1.08, 3.08, 2.2], [3.1, .98, 2.18],
+    [.34, 3.49, 1.37], [.87, .29, 1.12], [1.58, 3.52, 1.68], [2.03, 2.96, 2.25], [2.46, 3.66, 2.25],
+    [3.43, 3.42, 2.25], [3.67, 2.3, 2.18], [3.54, .42, .93], [1.95, .45, 2.35],
+  ].map((pos, index) => {
+    const id = 'authored-echo-' + (index + 1);
+    return { id, type: 'light', name: 'Saved fixture ' + (index + 1), pos, room_id: 'authored-room',
+      ha_entity_id: (index === 11 ? 'switch.' : 'light.') + id.replace(/-/g, '_') };
+  }) };
   const layer = echoModeled
-    ? authoredLightingLayer(echo, { sockets: echoDocument.equipment.filter(row => row.kind === 'fixture').map(row => ({
-      fixtureId: row.id, mountId: row.mounted_at_ref,
-      position: echoDocument.equipment.find(mount => mount.id === row.mounted_at_ref).position_m,
+    ? authoredLightingLayer(echo, { sockets: echo.seed.devices.map(row => ({
+      fixtureId: 'echo-virtual-' + row.id, mountId: 'echo-mount-' + row.id, position: row.pos,
     })), tamper: manifest => {
       const index = manifest.columns.length - 1;
       manifest.columns[index] = { ...manifest.columns[index], kind: 'capture_diffuse' };
@@ -258,7 +262,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         else if (url.pathname.startsWith(layer.base)) { body = layer.files[decodeURIComponent(url.pathname.slice(layer.base.length))]; receipt.requests.push(url.pathname); }
         else { const pack = [echo, victoria].find(item => url.pathname.startsWith(item.base)); if (pack) { body = pack.files[url.pathname.slice(pack.base.length)]; if (url.pathname.endsWith('.json')) type = 'application/json'; } }
         if (!body && url.pathname.startsWith('/proxy/')) {
-          const value = url.pathname.endsWith('/model') || url.pathname.endsWith('/apartment_model') ? echo.seed
+          const value = url.pathname.endsWith('/apartment_model') ? savedEcho : url.pathname.endsWith('/model') ? echo.seed
             : url.pathname.endsWith('/api/states') ? [] : url.pathname.endsWith('/api/config') ? { unit_system: { length: 'm' } } : {};
           body = Buffer.from(JSON.stringify(value)); type = 'application/json';
         }
@@ -279,10 +283,15 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     browser = await chromium.launch(browserOptions(precision));
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block', reducedMotion: 'reduce' });
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
-    await context.addInitScript(site => {
+    await context.addInitScript(({ site, draft }) => {
       localStorage.setItem('apartment3d.site', site); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true;
-      if (site === 'echo') localStorage.setItem('apartment3d.shader.uJitterAmp', '0');
-    }, site);
+      if (site === 'echo') {
+        localStorage.setItem('apartment3d.shader.uJitterAmp', '0');
+        window.__HOME_WEB_HA_TOKEN_PROXY = true;
+        window.__HOME_WEB_HA_TOKEN = 'authored-test-proxy-marker';
+        if (draft) localStorage.setItem('apartment3d.modelDraft', JSON.stringify(draft));
+      }
+    }, { site, draft: echoModeled && phase === 'mesh' ? { ...echo.seed, revision: 15 } : null });
     if(nativeWebgl)await context.addInitScript({content:'window.__nativeRgbaReference = '+nativeRgbaReference.toString()+';'});
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
@@ -362,15 +371,15 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       assert.equal(await lighting.getAttribute('aria-pressed'), 'false');
       await haControls.waitFor({ state: 'visible' });
       const views = [['Mesh', 'mesh', null], ['Photo', 'splat', 'splat'], ['Cloud', 'points', 'points']];
-      for (const [view, mode, receiver] of phase === 'mesh' ? views.slice(0, 1) : views) {
+      for (const [view, mode, receiver] of views.filter(([, , kind]) => phase === 'all' || !!kind === (phase === 'receivers'))) {
         await enterMode(page, view + ' view', mode);
         await stable(page, view + ':off');
         await lighting.click();
-        await page.waitForFunction(kind => {
+        await page.waitForFunction(({kind, count}) => {
           const engine = window.__APT_ENGINE, state = engine.litState();
           return state?.active && (state.receivers?.kind || null) === kind
-            && engine.overlay.virtualFixturesReadback().fixtures.length === 4;
-        }, receiver, { timeout: WAIT_MS });
+            && engine.overlay.virtualFixturesReadback().fixtures.length === count;
+        }, { kind: receiver, count: savedEcho.devices.length }, { timeout: WAIT_MS });
         await settled(page);
         if (receiver) {
           const disclosure = page.locator('[data-apt-lit-disclosure]');
@@ -390,10 +399,24 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         }
         await modeledControls.waitFor({ state: 'visible' });
         assert.equal(await haControls.count(), 0);
-        await page.waitForFunction(kind => {
+        const mapped = await page.evaluate(() => {
+          const overlay = window.__APT_ENGINE.overlay;
+          return overlay.virtualFixturesReadback().fixtures.map(({ fixture_id: id, label }) => {
+            const { display_anchor_m, display_origin_m } = overlay.virtualFixtureInteractionDescriptor(id);
+            return [id, label, display_anchor_m, display_origin_m];
+          });
+        });
+        const expected = savedEcho.devices.map(({id, name, pos}) => ['echo-virtual-' + id, name, pos, pos]);
+        assert.deepEqual(mapped.sort(), expected.sort(), view + ' uses every saved name and exact mount and beam origin');
+        for (const { name } of savedEcho.devices) {
+          assert.equal(await modeledControls.getByRole('button', { name: 'Select ' + name, exact: true }).count(), 1,
+            view + ' exposes the saved name ' + name);
+        }
+        check('echo_' + mode + '_saved_names_and_positions', { count: mapped.length });
+        await page.waitForFunction(({kind, count}) => {
           const state = window.__APT_ENGINE.litState();
-          return kind ? state.receivers?.liveSpots === 4 : state.shadowLights > 0 && state.bounce?.status === 'ready';
-        }, receiver, { timeout: WAIT_MS });
+          return kind ? state.receivers?.liveSpots === count : state.shadowLights > 0 && state.bounce?.status === 'ready';
+        }, { kind: receiver, count: savedEcho.devices.length }, { timeout: WAIT_MS });
         if (mode === 'mesh') {
           const { empty } = await meshDragPoints();
           assert.ok(empty, 'Mesh has empty canvas outside every fixture, footprint, and beam');
@@ -419,19 +442,23 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         const plan = mode === 'mesh' ? (await meshDragPoints()).beam : await page.evaluate(() => {
           const engine = window.__APT_ENGINE, canvas = engine.renderer.domElement;
           const rect = engine.picking.getHost().getBoundingClientRect();
-          for (const label of [...document.querySelectorAll('[data-apt-fixture-label]:not([hidden])')].reverse()) {
-            const id = label.getAttribute('data-apt-fixture-label');
+          const bodies = engine.overlay.virtualFixturePickObjects().filter(node => node.userData.interaction_role === 'fixture');
+          const project = world => {
+            const screen = engine.picking.projectToScreen(world);
+            const point = { x: Math.round(rect.left + screen.x), y: Math.round(rect.top + screen.y) };
+            return screen.visible && document.elementFromPoint(point.x, point.y) === canvas ? point : null;
+          };
+          for (const body of [...bodies].reverse()) {
+            const id = body.userData.fixture_id;
             const d = engine.overlay.virtualFixtureInteractionDescriptor(id);
-            const bounds = label.getBoundingClientRect();
-            const start = { x: Math.round(bounds.x + bounds.width / 2), y: Math.round(bounds.y + bounds.height / 2) };
-            if (!d?.state.spotlight.on || !label.contains(document.elementFromPoint(start.x, start.y))) continue;
+            const start = project(body.getWorldPosition(engine.camera.position.clone()));
+            if (!d?.state.spotlight.on || !start
+                || engine.picking.pick(bodies, start.x, start.y)[0]?.object !== body) continue;
             for (const point of [[2, 2, 0], [2.8, 1.4, 0], [1.4, 2.8, 0], [3.3, 2.9, 0]]) {
               if (Math.hypot(point[0] - d.display_anchor_m[0], point[1] - d.display_anchor_m[1]) < .4) continue;
               const world = engine.apartmentRoot.localToWorld(engine.camera.position.clone().set(...point));
-              const screen = engine.picking.projectToScreen(world);
-              const end = { x: Math.round(rect.x + screen.x), y: Math.round(rect.y + screen.y) };
-              if (!screen.visible || document.elementFromPoint(end.x, end.y) !== canvas
-                  || Math.hypot(end.x - start.x, end.y - start.y) < 45) continue;
+              const end = project(world);
+              if (!end || Math.hypot(end.x - start.x, end.y - start.y) < 45) continue;
               const hit = engine.displaySurfaceHit(end.x, end.y);
               if (hit && Math.hypot(...hit.point.map((value, axis) => value - point[axis])) < .1)
                 return { id, start, end, point: hit.point };
@@ -439,7 +466,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
           }
           return null;
         });
-        assert.ok(plan, view + ' has a ' + (mode === 'mesh' ? 'visible beam midsection' : 'visible label') + ' and reachable authored floor');
+        assert.ok(plan, view + ' has a ' + (mode === 'mesh' ? 'visible beam midsection' : 'visible fixture marker') + ' and reachable authored floor');
         const shadowState = () => page.evaluate(() => {
           const engine = window.__APT_ENGINE, state = engine.litState();
           const lights = [];
@@ -497,6 +524,8 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
 
         const tabs = name => fixtureControls.getByRole('tab', { name, exact: true });
         await tabs('Light').click();
+        assert.equal(await fixtureControls.getByRole('slider', { name: 'Down brightness', exact: true }).count(), 0);
+        assert.equal(await fixtureControls.getByRole('slider', { name: 'Radial brightness', exact: true }).count(), 0);
         const brightness = fixtureControls.getByRole('slider', { name: 'Brightness', exact: true });
         await brightness.press('Home');
         await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === 0, plan.id);

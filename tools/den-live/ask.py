@@ -93,8 +93,10 @@ def track_binding(snapshot, track, current):
     A good frame (track: Asker._track's one supported, confident subject) sets it. A bad frame, stale, unsafe or with
     no subject seen, keeps current: contract 2's consumer rule. But some frames end the person whatever their quality:
     - another service run or camera epoch;
-    - on a fresh frame, more than one person, since there's no single subject;
-    - on a fresh frame, one person under another track id or association revision."""
+    - on a fresh frame with tracks, the bound track missing from them, or there under another association revision.
+    The bound track among others, seen or coasting, keeps it (plan 04, step 3): a passer-by, even one who stands in
+    front of the reader, never ends the reader's episode. Coasting is bounded by den-track, and a swap shows up as a
+    revision bump. No ask starts while several people are seen, and one in flight across a crowd is dropped."""
     frame = snapshot.frame
     if track is not None:
         return (*frame.key[:2], track.track_id, track.association_revision)
@@ -102,11 +104,8 @@ def track_binding(snapshot, track, current):
         return None
     if frame is not None and tuple(frame.key[:2]) != tuple(current[:2]):
         return None
-    if snapshot.status == "fresh" and frame is not None:
-        seen = [t for t in snapshot.tracks if t.current_obs_ids]
-        # Several people keep the binding while the bound person is still among them (plan 04, step 3): a passer-by
-        # never ends the reader's episode. No ask starts while several are seen, and one in flight is dropped (crowd).
-        if seen and not any((t.track_id, t.association_revision) == tuple(current[2:]) for t in seen):
+    if snapshot.status == "fresh" and frame is not None and snapshot.tracks:
+        if not any((t.track_id, t.association_revision) == tuple(current[2:]) for t in snapshot.tracks):
             return None
     return current
 
@@ -364,8 +363,15 @@ class Asker:
         with self.lock:
             values, level, occupancy, why = self._gate()
             gate_why = why
+            bound = self.binding is not None and frame is not None and tuple(frame.key[:2]) == tuple(self.binding[:2])
+            # The bound reader coasting behind someone (03's review): the one person seen is never the subject.
+            shadowed = (track is not None and bound
+                        and (track.track_id, track.association_revision) != tuple(self.binding[2:])
+                        and any((t.track_id, t.association_revision) == tuple(self.binding[2:]) for t in snapshot.tracks))
+            if shadowed:
+                track = None
             crowded = (snapshot.status == "fresh" and frame is not None
-                       and sum(1 for t in snapshot.tracks if t.current_obs_ids) > 1)
+                       and (shadowed or sum(1 for t in snapshot.tracks if t.current_obs_ids) > 1))
             if crowded:
                 self.crowd_revision += 1
             binding = track_binding(snapshot, track, self.binding)

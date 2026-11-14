@@ -305,19 +305,20 @@ class PreviewTest(unittest.TestCase):
                 self.now += .25
                 self.track(seated=False)   # stand up, so the next cue starts a new episode
 
-    def test_multiple_people_in_the_stills_revokes_current_support(self):
+    def test_nobody_in_the_stills_revokes_current_support(self):
+        # "multiple" is unknown, not no (contract 3, 2026-11-14): test_preview_people.py has that case.
         self.light()
-        self.read(people_visible="multiple")
+        self.read(people_visible="none")
         self.assertFalse(self.row()["on"])
         self.assertIsNone(self.row()["keep_lit_token"])
 
     def test_the_next_frame_keeps_a_negative_and_older_stills_are_refused(self):
-        """The review's false light: a valid multiple reply moves the episode's start on to it. The next tracking frame,
+        """The review's false light: a valid none reply moves the episode's start on to it. The next tracking frame,
         whose published since hasn't moved, keeps that episode, so replies whose stills began before the negative are
         refused and two of them light nothing. The control: stills after the negative are taken."""
         self.light()
         episode, negative = self.preview.episode, self.now
-        self.read(people_visible="multiple")
+        self.read(people_visible="none")
         self.assertEqual(episode.started, negative)
         self.assertFalse(self.row()["on"])
         for _ in range(2):

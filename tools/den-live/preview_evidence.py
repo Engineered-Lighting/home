@@ -107,7 +107,9 @@ class Episode:
         self.last_observed = observed
         self.requests.append(request)
         self.need.exit_idle_s = patience
-        if field(observation, "status") == "valid" and field(facts, "people_visible") in ("none", "multiple"):
+        # "multiple" is unknown, not no (contract 3's owner, 2026-11-14): it neither renews nor revokes, and the support
+        # runs out on its own. With the ask's crowd guard it comes only when Qwen sees someone the tracker doesn't.
+        if field(observation, "status") == "valid" and field(facts, "people_visible") == "none":
             self.clear_support()
             self.started = observed
             return True

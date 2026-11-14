@@ -106,6 +106,46 @@ class PreviewPeopleTest(unittest.TestCase):
         self.assertEqual((self.preview.latest["bulbs"]["reason"], self.preview.latest["bulbs"]["release"]),
                          ("several_people", True))
 
+    def test_a_passer_by_in_front_of_the_reader_darkens_until_they_pass_and_the_episode_stays(self):
+        """03's review: the reader's track coasts while the passer is the only one seen. The light goes out (no current
+        support), the episode stays, and it lights again once the reader is seen, with no new answer."""
+        self.light()
+        episode = self.preview.episode
+        self.guest = AWAY
+        self.now += .25
+        self.seq += 1
+        reader = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": "confident",
+                  "association_revision": 2, "current_obs_ids": (), "supported_pose": {}, "seated": None}
+        passer = {"track_id": "t2", "state": "confirmed", "position_basis": "stereo", "association_status": "confident",
+                  "association_revision": 1, "current_obs_ids": ("pose",), "supported_pose": {},
+                  "coarse_head_room_m": list(AWAY), "seated": None}
+        self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": 1, "seq": self.seq,
+                                     "frame": {**base.BINDING, "capture_mono": self.now}, "status": "fresh",
+                                     "presence": "present", "eligibility_revision": 1, "eligible_track_id": None,
+                                     "tracks": [reader, passer]})
+        self.assertFalse(self.row()["on"])
+        self.assertIs(self.preview.episode, episode)
+        self.guest = None
+        self.now += .25
+        self.track()
+        self.assertTrue(self.row()["on"])
+
+    def test_a_multiple_reply_neither_renews_nor_revokes(self):
+        """Contract 3's owner: "multiple" is unknown, not no. It's taken, keeps the light, and renews nothing."""
+        self.light()
+        episode = self.preview.episode
+        until = episode.valid_until
+        self.now += .25
+        self.track()
+        self.read(people_visible="multiple")
+        self.assertIn(str(self.now), episode.requests)
+        self.assertEqual(episode.valid_until, until)
+        self.assertTrue(self.row()["on"])
+        self.now += .25
+        self.track()
+        self.read(people_visible="none")
+        self.assertFalse(self.row()["on"])
+
 
 if __name__ == "__main__":
     unittest.main()

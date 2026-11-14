@@ -123,7 +123,7 @@ test('every UI-originated fixture write passes the switch point first, in the sa
     ['applyDirectAim', 'aimVirtualFixtureAtTarget', '"aim"'],
     ['changeVirtualFixtureByHand', 'changeVirtualFixture', '"change"'],
     ['setAimProposal', 'aimVirtualFixtureAtTarget', '"aim"'],
-  ]);
+  ].sort());
   assert.equal(rows.filter(row => row.name === HOOK).length, 4, 'no other switch-point calls');
 });
 
@@ -165,6 +165,23 @@ test('fixture-body drag previews without writing and delegates commit to the gua
   for (const key of ['previewTarget', 'restoreSnapshot']) assert.doesNotMatch(text(option(key)), /aimVirtualFixtureAtTarget|restoreVirtualFixtureAim/);
 });
 
+test('remembered preview restores only ambient channels while the coordinator owns the spots', () => {
+  const calls = [], state = { radials: [], downward: { on: true }, spotlight: { on: true }, pan_deg: 25 };
+  const target = { point: [1, 1, 0] };
+  const context = vm.createContext({ virtualFixtureStatesRef: { current: {
+    states: new Map([['fixture-a', state]]), targets: new Map([['fixture-a', target]]),
+  } } });
+  const replay = install('reapplyVirtualFixtureMemory', context);
+  const overlay = { setVirtualFixtureState: (...args) => calls.push(['state', ...args]), aimVirtualFixtureAtTarget: (...args) => calls.push(['aim', ...args]) };
+  replay(overlay, null, true);
+  assert.deepEqual(plain(calls), [['state', 'fixture-a', { radials: [], downward: { on: true } }]]);
+  calls.length = 0;
+  replay(overlay, 'fixture-a', false);
+  assert.deepEqual(calls, []);
+  replay(overlay, null, false);
+  assert.deepEqual(calls, [['state', 'fixture-a', state], ['aim', 'fixture-a', target]]);
+});
+
 // Run the actual call sites with authored stand-ins and a recording switch
 // point: the switch point runs first, once, with the fixture id and reason.
 function install(name, context) {
@@ -204,6 +221,24 @@ test('actual channel change, aim Set and history restore call the switch point b
   f = authored();
   assert.equal(install('setAimProposal', f.context)({ fixture_id: 'fixture-a', proposal: f.pending }), true);
   assert.deepEqual(f.calls.slice(0, 3), [['switch', 'fixture-a', 'aim'], ['take', 'p1'], ['aim', 'fixture-a', 3]]);
+
+  f = authored();
+  const direct = install('applyDirectAim', f.context);
+  const request = { fixture_id: 'fixture-a', before: { generation: 3 }, target: { point: [1, 1, 0] } };
+  direct({ ...request, before: { generation: 2 } });
+  assert.deepEqual(f.calls, [], 'a stale gesture neither releases nor writes');
+  const current = f.context.aimScopeFor;
+  f.context.aimScopeFor = () => null;
+  direct(request);
+  assert.deepEqual(f.calls, [], 'an unowned scope neither releases nor writes');
+  let reads = 0;
+  f.context.aimScopeFor = id => ++reads === 1 ? current(id) : null;
+  direct(request);
+  assert.deepEqual(f.calls, [['switch', 'fixture-a', 'aim']], 'a scope lost during release never writes');
+  f.calls.length = 0;
+  f.context.aimScopeFor = current;
+  direct(request);
+  assert.deepEqual(f.calls.slice(0, 3), [['switch', 'fixture-a', 'aim'], ['aim', 'fixture-a', 3], ['take', 'p1']]);
 
   for (const direction of ['undo', 'redo']) {
     f = authored(); f.pending = null;

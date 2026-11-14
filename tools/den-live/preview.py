@@ -794,7 +794,23 @@ class Preview:
         newest = max(holds.values(), key=lambda hand: hand["since_mono"])
         return {"event_id": newest["event_id"], "parts": sorted(holds),
                 "since_mono": min(hand["since_mono"] for hand in holds.values()),
-                "ends": {part: hand["ends"] for part, hand in sorted(holds.items())}}
+                "ends": {part: hand["ends"] for part, hand in sorted(holds.items())},
+                "warning": self._hand_warning(name)}
+
+    def _hand_warning(self, name):
+        """For Home's warning on a spot the owner holds lit: its beam, where the hand left it, passing the reader's head
+        or eyes (beam_through_head, at the direction's keep clearance) or someone else's head
+        (beam_through_another_head). den-live never cuts it: manual wins (the spine, 2026-11-14). None when it's clear,
+        off, or there's nobody to check it against."""
+        hand = self.hands.get((name, "spot"))
+        if hand is None or not hand["lit"]:
+            return None
+        row, person = self.rows[name], self.track
+        if person is not None and person.get("head") and not self._clear(row, person, direction.AIM_KEEP_M):
+            return "beam_through_head"
+        if any(not self._clear(row, {"head": other["head"]}, direction.GLARE_KEEP_M) for other in self.others):
+            return THROUGH_ANOTHER_HEAD
+        return None
 
     def _snapshot_entry(self, now, fixtures, ambient):
         """What a change naming this snapshot is read against: den-live's own context, not Home's echo of it."""
@@ -1699,6 +1715,12 @@ class Preview:
             readback = self.hue.readback()
             current.update({**readback, "situation": readback.get("situation") or current["situation"],
                             "problem": current["problem"] or readback.get("problem")})
+        # Home's panel reads one map (#444): each situation's bulbs ("light.*", the overlay's) beside the spot and the
+        # room glow the owner taught here. learned_from_you keeps the fixtures' part on its own.
+        bulbs = current.get("learned") if isinstance(current.get("learned"), dict) else {}
+        mine = current["learned_from_you"]
+        current["learned"] = {key: {**(bulbs.get(key) or {}), **mine.get(key, {})}
+                              for key in sorted(set(bulbs) | set(mine))}
         return 200, current
 
     def bulbs(self, data):

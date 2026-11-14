@@ -167,6 +167,28 @@ class PreviewManualTest(unittest.TestCase):
             point, self.preview.rows[name]["aim_origin_m"], self.preview.rows[name]["horizontal_world_reference"]))]
         self.assertEqual([self.fixtures()[name]["pan_deg"], self.fixtures()[name]["tilt_deg"]], expected)
 
+    def test_a_held_beam_through_a_head_is_warned_about_and_never_cut(self):
+        name = self.light()
+        sent = len(self.moves(name))
+        head = list(self.preview.track["head"])
+        status, reply = self.change(name, {"target": None}, {"target": {"point": head, "normal": [0, 0, 1]}})
+        self.assertEqual(reply["hand"]["warning"], "beam_through_head")
+        self.frames(1)
+        self.assertEqual(self.fixtures()[name]["hand"]["warning"], "beam_through_head")
+        self.assertEqual(len(self.moves(name)), sent)   # warned, not cut: manual wins
+        page = list(self.preview.track["target"])
+        self.change(name, {"target": None}, {"target": {"point": page, "normal": [0, 0, 1]}})
+        self.assertIsNone(self.fixtures()[name]["hand"]["warning"])
+        self.change(name, {"target": None}, {"target": {"point": head, "normal": [0, 0, 1]}})
+        self.change(name, {"spotlight": {"on": True}}, {"spotlight": {"on": False}})
+        self.assertIsNone(self.fixtures()[name]["hand"]["warning"])   # off: nothing to warn about
+
+    def test_homes_panel_reads_the_spot_and_the_room_in_the_one_learned_map(self):
+        name = self.light()
+        self.dim(name)
+        state = self.preview.state()[1]
+        self.assertEqual(state["learned"]["task/evening"]["spot"], state["learned_from_you"]["task/evening"]["spot"])
+
     def test_aiming_the_light_somewhere_else_teaches_the_task_nothing(self):
         name = self.light()
         page = list(self.preview.track["target"])

@@ -156,14 +156,16 @@ class QuestionTest(unittest.TestCase):
 
 # ---- seated ----------------------------------------------------------------------------------------------------
 
-def joints(hip=None, head=None, x=0.0):
-    """den-live's room joints for one pose: both hips, both shoulders, and the nose, at floor point (x, 0)."""
+def joints(hip=None, head=None, x=0.0, knee=None):
+    """den-live's room joints for one pose: both hips, both shoulders, the nose and a knee, at floor point (x, 0)."""
     out = {"left_shoulder": [[x - 0.2, 0, 1.0], "supported"], "right_shoulder": [[x + 0.2, 0, 1.0], "supported"]}
     if hip is not None:
         out["left_hip"] = [[x - 0.15, 0, hip], "supported"]
         out["right_hip"] = [[x + 0.15, 0, hip], "uncertain"]
     if head is not None:
         out["nose"] = [[x, 0.1, head], "supported"]
+    if knee is not None:
+        out["left_knee"] = [[x - 0.15, 0.4, knee], "supported"]
     return out
 
 
@@ -200,13 +202,45 @@ class SeatedTest(unittest.TestCase):
         self.assertTrue(answer)
 
     def test_shifting_along_the_sofa_stays_seated_and_standing_ends_it(self):
+        """den-live's hysteresis (2026-11-14): standing ends it on two consecutive samples of clear standing evidence,
+        not one (a single high-hip frame was the copy's flicker)."""
         rule = seated.Seated()
         t, answer = self.feed(rule, hip=0.5)
         self.assertTrue(answer)
         t, answer = self.feed(rule, hip=0.5, speed=0.4, seconds=1.0, start=t + 0.25)
         self.assertTrue(answer, "a shift keeps you seated")
-        rule.update("t1", t + 0.25, joints(0.95))
-        self.assertFalse(rule.seated("t1", t + 0.25), "standing ends it at once")
+        rule.update("t1", t + 0.25, joints(1.0))
+        self.assertTrue(rule.seated("t1", t + 0.25), "one sample of evidence isn't standing")
+        rule.update("t1", t + 0.5, joints(1.0))
+        self.assertFalse(rule.seated("t1", t + 0.5), "two in a row is: it ends within a frame of the evidence")
+
+    def test_hips_on_the_bands_edge_never_end_seated(self):
+        """The owner's case on LA: the mid-hip on HIP_Z's top (0.61-0.85 m), the head at sofa height. The copy alone
+        never sat them (hips over 0.75 with both hips seen) and, once seated, flipped on every high frame."""
+        rule = seated.Seated()
+        self.assertTrue(self.feed(rule, hip=0.78, head=1.25)[1], "a head under 1.40 m enters, held and still")
+        t, answers = 3.25, []
+        for i in range(40):   # 10 s of the band's edge, 0.70 and 0.85 in turn
+            rule.update("t1", t, joints(0.70 if i % 2 else 0.85, head=1.25))
+            answers.append(rule.seated("t1", t))
+            t += 0.25
+        self.assertTrue(all(answers))
+        self.assertFalse(seated.seated([(0.0, seated.body_joints(joints(0.85, head=1.25)))], 0.0, was_seated=True),
+                         "the copy itself is unchanged: it would have ended it")
+
+    def test_standing_evidence(self):
+        evidence = lambda **kw: seated.standing_evidence(seated.body_joints(joints(**kw)))
+        self.assertTrue(evidence(hip=0.8, head=1.6))
+        self.assertFalse(evidence(hip=0.85, head=1.45), "hips at the edge, a seated head: no evidence")
+        self.assertTrue(evidence(hip=1.0), "no head: high hips")
+        self.assertFalse(evidence(hip=0.9), "no head: hips under 0.95 m aren't clear")
+        self.assertTrue(evidence(hip=0.8, knee=0.4), "the hips well above a knee")
+        self.assertFalse(evidence(hip=0.8, knee=0.6, head=1.3), "a seated lap: the hips just above the knee")
+        self.assertFalse(evidence(), "nothing seen is no evidence")
+        stood = lambda **kw: seated.stood_up(seated.body_joints(joints(**kw)))
+        self.assertTrue(stood(hip=0.95, head=1.68), "head and hips both up: standing at once")
+        self.assertFalse(stood(hip=0.85, head=1.68), "a high head over hips at the band's edge: two frames")
+        self.assertFalse(stood(hip=1.0), "no head: two frames")
 
     def test_the_copy_is_the_coordinators_body_py_at_its_pin(self):
         import inspect

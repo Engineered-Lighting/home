@@ -1,0 +1,420 @@
+<title>Den Light Reasons Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="den-shell.css">
+<style>
+/* Direction C, Why the light: the light explains itself. Tags at each spot's can, a "because" card where the beam
+   lands, a tether to the person it's for, and a panel with every spot's reason, the decision and the rules. */
+.device[data-layout="phone"] .app { grid-template-rows: minmax(0, 0.58fr) minmax(0, 0.42fr); }
+.device[data-layout="phone"] .bottom { overflow: auto; }
+
+.why-lines { position: absolute; inset: 0; pointer-events: none; }
+.ftag { position: absolute; left: 0; top: 0; display: grid; gap: 1px; padding: 4px 7px 5px; border-radius: 7px; pointer-events: none;
+  background: var(--cv-glass); border: 1px solid var(--cv-line); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  white-space: nowrap; will-change: transform; transition: border-color .3s, opacity .3s; }
+.ftag b { font: 600 11.5px/1.2 var(--sans); color: var(--cv-fg-0); }
+.ftag span { font: 500 11px/1.25 var(--mono); color: var(--cv-fg-3); }
+.ftag[data-state="lit"] { border-color: rgba(255, 221, 176, .45); }
+.ftag[data-state="lit"] span { color: var(--cv-warm); }
+.ftag[data-state="aimed"] span { color: var(--cv-fg-2); }
+.ftag[data-state="refused"] { border-color: rgba(255, 98, 95, .35); border-style: dashed; }
+.ftag[data-state="refused"] span { color: var(--cv-blocked); }
+.ftag[data-state="stopped"] span { color: var(--cv-attn); }
+
+.because { position: absolute; left: 0; top: 0; width: min(318px, calc(100% - 20px)); padding: 11px 12px 10px; border-radius: 10px;
+  background: var(--cv-glass); border: 1px solid var(--cv-line-strong); backdrop-filter: blur(14px) saturate(1.15); -webkit-backdrop-filter: blur(14px) saturate(1.15);
+  color: var(--cv-fg-1); font-size: 12.5px; line-height: 1.4; will-change: transform; }
+.because[data-tone="lit"] { border-color: rgba(255, 221, 176, .38); }
+.because[data-tone="warn"] { border-color: rgba(255, 180, 95, .4); }
+.because h3 { margin: 0 0 4px; font: 600 15px/1.25 var(--sans); color: var(--cv-fg-0); text-wrap: balance; }
+.because[data-tone="lit"] h3 { color: var(--cv-warm); }
+.because p { margin: 0; color: var(--cv-fg-2); }
+.because p + p { margin-top: 4px; }
+.because .k { color: var(--cv-fg-3); font: 500 11px/1.4 var(--mono); }
+.because .ok { color: var(--cv-ok); }
+.because .bad { color: var(--cv-attn); }
+.chain { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin: 2px 0 6px; }
+.chain i { font-style: normal; color: var(--cv-fg-4); font-size: 11px; }
+.chain span { font: 500 11px/1 var(--mono); padding: 4px 6px 3px; border-radius: 5px; border: 1px solid var(--cv-line); color: var(--cv-fg-1); background: rgba(255,255,255,.03); }
+.chain span.q { color: var(--cv-ice); border-color: rgba(184,216,255,.3); }
+.chain span.l { color: var(--cv-warm); border-color: rgba(255,221,176,.35); }
+.chain span.x { color: var(--cv-fg-3); border-style: dashed; }
+.lifebar { height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); margin: 5px 0 2px; overflow: hidden; }
+.lifebar i { display: block; height: 100%; background: var(--cv-ice); }
+.lifebar.pat i { background: var(--cv-attn); }
+.device[data-layout="phone"] .because { width: calc(100% - 20px); padding: 9px 10px 8px; }
+.device[data-layout="phone"] .because .k { display: none; }
+.device[data-layout="phone"] .because h3 { font-size: 14px; }
+.device[data-layout="phone"] .ftag span { display: none; }
+.device[data-layout="phone"] .ftag[data-state="lit"] span, .device[data-layout="phone"] .ftag[data-state="aimed"] span { display: block; }
+
+/* the panel follows the theme */
+.wp { display: grid; gap: 0; font-size: 12.5px; color: var(--hg-fg-1); }
+.wp-sec { padding: 12px 14px; border-bottom: 1px solid var(--hg-border-soft); display: grid; gap: 8px; min-width: 0; }
+.wp-h { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.wp-h h2 { margin: 0; font: 600 13px/1.3 var(--sans); color: var(--hg-fg-0); }
+.wp-h small { font: 500 11px/1.3 var(--mono); color: var(--hg-fg-3); text-align: right; }
+.wp-state { display: flex; align-items: center; gap: 7px; color: var(--hg-fg-1); }
+.shape { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--hg-fg-4); }
+.shape.lit { background: var(--apt-warm); box-shadow: 0 0 8px var(--apt-warm); }
+.shape.aimed { background: transparent; border: 1.5px solid var(--apt-warm); }
+.shape.refused { border-radius: 1px; height: 3px; width: 10px; background: var(--apt-blocked); }
+.shape.stopped, .shape.stale { border-radius: 1px; width: 8px; height: 8px; transform: rotate(45deg); background: var(--apt-attn); }
+.shape.live { background: var(--apt-ok); }
+.spots { display: grid; gap: 0; }
+.spot { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; padding: 7px 0; border-top: 1px solid var(--hg-border-soft); }
+.spot:first-child { border-top: 0; }
+.spot-name { font-weight: 560; color: var(--hg-fg-0); }
+.spot-lvl { font: 500 11.5px/1 var(--mono); color: var(--hg-fg-2); font-variant-numeric: tabular-nums; }
+.spot-why { grid-column: 2 / 4; color: var(--hg-fg-2); min-width: 0; }
+.spot-why code { font: 500 11px/1 var(--mono); color: var(--hg-fg-3); margin-left: 4px; }
+.spot[data-state="refused"] .spot-why { color: var(--apt-blocked); }
+.spot[data-state="lit"] .spot-why { color: var(--hg-fg-1); }
+.bar { grid-column: 2 / 4; height: 3px; border-radius: 2px; background: var(--hg-border); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--apt-warm); transition: width .2s linear; }
+.kv { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 4px 10px; margin: 0; }
+.kv dt { color: var(--hg-fg-3); font: 500 11.5px/1.45 var(--mono); }
+.kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; color: var(--hg-fg-1); }
+.kv .mono { font: 500 11.5px/1.45 var(--mono); }
+.prop { color: var(--apt-proposed); font: 500 10.5px/1 var(--mono); border: 1px dashed currentColor; border-radius: 4px; padding: 1px 4px; margin-left: 4px; white-space: nowrap; }
+.log { display: grid; gap: 3px; margin: 0; padding: 0; list-style: none; }
+.log li { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; color: var(--hg-fg-2); }
+.log li span:first-child { font: 500 11px/1.5 var(--mono); color: var(--hg-fg-3); font-variant-numeric: tabular-nums; }
+.muted { color: var(--hg-fg-3); }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="links.js"></script>
+<script src="den-sim.js"></script>
+<script src="den-client.js"></script>
+<script src="den-stage.js"></script>
+<script src="den-shell.js"></script>
+<script>
+(function () {
+const NOTES = `
+<article class="note"><h2>What this direction is</h2>
+<p>The light explains itself. Every spot carries a tag at its can: the lit one gives level and colour temperature, a dark pre-aim says it's ready, and a refused spot gives its reason in red beside a dashed ring.</p>
+<p>A "because" card sits where the beam lands. It builds one sentence from data bound to the decision: the Qwen answer, whose it was, how long it stays good, and what would turn the light off. A tether runs from the lit spot to the person it's for.</p>
+<p>The panel lists every spot's reason, the latest decision with its poll age, the rules in force, and the last changes.</p></article>
+<article class="note"><h2>Bindings</h2><ul>
+<li>Tags and the panel's rows: <code>fixtures[id].on, level, cct_k, reason, motion_phase, target_m</code> at 10 Hz. A snapshot older than 1.5 s hides the beam.</li>
+<li>For whom: <code>subject.track_id</code> against the people event's tracks. The name comes from <code>identity</code> <span class="pill-proposed">proposed</span>.</li>
+<li>Which answer: <code>subject.request_id</code> (sent today) against <code>activity.request_id</code> <span class="pill-proposed">proposed</span>.</li>
+<li>How long it holds: the answer's life (<code>valid_for_s</code> <span class="pill-proposed">proposed</span>, else 10 s from <code>at</code>), and <code>phone_patience_s</code> from the 2 s coordinator poll.</li>
+<li>Decision: <code>decision.decision_id, proposal.kind, refused</code> from the poll, with its age.</li></ul></article>
+<article class="note"><h2>Design check</h2><dl class="score">
+<dt>Readable</dt><dd>Answers "why is it on" in one sentence, and "why not that spot" in red, without opening anything. It competes with the person for attention, and tags at four ceiling cans crowd the overview.</dd>
+<dt>Honest</dt><dd>The strongest of the four: every clause is a bound field, and refusals and stale snapshots are shown, not smoothed over. The patience countdown is Home's estimate from the answers it saw, so it says "about".</dd>
+<dt>Fast</dt><dd>Snapshots arrive at 10 Hz, but text changes only when a reason or a 5% level step changes. The card refreshes at 4 Hz and the lines draw on one canvas.</dd>
+<dt>Delight</dt><dd>Medium. A ripple where the beam first lands and a tether to the person read well. The rest is an explanation, and it isn't meant to be playful.</dd></dl></article>`;
+
+DenShell.mount({ letter: 'C', title: 'Why the light did this',
+    subtitle: 'The light explains itself: a reason at every spot, a because-card where the beam lands, a tether to its subject. Synthetic stream at real rates.',
+    notes: NOTES, side: 340, phoneStage: '0.58fr', startAt: 21.0,
+    setup(ctx) {
+        const { overlay, stage, esc, sim } = ctx;
+        const ROOM = sim.ROOM, REASON = DenClient.REASON;
+        const CLOSE_UP = new Set(['reading', 'hobby']);
+        overlay.innerHTML = `<canvas class="why-lines" id="why-lines"></canvas><div class="because" id="because" role="status" aria-live="polite"></div>`;
+        const lines = overlay.querySelector('#why-lines'), g = lines.getContext('2d');
+        const card = overlay.querySelector('#because');
+        const tags = new Map();
+        for (const f of ROOM.fixtures) {
+            const el = document.createElement('div');
+            el.className = 'ftag'; el.innerHTML = `<b>${esc(f.name)}</b><span></span>`;
+            overlay.insertBefore(el, card);
+            tags.set(f.id, { el, x: null, y: null, line: el.querySelector('span') });
+        }
+
+        // the panel: on the right on a laptop, under the stage on a phone
+        const panel = document.createElement('div');
+        panel.className = 'wp';
+        panel.innerHTML = `
+          <section class="wp-sec"><div class="wp-h"><h2>Automation</h2><small id="wp-poll"></small></div><div class="wp-state" id="wp-auto"></div></section>
+          <section class="wp-sec"><div class="wp-h"><h2>Why each spot</h2><small id="wp-snap"></small></div><div class="spots" id="wp-spots"></div></section>
+          <section class="wp-sec"><div class="wp-h"><h2>The decision</h2><small id="wp-dage"></small></div><dl class="kv" id="wp-decision"></dl></section>
+          <section class="wp-sec"><div class="wp-h"><h2>Rules in force</h2><small>from the poll</small></div><dl class="kv" id="wp-rules"></dl></section>
+          <section class="wp-sec"><div class="wp-h"><h2>Spot 3, last changes</h2><small>as received</small></div><ul class="log" id="wp-log"></ul></section>`;
+        const P = id => panel.querySelector('#' + id);
+        for (const f of ROOM.fixtures) {
+            const row = document.createElement('div');
+            row.className = 'spot'; row.dataset.id = f.id;
+            row.innerHTML = `<span class="shape"></span><span class="spot-name">${esc(f.name)}</span><span class="spot-lvl"></span><div class="bar"><i style="width:0"></i></div><div class="spot-why"></div>`;
+            P('wp-spots').appendChild(row);
+        }
+        ctx.onLayout(layout => { (layout === 'phone' ? ctx.bottom : ctx.side).appendChild(panel); });
+
+        const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+        const html = (node, value) => { if (node._h !== value) { node.innerHTML = value; node._h = value; } };
+        const secs = s => s == null || !isFinite(s) ? '—' : s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`;
+        const whole = s => `${Math.max(0, Math.round(s))} s`;
+        const ago = s => s < 1 ? 'just now' : `${whole(s)} ago`;
+
+        // when Home last got a coordinator poll answer (it carries no time of its own)
+        let coordObj = null, coordAt = null;
+        let lastLevel = 0, ripple = -10, lastCardAt = -10, cardPos = null;
+
+        function stateOf(f, light) {
+            if (!light || !light.fresh) return 'stale';
+            if (light.stopped) return 'stopped';
+            if (f.on) return 'lit';
+            if (f.target) return 'aimed';
+            if (f.refused) return 'refused';
+            return 'idle';
+        }
+
+        /* What Home saw of the subject's answers: the newest close-up answer, and the first non-close-up answer after it
+           (the start of the patience). Built from the people events received, so it's Home's estimate. */
+        function answers(view, trackId) {
+            let closeUp = null, negative = null;
+            for (const h of view.history) {
+                if (h.kind !== 'people' || h.track !== trackId || !h.word || h.answeredAt == null) continue;
+                if (CLOSE_UP.has(h.word)) { if (!closeUp || h.answeredAt > closeUp.answeredAt + 0.01) { closeUp = h; negative = null; } }
+                else if (h.word !== 'unclear' && (!closeUp || h.answeredAt > closeUp.answeredAt) && !negative) negative = h;
+            }
+            return { closeUp, negative };
+        }
+
+        function frame(view, now, dt) {
+            const W = stage.size.width, H = stage.size.height, dpr = Math.min(2, devicePixelRatio || 1);
+            if (lines.width !== Math.round(W * dpr) || lines.height !== Math.round(H * dpr)) { lines.width = Math.round(W * dpr); lines.height = Math.round(H * dpr); lines.style.width = W + 'px'; lines.style.height = H + 'px'; }
+            g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+            const reduce = ctx.reduced(), phone = ctx.layout === 'phone';
+            const k = reduce || dt === 0 ? 1 : 1 - Math.exp(-dt / 0.22);
+            const light = view.light, fx = light ? light.fixtures : [];
+            const lit = light && light.fresh ? light.lit : null, aimed = light && light.fresh ? light.aimed : null;
+            const anchors = stage.anchors();
+            const subject = light && light.subject;
+            const subjectTrack = subject ? view.tracks.find(t => t.id === subject.track_id) : null;
+            const subjectAnchor = subjectTrack ? anchors.get(subjectTrack.id) : null;
+            const coord = ctx.client.state.coordinator;
+            if (coord !== coordObj) { coordAt = coordObj == null ? now - (((now - 0.15) % 2) + 2) % 2 : now; coordObj = coord; }
+            const coordAge = coord ? now - coordAt : null;
+            const patienceS = coord?.settings?.phone_patience_s ?? null;
+
+            // 1. tags at the cans, refused rings and would-have-aimed rays, the tether
+            const goalTarget = lit?.target || aimed?.target || (subjectTrack ? [subjectTrack.xy[0], subjectTrack.xy[1], 0.8] : null);
+            // where each tag wants to sit (above its can), then push overlapping tags apart sideways, then down
+            const want = [];
+            for (const f of ROOM.fixtures) {
+                const tag = tags.get(f.id), can = stage.project(f.at);
+                const w = tag.el.offsetWidth, h = tag.el.offsetHeight;
+                want.push({ id: f.id, can, w, h, x: can.x - w / 2, y: can.y - h - 12 });
+            }
+            const clampTag = t => { t.x = Math.max(6, Math.min(W - t.w - 6, t.x)); t.y = Math.max(6, Math.min(H - t.h - 6, t.y)); };
+            for (const t of want) clampTag(t);
+            for (let pass = 0; pass < 6; pass++) for (let i = 0; i < want.length; i++) for (let j = i + 1; j < want.length; j++) {
+                const a = want[i], b = want[j];
+                if (a.can.behind || b.can.behind) continue;
+                const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) + 6, oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) + 4;
+                if (ox <= 0 || oy <= 0) continue;
+                if (ox < 120) { const d = ox / 2 * (a.x <= b.x ? 1 : -1); a.x -= d; b.x += d; clampTag(a); clampTag(b); }
+                else { const lower = a.y >= b.y ? b : a; const upper = lower === a ? b : a; lower.y = upper.y + upper.h + 4; clampTag(lower); }
+            }
+            for (const f of ROOM.fixtures) {
+                const row = fx.find(r => r.id === f.id), tag = tags.get(f.id), st = row ? stateOf(row, light) : 'stale';
+                const spot = want.find(t => t.id === f.id), can = spot.can;
+                tag.el.dataset.state = st;
+                const line = !row ? 'no snapshot yet' : st === 'stale' ? `no snapshot for ${whole(light.age)}`
+                    : st === 'stopped' ? 'Stop holds' : st === 'lit' ? `${Math.round(row.level * 100)}% · ${row.cct} K${row.phase === 'moving' ? ' · moving' : ''}`
+                    : st === 'aimed' ? (row.phase === 'moving' ? 'aiming, dark' : 'aimed, dark, ready') : st === 'refused' ? row.words.toLowerCase()
+                    : row.reason === 'waiting_for_task' ? 'waiting for a task' : row.reason === 'waiting_for_tracking' ? 'nobody tracked' : row.words.toLowerCase();
+                text(tag.line, line);
+                if (can.behind) { tag.el.style.opacity = '0'; continue; }
+                const w = spot.w, h = spot.h, tx = spot.x, ty = spot.y;
+                tag.x = tag.x == null ? tx : tag.x + (tx - tag.x) * k; tag.y = tag.y == null ? ty : tag.y + (ty - tag.y) * k;
+                tag.el.style.transform = `translate(${Math.round(tag.x)}px, ${Math.round(tag.y)}px)`;
+                tag.el.style.opacity = st === 'idle' ? '0.7' : '1';
+                tag.can = can; tag.w = w; tag.h = h;
+                // a tick from the tag down to its can
+                g.strokeStyle = 'rgba(237,237,237,0.28)'; g.lineWidth = 1;
+                const footX = Math.max(tag.x + 6, Math.min(tag.x + w - 6, can.x));
+                g.beginPath(); g.moveTo(footX, tag.y + h); g.lineTo(can.x, can.y - 4); g.stroke();
+                if (st === 'refused') {
+                    g.save(); g.strokeStyle = 'rgba(255,98,95,0.85)'; g.setLineDash([3, 3]); g.lineWidth = 1.4;
+                    g.beginPath(); g.arc(can.x, can.y, 11, 0, Math.PI * 2); g.stroke();
+                    if (goalTarget) {   // the aim it would have taken, cut short: it was never sent
+                        const t = stage.project(goalTarget);
+                        if (!t.behind) {
+                            const ex = can.x + (t.x - can.x) * 0.38, ey = can.y + (t.y - can.y) * 0.38;
+                            g.globalAlpha = 0.55; g.beginPath(); g.moveTo(can.x, can.y); g.lineTo(ex, ey); g.stroke();
+                            g.setLineDash([]); g.globalAlpha = 0.9; g.lineWidth = 2;
+                            const ang = Math.atan2(ey - can.y, ex - can.x) + Math.PI / 2;
+                            g.beginPath(); g.moveTo(ex - Math.cos(ang) * 6, ey - Math.sin(ang) * 6); g.lineTo(ex + Math.cos(ang) * 6, ey + Math.sin(ang) * 6); g.stroke();
+                        }
+                    }
+                    g.restore();
+                }
+            }
+            // the tether: from the lit (or dark-aimed) spot's tag to its subject's floor ring
+            const owner = lit || aimed;
+            if (owner && subjectAnchor && subjectAnchor.ring && !subjectAnchor.ring.behind) {
+                const tag = tags.get(owner.id);
+                if (tag.can) {
+                    const a = { x: tag.x + tag.w / 2, y: tag.y + tag.h }, b = subjectAnchor.ring;
+                    const cx = (a.x + b.x) / 2 + (b.y - a.y) * 0.18, cy = (a.y + b.y) / 2 - Math.abs(b.x - a.x) * 0.12;
+                    g.save();
+                    g.strokeStyle = lit ? 'rgba(255,221,176,0.55)' : 'rgba(201,185,163,0.45)'; g.lineWidth = 1.2;
+                    if (!lit) g.setLineDash([4, 4]);
+                    g.beginPath(); g.moveTo(a.x, a.y); g.quadraticCurveTo(cx, cy, b.x, b.y); g.stroke();
+                    g.setLineDash([]); g.fillStyle = lit ? 'rgba(255,221,176,0.9)' : 'rgba(201,185,163,0.8)';
+                    g.beginPath(); g.arc(b.x, b.y, 2.5, 0, Math.PI * 2); g.fill();
+                    g.restore();
+                }
+            }
+
+            // 2. a ripple where the beam first lands (a real event: the level leaving zero)
+            const level = lit ? lit.level : 0;
+            if (lastLevel === 0 && level > 0) ripple = now;
+            lastLevel = level;
+            const bt = stage.beamTarget();
+            const landing = bt ? stage.project(bt) : null;
+            if (landing && !landing.behind && !reduce) {
+                const u = (now - ripple) / 1.1;
+                if (u >= 0 && u < 1) {
+                    g.strokeStyle = `rgba(255,221,176,${0.7 * (1 - u)})`; g.lineWidth = 1.5;
+                    g.beginPath(); g.ellipse(landing.x, landing.y, 8 + u * 46, (8 + u * 46) * 0.5, 0, 0, Math.PI * 2); g.stroke();
+                }
+            }
+
+            // 3. the because card
+            const c = because(view, now, { lit, aimed, light, subject, subjectTrack, patienceS });
+            if (now - lastCardAt >= 0.25 || now < lastCardAt || dt === 0) {
+                lastCardAt = now;
+                card.dataset.tone = c.tone;
+                html(card, `<h3>${esc(c.title)}</h3>${c.chain ? `<div class="chain">${c.chain}</div>` : ''}${c.body}`);
+            }
+            let anchor = landing && !landing.behind && (lit || aimed) ? landing : subjectAnchor?.ring && !subjectAnchor.ring.behind ? subjectAnchor.ring : null;
+            const cw = card.offsetWidth, ch = card.offsetHeight;
+            let tx, ty;
+            if (phone) { tx = 10; ty = H - ch - 48; }
+            else if (!anchor) { tx = 10; ty = H - ch - 10; }
+            else {
+                const right = anchor.x < W * 0.55;
+                tx = right ? anchor.x + 72 : anchor.x - 72 - cw; ty = anchor.y - ch * 0.35;
+                tx = Math.max(10, Math.min(W - cw - 10, tx)); ty = Math.max(10, Math.min(H - ch - 54, ty));
+            }
+            cardPos = !cardPos || reduce || dt === 0 ? { x: tx, y: ty } : { x: cardPos.x + (tx - cardPos.x) * k, y: cardPos.y + (ty - cardPos.y) * k };
+            card.style.transform = `translate(${Math.round(cardPos.x)}px, ${Math.round(cardPos.y)}px)`;
+            if (anchor && !phone) {   // leader from the landing point to the card
+                const ex = cardPos.x + (anchor.x < cardPos.x ? 0 : cw), ey = Math.max(cardPos.y + 12, Math.min(cardPos.y + ch - 12, anchor.y));
+                g.strokeStyle = 'rgba(237,237,237,0.35)'; g.lineWidth = 1;
+                g.beginPath(); g.moveTo(anchor.x, anchor.y); g.lineTo(ex, ey); g.stroke();
+                g.fillStyle = lit ? 'rgba(255,221,176,0.95)' : 'rgba(237,237,237,0.8)';
+                g.beginPath(); g.arc(anchor.x, anchor.y, 2.6, 0, Math.PI * 2); g.fill();
+            }
+
+            // 4. the panel
+            renderPanel(view, now, { light, coord, coordAge, patienceS });
+        }
+
+        function because(view, now, { lit, aimed, light, subject, subjectTrack, patienceS }) {
+            const who = subjectTrack ? subjectTrack.identity.name : null;
+            const where = subjectTrack ? [subjectTrack.posture ? subjectTrack.posture.toLowerCase() : subjectTrack.seated ? 'seated' : null, subjectTrack.near].filter(Boolean).join(', ') : '';
+            const whoLine = who ? `${esc(who)}${where ? `, ${esc(where)}` : ''}` : '';
+            if (!view.live && !light) return { tone: 'warn', title: 'Waiting for the den', body: '<p>No stream yet.</p>' };
+            if (!light) return { tone: 'warn', title: 'No spot snapshot yet', body: '<p>The coordinator has sent nothing. No beam is drawn until it does.</p>' };
+            if (!light.fresh) return { tone: 'warn', title: `No spot snapshot for ${whole(light.age)}`,
+                body: `<p>Snapshots come 10 times a second. Past 1.5 s Home stops drawing the beam rather than guess.</p>${!view.live ? `<p class="bad">The people stream stopped too.</p>` : ''}` };
+            if (light.stopped) {
+                const n = ctx.client.state.spot?.stop_counter ?? '';
+                return { tone: 'warn', title: 'Stop is holding every spot dark', body: `<p>Nothing lights until Resume, and Resume must name stop #${esc(n)}, so a stale Resume can't undo a newer Stop.</p>` };
+            }
+            const fix = lit || aimed;
+            // the binding: whose decision, and is that person in the latest people event
+            let binding = '';
+            if (subject) {
+                const inEvent = !!subjectTrack;
+                const reqMatch = subject.request_id && subjectTrack?.activity?.requestId != null ? subjectTrack.activity.requestId === subject.request_id : null;
+                binding = `<p class="k">for track ${esc(subject.track_id)} · epoch ${esc(subject.camera_epoch)} · rev ${esc(subject.association_revision)}${inEvent ? '' : ' · <span class="bad">not in the latest people event</span>'}</p>`;
+                if (subject.request_id) binding += `<p class="k">answer ${esc(subject.request_id)} · ${reqMatch === true ? '<span class="ok">the one shown</span>' : reqMatch === false ? '<span class="bad">not the one shown</span>' : ctx.proposed ? 'no answer shown now' : "can't check: the answer's id isn't sent today"}</p>`;
+            }
+            if (lit) {
+                const act = subjectTrack?.activity;
+                const { closeUp, negative } = subjectTrack ? answers(view, subjectTrack.id) : {};
+                const title = lit.reason === 'task_released' ? `${lit.name} is fading out` : `${lit.name} is on · ${Math.round(lit.level * 100)}% · ${lit.cct} K`;
+                let chain = '', body = '';
+                if (lit.reason === 'task_released') {
+                    chain = `<span class="q">${esc(DenClient.ACTIVITY[negative?.word] || 'No close-up answer')}</span><i>→</i><span class="x">patience over</span><i>→</i><span class="l">${esc(lit.name)} fading</span>`;
+                    body = `<p>The task ended: no close-up answer${negative ? ` since Qwen said ${esc((DenClient.ACTIVITY[negative.word] || negative.word).toLowerCase())} ${ago(now - negative.answeredAt)}` : ''}${patienceS != null ? `, and the ${patienceS} s patience ran out` : ''}.</p>`;
+                } else if (act && act.closeUp) {
+                    chain = `<span class="q">${esc(act.words)} · ${act.age < 1 ? 'now' : whole(act.age)}</span><i>→</i><span>close-up task</span><i>→</i><span class="l">${esc(lit.name)} ${Math.round(lit.level * 100)}%</span>`;
+                    body = `<p>Because Qwen said <b>${esc(act.words.toLowerCase())}</b> ${ago(act.age)}${whoLine ? ` (${whoLine})` : ''}.</p>
+                      <p>Holds while answers keep saying close-up work. This one is good ${secs(act.left)} more.</p><div class="lifebar"><i style="width:${(act.life * 100).toFixed(0)}%"></i></div>`;
+                } else if (negative && patienceS != null) {
+                    const left = patienceS - (now - negative.answeredAt);
+                    chain = `<span class="q">${esc(DenClient.ACTIVITY[negative.word] || negative.word)} · ${whole(now - negative.answeredAt)}</span><i>→</i><span>patience ${whole(Math.max(0, left))}</span><i>→</i><span class="l">${esc(lit.name)} still on</span>`;
+                    body = `<p>Still on: Qwen said ${esc((DenClient.ACTIVITY[negative.word] || negative.word).toLowerCase())} ${ago(now - negative.answeredAt)}, so the light waits out the ${patienceS} s patience.</p>
+                      <p>Off in about ${whole(Math.max(0, left))}, unless the next answer is close-up work again.</p><div class="lifebar pat"><i style="width:${Math.max(0, Math.min(100, left / patienceS * 100)).toFixed(0)}%"></i></div>`;
+                } else if (closeUp) {
+                    const age = now - closeUp.answeredAt, out = view.qwen?.lastOutcome;
+                    chain = `<span class="q">${esc(DenClient.ACTIVITY[closeUp.word])} · ${whole(age)}</span><i>→</i><span>close-up task</span><i>→</i><span class="l">${esc(lit.name)} ${Math.round(lit.level * 100)}%</span>`;
+                    body = `<p>Because Qwen said <b>${esc(DenClient.ACTIVITY[closeUp.word].toLowerCase())}</b> ${ago(age)}${whoLine ? ` (${whoLine})` : ''}. That answer is no longer shown.</p>
+                      <p>${out && out.kind !== 'bound' && out.age < 10 ? `Newer answers didn't count: ${esc(out.words.toLowerCase())}. ` : ''}It holds until about ${whole(Math.max(0, 10 - age))} from now.</p>`;
+                } else {
+                    body = `<p>On for ${whoLine || 'its subject'}. Home hasn't seen the answer behind it (it may have come before this page opened).</p>`;
+                }
+                return { tone: 'lit', title, chain, body: body + binding };
+            }
+            if (aimed) {
+                const moving = aimed.phase === 'moving';
+                return { tone: 'idle', title: `${aimed.name} ${moving ? 'is turning toward' : 'is aimed at'} ${who || 'someone'}, dark`,
+                    chain: `<span class="q">${subjectTrack?.activity ? esc(subjectTrack.activity.words) : 'no close-up answer'}</span><i>→</i><span class="x">no task</span><i>→</i><span>${esc(aimed.name)} dark, ready</span>`,
+                    body: `<p>Seated${subjectTrack?.near ? ` ${esc(subjectTrack.near)}` : ''}, but no close-up answer yet${subjectTrack?.activity ? `: Qwen says ${esc(subjectTrack.activity.words.toLowerCase())}` : ''}.</p><p>Pre-aim is on, so the spot points at the reading spot and waits. It lights when Qwen says reading or a close-up hobby.</p>${binding}` };
+            }
+            const f3 = light.fixtures.find(f => f.id === 'F3');
+            if (view.banner?.kind === 'too-dark') return { tone: 'warn', title: 'All spots dark: too dark to see',
+                body: '<p>No tracks, so nothing to aim at. Infrared tracking isn\'t on yet, so the den can\'t follow anyone in the dark.</p>' };
+            if (f3?.reason === 'waiting_for_task') {
+                const t = view.tracks[0];
+                return { tone: 'idle', title: 'All spots dark',
+                    body: `<p>${t ? `${esc(t.identity.name)} is ${esc((t.posture || 'not seated').toLowerCase())}` : 'Someone is here, not seated'}. The spots wait for a seated person before they aim.</p>` };
+            }
+            if (f3?.reason === 'waiting_for_tracking') return { tone: 'idle', title: 'All spots dark', body: `<p>Nobody tracked${view.count ? ' yet' : ''}. There's nothing to aim at.</p>` };
+            return { tone: 'idle', title: 'All spots dark', body: `<p>${esc(f3 ? f3.words : 'No reason given')}.</p>` };
+        }
+
+        function renderPanel(view, now, { light, coord, coordAge, patienceS }) {
+            html(P('wp-auto'), coord ? `<span class="shape ${coord.stopped ? 'stopped' : coord.on ? 'live' : ''}"></span><span>${coord.stopped ? 'Stop is holding' : coord.on ? 'On · moving the virtual spots in Home' : 'Off'}</span>`
+                : '<span class="shape"></span><span class="muted">No coordinator answer yet</span>');
+            text(P('wp-poll'), coord ? `polled ${ago(coordAge)}` : 'polls every 2 s');
+            text(P('wp-snap'), light ? (light.fresh ? `snapshot ${Math.round(light.age * 1000)} ms old` : `stale · ${whole(light.age)}`) : 'no snapshot');
+            for (const row of P('wp-spots').children) {
+                const f = light?.fixtures.find(x => x.id === row.dataset.id);
+                const st = f ? stateOf(f, light) : 'stale';
+                row.dataset.state = st;
+                row.querySelector('.shape').className = 'shape ' + st;
+                text(row.querySelector('.spot-lvl'), f ? (f.on ? `${Math.round(f.level * 100)}% · ${f.cct} K` : f.target ? 'dark · aimed' : 'dark') : '—');
+                row.querySelector('.bar i').style.width = f ? `${Math.round(f.level * 100)}%` : '0';
+                html(row.querySelector('.spot-why'), f ? `${esc(st === 'stale' ? 'No fresh snapshot' : f.words)}${f.phase === 'moving' ? ' · moving' : ''}<code>${esc(f.reason)}</code>` : '<span class="muted">no snapshot yet</span>');
+            }
+            const d = coord?.decision;
+            text(P('wp-dage'), d ? `as of the poll ${ago(coordAge)}` : '');
+            const kv = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+            html(P('wp-decision'), d ? kv('id', `<span class="mono">${esc(d.decision_id)}</span>`)
+                + kv('kind', d.proposal ? (d.proposal.kind === 'task' ? 'task: light it' : 'pre-aim: aim dark') : 'none: nobody to aim at')
+                + (d.proposal ? kv('fixture', esc(ROOM.fixtures.find(f => f.id === d.proposal.fixture)?.name || d.proposal.fixture || '—')) : '')
+                + (d.proposal && Object.keys(d.proposal.refused || {}).length ? kv('refused', Object.entries(d.proposal.refused).map(([id, r]) => `${esc(ROOM.fixtures.find(f => f.id === id)?.name || id)}: ${esc((REASON[r] || r).toLowerCase())}`).join('<br>')) : '')
+                + kv('subject', d.subject ? `<span class="mono">${esc(d.subject.track_id)}</span>${d.subject.request_id ? `<br><span class="mono">${esc(d.subject.request_id)}</span>` : ''}` : 'none')
+                + kv('actuation', esc(d.actuation || '—')) : '<dt>—</dt><dd class="muted">No decision yet</dd>');
+            const s = coord?.settings;
+            html(P('wp-rules'), s ? kv('phone patience', `${esc(s.phone_patience_s)} s after a phone or closed-book answer`)
+                + kv('pre-aim', s.pre_aim ? 'on: a dark spot points at a seated person' : 'off')
+                + kv('fade', `in ${esc(s.fade_in_s)} s · out ${esc(s.fade_out_s)} s`)
+                + kv('answer life', `10 s from its newest still${ctx.proposed ? '' : '<span class="prop">valid_for_s proposed</span>'}`) : '<dt>—</dt><dd class="muted">Waiting for the poll</dd>');
+            // the last changes of spot 3's reason, as Home received them
+            const changes = [];
+            let prev = null;
+            for (const h of view.history) {
+                if (h.kind !== 'spot') continue;
+                const key = h.stopped ? 'stopped' : h.reason;
+                if (key !== prev) { changes.push({ at: h.at, key, level: h.level }); prev = key; }
+            }
+            const shown = changes.slice(-5).reverse();
+            html(P('wp-log'), shown.length ? shown.map(c => `<li><span>${esc(whole(now - c.at))}</span><span>${esc(REASON[c.key] || c.key)}</span></li>`).join('')
+                : '<li><span>—</span><span class="muted">Nothing yet</span></li>');
+        }
+        return { frame };
+    } });
+})();
+</script>

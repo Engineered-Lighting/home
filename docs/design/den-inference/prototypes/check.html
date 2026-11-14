@@ -1,0 +1,164 @@
+<title>Den Inference Design Check</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="den-shell.css">
+<style>
+/* One column of reading, set in Home's own type. Each direction is a row: a still, then a scored verdict. */
+.doc { max-width: 1080px; margin: 0 auto; padding-block: 22px 56px; display: grid; gap: 28px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.lede { display: grid; gap: 8px; max-width: 72ch; }
+.lede h1 { margin: 0; font: 600 26px/1.15 var(--sans); color: var(--hg-fg-0); letter-spacing: -.015em; text-wrap: balance; }
+.lede p { margin: 0; color: var(--hg-fg-2); font-size: 14.5px; line-height: 1.55; }
+.verdict { display: grid; gap: 10px; padding: 18px 20px; border-radius: 12px; border: 1px solid var(--hg-border-strong); background: var(--hg-bg-2); }
+.verdict h2 { margin: 0; font: 600 16px/1.3 var(--sans); color: var(--hg-fg-0); }
+.verdict p { margin: 0; color: var(--hg-fg-1); max-width: 76ch; }
+.verdict ol { margin: 0; padding-left: 20px; display: grid; gap: 6px; color: var(--hg-fg-1); max-width: 80ch; }
+.verdict b { color: var(--hg-fg-0); font-weight: 600; }
+h2.sec { margin: 0; font: 600 13px/1 var(--mono); color: var(--hg-fg-3); letter-spacing: .05em; text-transform: uppercase; }
+.dir { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 18px; align-items: start; padding-top: 18px; border-top: 1px solid var(--hg-border); }
+@media (max-width: 760px) { .dir { grid-template-columns: minmax(0, 1fr); } }
+.dir figure { margin: 0; display: grid; gap: 6px; }
+.dir img { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--hg-border); background: #000; display: block; }
+.dir figcaption { font: 500 11.5px/1.4 var(--mono); color: var(--hg-fg-3); }
+.dir h3 { margin: 0 0 4px; font: 600 17px/1.25 var(--sans); color: var(--hg-fg-0); display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.dir h3 a { font: 500 12px/1 var(--mono); color: var(--hg-ice); text-decoration: none; border: 1px solid var(--hg-border); border-radius: 7px; padding: 6px 8px; }
+.dir h3 a:hover { border-color: var(--hg-ice); }
+.dir .what { margin: 0 0 10px; color: var(--hg-fg-2); }
+.rows { display: grid; grid-template-columns: 74px minmax(0, 1fr); gap: 8px 12px; margin: 0; }
+.rows dt { display: flex; align-items: center; gap: 6px; font: 500 11.5px/1.5 var(--mono); color: var(--hg-fg-3); }
+.rows dd { margin: 0; color: var(--hg-fg-1); }
+.mark { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
+.mark.strong { background: var(--apt-ok); }
+.mark.fair { background: transparent; border: 1.5px solid var(--hg-fg-3); }
+.mark.weak { background: var(--apt-attn); border-radius: 1px; transform: rotate(45deg); }
+.role { margin-top: 10px; font-size: 13px; color: var(--hg-fg-2); }
+.role b { color: var(--hg-fg-0); font-weight: 560; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.card2 { min-width: 0; padding: 16px 18px; border: 1px solid var(--hg-border); border-radius: 10px; background: var(--hg-bg-2); display: grid; gap: 8px; align-content: start; }
+.card2 h3 { margin: 0; font: 600 14px/1.3 var(--sans); color: var(--hg-fg-0); }
+.card2 ul { margin: 0; padding-left: 18px; display: grid; gap: 5px; color: var(--hg-fg-2); font-size: 13px; }
+.card2 code { font: 500 12px/1.4 var(--mono); color: var(--hg-fg-1); overflow-wrap: anywhere; }
+.home-shot { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: center; }
+@media (max-width: 760px) { .home-shot { grid-template-columns: minmax(0, 1fr); } }
+.home-shot img { width: 100%; height: auto; border-radius: 10px; border: 1px solid var(--hg-border); background: #000; }
+.home-shot p { margin: 0 0 6px; color: var(--hg-fg-2); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font: 500 11.5px/1 var(--mono); color: var(--hg-fg-3); }
+.legend span { display: inline-flex; gap: 6px; align-items: center; }
+</style>
+<script src="links.js"></script>
+<div class="doc">
+  <header class="lede">
+    <span class="eyebrow">Den · live inference · design check · 2026-11-14</span>
+    <h1>Four ways to show what the den is thinking, checked against the data</h1>
+    <p>Each prototype plays one synthetic den stream at den-live's real rates: people about 3 a second, spots at 10 Hz, Qwen about every 2 s with its 10 s expiry. The room and the person are invented. Every page has a "Today's stream" switch that strips the fields den-live doesn't send yet, so you can see what's buildable now.</p>
+  </header>
+
+  <section class="verdict" aria-labelledby="rec">
+    <h2 id="rec">Recommendation: A, the live caption, with three grafts</h2>
+    <p>The body is where you look, so that's where the house should say what it believes. A says it in one place: who, what Qwen said, how long that answer holds, what's in their hands, and what the light is doing for them. The other three are better as places you open than as the view itself.</p>
+    <ol>
+      <li><b>From B:</b> the signal strip as a drawer behind the status chip. Use it when you ask why something is slow, not every time you look.</li>
+      <li><b>From C:</b> the "because" sentence and the refused spots, in the caption's tap card. The spot tags belong in the Lighting view.</li>
+      <li><b>From D:</b> the last two minutes, as a strip in the tap card, with the still → light bracket.</li>
+    </ol>
+  </section>
+
+  <div class="legend" aria-label="Marks"><span><i class="mark strong"></i>strong</span><span><i class="mark fair"></i>fair</span><span><i class="mark weak"></i>weak</span></div>
+
+  <article class="dir" id="a">
+    <figure><img src="a.jpg" alt="A seated gold point-cloud figure with a caption: Sam, face 0.94, Reading with a ring, a BOOK pill, Qwen saw book in hands, pages open, head down, Spot 3 reading light 70%." width="900" height="508"><figcaption>A at close zoom · synthetic</figcaption></figure>
+    <div>
+      <h3>A · Caption <a data-link="A" href="#">Open prototype</a></h3>
+      <p class="what">The live body with a System caption beside its head. Qwen's word has a ring that drains over its 10 s life and goes the moment it expires. Up close, "Qwen saw" lists the model's visible basis in place of a confidence it doesn't give.</p>
+      <dl class="rows">
+        <dt><i class="mark strong"></i>Readable</dt><dd>One place to look, at every zoom; it says less when zoomed out. With two people the captions can crowd at overview. On Home's phone layout today, the room is a thin strip under the sheet, so the caption needs the room to get taller there.</dd>
+        <dt><i class="mark strong"></i>Honest</dt><dd>The expiry is visible and never extended. A standing guest gets their posture, not someone else's answer. The light line appears only when the spot's subject binds to this track. The risk is that a word next to a body reads as fact, and the ring and "Qwen saw" are what push back on that.</dd>
+        <dt><i class="mark strong"></i>Fast</dt><dd>The DOM changes at the event rate. Each frame does one projection per person. It runs in Home's real browser test on desktop and phone.</dd>
+        <dt><i class="mark strong"></i>Delight</dt><dd>An answer lands with a pulse from the person to their caption, which is the moment the house "gets it".</dd>
+      </dl>
+      <p class="role"><b>Misses:</b> where the time goes, why the other spots refused, and what just happened.</p>
+    </div>
+  </article>
+
+  <article class="dir" id="b">
+    <figure><img src="b.jpg" alt="The den with a six-stage strip below: Camera 3.0 fps, Detector 41 ms, Tracker 0.55 s behind, Qwen Reading, Coordinator Task lit, Beam 70%; a still to light ruler reads 1.9 s within goal." width="900" height="508"><figcaption>B in the room view · synthetic</figcaption></figure>
+    <div>
+      <h3>B · Signal path <a data-link="B" href="#">Open prototype</a></h3>
+      <p class="what">Camera → Detector → Tracker → Qwen → Coordinator → Beam, with den-live's own p50 and p95. A pulse moves only when a real event arrives. A ruler measures still → light for each lighting against the 2 s goal.</p>
+      <dl class="rows">
+        <dt><i class="mark fair"></i>Readable</dt><dd>It's clear if you know the system; for anyone else it's a wall of numbers. It answers "where did the time go", not "what are they doing". On a phone it takes half the screen.</dd>
+        <dt><i class="mark strong"></i>Honest</dt><dd>Every number is den-live's own, gaps show as gaps, and the ruler calls itself a lower bound on cue → light.</dd>
+        <dt><i class="mark strong"></i>Fast</dt><dd>Text changes only when a value does. The pulses stop when nothing arrives.</dd>
+        <dt><i class="mark fair"></i>Delight</dt><dd>The rhythm of real events is satisfying, and the ruler is the one number you're chasing.</dd>
+      </dl>
+      <p class="role"><b>Role:</b> a drawer behind the status chip.</p>
+    </div>
+  </article>
+
+  <article class="dir" id="c">
+    <figure><img src="c.jpg" alt="Spot tags at each ceiling can: Spot 1 in front of you, Spot 4 its beam would cross a head, Spot 2 can't turn that far, Spot 3 70% 2700 K; a because card reads Spot 3 is on because Qwen said reading." width="900" height="508"><figcaption>C in the room view · synthetic</figcaption></figure>
+    <div>
+      <h3>C · Why the light did this <a data-link="C" href="#">Open prototype</a></h3>
+      <p class="what">Every spot gets a reason at its can. Refused spots are red with a dashed ring. A "because" card where the beam lands builds one sentence from bound data, and a tether runs from the lit spot to its person.</p>
+      <dl class="rows">
+        <dt><i class="mark strong"></i>Readable</dt><dd>"Why is it on" in a sentence, and "why not that one" in red. It does compete with the person, and four tags crowd the overview.</dd>
+        <dt><i class="mark strong"></i>Honest</dt><dd>Every clause is a bound field. The patience countdown is Home's estimate, so it says "about".</dd>
+        <dt><i class="mark strong"></i>Fast</dt><dd>Snapshots arrive at 10 Hz, but text changes only on a reason change or a 5% step in level.</dd>
+        <dt><i class="mark fair"></i>Delight</dt><dd>The ripple where the beam lands and the tether read well. The rest is an explanation.</dd>
+      </dl>
+      <p class="role"><b>Role:</b> the tap card's light section, and the Lighting view's spot tags.</p>
+    </div>
+  </article>
+
+  <article class="dir" id="d">
+    <figure><img src="d.jpg" alt="A five-lane timeline under the room: Presence, Who, Qwen answers as bars, Light level with task and released, Seeing with a too dark band; a bracket reads still to light 1.9 s, goal 2 s." width="900" height="508"><figcaption>D after the dark spell · synthetic</figcaption></figure>
+    <div>
+      <h3>D · Last two minutes <a data-link="D" href="#">Open prototype</a></h3>
+      <p class="what">Five lanes: presence, who, Qwen's answers with their expiry, the light's level and reasons, and whether the camera could see. A bracket measures still → light, and a click replays the room at that moment.</p>
+      <dl class="rows">
+        <dt><i class="mark fair"></i>Readable</dt><dd>It's the only view that answers "in what order?". It's a log, though: the lanes take a moment to learn, and a phone holds only 60 s.</dd>
+        <dt><i class="mark strong"></i>Honest</dt><dd>The most honest of the four. Expiry, gaps, darkness and answers that lit nothing are all drawn as time, so certainty can't be overstated.</dd>
+        <dt><i class="mark strong"></i>Fast</dt><dd>One canvas of a few hundred shapes. Data changes only on events.</dd>
+        <dt><i class="mark fair"></i>Delight</dt><dd>The bracket closing as the light comes on.</dd>
+      </dl>
+      <p class="role"><b>Role:</b> a strip inside the tap card.</p>
+    </div>
+  </article>
+
+  <section class="home-shot" aria-labelledby="inhome">
+    <div>
+      <h2 class="sec" id="inhome">In Home already</h2>
+      <p>The prototype branch puts A's caption into Home's live den view, behind a flag. This is Home's own browser test, playing a synthetic stream with the proposed fields: Qwen's word and age, the held object, and the virtual spot's reading light for this person. Seconds after the answer expires, the word is gone.</p>
+      <p>Not in the branch yet: the tap card, the signal drawer, the spot tags and the two-minute strip.</p>
+    </div>
+    <img src="home.jpg" alt="Home's den view with the caption beside the marker: Sam, Reading 1 s, BOOK, Proposed fixture 1 reading light 79% 2700 K." width="700" height="380">
+  </section>
+
+  <section class="grid2" aria-label="Survey, contract and questions">
+    <div class="card2"><h3>What the den view does today</h3><ul>
+      <li>Qwen's answer is a line in the corner chip, far from the person.</li>
+      <li>The body's own label says "Someone · STANDING" from its geometry. Nothing feeds it Qwen or the light, so the two can disagree.</li>
+      <li>On a phone, the room is a thin strip under the Controls sheet, and the chip and room labels cover most of it.</li>
+      <li>The coordinator section lists raw fixture and trace ids.</li>
+    </ul></div>
+    <div class="card2"><h3>Fields to ask den-live for</h3><ul>
+      <li><code>activity.valid_for_s</code> (already asked for), <code>activity.capture_ts</code>, <code>activity.request_id</code></li>
+      <li><code>activity.facts</code> {held_object, book_state, gaze_target, subject_posture} and <code>activity.basis</code>, from the reply it already validates</li>
+      <li><code>track.seated</code>, <code>track.posture</code> (contract 2, planned)</li>
+      <li><code>track.identity</code> {kind, label, score, at}, from the face work</li>
+      <li><code>health.qwen.last_outcome</code>, <code>health.qwen.inflight_since</code></li>
+    </ul></div>
+    <div class="card2"><h3>Questions for you</h3><ul>
+      <li>"The face with the facial recognition": I read that as a name tag with its match score, never a face image. Is that right?</li>
+      <li>On a phone, should the den view start with the Controls sheet folded, so the room gets the screen?</li>
+      <li>Which graft first: the tap card's light section (C), or the two-minute strip (D)?</li>
+    </ul></div>
+  </section>
+</div>
+<script>
+(function () {
+  var links = window.DEN_LINKS || {};
+  document.querySelectorAll('[data-link]').forEach(function (a) { var url = links[a.dataset.link]; if (url && url !== '#') { a.href = url; a.target = '_top'; } });
+})();
+</script>

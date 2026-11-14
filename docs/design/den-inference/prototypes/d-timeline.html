@@ -1,0 +1,587 @@
+<title>Den Timeline Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="den-shell.css">
+<style>
+/* Direction D, Last two minutes: the room on top with a small tag, and under it five lanes of what Home received in
+   the last 120 s (60 s on a phone): who was there, who they were, what Qwen said and for how long it held, what the
+   light did, and whether the camera could see. Now is the right edge. */
+.chip { position: absolute; left: 10px; top: 10px; display: grid; gap: 2px; padding: 7px 10px; border-radius: 10px; max-width: min(300px, calc(100% - 20px));
+  background: var(--cv-glass); border: 1px solid var(--cv-line); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 12.5px; }
+.chip p { margin: 0; }
+.chip-title { display: flex; align-items: center; gap: 7px; color: var(--cv-fg-0); font-weight: 560; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cv-fg-4); flex: 0 0 auto; }
+.chip[data-state="live"] .dot { background: var(--cv-ok); box-shadow: 0 0 8px var(--cv-ok); }
+.chip[data-state="attention"] .dot { background: var(--cv-attn); border-radius: 1px; transform: rotate(45deg); }
+.chip-facts { color: var(--cv-fg-2); font-variant-numeric: tabular-nums; }
+.chip-banner { color: var(--cv-attn); }
+.chip-banner:empty { display: none; }
+.chip-past { color: var(--cv-proposed); font: 500 11.5px/1.3 var(--mono); }
+.chip-past:empty { display: none; }
+
+.tag { position: absolute; left: 0; top: 0; display: grid; gap: 3px; justify-items: center; padding: 5px 8px 6px; border-radius: 8px;
+  background: var(--cv-glass); border: 1px solid var(--cv-line); white-space: nowrap; pointer-events: none; will-change: transform; transition: opacity .3s var(--ease); }
+.tag-name { font: 600 13.5px/1.1 var(--sans); color: var(--cv-fg-0); }
+.tag[data-kind="unknown"] .tag-name, .tag[data-kind="guest"] .tag-name { color: var(--cv-fg-1); font-weight: 560; }
+.tag-word { font: 500 12.5px/1.1 var(--sans); color: var(--cv-ice); }
+.tag[data-answer="none"] .tag-word { color: var(--cv-fg-3); }
+.tag-life { width: 100%; height: 2px; border-radius: 1px; background: rgba(255,255,255,.14); overflow: hidden; }
+.tag-life i { display: block; height: 100%; background: var(--cv-ice); }
+.tag[data-answer="none"] .tag-life { visibility: hidden; }
+
+.tl { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 4px; height: 228px; padding: 8px 12px 6px; }
+.device[data-layout="phone"] .tl { height: 330px; padding: 8px 10px 6px; }
+.tl-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 12px; min-width: 0; }
+.tl-title { font: 600 13px/1.3 var(--sans); color: var(--hg-fg-0); white-space: nowrap; }
+.tl-readout { flex: 1 1 240px; min-width: 0; font: 500 11.5px/1.4 var(--mono); color: var(--hg-fg-2); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tl-readout b { font-weight: 500; color: var(--hg-fg-0); }
+.tl-readout .warn { color: var(--apt-attn); }
+.tl-go { margin-left: 6px; border: 1px solid var(--hg-border-strong); background: var(--hg-bg-3); color: var(--hg-fg-0); border-radius: 6px;
+  font: 500 11.5px/1 var(--sans); padding: 4px 7px; cursor: pointer; }
+.tl-wrap { position: relative; min-height: 0; }
+.tl-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: pan-y; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="links.js"></script>
+<script src="den-sim.js"></script>
+<script src="den-client.js"></script>
+<script src="den-stage.js"></script>
+<script src="den-shell.js"></script>
+<script>
+(function () {
+const NOTES = `
+<article class="note"><h2>What this direction is</h2>
+<p>A strip of the last two minutes under the room. Five lanes say who was there, who they were, what Qwen said and how long each answer held, what the light did, and whether the camera could see. Now is the right edge; everything slides left as it ages.</p>
+<p>When a reading answer lights the spot, a bracket measures the time from Qwen's newest still to the light coming on. That is a lower bound on cue to light: the cue happened before the still. The owner's goal (2 s) is printed beside it.</p>
+<p>Hover or tap the strip to read any moment. Click it (or tap, then "Go there") to replay the room at that moment.</p></article>
+<article class="note"><h2>Bindings</h2><ul>
+<li>Presence: <code>tracks</code>, <code>state</code> (coasting is dashed). Seated, standing, walking: <code>track.seated</code> <span class="pill-proposed">proposed</span>.</li>
+<li>Who: <code>track.identity</code> <span class="pill-proposed">proposed</span>. Today the lane says there's no identity field.</li>
+<li>Qwen: the answer shown in each people event (<code>activity.word</code>, <code>at</code>). Each bar fades as its answer ages and stops at its 10 s expiry, or at <code>valid_for_s</code> <span class="pill-proposed">proposed</span>. Hollow ticks: replies that lit nothing (<code>last_outcome</code> <span class="pill-proposed">proposed</span>; today, a new <code>last_reply_at</code> with no answer).</li>
+<li>Light: the lit or aimed row of <code>den-virtual-spots-1</code>: <code>level</code>, <code>reason</code>, <code>stopped</code>. Bracket: <code>subject.request_id</code> to the answer's <code>capture_ts</code> <span class="pill-proposed">proposed</span>; today it starts at the answer instead.</li>
+<li>Seeing: <code>perception_status</code>, <code>camera.why</code>, and gaps of 3 s or more between people events.</li></ul></article>
+<article class="note"><h2>Design check</h2><dl class="score">
+<dt>Readable</dt><dd>Strong for "what just happened, and in what order", which no other direction answers. Weak as the only view: five lanes need a glance to learn, and on a phone the 60 s window is the most that stays legible.</dd>
+<dt>Honest</dt><dd>The most honest of the four. Expiry, gaps, too dark and unbound replies are drawn as time, so certainty can't be overstated. The bracket names itself as a lower bound.</dd>
+<dt>Fast</dt><dd>One canvas, about 400 shapes, redrawn at 60 fps (once a second with reduced motion). Data changes only on events.</dd>
+<dt>Delight</dt><dd>Medium. The bracket closing as the light comes on is satisfying, but this is a log. Best grafted into another direction as a tap-to-open strip, not shown as the hero.</dd></dl></article>`;
+
+DenShell.mount({ letter: 'D', title: 'Last two minutes: what the house saw, said and did',
+    subtitle: 'A short timeline under the live room. Synthetic stream at real rates; no frames or real positions.',
+    notes: NOTES, side: 0, startAt: 24,
+    setup(ctx) {
+        const { overlay, stage, client, sim, esc } = ctx;
+        const DIRECT = { pre_aim: 'aimed', task: 'task', task_released: 'released', stopped: 'Stop', waiting_for_tracking: 'no track', off: 'off' };
+        const WORD = window.DenClient.ACTIVITY;
+        const LOG_S = 140, GOAL_S = 2;
+
+        /* ---------- the stage: a status chip and a small tag per person ---------- */
+        overlay.innerHTML = `<div class="chip" id="chip" data-state="connecting"><p class="chip-title"><span class="dot"></span><span>Den · live</span></p>
+          <p class="chip-facts" id="chip-facts">Connecting…</p><p class="chip-banner" id="chip-banner" role="status" aria-live="polite"></p></div>`;
+        const tags = new Map();
+        const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+
+        /* ---------- the log: built from the same events the client gets ---------- */
+        let log;
+        function resetLog() { log = { people: [], spots: [], answers: new Map(), outcomes: [], lightOns: [], lastReply: null, lastOutcomeAt: null, lastLevel: 0 }; }
+        resetLog();
+        const feed = client.feed, reset = client.reset;
+        client.reset = () => { reset(); resetLog(); };
+        client.feed = (events, now) => { feed(events, now); ingest(events, now); };
+
+        function ingest(events, now) {
+            for (const e of events) {
+                if (e.type === 'people') {
+                    const d = e.data, q = d.health?.qwen || {};
+                    const tracks = d.tracks.map(t => {
+                        const a = t.activity;
+                        let key = null;
+                        if (a && typeof a.word === 'string') {
+                            key = a.proposed?.request_id || 'at' + a.at;
+                            let ans = log.answers.get(key);
+                            if (!ans) {
+                                ans = { key, word: a.word, closeUp: a.close_up === true, answeredAt: e.at - (d.emitted_ts - a.at), firstSeen: e.at,
+                                    stillAt: Number.isFinite(a.proposed?.capture_ts) ? e.at - (d.emitted_ts - a.proposed.capture_ts) : null,
+                                    expiryP: Infinity, request: a.proposed?.request_id ?? null };
+                                log.answers.set(key, ans);
+                            }
+                            if (Number.isFinite(a.proposed?.valid_for_s)) ans.expiryP = Math.min(ans.expiryP, e.at + a.proposed.valid_for_s);
+                        }
+                        return { id: t.track_id, state: t.state, seated: t.proposed?.seated ?? null, posture: t.proposed?.posture ?? null,
+                            identity: t.proposed?.identity ?? null, key };
+                    });
+                    // a reply that lit nothing: today, a new last_reply_at with no answer carrying it; proposed, last_outcome
+                    let todayMiss = null;
+                    if (q.last_reply_at != null && q.last_reply_at !== log.lastReply) {
+                        if (log.lastReply != null && !d.tracks.some(t => t.activity && t.activity.at === q.last_reply_at)) todayMiss = e.at - (d.emitted_ts - q.last_reply_at);
+                        log.lastReply = q.last_reply_at;
+                    }
+                    if (todayMiss != null) log.outcomes.push({ at: todayMiss, kind: 'no_answer', source: 'today' });
+                    const oc = q.proposed?.last_outcome;
+                    if (oc && oc.at !== log.lastOutcomeAt) {
+                        log.lastOutcomeAt = oc.at;
+                        if (oc.kind !== 'bound') log.outcomes.push({ at: e.at - (d.emitted_ts - oc.at), kind: oc.kind, source: 'proposed' });
+                    }
+                    log.people.push({ at: e.at, status: d.perception_status, why: d.camera?.why || null, tracks, qwen: q.state || 'off' });
+                } else if (e.type === 'spot') {
+                    const d = e.data, rows = Object.entries(d.fixtures);
+                    let pick = rows.filter(([, r]) => r.on).sort((a, b) => b[1].level - a[1].level)[0] || rows.find(([, r]) => r.target_m) || null;
+                    const [id, row] = pick || [null, null];
+                    const level = row ? row.level : 0, reason = row ? row.reason : (d.stopped ? 'stopped' : 'waiting_for_tracking');
+                    log.spots.push({ at: e.at, id, level, reason, aimed: !!row?.target_m, stopped: d.stopped, request: d.subject?.request_id ?? null });
+                    if (log.lastLevel === 0 && level > 0 && reason === 'task') log.lightOns.push({ at: e.at, request: d.subject?.request_id ?? null, id });
+                    log.lastLevel = level;
+                }
+            }
+            const cut = now - LOG_S;
+            const drop = list => { let i = 0; while (i < list.length && list[i].at < cut) i++; if (i) list.splice(0, i); };
+            drop(log.people); drop(log.spots); drop(log.outcomes); drop(log.lightOns);
+            for (const [k, a] of log.answers) if (a.firstSeen < cut - 15) log.answers.delete(k);
+        }
+
+        /* ---------- the panel ---------- */
+        ctx.bottom.innerHTML = `<div class="tl"><div class="tl-head"><span class="tl-title" id="tl-title">Last 2 minutes</span>
+            <span class="tl-readout" id="tl-readout" aria-live="off"></span></div>
+          <div class="tl-wrap"><canvas class="tl-canvas" id="tl-canvas" role="img" aria-label="Timeline of the last two minutes in the den"></canvas></div></div>`;
+        const cv = document.getElementById('tl-canvas'), g = cv.getContext('2d'), readout = document.getElementById('tl-readout');
+        let W = 1, H = 1, dpr = 1;
+        function size() { const r = cv.getBoundingClientRect(); dpr = Math.min(2, devicePixelRatio || 1); W = Math.max(1, r.width); H = Math.max(1, r.height);
+            if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); } }
+        new ResizeObserver(size).observe(cv); size();
+        let phone = false;
+        ctx.onLayout(v => { phone = v === 'phone'; text(document.getElementById('tl-title'), phone ? 'Last minute' : 'Last 2 minutes'); requestAnimationFrame(size); });
+
+        // theme tokens, read every half second so a theme switch takes effect
+        let tok = {}, tokAt = -Infinity;
+        const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+        function tokens(realNow) {
+            if (realNow - tokAt < 500) return tok;
+            tokAt = realNow;
+            tok = { bg: css('--hg-bg-1'), fg0: css('--hg-fg-0'), fg1: css('--hg-fg-1'), fg2: css('--hg-fg-2'), fg3: css('--hg-fg-3'), fg4: css('--hg-fg-4'),
+                line: css('--hg-border'), lineStrong: css('--hg-border-strong'), ice: css('--hg-ice'), warm: css('--apt-warm'), ok: css('--apt-ok'),
+                attn: css('--apt-attn'), blocked: css('--apt-blocked'), proposed: css('--apt-proposed'),
+                dark: document.documentElement.dataset.theme === 'dark' || !document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches };
+            patterns.clear();
+            return tok;
+        }
+        const patterns = new Map();
+        function hatch(color) {
+            if (patterns.has(color)) return patterns.get(color);
+            const c = document.createElement('canvas'); c.width = c.height = 6 * dpr; const h = c.getContext('2d');
+            h.strokeStyle = color; h.lineWidth = dpr; h.beginPath(); h.moveTo(0, 6 * dpr); h.lineTo(6 * dpr, 0); h.stroke();
+            const p = g.createPattern(c, 'repeat'); patterns.set(color, p); return p;
+        }
+        const alpha = (color, a) => { g.globalAlpha = a; return color; };
+
+        /* ---------- reading the log at a time ---------- */
+        function sampleAt(list, t, maxGap) { let lo = 0, hi = list.length - 1, best = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (list[m].at <= t) { best = m; lo = m + 1; } else hi = m - 1; }
+            return best >= 0 && t - list[best].at <= maxGap ? list[best] : null; }
+        const expiryOf = a => Math.min(a.answeredAt + 10, ctx.proposed ? a.expiryP : Infinity);
+        function shownAt(t) {
+            const p = sampleAt(log.people, t, 3);
+            if (!p) return null;
+            const tr = p.tracks.find(x => x.key);
+            const a = tr && log.answers.get(tr.key);
+            return a && t < expiryOf(a) ? a : null;
+        }
+        function identityWords(idt) {
+            if (!ctx.proposed) return 'Someone';
+            if (!idt || idt.kind === 'unknown') return 'Someone';
+            if (idt.kind === 'guest') return 'Guest';
+            return idt.score >= 0.8 ? `${idt.label} · face ${idt.score.toFixed(2)}` : `${idt.label}? · face ${idt.score.toFixed(2)}`;
+        }
+        function bracketFor(on) {
+            let a = null;
+            if (ctx.proposed && on.request) for (const x of log.answers.values()) if (x.request === on.request) a = x;
+            if (!a) for (const x of log.answers.values()) if (x.closeUp && x.answeredAt <= on.at && (!a || x.answeredAt > a.answeredAt)) a = x;
+            if (!a) return null;
+            const fromStill = ctx.proposed && a.stillAt != null;
+            const start = fromStill ? a.stillAt : a.answeredAt;
+            return { start, end: on.at, answer: a.answeredAt, s: on.at - start, label: fromStill ? 'still → light' : 'answer → light', id: on.id };
+        }
+        // two clocks meet in a bracket (people events and spot snapshots), so a span under 0.2 s isn't claimed to the tenth
+        const span = sec => sec < 0.2 ? 'under 0.2 s' : `${sec.toFixed(1)} s`;
+        const fixtureName = id => sim.ROOM.fixtures.find(f => f.id === id)?.name || 'Spot';
+
+        /* ---------- pointer: hover reads, click seeks (tap reads, then "Go there") ---------- */
+        let hover = null;   // { x, touch }
+        cv.addEventListener('pointermove', e => { if (e.pointerType === 'mouse') hover = { x: e.offsetX, touch: false }; });
+        cv.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') hover = null; });
+        let downAt = null;
+        cv.addEventListener('pointerdown', e => { downAt = { x: e.offsetX, y: e.offsetY }; });
+        cv.addEventListener('pointerup', e => {
+            if (!downAt || Math.hypot(e.offsetX - downAt.x, e.offsetY - downAt.y) > 8) { downAt = null; return; }
+            downAt = null;
+            const t = timeAtX(e.offsetX);
+            if (t == null) return;
+            if (e.pointerType === 'mouse') { ctx.seek(t); hover = { x: e.offsetX, touch: false }; }
+            else hover = { x: e.offsetX, touch: true, t };
+        });
+        readout.addEventListener('click', e => { if (e.target.closest('[data-go]') && hover?.t != null) { ctx.seek(hover.t); hover = null; } });
+
+        let geo = null;
+        function timeAtX(x) { if (!geo || x < geo.L || x > geo.R) return null; return geo.now - (geo.R - x) / geo.pps; }
+
+        /* ---------- drawing ---------- */
+        let lastReadout = '';
+        function draw(now, realNow) {
+            const T = tokens(realNow);
+            const windowS = phone ? 60 : 120;
+            const nowD = ctx.reduced() ? Math.floor(now) : now;
+            const L = phone ? 62 : 76, R = W - 6, axisH = 16;
+            const pps = (R - L) / windowS;
+            geo = { L, R, pps, now: nowD };
+            const X = t => R - (nowD - t) * pps;
+            const t0 = nowD - windowS;
+            g.setTransform(dpr, 0, 0, dpr, 0, 0);
+            g.globalAlpha = 1; g.clearRect(0, 0, W, H);
+            g.font = '500 11.5px "Geist Mono", ui-monospace, monospace'; g.textBaseline = 'middle';
+
+            const lanes = [['Presence', 1], ['Who', 1.1], ['Qwen', 1.35], ['Light', 1.6], ['Seeing', 0.75]];
+            const total = lanes.reduce((s, l) => s + l[1], 0), avail = H - axisH - 2;
+            let y = 1; const lane = {};
+            for (const [name, w] of lanes) { const h = avail * w / total; lane[name] = { top: y, h, mid: y + h / 2, bottom: y + h }; y += h; }
+
+            // grid, lane labels, axis
+            g.lineWidth = 1;
+            for (const [name] of lanes) {
+                const ln = lane[name];
+                g.strokeStyle = alpha(T.line, 1); g.beginPath(); g.moveTo(L, Math.round(ln.bottom) + .5); g.lineTo(R, Math.round(ln.bottom) + .5); g.stroke();
+                g.fillStyle = alpha(T.fg3, 1); g.textAlign = 'left'; g.fillText(name, 0, ln.mid);
+            }
+            const step = phone ? 15 : 30;
+            g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+            for (let s = 0; s <= windowS; s += step) {
+                const x = R - s * pps;
+                g.strokeStyle = alpha(T.line, 0.7); g.beginPath(); g.moveTo(Math.round(x) + .5, 1); g.lineTo(Math.round(x) + .5, H - axisH); g.stroke();
+                g.fillStyle = alpha(T.fg3, 1);
+                const label = s === 0 ? 'now' : `−${s} s`;
+                g.textAlign = s === 0 ? 'right' : 'center'; g.fillText(label, s === 0 ? R : x, H - 3);
+            }
+            g.textBaseline = 'middle';
+            g.save(); g.beginPath(); g.rect(L, 0, R - L, H); g.clip();
+
+            const P = log.people;
+            const spanEnd = i => Math.min(i + 1 < P.length ? P[i + 1].at : now, P[i].at + 3);
+            const label = (txt, x, yy, color, maxX) => {   // a sticky run label: stays at the left edge while its run scrolls off
+                const lx = Math.max(x + 4, L + 4), w = g.measureText(txt).width;
+                if (lx + w > maxX - 2) return;
+                g.textAlign = 'left'; g.fillStyle = color; g.fillText(txt, lx, yy);
+            };
+
+            // Presence and Who: a row per person (two when two are in the window); the run's words cut into its line
+            const two = P.some(p => p.at >= t0 && p.tracks.length > 1);
+            const onLine = (txt, x0, x1, yy, color) => {
+                if (!txt) return;
+                g.font = '500 11.5px "Geist", ui-sans-serif, system-ui, sans-serif';
+                const lx = Math.max(x0 + 6, L + 4), w = g.measureText(txt).width;
+                if (lx + w + 4 > x1) return;
+                g.globalAlpha = 1; g.fillStyle = T.bg; g.fillRect(lx - 3, yy - 7, w + 6, 14);
+                g.fillStyle = color; g.textAlign = 'left'; g.fillText(txt, lx, yy + 0.5);
+            };
+            for (const name of ['Presence', 'Who']) {
+                const ln = lane[name];
+                for (let r = 0; r < (two ? 2 : 1); r++) {
+                    const yy = Math.round(two ? ln.top + ln.h * (r === 0 ? 0.3 : 0.74) : ln.mid) + 0.5;
+                    let run = null;
+                    const flush = () => {
+                        if (!run) return;
+                        const x0 = X(run.start), x1 = X(run.end);
+                        if (x1 >= L && x0 <= R) {
+                            g.lineWidth = run.style === 'dashed' ? 1.5 : 3; g.strokeStyle = alpha(run.color, run.a ?? 0.9);
+                            if (run.style === 'dashed') g.setLineDash([4, 3]);
+                            g.beginPath(); g.moveTo(x0, yy); g.lineTo(x1, yy); g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
+                            onLine(run.text, x0, x1, yy, run.textColor || T.fg1);
+                        }
+                        run = null;
+                    };
+                    for (let i = 0; i < P.length; i++) {
+                        const tr = P[i].tracks[r], end = spanEnd(i);
+                        if (end < t0 || !tr) { flush(); continue; }
+                        let key, style = 'solid', color, a = 0.9, txt, textColor;
+                        if (name === 'Presence') {
+                            const posture = ctx.proposed ? tr.posture : null;
+                            if (tr.state === 'coasting') { key = 'coast'; style = 'dashed'; color = T.fg3; txt = 'leaving'; textColor = T.fg2; }
+                            else if (posture === 'sitting') { key = 'sit'; color = T.fg1; txt = 'seated'; }
+                            else if (posture) { key = posture; color = T.fg3; a = 0.8; txt = posture; textColor = T.fg2; }
+                            else { key = 'tracked'; color = T.fg2; a = 0.8; txt = 'tracked'; textColor = T.fg2; }
+                        } else {
+                            const idt = tr.identity;
+                            if (!ctx.proposed) { key = 'none'; style = 'dashed'; color = T.fg4; txt = r === 0 ? 'no identity field today' : ''; textColor = T.fg3; }
+                            else if (!idt || idt.kind === 'unknown') { key = 'unknown:' + tr.id; style = 'dashed'; color = T.fg3; txt = 'Someone'; textColor = T.fg2; }
+                            else if (idt.kind === 'guest') { key = 'guest:' + tr.id; color = T.fg3; a = 0.8; txt = 'Guest'; }
+                            else { key = `hh:${idt.label}:${tr.id}:${idt.score >= 0.8}`; color = T.fg1; txt = identityWords(idt); textColor = T.fg0; }
+                        }
+                        if (!run || run.key !== key || P[i].at - run.end > 0.05) { flush(); run = { key, style, color, a, text: txt, textColor, start: P[i].at, end }; }
+                        else run.end = end;
+                    }
+                    flush();
+                }
+            }
+
+            // Qwen: what Home showed, faded by the answer's age, ended at its expiry; ticks at each new answer
+            {
+                const ln = lane.Qwen, bh = Math.max(6, Math.min(11, ln.h * 0.28)), by = Math.round(ln.top + ln.h * 0.5);
+                // asking or off, as a dotted baseline
+                for (let i = 0; i < P.length; i++) {
+                    const end = spanEnd(i);
+                    if (end < t0 || P[i].qwen === 'off') continue;
+                    g.setLineDash([1, 3]); g.strokeStyle = alpha(P[i].qwen === 'unavailable' ? T.attn : T.fg4, 1); g.lineWidth = 1;
+                    g.beginPath(); g.moveTo(X(P[i].at), by + bh / 2); g.lineTo(X(end), by + bh / 2); g.stroke(); g.setLineDash([]);
+                }
+                // segments: one per shown answer, cut at its expiry
+                const segs = [];
+                for (let i = 0; i < P.length; i++) {
+                    const tr = P[i].tracks.find(x => x.key), a = tr && log.answers.get(tr.key);
+                    let end = spanEnd(i);
+                    if (!a || end < t0) continue;
+                    end = Math.min(end, expiryOf(a));
+                    if (end <= P[i].at) continue;
+                    const last = segs[segs.length - 1];
+                    if (last && last.a === a && P[i].at - last.end < 0.05) last.end = end; else segs.push({ a, start: P[i].at, end });
+                }
+                const life = age => 0.28 + 0.72 * (1 - Math.max(0, Math.min(1, age / 10)));
+                for (const s of segs) {
+                    const x0 = X(s.start), x1 = X(s.end);
+                    if (x1 < L || x0 > R) continue;
+                    const color = s.a.closeUp ? T.ice : T.fg3;
+                    const grad = g.createLinearGradient(x0, 0, x1, 0);
+                    g.globalAlpha = 1;
+                    grad.addColorStop(0, withAlpha(color, life(s.start - s.a.answeredAt)));
+                    grad.addColorStop(1, withAlpha(color, life(s.end - s.a.answeredAt)));
+                    g.fillStyle = grad; g.fillRect(x0, by, Math.max(1, x1 - x0), bh);
+                }
+                // runs of one word get one label; ticks where a new answer arrived
+                let run = null, qEnd = -Infinity;
+                const flushRun = () => {
+                    if (!run) return;
+                    const x0 = X(run.start), x1 = X(run.end);
+                    g.font = '500 12px "Geist", ui-sans-serif, system-ui, sans-serif';
+                    if (x1 > L + 4) {
+                        const txt = WORD[run.word] || run.word, w = g.measureText(txt).width, lx = Math.max(x0, L + 2);
+                        if (lx > qEnd + 6 && lx + w < R - 2) { g.globalAlpha = 1; g.textAlign = 'left'; g.fillStyle = run.closeUp ? T.ice : T.fg2; g.fillText(txt, lx, by - 8); qEnd = lx + w; }
+                    }
+                    g.font = '500 11.5px "Geist Mono", ui-monospace, monospace';
+                    run = null;
+                };
+                for (const s of segs) {
+                    if (!run || run.word !== s.a.word || s.start - run.end > 0.05) { flushRun(); run = { word: s.a.word, closeUp: s.a.closeUp, start: s.start, end: s.end }; }
+                    else run.end = s.end;
+                }
+                flushRun();
+                g.globalAlpha = 1;
+                for (const a of log.answers.values()) {
+                    if (a.firstSeen < t0) continue;
+                    const x = X(a.firstSeen);
+                    g.fillStyle = T.bg; g.fillRect(Math.round(x) - 1, by, 1.5, bh);
+                }
+                // replies that lit nothing: hollow ticks under the bar
+                for (const o of log.outcomes) {
+                    if (o.at < t0 || o.source === 'today' && ctx.proposed || o.source === 'proposed' && !ctx.proposed) continue;
+                    const x = X(o.at);
+                    g.strokeStyle = alpha(o.kind === 'failed' ? T.blocked : T.fg2, 1); g.lineWidth = 1.3;
+                    g.beginPath(); g.arc(x, by + bh + 7, 3, 0, Math.PI * 2); g.stroke();
+                }
+                g.globalAlpha = 1;
+            }
+
+            // Light: the level as a warm area; a dashed baseline while aimed but dark; Stop hatched; reason changes marked
+            {
+                const ln = lane.Light, top = ln.top + 15, base = ln.bottom - 3, h = base - top;
+                const S = log.spots;
+                let started = false, prev = null;
+                g.beginPath();
+                const closeArea = () => { if (started && prev) { g.lineTo(X(prev.at), base); g.closePath(); } started = false; };
+                for (const s of S) {
+                    if (s.at < t0 - 1) { prev = s; continue; }
+                    if (prev && s.at - prev.at > 1.5) closeArea();
+                    if (!started) { g.moveTo(X(s.at), base); started = true; }
+                    g.lineTo(X(s.at), base - s.level * h);
+                    prev = s;
+                }
+                closeArea();
+                g.fillStyle = alpha(T.warm, T.dark ? 0.42 : 0.3); g.fill();
+                g.globalAlpha = 1;
+                // the top edge
+                g.beginPath(); prev = null; started = false;
+                for (const s of S) {
+                    if (s.at < t0 - 1) { prev = s; continue; }
+                    const x = X(s.at), yy = base - s.level * h;
+                    if (!started || prev && s.at - prev.at > 1.5) { g.moveTo(x, yy); started = true; } else g.lineTo(x, yy);
+                    prev = s;
+                }
+                g.strokeStyle = alpha(T.warm, 1); g.lineWidth = 1.5; g.stroke(); g.globalAlpha = 1;
+                // aimed but dark, and Stop
+                let seg = null;
+                const flushSeg = () => {
+                    if (!seg) return;
+                    const x0 = X(seg.start), x1 = X(seg.end);
+                    if (seg.kind === 'aimed') { g.setLineDash([3, 3]); g.strokeStyle = alpha(T.warm, 0.85); g.lineWidth = 1.5; g.beginPath(); g.moveTo(x0, base - 1); g.lineTo(x1, base - 1); g.stroke(); g.setLineDash([]); }
+                    else { g.globalAlpha = 1; g.fillStyle = hatch(T.blocked); g.fillRect(x0, top, x1 - x0, h); g.strokeStyle = alpha(T.blocked, 0.8); g.lineWidth = 1; g.strokeRect(x0 + .5, top + .5, x1 - x0 - 1, h - 1); }
+                    g.globalAlpha = 1; seg = null;
+                };
+                for (let i = 0; i < S.length; i++) {
+                    const s = S[i], kind = s.stopped ? 'stop' : s.aimed && s.level === 0 ? 'aimed' : null;
+                    const end = i + 1 < S.length ? Math.min(S[i + 1].at, s.at + 1.5) : Math.min(now, s.at + 1.5);
+                    if (!kind || end < t0) { flushSeg(); continue; }
+                    if (!seg || seg.kind !== kind || s.at - seg.end > 0.2) { flushSeg(); seg = { kind, start: s.at, end }; } else seg.end = end;
+                }
+                flushSeg();
+                // reason changes
+                g.font = '500 11.5px "Geist", ui-sans-serif, system-ui, sans-serif'; g.textAlign = 'left';
+                let lastR = null, lastX = -Infinity;
+                for (const s of S) {
+                    const r = DIRECT[s.reason] ? s.reason : lastR;
+                    if (r !== lastR && s.at >= t0 && DIRECT[r]) {
+                        const x = X(s.at);
+                        g.strokeStyle = alpha(T.fg3, 0.9); g.lineWidth = 1; g.beginPath(); g.moveTo(Math.round(x) + .5, top - 2); g.lineTo(Math.round(x) + .5, base); g.stroke();
+                        const word = DIRECT[r] === 'Stop' ? 'Stop' : DIRECT[r];
+                        if ((x - lastX > 10) && x + 3 + g.measureText(word).width < R - 2) {
+                            g.globalAlpha = 1; g.fillStyle = r === 'stopped' ? T.blocked : r === 'task' ? T.warm : T.fg2;
+                            g.fillText(word, x + 3, base - 7); lastX = x + 3 + g.measureText(word).width;
+                        }
+                    }
+                    lastR = r;
+                }
+                g.globalAlpha = 1;
+                // still → light brackets
+                g.font = '500 11.5px "Geist Mono", ui-monospace, monospace';
+                for (const on of log.lightOns) {
+                    if (on.at < t0) continue;
+                    const b = bracketFor(on);
+                    if (!b) continue;
+                    const x0 = X(b.start), x1 = X(b.end), yy = ln.top + 6;
+                    const over = b.s > GOAL_S, col = over ? T.attn : T.fg0;
+                    g.strokeStyle = alpha(col, 1); g.lineWidth = 1.2;
+                    g.beginPath(); g.moveTo(x0, yy + 5); g.lineTo(x0, yy); g.lineTo(x1, yy); g.lineTo(x1, yy + 5); g.stroke();
+                    if (b.label === 'still → light') { g.fillStyle = alpha(T.ice, 1); g.beginPath(); g.arc(X(b.answer), yy, 2.5, 0, Math.PI * 2); g.fill(); }
+                    const txt = `${b.label} ${span(b.s)} · goal ${GOAL_S} s`;
+                    const w = g.measureText(txt).width;
+                    let tx = x1 + 6; if (tx + w > R - 2) tx = x0 - 6 - w;
+                    g.globalAlpha = 1; g.fillStyle = col; g.textAlign = 'left'; g.fillText(txt, Math.max(L + 2, tx), yy + 1);
+                }
+                g.globalAlpha = 1;
+            }
+
+            // Seeing: fresh, too dark, or no stream
+            {
+                const ln = lane.Seeing, yy = ln.mid, bh = Math.min(8, ln.h * 0.4);
+                g.font = '500 11.5px "Geist", ui-sans-serif, system-ui, sans-serif';
+                let run = null;
+                const flush = () => {
+                    if (!run) return;
+                    const x0 = X(run.start), x1 = X(run.end);
+                    if (run.kind === 'stale') { g.globalAlpha = 1; g.fillStyle = hatch(T.fg3); g.fillRect(x0, yy - bh / 2 - 2, x1 - x0, bh + 4); }
+                    else { g.fillStyle = alpha(run.kind === 'fresh' ? T.ok : T.attn, run.kind === 'fresh' ? 0.45 : 0.85); g.fillRect(x0, yy - bh / 2, x1 - x0, bh); }
+                    g.globalAlpha = 1;
+                    const words = run.kind === 'stale' ? 'stream stopped' : run.kind === 'fresh' ? '' : (run.why || 'degraded');
+                    if (words) onLine(words, x0, x1, yy, run.kind === 'stale' ? T.fg1 : T.attn);
+                    run = null;
+                };
+                const push = (kind, start, end, why) => {
+                    if (end < t0) return;
+                    if (run && run.kind === kind && start - run.end < 0.05) { run.end = end; return; }
+                    flush(); run = { kind, start, end, why };
+                };
+                for (let i = 0; i < P.length; i++) {
+                    const p = P[i], next = i + 1 < P.length ? P[i + 1].at : now;
+                    push(p.status === 'fresh' ? 'fresh' : 'degraded', p.at, Math.min(next, p.at + 3), p.why);
+                    if (next - p.at > 3) push('stale', p.at + 3, next);
+                }
+                flush();
+            }
+
+            // the crosshair and its readout
+            let html;
+            if (hover && hover.x >= L && hover.x <= R) {
+                const t = hover.touch && hover.t != null ? hover.t : timeAtX(hover.x);
+                const x = X(t);
+                g.strokeStyle = alpha(T.fg0, 0.7); g.lineWidth = 1; g.beginPath(); g.moveTo(Math.round(x) + .5, 0); g.lineTo(Math.round(x) + .5, H - axisH); g.stroke(); g.globalAlpha = 1;
+                html = readAt(t, now) + (hover.touch ? ' <button class="tl-go" data-go>Go there</button>' : ' · click to replay');
+            } else html = summary(now);
+            g.restore();
+            if (html !== lastReadout) { readout.innerHTML = html; lastReadout = html; }
+        }
+
+        function withAlpha(color, a) {
+            const c = color.trim();
+            if (c.startsWith('#')) { const n = c.length === 4 ? c.slice(1).split('').map(x => parseInt(x + x, 16)) : [1, 3, 5].map(i => parseInt(c.slice(i, i + 2), 16)); return `rgba(${n[0]},${n[1]},${n[2]},${a})`; }
+            const m = c.match(/rgba?\(([^)]+)\)/); if (m) { const p = m[1].split(',').map(s => s.trim()); return `rgba(${p[0]},${p[1]},${p[2]},${a})`; }
+            return c;
+        }
+
+        function readAt(t, now) {
+            const ago = now - t, parts = [`<b>${ago < 1 ? 'now' : Math.round(ago) + ' s ago'}</b>`];
+            const p = sampleAt(log.people, t, 3);
+            if (!p) parts.push('no stream');
+            else {
+                const n = p.tracks.length;
+                const seat = ctx.proposed && p.tracks.some(x => x.posture === 'sitting');
+                parts.push(n === 0 ? 'nobody' : `${n === 1 ? '1 person' : n + ' people'}${seat ? ', seated' : ''}`);
+                if (n) parts.push(esc(p.tracks.map(x => identityWords(x.identity).replace(/ · face/, ', face')).join(' and ')));
+                const a = shownAt(t);
+                parts.push(a ? `${esc(WORD[a.word] || a.word)}, answer ${(t - a.answeredAt).toFixed(1)} s old` : p.qwen === 'asking' ? 'no answer, asking' : `Qwen ${esc(p.qwen)}`);
+                if (p.status !== 'fresh') parts.push(`<span class="warn">${esc(p.why || p.status)}</span>`);
+            }
+            const s = sampleAt(log.spots, t, 1.5);
+            parts.push(!s ? 'no spot snapshot' : s.stopped ? '<span class="warn">Stop holding</span>' : s.level > 0 ? `${fixtureName(s.id)} ${Math.round(s.level * 100)}% · ${esc(DIRECT[s.reason] || s.reason.replace(/_/g, ' '))}` : s.aimed ? `${fixtureName(s.id)} aimed, dark` : 'spots dark');
+            return parts.join(' · ');
+        }
+        function summary(now) {
+            const windowS = phone ? 60 : 120;
+            const ons = log.lightOns.filter(o => o.at >= now - windowS);
+            const b = ons.length ? bracketFor(ons[ons.length - 1]) : null;
+            if (!b) return '<b>No light came on</b> in this window. Hover or tap to read a moment.';
+            const over = b.s > GOAL_S;
+            return `<b>${b.label} ${span(b.s)}</b>${over ? ` <span class="warn">over the ${GOAL_S} s goal</span>` : ` (goal ${GOAL_S} s)`} · `
+                + (b.label === 'still → light' ? 'a lower bound on cue → light' : 'today: from the answer, not the still');
+        }
+
+        /* ---------- per frame ---------- */
+        function frame(view, now, dt) {
+            const chip = overlay.querySelector('#chip');
+            chip.dataset.state = view.connecting ? 'connecting' : view.banner ? 'attention' : 'live';
+            text(overlay.querySelector('#chip-facts'), view.connecting ? 'Connecting…' : view.live
+                ? `${view.count === 0 ? 'No one' : view.count === 1 ? '1 person' : view.count + ' people'}${view.behind != null ? ` · ${view.behind.toFixed(2)} s behind` : ''}`
+                : `Last event ${Math.floor(view.sincePeople)} s ago`);
+            text(overlay.querySelector('#chip-banner'), view.banner ? `${view.banner.words}${view.banner.detail ? ' · ' + view.banner.detail : ''}` : '');
+
+            // the tag: name and Qwen's word, with a thin life bar
+            const anchors = stage.anchors(), Wd = stage.size.width, Hd = stage.size.height;
+            const seen = new Set();
+            for (const t of view.tracks) {
+                const a = anchors.get(t.id);
+                if (!a || a.head.behind) continue;
+                seen.add(t.id);
+                let tag = tags.get(t.id);
+                if (!tag) {
+                    const el = document.createElement('div'); el.className = 'tag';
+                    el.innerHTML = '<span class="tag-name"></span><span class="tag-word"></span><span class="tag-life"><i></i></span>';
+                    overlay.appendChild(el); tag = { el, x: null, y: null, o: 0 }; tags.set(t.id, tag);
+                }
+                let p = a.ring;
+                const bh = stage.bodyHead();
+                if (a.hasBody && bh && stage.bodyVisible()) p = stage.project([bh[0], bh[1], bh[2] + 0.2]);
+                const el = tag.el, w = el.offsetWidth, h = el.offsetHeight;
+                const tx = Math.max(6, Math.min(Wd - w - 6, p.x - w / 2)), ty = Math.max(6, Math.min(Hd - h - 6, p.y - h - 10));
+                const k = ctx.reduced() || dt === 0 ? 1 : 1 - Math.exp(-dt / 0.24);
+                tag.x = tag.x == null ? tx : tag.x + (tx - tag.x) * k; tag.y = tag.y == null ? ty : tag.y + (ty - tag.y) * k;
+                el.style.transform = `translate(${Math.round(tag.x)}px, ${Math.round(tag.y)}px)`;
+                el.dataset.kind = t.identity.kind;
+                text(el.querySelector('.tag-name'), t.identity.name);
+                const act = t.activity;
+                el.dataset.answer = act ? 'live' : 'none';
+                const asked = t.seated != null ? t.seated : !!act || view.tracks.length === 1;
+                text(el.querySelector('.tag-word'), act ? `${act.words} · ${Math.round(act.age)} s` : asked ? (view.qwen?.state === 'asking' ? 'no answer yet' : 'Qwen off') : (t.posture || 'not seated'));
+                el.querySelector('.tag-life i').style.width = act ? (act.life * 100).toFixed(0) + '%' : '0%';
+                tag.o = Math.min(1, tag.o + Math.max(dt, 0.016) * 3); el.style.opacity = String(tag.o * Math.min(1, a.opacity));
+            }
+            for (const [id, tag] of tags) if (!seen.has(id)) { tag.el.remove(); tags.delete(id); }
+
+            draw(now, performance.now());
+        }
+        return { frame };
+    } });
+})();
+</script>

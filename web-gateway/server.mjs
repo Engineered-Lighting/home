@@ -33,6 +33,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DEN_LIVE_ENABLED = denLiveEnabled(process.env);
 const DEN_BODY_V2 = DEN_LIVE_ENABLED && envEnabled("HOME_WEB_DEN_BODY_V2");
 const DEN_VIRTUAL = DEN_LIVE_ENABLED && envEnabled("HOME_WEB_DEN_VIRTUAL");
+const DEN_CAPTION = DEN_LIVE_ENABLED && envEnabled("HOME_WEB_DEN_CAPTION");   // the live caption (docs/design/den-inference)
+const DEN_PIPELINE = DEN_LIVE_ENABLED && envEnabled("HOME_WEB_DEN_PIPELINE");   // the pipeline through the room (same doc)
 const SERVE_PORT = /^\d{1,5}$/.test(String(process.env.HOME_WEB_SERVE_PORT || "")) ? Number(process.env.HOME_WEB_SERVE_PORT) : 0;
 const SERVE_ORIGIN_CONFIG = String(process.env.HOME_WEB_SERVE_ORIGIN || "").trim();
 // At most this many den-live streams per look-only device, and in all: den-live serves 16, and signed-in Home needs some.
@@ -1290,7 +1292,7 @@ function sendIndex(req, res, filePath, { lookOnly = false } = {}) {
     const serve = req[SERVE_ADMITTED] === true;
     const den = DEN_LIVE_ENABLED
       ? denLiveRuntime({ bodyV2: DEN_BODY_V2 && denBodyIngress(req), virtual: DEN_VIRTUAL,
-        coordinator: !serve || DEN_VIRTUAL }) + denLabelsRuntime()
+        coordinator: !serve || DEN_VIRTUAL, caption: DEN_CAPTION, pipeline: DEN_PIPELINE }) + denLabelsRuntime()
       : "";
     const serveRuntime = serve
       ? `window.HomeServe=Object.freeze({active:true,bridgeManaged:${!!serveBridgeCredential && envEnabled("HOME_WEB_ENABLE_LEGACY_BRIDGE_PROXY")}});`

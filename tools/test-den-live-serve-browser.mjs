@@ -430,10 +430,14 @@ test('cross-home card works during HA outage and recovers a lost reply on reload
   } finally { fake.haOffline = false; fake.dropLightingReply = false; await context.close(); }
 });
 
-test('the mobile Den draws a face-free figure, and Stop holds the visible spot through replay, restart and reload', { timeout: 140000 }, async () => {
+// SwiftShader on a busy runner can slow this case well past its usual minute. If it still times out, the abort puts the
+// fake back and closes this case's browser at once, so the cases after it don't inherit paused streams or a Stop.
+test('the mobile Den draws a face-free figure, and Stop holds the visible spot through replay, restart and reload', { timeout: 240000 }, async t => {
   const initial = { ...fake.control }, initialEpoch = fake.epoch;
   const firstAction = fake.actions.length;
+  const restore = () => { fake.control = initial; fake.epoch = initialEpoch; fake.bodyStreaming = true; fake.spotStreaming = true; };
   const { page, context } = await openHome(true);
+  t.signal.addEventListener('abort', () => { restore(); context.close().catch(() => {}); }, { once: true });
   const panel = page.locator('[data-den-coordinator]');
   const button = command => panel.locator(`[data-den-coordinator-${command}]`);
   const live = () => page.evaluate(() => window.HomeDenLiveView.status());
@@ -528,7 +532,7 @@ test('the mobile Den draws a face-free figure, and Stop holds the visible spot t
   } catch (error) {
     error.message += '\nDen state: ' + JSON.stringify(await page.evaluate(() => window.HomeDenLiveView?.status() || null));
     throw error;
-  } finally { fake.control = initial; fake.epoch = initialEpoch; fake.bodyStreaming = true; fake.spotStreaming = true; await context.close(); }
+  } finally { restore(); await context.close(); }
 });
 
 test('the normal Den label editor saves a label and keeps a draft across a revision conflict', { timeout: 110000 }, async () => {

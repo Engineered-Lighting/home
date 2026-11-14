@@ -846,6 +846,70 @@ class DirectionTest(PreviewTest):
         self.assertEqual([row for row in self.moves(since) if row["requested"]["start_cdeg"]
                           != row["requested"]["target_cdeg"]], [], "the frame holds")
 
+    def test_a_reframe_never_dips_into_a_landing_it_could_not_light_again(self):
+        """A lit spot is kept on keep's margin (12 cm), but once a dip has taken it dark it is judged by admission's
+        (15 cm). A reframe whose way past the head needs a dip, to a page whose line passes the head between the two,
+        left the reader dark for good (with a learned offset, a fade out and back every 4 s). The frame holds instead,
+        lit, and the floor still checks the beam as it points."""
+        self.lit_by_direction()
+        self.read()   # the task runs on through the slide
+        origin = self.preview.rows["F3"]["aim_origin_m"]
+        pose = {key: [*xyz, 1.0] for key, (xyz, _supported) in joints(True, shift=-.3).items()}
+        page = direction.page_point(pose, self.preview.settings["page_up_m"])   # where the book settles
+        # Perception's head point 12.8 cm from the line to that page: inside the path's keep margin, so the glide there
+        # must dip, and inside admission's 15 cm, so the dark fixture would be refused where it lands.
+        head = [.9, 1.1, 1.18]
+        line = [page[i] - origin[i] for i in range(3)]
+        t = sum((head[i] - origin[i]) * line[i] for i in range(3)) / sum(c * c for c in line)
+        foot = [origin[i] + t * line[i] for i in range(3)]
+        off = math.dist(head, foot)
+        head = [foot[i] + .128 * (head[i] - foot[i]) / off for i in range(3)]
+        since = len(self.encoded)
+        for _ in range(24):
+            self.now = round(self.now + .25, 6)
+            self.track(shift=-.3, head=head)
+            self.assertTrue(self.row()["on"], "lit all the way")
+            self.assertIsNone(self.preview.rows["F3"]["dip"], "no dip")
+        self.assertLess(math.dist(self.preview.track["target"], page), 1e-9, "the book did move")
+        self.assertFalse(self.preview._in_beam(self.preview.rows["F3"], page, direction.FRAME_HOLD),
+                         "out of the frame: a reframe was due")
+        self.assertEqual([row for row in self.moves(since) if row["requested"]["start_cdeg"]
+                          != row["requested"]["target_cdeg"]], [], "the frame holds")
+
+    def test_a_lit_glide_is_approved_only_where_the_floor_would_let_it_fly(self):
+        """A lit glide's way is checked against the eyes as the floor checks the beam as it points: an eye the middle of
+        the sweep would pass inside the floor's clearance makes it a dip, dark on the way, never a glide the floor cuts
+        mid-flight."""
+        self.lit_by_direction()
+        self.read()   # the task runs on through the slide
+        row = self.preview.rows["F3"]
+        start = row["current"]
+        pose = {key: [*xyz, 1.0] for key, (xyz, _supported) in joints(True, shift=-.3).items()}
+        page = direction.page_point(pose, self.preview.settings["page_up_m"])
+        target = tuple(map(self.core.joints.to_cdeg, self.core.joints.room_to_joints(
+            page, row["aim_origin_m"], row["horizontal_world_reference"])))
+        span = [b - a for a, b in zip(start, target)]
+
+        def along(at):
+            return sum((j - a) * d for j, a, d in zip(at, start, span)) / sum(d * d for d in span)
+        clear = preview.Preview._clear
+
+        def eye_on_the_way(owner, row, person, clearance, joints=None):   # an eye beside the middle of the sweep
+            if .25 < along(row["current"] if joints is None else joints) < .75:
+                return False
+            return clear(owner, row, person, clearance, joints)
+        seen = []
+        with patch.object(preview.Preview, "_clear", eye_on_the_way):
+            for _ in range(28):
+                self.now = round(self.now + .25, 6)
+                self.track(shift=-.3)
+                fixture = self.preview.rows["F3"]
+                seen.append((self.row()["on"], along(fixture["current"]), fixture["reason"]))
+        self.assertEqual([s for s in seen if s[0] and .25 < s[1] < .75], [], "never lit across the eye")
+        self.assertNotIn("beam_through_head", [s[2] for s in seen], "never cut")
+        self.assertEqual(self.preview.rows["F3"]["current"], target, "it got there, dark on the way")
+        self.assertTrue(self.row()["on"], "and lit again")
+
     def test_the_room_dims_under_the_task_light_and_comes_back(self):
         self.assertEqual(self.preview.latest["ambient"]["scale"], 1.0)
         self.lit_by_direction()
@@ -917,8 +981,14 @@ class DirectionTest(PreviewTest):
         self.assertFalse(self.row()["on"], "a 0.3 s exit is too short for a 0.5 s train: one MOVE, dark")
 
     def test_an_exit_during_a_glide_is_one_dark_move_to_where_it_is_going(self):
-        """P3 holds a MOVE that arrives during a move until the landing, so an exit mid-glide never sends a train: one
-        level-0 MOVE to the glide's own target, never back to a point it has passed."""
+        """P3: a real board holds a MOVE that arrives during a move until the landing, so unless it can join the flight
+        an exit mid-glide never sends a train: one level-0 MOVE to the glide's own target, never back to a point it has
+        passed."""
+        real = {"F3": {**FIXTURES["F3"], "profile": {**self.core.scurve.FICTIONAL_PROFILE, "fictional": False,
+                                                       "label": "measured-test"}}}
+        self.preview = preview.Preview(self.core, binding=BINDING, fixtures=real, state=self.path,
+                                       clock=lambda: self.now, threaded=False, append=self.encoded.append)
+        self.preview.configure({"pre_aim": True, "leave_fade_board_s": 1.0})   # at rest, a train of two steps
         self.lit_by_direction()
         for _ in range(12):
             self.now = round(self.now + .25, 6)
@@ -935,6 +1005,56 @@ class DirectionTest(PreviewTest):
         self.assertEqual(len(moves), 1)
         self.assertEqual((tuple(moves[0]["requested"]["target_cdeg"]), moves[0]["effective"]["spot_level"]),
                          (glide.target, 0))
+
+    def test_a_virtual_spot_fades_out_mid_glide_and_the_glide_flies_on(self):
+        """A virtual fixture has no P3: an exit during a creep is the exit's fade, each step joining the flight, not a
+        cut, and the glide goes on to where it was going."""
+        self.lit_by_direction()
+        self.read()   # the task runs on through the slide
+        for _ in range(16):
+            self.now = round(self.now + .25, 6)
+            self.track(shift=-.3)
+            if self.preview.rows["F3"]["glide"]:
+                break
+        glide = self.preview.rows["F3"]["glide"]
+        self.assertIsNotNone(glide)
+        since = len(self.encoded)
+        levels = []
+        for _ in range(8):
+            self.now = round(self.now + .05, 6)
+            self.track(seated=False, shift=-.3)
+            levels.append(self.row()["level"])
+        self.assertGreater(levels[0], 0, "standing mid-glide: it fades, it isn't cut")
+        self.assertTrue(all(b <= a for a, b in zip(levels, levels[1:])))
+        self.assertEqual(levels[-1], 0, "dark within the leave fade")
+        self.assertIs(self.preview.rows["F3"]["glide"], glide, "the glide flies on")
+        steps = self.moves(since)
+        self.assertGreater(len(steps), 1, "a fade, not one dark MOVE")
+        self.assertEqual({tuple(row["requested"]["target_cdeg"]) for row in steps}, {glide.target},
+                         "every step joins the flight")
+
+    def test_a_planned_end_mid_glide_fades_to_dark_and_never_lights_again(self):
+        """The task's planned end (the reply's validity) begins its fade during a creep: the light fades out with the
+        glide and is dark by the deadline. A cut there let the fixture, once landed, rise again before the deadline,
+        only to fade again: off, a flash, off."""
+        self.lit_by_direction()
+        until = self.preview.task_until()
+        while self.now < until - 3.75 - 1e-9:   # so the slide's glide (1.2 s on, 2 s long) spans the end's fade's start
+            self.now = round(self.now + .25, 6)
+            self.track()
+        seen = []
+        while self.now < until + .5:
+            self.now = round(self.now + .05, 6)
+            self.track(shift=-.3)
+            seen.append((self.now, self.row()["level"], self.preview.rows["F3"]["glide"]))
+        fade_from = until - self.preview.settings["fade_out_s"]
+        glide = next(g for t, _level, g in seen if t >= fade_from - 1e-9)
+        self.assertIsNotNone(glide, "the end's fade begins mid-glide")
+        self.assertLess(glide.arrival, until, "and the glide lands before the deadline")
+        levels = [level for t, level, _g in seen if t >= fade_from - 1e-9]
+        self.assertGreater(levels[0], 0, "a fade, not a cut")
+        self.assertTrue(all(b <= a + 1e-9 for a, b in zip(levels, levels[1:])), "it never lights again")
+        self.assertEqual(levels[-1], 0)
 
     def test_a_hand_off_is_a_crossfade_from_the_standby(self):
         fixtures = {"F3": FIXTURES["F3"], "F4": {"aim_origin_m": [.6, .2, 2.5], "horizontal_world_reference": [0, 1, 0]}}

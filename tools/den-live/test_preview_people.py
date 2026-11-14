@@ -1,6 +1,7 @@
 """Several people (plan 04, step 3): a second person never darkens the reader's light, no beam crosses anyone's head,
 two people with no binding light nothing, and the bulbs get no reading scene while others are there."""
 
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,11 +37,11 @@ class PreviewPeopleTest(unittest.TestCase):
         self.preview.configure({"fade_in_s": 0, "pre_aim": False})
         self.guest = None   # the second person's head, or None
 
-    def track(self, *, seated=True, epoch=1, eligible=True, **_ignored):
+    def track(self, *, seated=True, epoch=1, eligible=True, shift=0.0, **_ignored):
         """The reader t1, plus a second person t2 standing with their head at self.guest. The ask names an eligible
         track only while one person is in view, as ask.py does."""
         self.seq += 1
-        pose = base.joints(seated)
+        pose = base.joints(seated, shift=shift)
         reader = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": "confident",
                   "association_revision": 2, "current_obs_ids": ("pose",), "supported_pose": pose,
                   "seated": self.rule.update("t1", 2, self.now, pose)}
@@ -74,6 +75,70 @@ class PreviewPeopleTest(unittest.TestCase):
         on_beam = [row["aim_origin_m"][i] + 1.0 * aim[i] for i in range(3)]   # a metre down the beam
         self.assertFalse(all(self.walk(on_beam, .5)), "someone's head in the beam: dark at once")
         self.assertEqual(self.preview.rows["F3"]["reason"], preview.THROUGH_ANOTHER_HEAD)
+
+    def test_a_head_past_the_book_is_judged_as_admission_judged_it_so_the_light_never_blinks(self):
+        """Admission and the cut measure everyone else's head the same way: to the beam's centre from the fixture as far
+        as the page. A head past the book along the beam (a partner's head in the reader's lap, the book held above it)
+        is as far from the light as it is from the page. The cut used to measure it to the beam's whole line, so the
+        light was admitted, cut, admitted again after CUT_HOLD_S and cut again: a blink every 1.6 s."""
+        self.light()
+        row = self.preview.rows["F3"]
+        origin, page = row["aim_origin_m"], self.preview.track["target"]
+        line = [page[i] - origin[i] for i in range(3)]
+        length = math.sqrt(sum(c * c for c in line))
+        ahead = [c / length for c in line]
+        side = [ahead[1], -ahead[0], 0.0]
+        norm = math.sqrt(sum(c * c for c in side))
+        past = [page[i] + .25 * ahead[i] + .10 * side[i] / norm for i in range(3)]   # 25 cm past the book, 10 cm off
+        self.assertGreater(self.core.eye.centre_clear(origin, page, past), self.core.eye.HEAD_CLEARANCE_M,
+                           "admission clears it")
+        self.read()   # the task runs on
+        refused = []
+        seen = []
+        for _ in range(round((3 * preview.CUT_HOLD_S + 1) / .25)):
+            self.now += .25
+            self.guest = past
+            self.track()
+            seen.append(self.row()["on"])
+            refused.append(self.preview.latest_decision["proposal"]["refused"].get("F3"))
+        self.assertEqual(seen, [True] * len(seen), "lit throughout: never cut and lit again")
+        self.assertNotIn(preview.THROUGH_ANOTHER_HEAD, refused)
+        self.assertNotEqual(self.preview.rows["F3"]["reason"], preview.THROUGH_ANOTHER_HEAD)
+
+    def test_a_light_rises_in_place_only_where_its_beam_already_clears_everyone(self):
+        """A dark fixture near enough the page rises where it points, without a move, only if that beam clears the
+        reader and everyone else by admission's margin, as the line to the page was admitted. Otherwise it moves dark to
+        the page first: rising in place into someone's head was a cut and, a CUT_HOLD_S later, the same rise again."""
+        self.light()
+        aim = self.preview.rows["F3"]["current"]
+        for _ in range(8):   # the book 9 cm along: the lit frame holds, a little off the new page
+            self.now += .25
+            self.track(shift=-.09)
+        row = self.preview.rows["F3"]
+        self.assertEqual(row["current"], aim, "the frame held")
+        origin, page = row["aim_origin_m"], self.preview.track["target"]
+        beam = self.core.joints.direction(aim[0] / 100, aim[1] / 100, row["horizontal_world_reference"])
+        new = [page[i] - origin[i] for i in range(3)]
+        length = math.sqrt(sum(c * c for c in new))
+        on_beam = [origin[i] + 1.8 * beam[i] for i in range(3)]
+        on_line = [origin[i] + 1.8 * new[i] / length for i in range(3)]
+        away = [on_beam[i] - on_line[i] for i in range(3)]
+        norm = math.sqrt(sum(c * c for c in away))
+        guest = [on_beam[i] + .10 * away[i] / norm for i in range(3)]   # 10 cm off the held beam, farther off the page's
+        self.assertGreater(self.core.eye.centre_clear(origin, page, guest), self.core.eye.HEAD_CLEARANCE_M,
+                           "admission clears the line to the page")
+        self.read()
+        seen = []
+        for _ in range(round((3 * preview.CUT_HOLD_S + 1) / .25)):
+            self.now += .25
+            self.guest = guest
+            self.track(shift=-.09)
+            seen.append(self.row()["on"])
+        self.assertFalse(seen[0], "their head in the held beam: cut at once")
+        self.assertIn(True, seen, "lit again once the hold is over")
+        back = seen.index(True)
+        self.assertEqual(seen[back:], [True] * (len(seen) - back), "and it stays lit: no second cut")
+        self.assertNotEqual(self.preview.rows["F3"]["current"], aim, "it moved to the page dark, then rose")
 
     def test_a_passer_by_never_darkens_the_reader(self):
         self.light()

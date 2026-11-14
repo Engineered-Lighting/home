@@ -12,8 +12,9 @@ The room frame is den-observe's z_up_metric_floor0, so z is height above the flo
 
 den-live's side adds hysteresis to the copy (held_seated, below; the copy itself is unchanged): becoming seated also
 counts a head under 1.40 m, and staying seated ends on two consecutive samples of clear standing evidence (a head
-at 1.50 m or more; with no head, a mid-hip over 0.95 m; or the mid-hip 0.35 m over the knees), or at once on one
-sample with the head at 1.60 m and the mid-hip at 0.90 m or more. Hips at the sofa band's edge no longer end it.
+at 1.50 m or more; with no head, a mid-hip over 0.95 m; or the mid-hip 0.35 m over the knees, unless the head is at
+seated height, under 1.40 m), or at once on one sample with the head at 1.60 m and the mid-hip at 0.90 m or more.
+Hips at the sofa band's edge no longer end it.
 
 Seated (below) keeps each track's recent poses and its last answer, passes that answer back as was_seated, and asks
 held_seated.
@@ -119,13 +120,17 @@ HEAD_UP_Z, HIP_UP_Z = 1.60, 0.90   # or at once on one sample with both the head
 
 def standing_evidence(joints):
     """Clear evidence of someone standing on one sample (body.py's joints): a high head, or with no head high hips, or
-    hips well above the knees. Anything less (hips on the sofa band's edge, a missing face) is no evidence."""
+    hips well above the knees. Anything less (hips on the sofa band's edge, a missing face) is no evidence, and a head
+    at seated height (under HEAD_ENTER_Z) is none whatever the hips or knees say: no standing adult's head is that low,
+    and a knee point found at the feet would otherwise unseat a reader."""
     face = head(joints)
     left, right = _joint(joints, "left_hip"), _joint(joints, "right_hip")
     hip = _mid(left, right) if left and right else None
     knees = [k for k in (_joint(joints, "left_knee"), _joint(joints, "right_knee")) if k]
     if face is not None and face[2] >= HEAD_STAND_Z:
         return True
+    if face is not None and face[2] < HEAD_ENTER_Z:
+        return False
     if face is None and hip is not None and hip[2] > HIP_STAND_Z:
         return True
     return hip is not None and bool(knees) and hip[2] - sum(k[2] for k in knees) / len(knees) > HIP_OVER_KNEE_M

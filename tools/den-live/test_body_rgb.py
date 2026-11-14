@@ -185,6 +185,16 @@ class RgbBodyTests(unittest.TestCase):
         self.assertGreater(len(rows), 0)
         self.assertFalse(cut_side(cols, rows, cut).any())
 
+    def test_a_profile_with_the_cut_never_publishes_on_the_face_envelope_alone(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        with patch("body_rgb.torso_cut", return_value=None):
+            f.frame(55)
+        self.assertEqual(f.last.observation, "unknown")
+
     def test_stale_unqualified_and_dark_empty_frames_do_not_feed_learning(self):
         f = self.f
         for seq, changes in enumerate(({"receipt": False}, {"age": 1}, {"skew": 0.068},

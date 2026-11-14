@@ -95,8 +95,8 @@ class RgbBodyInput:
                         separation_s=bounds.separation_s)
         head = head_evidence(pose, self.camera, **evidence)
         cut = torso_cut(pose, self.camera, **evidence)
-        if head is None and cut is None:
-            return BodyInput(*common, "unknown")
+        if (head is None and cut is None) or (profile.head.torso_cut_m is not None and cut is None):
+            return BodyInput(*common, "unknown")   # a profile with the cut never publishes on the envelope alone
         # The envelope and the cut, whichever this frame supports: the figure loses the union of both.
         return replace(value, head_evidence={**(cut or {}), **(head or {})})
 

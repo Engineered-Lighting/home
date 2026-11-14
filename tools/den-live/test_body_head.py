@@ -134,9 +134,13 @@ class HeadEvidenceTests(unittest.TestCase):
     def test_the_shoulder_line_cut_takes_every_head_and_neck_point_without_a_face(self):
         evidence = self.cut()
         self.assertIsNotNone(evidence)
-        shoulder, axis, margin = cut_of(evidence, frame_key=FRAME_KEY, binding=self.binding)
+        shoulder, axis, margin, *_ = cut_of(evidence, frame_key=FRAME_KEY, binding=self.binding)
         self.assertAlmostEqual(math.hypot(*axis), 1.0)
-        self.assertAlmostEqual(margin, 0.08 + PROFILE.localization_m + PROFILE.max_motion_m_s * 0.055)
+        # One constant margin: the profile's largest separation, never this frame's smaller one.
+        self.assertAlmostEqual(margin, 0.08 + PROFILE.localization_m + PROFILE.max_motion_m_s * PROFILE.max_separation_s)
+        self.assertEqual(self.cut(separation_s=0.0)["cut"]["margin_m"], evidence["cut"]["margin_m"])
+        self.assertEqual(len(evidence["cut"]["shoulders_px"]), 2)
+        self.assertAlmostEqual(evidence["cut"]["ceiling_m"], (1.45 - 0.27 + 1.45 - 0.28) / 2)
         to_depth = self.geom.inverse(*self.camera.room_from_left)
         depth_m = self.geom.apply(*to_depth, (-0.13, 2.08, 1.175))[2]   # at the shoulders
         margin_px = margin * self.camera.rig.left_k[0] / depth_m
@@ -178,6 +182,21 @@ class HeadEvidenceTests(unittest.TestCase):
             replace(PROFILE, torso_cut_m=0.0)
         with self.assertRaises(ValueError):
             replace(PROFILE, torso_cut_m=float("nan"))
+
+    def test_the_cut_must_face_the_head_the_detector_sees(self):
+        pose = self.with_hips(self.pose())
+        self.assertIsNotNone(self.cut(pose))
+        flipped = self.with_hips(self.pose(), hips=((-0.15, 2.1, 1.90), (0.05, 2.1, 1.90)))   # a wrong hip above the head
+        self.assertIsNone(self.cut(flipped), "the face is on the hips' side: clear")
+        bowed = self.with_hips(self.pose())
+        to_depth = self.geom.inverse(*self.camera.room_from_left)
+        chest = self.camera.rig.to_rgb(self.geom.apply(*to_depth, (-0.13, 2.0, 1.05)))
+        bowed["keypoints"][0] = [*chest, 0.9]   # the nose below the shoulder line
+        self.assertIsNone(self.cut(bowed), "any face point on the hips' side clears")
+        unseen = self.with_hips(self.pose())
+        for index in range(5):
+            unseen["keypoints"][index][2] = 0.1
+        self.assertIsNone(self.cut(unseen), "no face or ear point seen: clear")
 
     def test_hips_without_depth_come_from_their_keypoints_at_the_shoulders_depth(self):
         lifted = self.cut()

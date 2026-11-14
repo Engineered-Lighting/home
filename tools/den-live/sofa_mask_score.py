@@ -276,7 +276,7 @@ def empty_background(frames):
     return background
 
 
-def cut_leaks(frame, region, rect, cut_px, background):
+def cut_leaks(frame, region, rect, cut_px, background, camera=None):
     """Foreground depth pixels in a marked region that neither the envelope nor the cut removes: the pixels the
     figure could still draw there (40 mm nearer than the empty room, body.py's least foreground step)."""
     import numpy as np
@@ -291,6 +291,15 @@ def cut_leaks(frame, region, rect, cut_px, background):
         candidate &= ~((cols >= l) & (cols < r) & (rows >= t) & (rows < b))
     if cut_px is not None:
         candidate &= ~cut_side(cols, rows, cut_px)
+        if camera is not None and candidate.any():   # the ceiling: nothing above the tracked shoulders
+            fx, fy, cx, cy = (float(v) for v in camera.rig.left_k[:4])
+            z = depth[candidate] / 1000
+            points = np.column_stack(((cols[candidate] - cx) * z / fx, (rows[candidate] - cy) * z / fy, z))
+            rotation, translation = camera.room_from_left
+            height = (points @ np.asarray(rotation, float).T + np.asarray(translation, float))[:, 2]
+            kept = candidate.copy()
+            kept[candidate] = height <= cut_px[3]
+            candidate = kept
     return int(candidate.sum())
 
 
@@ -330,7 +339,7 @@ def score(frames, annotations, camera, *, profile, separations=None):
             if cut is None:
                 covers_head, covers_neck = (contains(mask, region) for region in regions)
             else:
-                covers_head, covers_neck = (cut_leaks(frame, region, mask, cut, background) == 0
+                covers_head, covers_neck = (cut_leaks(frame, region, mask, cut, background, camera) == 0
                                             for region in regions)
                 tally["by_cut"] += 1
             tally["covered" if covers_head and covers_neck else "undercovered"] += 1

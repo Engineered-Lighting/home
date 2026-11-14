@@ -16,6 +16,9 @@ TORSO_AXIS_PX = 20
 # even a little outside the RGB image (a desk or the frame's edge hides it; the detector extrapolates), up to this
 # fraction of the image beyond each edge.
 HIP_MIN_SCORE, HIP_OUTSIDE = 0.3, 0.25
+# Every face and ear keypoint the detector scores at least this lies beyond the shoulder line, or the frame clears:
+# the signed check that the line faces the right way (a wrong hip can't flip it unseen).
+HEAD_MIN_SCORE = 0.3
 # Seen from the front or back the torso axis crosses the shoulder line square: it may lean this far off square
 # (cosine 0.57, 35 degrees) once the shoulder line is long enough in the image to say.
 AXIS_MAX_COS, SHOULDER_LINE_MIN = 0.57, 0.4
@@ -72,9 +75,13 @@ def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
     placed in the rectified-left depth image; a lift that slipped onto the surface behind, or a hip at the shoulders'
     depth, moves it there by only the RGB-to-left parallax, a pixel or two, which the margin covers. The hips set only
     the line's direction, and that direction must cross the shoulder line nearly square when the shoulder line is long
-    enough to judge. The line runs through the shoulder midpoint across the 2D torso axis. The margin is the qualified
-    cut plus the localization and motion bounds, as the envelope's. No face landmark is needed, so it holds for a
-    turned-away, bowed or reclined head, and for one the RGB view cuts off."""
+    enough to judge, and every face or ear keypoint the detector sees (score HEAD_MIN_SCORE) must lie beyond the
+    line, else the frame clears. The line runs through the shoulder midpoint across the 2D torso axis. The margin is
+    one constant, live and scored alike: the qualified cut plus the localization bound plus the motion bound over the
+    profile's largest separation (never this frame's smaller one, which would thin the cut). No face landmark needs
+    depth, so it holds for a turned-away, bowed or reclined head, and for one the RGB view cuts off. The evidence also
+    carries both shoulders' pixels (the band whose nearest depth sets pixels per metre) and the shoulders' room height,
+    above which the figure keeps nothing."""
     from camgeom import apply, inverse, project
 
     if (not isinstance(profile, HeadProfile) or profile.torso_cut_m is None or frame_key is None
@@ -107,17 +114,27 @@ def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
         if index in SHOULDERS:
             rgb_depths.append(apply(rig.rotation, rig.translation, point)[2])
     keypoints = pose.get("keypoints")
+    if not isinstance(keypoints, (tuple, list)) or len(keypoints) != 17:
+        return None
     width, height = rig.rgb_size
-    for index in HIPS:
-        if index in lifted or not isinstance(keypoints, (tuple, list)) or len(keypoints) != 17:
-            continue
+    shoulder_depth = _mean([[z] for z in rgb_depths])[0]
+
+    def placed(index, min_score):
+        """The keypoint's rectified-left pixel at the shoulders' depth, or None."""
         pixel = keypoints[index]
         if (isinstance(pixel, (tuple, list)) and len(pixel) == 3 and all(map(_finite, pixel))
-                and HIP_MIN_SCORE <= pixel[2] <= 1 and -HIP_OUTSIDE * width <= pixel[0] < (1 + HIP_OUTSIDE) * width
+                and min_score <= pixel[2] <= 1.5 and -HIP_OUTSIDE * width <= pixel[0] < (1 + HIP_OUTSIDE) * width
                 and -HIP_OUTSIDE * height <= pixel[1] < (1 + HIP_OUTSIDE) * height):
-            placed = rig.left_pixel(rig.rgb_ray(pixel[0], pixel[1]), _mean([[z] for z in rgb_depths])[0])
-            if placed is not None and all(map(_finite, placed)):
-                pixels[index] = placed
+            where = rig.left_pixel(rig.rgb_ray(pixel[0], pixel[1]), shoulder_depth)
+            if where is not None and all(map(_finite, where)):
+                return where
+        return None
+
+    for index in HIPS:
+        if index not in lifted:
+            where = placed(index, HIP_MIN_SCORE)
+            if where is not None:
+                pixels[index] = where
     hip_pixels = [pixels[index] for index in HIPS if index in pixels]
     if not hip_pixels:
         return None
@@ -131,10 +148,17 @@ def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
     span = math.hypot(*across)
     if span >= SHOULDER_LINE_MIN * length and abs(axis[0] * across[0] + axis[1] * across[1]) > AXIS_MAX_COS * span * length:
         return None
-    margin = profile.torso_cut_m + profile.localization_m + profile.max_motion_m_s * separation_s
+    unit = (axis[0] / length, axis[1] / length)
+    head = [placed(index, HEAD_MIN_SCORE) for index in FACE]
+    head = [where for where in head if where is not None]
+    if not head or any((x - shoulder[0]) * unit[0] + (y - shoulder[1]) * unit[1] <= 0 for x, y in head):
+        return None   # unsure which side the head is on: clear
+    margin = profile.torso_cut_m + profile.localization_m + profile.max_motion_m_s * profile.max_separation_s
+    ceiling = _mean([lifted[index] for index in SHOULDERS])[2]
     return {"frame_key": frame_key, "binding": binding,
-            "cut": {"shoulder_px": [float(shoulder[0]), float(shoulder[1])],
-                    "axis_px": [axis[0] / length, axis[1] / length], "margin_m": margin}}
+            "cut": {"shoulder_px": [float(shoulder[0]), float(shoulder[1])], "axis_px": list(unit), "margin_m": margin,
+                    "shoulders_px": [[float(x) for x in pixels[index]] for index in SHOULDERS],
+                    "ceiling_m": float(ceiling)}}
 
 
 def _measured_points(pose):

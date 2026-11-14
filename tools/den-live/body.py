@@ -88,39 +88,48 @@ def torso_cut(evidence, *, frame_key, binding):
     if not isinstance(cut, dict):
         return None
     shoulder, axis, margin = cut.get("shoulder_px"), cut.get("axis_px"), cut.get("margin_m")
-    if (not isinstance(shoulder, (list, tuple)) or len(shoulder) != 2 or not all(_finite(x) for x in shoulder)
-            or not -WIDTH <= shoulder[0] <= 2 * WIDTH or not -HEIGHT <= shoulder[1] <= 2 * HEIGHT
-            or not isinstance(axis, (list, tuple)) or len(axis) != 2 or not all(_finite(x) for x in axis)
-            or not _finite(margin) or not 0 < margin <= 1.0):
+    shoulders, ceiling = cut.get("shoulders_px"), cut.get("ceiling_m")
+
+    def pixel(p):
+        return (isinstance(p, (list, tuple)) and len(p) == 2 and all(_finite(x) for x in p)
+                and -WIDTH <= p[0] <= 2 * WIDTH and -HEIGHT <= p[1] <= 2 * HEIGHT)
+
+    if (not pixel(shoulder) or not isinstance(axis, (list, tuple)) or len(axis) != 2 or not all(_finite(x) for x in axis)
+            or not _finite(margin) or not 0 < margin <= 1.0
+            or not isinstance(shoulders, (list, tuple)) or len(shoulders) != 2 or not all(pixel(p) for p in shoulders)
+            or not _finite(ceiling) or not -1.0 <= ceiling <= 3.0):
         return None
     length = math.hypot(*axis)
     if not 0.999 <= length <= 1.001:
         return None
-    return (float(shoulder[0]), float(shoulder[1])), (axis[0] / length, axis[1] / length), float(margin)
+    return ((float(shoulder[0]), float(shoulder[1])), (axis[0] / length, axis[1] / length), float(margin),
+            tuple((float(p[0]), float(p[1])) for p in shoulders), float(ceiling))
 
 
-CUT_PATCH_PX, CUT_MIN_DEPTH_PX, CUT_MAX_PX = 6, 8, 200
+CUT_BAND_PX, CUT_MIN_DEPTH_PX, CUT_MAX_PX = 12, 8, 200
 
 
 def cut_pixels(cut, depth_mm, fx):
-    """(shoulder_px, axis_px, margin_px) on this frame, or None: the margin in pixels at the nearest tenth of the
-    measured depth around the shoulder midpoint (nearer means more pixels: the conservative side)."""
+    """(shoulder_px, axis_px, margin_px, ceiling_m) on this frame, or None: the margin in pixels at the nearest 5% of
+    the measured depth across the shoulder band (both shoulders and the midpoint, CUT_BAND_PX around), so a head or
+    neck nearer the camera than the shoulders still gets enough pixels."""
     if cut is None:
         return None
-    (u, v), axis, margin_m = cut
-    row, col = int(round(v)), int(round(u))
-    patch = depth_mm[max(0, row - CUT_PATCH_PX):max(0, row + CUT_PATCH_PX + 1),
-                     max(0, col - CUT_PATCH_PX):max(0, col + CUT_PATCH_PX + 1)]
-    measured = sorted(int(x) for x in patch.ravel() if NEAR_MM <= x <= FAR_MM)
+    (u, v), axis, margin_m, shoulders, ceiling = cut
+    us, vs = [u] + [p[0] for p in shoulders], [v] + [p[1] for p in shoulders]
+    top, bottom = max(0, int(min(vs)) - CUT_BAND_PX), max(0, int(max(vs)) + CUT_BAND_PX + 1)
+    left, right = max(0, int(min(us)) - CUT_BAND_PX), max(0, int(max(us)) + CUT_BAND_PX + 1)
+    band = depth_mm[top:bottom, left:right]
+    measured = sorted(int(x) for x in band.ravel() if NEAR_MM <= x <= FAR_MM)
     if len(measured) < CUT_MIN_DEPTH_PX:
         return None
-    z = measured[len(measured) // 10] / 1000
-    return (u, v), axis, min(CUT_MAX_PX, margin_m * fx / z)
+    z = measured[len(measured) // 20] / 1000
+    return (u, v), axis, min(CUT_MAX_PX, margin_m * fx / z), ceiling
 
 
 def cut_side(cols, rows, cut_px, extra_px=0.0):
     """Which pixels the cut removes: on the head's side of the line, or within its margin (plus extra_px) of it."""
-    (u, v), (ax, ay), margin_px = cut_px
+    (u, v), (ax, ay), margin_px = cut_px[:3]
     return (cols - u) * ax + (rows - v) * ay > -(margin_px + extra_px)
 
 
@@ -215,9 +224,10 @@ class BodyMaker:
 
         evidence = person.get("head_evidence")
         exclusion = head_exclusion(evidence, frame_key=frame_key, binding=binding)
-        cut = cut_pixels(torso_cut(evidence, frame_key=frame_key, binding=binding), raw, self.fx)
-        if exclusion is None and cut is None:
-            return None, "head_mask_unavailable"
+        cut_evidence = torso_cut(evidence, frame_key=frame_key, binding=binding)
+        cut = cut_pixels(cut_evidence, raw, self.fx)
+        if (exclusion is None and cut is None) or (cut_evidence is not None and cut is None):
+            return None, "head_mask_unavailable"   # a cut that can't be placed never falls back to the envelope
         if self.background is None:
             return None, "warming_background"
         joints, masked = {}, {}
@@ -236,7 +246,7 @@ class BodyMaker:
                         masked[name] = point
                         continue
                 # A seed this close to the cut would grow into cut pixels: it counts as masked.
-                if cut is not None and cut_side(u, v, cut, TORSO_SEED_PX):
+                if cut is not None and (cut_side(u, v, cut, TORSO_SEED_PX) or xyz[2] > cut[3]):
                     masked[name] = point
                     continue
                 joints[name] = point
@@ -256,9 +266,10 @@ class BodyMaker:
         if cut is not None:
             rows, cols = np.mgrid[v0:v1, u0:u1]
             depth[cut_side(cols, rows, cut)] = 0
-        return self._person(depth, bg, v0, u0, joints, torso, centre, person, masked=masked)
+        return self._person(depth, bg, v0, u0, joints, torso, centre, person, masked=masked,
+                            ceiling=None if cut is None else cut[3])
 
-    def _person(self, depth, bg, v0, u0, joints, torso, centre, person, *, masked=None):
+    def _person(self, depth, bg, v0, u0, joints, torso, centre, person, *, masked=None, ceiling=None):
         np, cv2 = self.np, self.cv2
         valid = (depth >= NEAR_MM) & (depth <= FAR_MM) & (bg > 0)
         delta = bg - depth
@@ -276,6 +287,8 @@ class BodyMaker:
         camera = self._camera_points(depth[rows, cols], rows + v0, cols + u0)
         room = camera @ self.R.T + self.t
         inside = (np.linalg.norm(room[:, :2] - centre, axis=1) <= GATE_M) & (room[:, 2] >= 0.02) & (room[:, 2] <= 2.4)
+        if ceiling is not None:
+            inside &= room[:, 2] <= ceiling   # nothing above the tracked shoulders: not even an undetected neighbour's head
         eligible = np.zeros(depth.shape, bool)
         eligible[rows[inside], cols[inside]] = True
 

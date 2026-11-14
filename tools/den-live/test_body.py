@@ -69,15 +69,17 @@ def pixel(xyz):
     return np.array([FX * camera[0] / camera[2] + CX, FY * camera[1] / camera[2] + CY])
 
 
-def cut_subject(fixture, margin=0.05, frame_key="fixture-7"):
+def cut_subject(fixture, margin=0.05, frame_key="fixture-7", ceiling=3.0):
     """Evidence with the shoulder-line cut only: no depth-pixel envelope."""
     _, _, _, _, joints = fixture
-    sh = (pixel(joints["left_shoulder"][0]) + pixel(joints["right_shoulder"][0])) / 2
+    shoulders = [pixel(joints["left_shoulder"][0]), pixel(joints["right_shoulder"][0])]
+    sh = (shoulders[0] + shoulders[1]) / 2
     hip = (pixel(joints["left_hip"][0]) + pixel(joints["right_hip"][0])) / 2
     axis = (sh - hip) / np.linalg.norm(sh - hip)
     return {"track_id": "fixture-track", "joints": joints, "facing_deg": 0,
             "head_evidence": {"frame_key": frame_key, "binding": BINDING,
-                              "cut": {"shoulder_px": sh.tolist(), "axis_px": axis.tolist(), "margin_m": margin}}}
+                              "cut": {"shoulder_px": sh.tolist(), "axis_px": axis.tolist(), "margin_m": margin,
+                                      "shoulders_px": [p.tolist() for p in shoulders], "ceiling_m": ceiling}}}
 
 
 def cut_px(fixture, person, frame_key="fixture-7"):
@@ -226,6 +228,10 @@ class BodyTest(unittest.TestCase):
             "nan shoulder": lambda cut: cut.update(shoulder_px=[float("nan"), 100]),
             "far shoulder": lambda cut: cut.update(shoulder_px=[5000, 100]),
             "short shoulder": lambda cut: cut.update(shoulder_px=[100]),
+            "no shoulder band": lambda cut: cut.pop("shoulders_px"),
+            "one shoulder in the band": lambda cut: cut.update(shoulders_px=[[100, 100]]),
+            "no ceiling": lambda cut: cut.pop("ceiling_m"),
+            "nan ceiling": lambda cut: cut.update(ceiling_m=float("nan")),
         }.items():
             with self.subTest(label=label):
                 person = cut_subject(fixture)
@@ -242,11 +248,29 @@ class BodyTest(unittest.TestCase):
         fixture = scene()
         maker = self.learned(fixture)
         person = cut_subject(fixture)
-        person["head_evidence"]["cut"]["shoulder_px"] = [5, 5]   # a corner with nothing measured nearer than the room
+        cut = person["head_evidence"]["cut"]
+        cut["shoulder_px"] = [5, 5]   # a corner with nothing measured there
+        cut["shoulders_px"] = [[3, 5], [7, 5]]
         hole = fixture[1].copy()
-        hole[:20, :20] = 0
+        hole[:40, :40] = 0
         self.assertEqual(maker.step(hole, observation="person", person=person, now=20, frame_key="fixture-7",
                                     binding=BINDING), (None, "head_mask_unavailable"))
+        # Nor does it fall back to the face envelope when one is there too.
+        person["head_evidence"].update({key: value for key, value in subject(fixture)["head_evidence"].items()
+                                        if key not in ("frame_key", "binding")})
+        self.assertEqual(maker.step(hole, observation="person", person=person, now=20, frame_key="fixture-7",
+                                    binding=BINDING), (None, "head_mask_unavailable"))
+
+    def test_nothing_above_the_tracked_shoulders_is_kept(self):
+        fixture = scene("standing")
+        maker = self.learned(fixture)
+        joints = fixture[4]
+        ceiling = float(joints["left_hip"][0][2]) + 0.10   # well under the shoulders: the cut's own ceiling is higher
+        frame, why = self.render(maker, fixture, cut_subject(fixture, ceiling=ceiling))
+        self.assertIsNone(why)
+        self.assertLessEqual(decode(frame)["position_mm"][:, 2].max(), ceiling * 1000 + 1)
+        high, _ = self.render(maker, fixture, cut_subject(fixture))
+        self.assertGreater(high["points"]["count"], frame["points"]["count"])
 
     def test_with_the_shoulders_cut_the_figure_may_anchor_on_other_measured_joints(self):
         fixture = scene("seated")

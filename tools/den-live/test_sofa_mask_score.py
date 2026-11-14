@@ -121,13 +121,23 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(all(tally.get("by_cut") == tally.get("covered") == 1
                             for cue, tally in result["counts_by_cue"].items() if cue != mask.EMPTY_CUE))
         self.assertEqual(result["counts_by_cue"][mask.EMPTY_CUE], {"empty_withheld": 1})
-        # Hips placed above the head flip the axis: the head lies "below" the line and every head pixel survives.
+        # Hips placed above the head would flip the axis: the face is then on the hips' side, so the cut is refused
+        # and every frame is withheld, never covered.
         self.setUp()
         frames = self.cut_session(((-0.15, 2.1, 1.90), (0.05, 2.1, 1.90)))
         result = mask.score(frames, self.annotations, self.camera, profile=profile, separations=self.separations)
-        self.assertEqual(result["verdict"], "fail")
-        self.assertTrue(all(tally.get("undercovered") == 1
-                            for cue, tally in result["counts_by_cue"].items() if cue != mask.EMPTY_CUE))
+        self.assertEqual(result["verdict"], "incomplete")
+        self.assertFalse(any(tally.get("covered") for cue, tally in result["counts_by_cue"].items()))
+        # A cut that keeps the marked region is counted as a leak.
+        frame = frames[0]
+        region = self.annotations["frames"][0]["head_bounds_px"]
+        background = mask.empty_background(frames)
+        everything = ((0.0, 0.0), (0.0, 1.0), 0.0, 3.0)    # the head side is all of the image below row 0
+        nothing = ((0.0, 0.0), (0.0, -1.0), 0.0, 3.0)      # the head side is above the image: nothing removed
+        self.assertEqual(mask.cut_leaks(frame, region, None, everything, background, self.camera), 0)
+        self.assertGreater(mask.cut_leaks(frame, region, None, nothing, background, self.camera), 0)
+        low_ceiling = ((0.0, 0.0), (0.0, -1.0), 0.0, -0.5)   # nothing removed by the line, everything by the ceiling
+        self.assertEqual(mask.cut_leaks(frame, region, None, low_ceiling, background, self.camera), 0)
         # Without an empty room to compare with, the cut is never counted as covering.
         self.setUp()
         frames = self.cut_session(((-0.15, 2.1, 0.70), (0.05, 2.1, 0.70)))[:-1]
@@ -224,7 +234,7 @@ class ReplayTests(unittest.TestCase):
         pose, status = replay(self.bundle())
         self.assertEqual(status, "supported_pose")
         self.assertEqual(pose["joints_room"][0]["lift"], "stereo")
-        self.assertEqual(replay(self.bundle(luma=10)), (None, "unusable_rgb"))
+        self.assertEqual(replay(self.bundle(luma=3)), (None, "unusable_rgb"))
         self.assertEqual(replay(self.bundle(depth=bytes(640 * 400 * 2))), (None, "unusable_depth"))
         row["detections"].append({"id": "rival", "class": "person", "score": 0.55,
                                   "box_xyxy": [8.0, 12.0, 90.0, 65.0], "keypoints": None})

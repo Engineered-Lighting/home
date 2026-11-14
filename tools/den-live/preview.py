@@ -30,15 +30,40 @@ LEASE_S = 1.0
 # The entry rule (spine decision 4, the owner's ruling): one confident yes lights. A later answer confirms it, starts
 # the patience that ends it (phone, screen, closed book), or ends it at once (none or several people in the stills).
 ENTRY_ANSWERS = 1
-# The keep rule's time hysteresis (contract 10, "For 04"): both sofa sockets sit within 3 degrees of side-on, so a
-# fixture lit for someone stays theirs through a facing refusal that hasn't lasted this long.
-KEEP_HOLD_S = 1.0
 # The gap hold (plan 05 section 3.5, contract 4): the camera's newest frame can go 1.5-2.4 s without changing, about 5
 # times a minute. A spot already lit stays lit while its person's newest fresh frame is at most this old, the same 3.0 s
 # at which contract 2 ends the camera epoch; keep-lit goes on through the gap. Lighting still needs a pose at most
 # POSE_AGE_S old, and evidence on a fresh frame (standing, leaving, a second person) darkens at once.
 GAP_HOLD_S = 3.0
 FACING_REFUSALS = ("in_front_of_reader", "no_facing")
+# A light on someone refused for these is in, or can't be checked against, their head or eyes: it's cut at once (one
+# level-0 MOVE), never eased out. Easing is for ordinary hand-offs and exits.
+EYE_REFUSALS = ("beam_through_head", "no_head")
+# The head's clearance from a beam is checked where the head is going as well as where the newest frame saw it: a
+# velocity fitted over the last HEAD_V_FRAMES frames (within HEAD_V_WINDOW_S; with fewer, none: two noisy frames read
+# 9-44 cm a second for a still head), at most HEAD_SPEED_MAX_M_S, carried over a horizon. Keeping a lit beam: the
+# frame's age plus HEAD_LEAD_S, at most HEAD_LEAD_MAX_S. Admitting a fixture, rising in place or handing over: the age
+# plus ADMIT_LEAD_S, at most ADMIT_LEAD_MAX_S, because that beam will stay. Through a camera gap: the gap's age plus
+# HEAD_LEAD_S, with GAP_DRIFT_M_S of extra margin for each second of gap.
+HEAD_V_FRAMES = 4
+HEAD_V_WINDOW_S = 2.5
+HEAD_SPEED_MAX_M_S = 1.0
+HEAD_LEAD_S = 0.4
+HEAD_LEAD_MAX_S = 0.8
+ADMIT_LEAD_S = 1.0
+ADMIT_LEAD_MAX_S = 1.5
+GAP_DRIFT_M_S = 0.01
+# The clearance is to each eye as well as to den-core's head point (the face joints' median, ears included, about 3 cm
+# behind the eyes): the eye keypoints, or without them the head point this far along the facing.
+EYES_AHEAD_M = 0.03
+# A seated reader can slide along the sofa, across their facing, faster than a 2.6 frame-a-second camera and its lag
+# can follow (40 cm a second covers 30 cm before a cut lands). So a beam must also clear the head and the eyes moved
+# this far to either side. In the reading sim a sideways reach of 25 cm keeps a lean-then-slide's closest pass at 12-15 cm
+# with no time under 12 cm, at about half a cut and a second of dark more a session; 15 cm costs nothing and keeps it
+# at 10-11 cm.
+SLIDE_REACH_M = 0.25
+# After a cut for the head or the eyes, the fixture isn't admitted again for this long: no cut-and-relight cycles.
+CUT_HOLD_S = 1.5
 # The direction's choice hysteresis (lighting-direction note): a dark pre-aim moves at most once a second, and while the
 # person is on their feet only for a torso move of more than this.
 PRE_AIM_STANDING_M = .3
@@ -52,6 +77,22 @@ RECOVERABLE = ("task_released", "task_ending")
 THROUGH_ANOTHER_HEAD = "beam_through_another_head"   # den-core eye's own is beam_through_head
 CONTROL_KEYS = ("on", "stopped", "stop_counter")
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
+
+
+def fitted_velocity(frames):
+    """The head's velocity from (capture_mono, xyz) frames: the least-squares slope on each axis, at most
+    HEAD_SPEED_MAX_M_S. None if the frames span no time."""
+    times = [t for t, _ in frames]
+    mean_t = sum(times) / len(times)
+    spread = sum((t - mean_t) ** 2 for t in times)
+    if spread <= 0:
+        return None
+    means = [sum(p[i] for _, p in frames) / len(frames) for i in range(3)]
+    velocity = [sum((t - mean_t) * (p[i] - means[i]) for t, p in frames) / spread for i in range(3)]
+    speed = math.sqrt(sum(c * c for c in velocity))
+    if speed > HEAD_SPEED_MAX_M_S:
+        velocity = [c * HEAD_SPEED_MAX_M_S / speed for c in velocity]
+    return velocity
 
 
 class Preview:
@@ -102,9 +143,9 @@ class Preview:
             # glide: the MOVE the board is flying (direction.Glide); ramp: the level curve its train samples;
             # lit_until: the last validity this fixture's light was published with, which an exit never outlasts.
             self.rows[name] = dict(row, profile=profile, ranges=ranges, current=current, level=0.0,
-                                   pending=None, motion=None, move=None, token=None, keep_at=0.0,
+                                   pending=None, motion=None, move=None, token=None, keep_at=0.0, sends=[], cut_at=None, leased_at=None,
                                    target=None, basis=None, job=None, reason="waiting_for_tracking", pre_at=None,
-                                   eye_hold=None, glide=None, ramp=None, ramp_at=None, goal=0.0, exiting=None,
+                                   glide=None, ramp=None, ramp_at=None, goal=0.0, exiting=None,
                                    lit_until=None, ended_at=None, dip=None, arrive_level=None,
                                    lit_subject=None, step_at=None, step_s=direction.level_step_s(profile),
                                    timed=timed_codec and direction.capabilities(profile)["timed_move"],
@@ -129,6 +170,7 @@ class Preview:
         self.ambient = direction.Ambient()
         self.standby = None   # the runner-up for the lit person, aimed dark at their page
         self.admitted = {}    # this evaluation's other admitted fixtures: {name: (eye result, joints)}
+        self.cut = {}         # this evaluation's lights in (or unchecked against) a head or eyes: {name: reason}
         self.latest_decision = self.latest = self.problem = None
         self.context_signature, self.context_since = None, self.clock()
         self.counts = {"snapshots": 0, "refused": 0, "trace_errors": 0}
@@ -313,6 +355,13 @@ class Preview:
         head = published_head(track) or body.head(joints)   # contract 2's head_point_m, perception's
         if head and not body.head(joints):
             joints["nose"] = [*head, 1.0]
+        before = self.track if self.track and self.track.get("track_id") == key[2] else None
+        frames = [(c, h) for c, h in (getattr(self, "head_frames", None) if before else None) or []
+                  if c > captured - HEAD_V_WINDOW_S]
+        if head:
+            frames.append((captured, tuple(head)))
+        self.head_frames = frames[-HEAD_V_FRAMES:]
+        head_v = fitted_velocity(self.head_frames) if len(self.head_frames) >= HEAD_V_FRAMES else None
         self.captured = captured
         self.track_until, self.hold_until = deadline, hold
         # Contract 2's seated, published once by perception: the episode starts at its since_mono, the same instant
@@ -331,16 +380,20 @@ class Preview:
         # and out of "in front of you" by the shoulders' frame-to-frame swing.
         facing = self.facing.update(captured, body.facing(joints), seated)
         shoulders = body.shoulder_mid(joints) or head
+        eyes = [list(joints[name][:3]) for name in ("left_eye", "right_eye")
+                if joints.get(name) and len(joints[name]) >= 4 and joints[name][3] >= 0.5]
+        if not eyes and head and facing:
+            eyes = [[head[0] + EYES_AHEAD_M * facing[0], head[1] + EYES_AHEAD_M * facing[1], head[2]]]
         target, basis = shoulders, "torso"
         if seated:
             # The page, not the wrists: the aim filter's settled median, which a page turn never moves.
             fallback, fallback_basis = body.task_point(joints, facing, self.seat_mark)
-            page = direction.page_point(joints, self.settings["page_lift"])
+            page = direction.page_point(joints, self.settings["page_up_m"])
             self.shift.shift_m, self.shift.hold_s = self.settings["shift_m"], self.settings["shift_hold_s"]
             target, basis = self.shift.update(captured, page, fallback, fallback_basis, self._lit_for(key[2]))
             self.target_basis = basis
         self.track = {"track_id": key[2], "head": head, "shoulder_mid": shoulders, "facing": facing,
-                      "target": target, "basis": basis, "seated": seated}
+                      "target": target, "basis": basis, "seated": seated, "head_v": head_v, "eyes": eyes}
 
     def inference(self, reply):
         with self.lock:
@@ -381,20 +434,27 @@ class Preview:
         return self.episode.deadline(self.settings["phone_patience_s"])
 
     def _eye(self, name, row, person, kept):
-        """den-core's eye rule for this fixture, with the direction's spatial hysteresis on glare: a fixture lit for this
-        person is refused for its beam's centre passing the head only once it's inside GLARE_KEEP_M (admission keeps
-        den-core's 0.15 m), so a few centimetres of head jitter can't flip it."""
+        """den-core's eye rule for this fixture. Admission is den-core's: nothing new lights in front of the reader. A
+        fixture already lit for this person keeps its job however they turn (the owner, 2026-11-14: turning to face a
+        light that's on is fine), and is refused for its beam's centre passing the head only once that's inside
+        GLARE_KEEP_M (admission keeps den-core's 0.15 m), so head jitter can't flip it. The head and the eyes are also
+        checked on the beam as it points (_beam_clear), whichever way the reader faces."""
         eye = self.core.eye
         result = eye.evaluate(name, row, person, person["target"], kept)
-        if kept and result.reason == "beam_through_head":
+        if kept and result.reason in ("beam_through_head", "in_front_of_reader", "no_facing") and person.get("head"):
             aim = eye.aim
-            reader = aim.Reader(tuple(person["shoulder_mid"]), tuple(person["facing"][:2]) + (0.0,), "shoulders",
+            facing = person.get("facing")
+            if not facing:   # facing doesn't matter to a lit light: any horizontal direction will do for den-core
+                facing = (1.0, 0.0)
+            reader = aim.Reader(tuple(person["shoulder_mid"]), tuple(facing[:2]) + (0.0,), "shoulders",
                                 tuple(person["head"]), "pose", tuple(person["target"]))
             fixture = aim.Fixture(name, tuple(row["aim_origin_m"]), tuple(row["horizontal_world_reference"]),
                                   dict(aim.DEFAULT_LIMITS))
             held = aim.evaluate_fixture(fixture, reader, dataclasses.replace(
-                eye._KEEP, head_clearance_m=direction.GLARE_KEEP_M))
-            result = held if held.ok else result
+                eye._KEEP, head_clearance_m=direction.GLARE_KEEP_M, min_behind_cos=-1.0))
+            # A facing refusal (in front, or no facing) never stands for a lit fixture: it gives way to what the check
+            # without facing finds, so a beam through the head is still beam_through_head, and cut.
+            result = held if held.ok or result.reason in FACING_REFUSALS else result
         return result
 
     def _candidate(self, person, now=None):
@@ -402,21 +462,24 @@ class Preview:
         now = self.clock() if now is None else now
         candidates, reasons, joints = {}, {}, {}
         incumbent = pre_aimed = None
+        self.cut = {}
         for name, row in self.rows.items():
             # An exiting fixture is never the incumbent: a refused light that's fading out can't win its job back
             # in the middle of the crossfade (that was a hand-off ping-pong).
             kept = row["job"] == person["track_id"] and row["exiting"] in (None, *RECOVERABLE) and (
                 row["token"] is not None or self._lighting(row))
-            result = self._eye(name, row, person, kept)
-            if not kept:
-                row["eye_hold"] = None
-            elif result.ok:
-                row["eye_hold"] = (now, person["facing"])
-            elif result.reason in FACING_REFUSALS and row["eye_hold"] and now - row["eye_hold"][0] < KEEP_HOLD_S:
-                # Facing jitter: judge the lit fixture by the last facing that kept it, until the refusal has lasted
-                # KEEP_HOLD_S.
-                held = self._eye(name, row, dict(person, facing=row["eye_hold"][1]), kept)
-                result = held if held.ok else result
+            result = self._eye(name, row, person, kept)   # a lit fixture is never refused for facing (_eye)
+            if row["job"] == person["track_id"] and self._lighting(row):
+                # Any light on this person (rising, lit, holding, crossfading or leaving) is judged by the keep rule's
+                # head and eye margins, and by the head's clearance on the beam as it points now. den-core checks the
+                # line to the page, but a rise in place, the hold without lit travel and a standby's hand-over all
+                # light a beam pointing up to 8 degrees off that line. Failing is a cut at once (_evaluate).
+                safe = result if kept else self._eye(name, row, person, True)
+                if not self._beam_clear(row, person):   # whatever den-core refused it for first
+                    safe = self.core.eye.aim.Candidate(name, False, "beam_through_head")
+                if not safe.ok and safe.reason in EYE_REFUSALS:
+                    self.cut[name] = reasons[name] = safe.reason
+                    continue
             if not result.ok:
                 reasons[name] = result.reason
                 continue
@@ -435,6 +498,16 @@ class Preview:
             if any(abs(a - b) > 18000 for a, b in zip(target, row["current"])):
                 reasons[name] = "route_over_180"
                 continue
+            if not kept:
+                # Admission takes keep's test (the head and each eye, along their path), on the beam as it will be
+                # aimed and at admission's 15 cm, so nothing is admitted that keep would cut at once. A fixture cut for
+                # the head or the eyes waits CUT_HOLD_S before it's admitted again.
+                if row["cut_at"] is not None and now - row["cut_at"] < CUT_HOLD_S:
+                    reasons[name] = "cut_hold"
+                    continue
+                if not self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M, target, self._admit_horizon()):
+                    reasons[name] = "beam_through_head"
+                    continue
             candidates[name], joints[name] = result, target
             if kept:
                 incumbent = name
@@ -443,7 +516,15 @@ class Preview:
         # A lit fixture keeps its job (den-core's rule); with none lit, the one already pre-aimed for this person keeps
         # its pre-aim while it's admitted, so the dark aim doesn't hop between two near-equal sockets.
         mine = incumbent or pre_aimed
-        selected = core.share.pick_for_person(candidates, self.rows, person["target"], mine) if candidates else None
+        pool = candidates
+        if incumbent is not None and self._outgrown(self.rows[incumbent], person):
+            # The page has left a lit fixture that can't follow it lit: a dark one already on it takes the job.
+            ready = {name: c for name, c in candidates.items()
+                     if name != incumbent and self._ready(self.rows[name], person)}
+            if ready:
+                pool, mine = ready, None
+                reasons[incumbent] = "handed_on"
+        selected = core.share.pick_for_person(pool, self.rows, person["target"], mine) if pool else None
         self.admitted = {name: (candidates[name], joints[name]) for name in candidates if name != selected}
         return selected, joints.get(selected), reasons
 
@@ -464,7 +545,7 @@ class Preview:
         for row in self.rows.values():
             self._advance(row, now, task and directing)
         chosen, target, reasons = None, None, {}
-        self.admitted = {}
+        self.admitted, self.cut = {}, {}
         if held:
             if task:
                 chosen = next((name for name, row in self.rows.items() if row["job"] == person["track_id"]
@@ -483,11 +564,31 @@ class Preview:
             self.decision_seq += 1
             self.latest_decision = {"version": "decision/v3", "decision_id": f"{self.epoch}-{self.decision_seq}",
                                     "actuation": "shadow", "subject": subject, "proposal": diagnostic}
+        if person is not None and directing:
+            # Every beam the board emits, whatever den-core says and whether or not a candidate was chosen (a task's
+            # fade-out with pre-aim off, the leave fade), clears the head and the eyes, or is cut at once. Through a
+            # camera gap it's judged from the last frame, the head carried on its path for the gap's age, with
+            # GAP_DRIFT_M_S more margin for each second of gap.
+            gap = self._age() if held else 0.0
+            clearance = direction.AIM_KEEP_M + GAP_DRIFT_M_S * gap
+            horizon = gap + HEAD_LEAD_S if held else None
+            for name, row in self.rows.items():
+                if (name not in self.cut and self._lighting(row)
+                        and not self._beam_clear(row, person, clearance, horizon)):
+                    self.cut[name] = "beam_through_head"
+                elif name not in self.cut and self._lighting(row) and not self._others_clear(row):
+                    self.cut[name] = THROUGH_ANOTHER_HEAD   # someone else's head in the beam as it points
         # The room's glow follows the task light: it dims a beat after the spot starts and comes back as it ends.
         self.ambient.direct(directing and task and chosen is not None, self.settings, now)
         standby = self._standby(chosen, task, held, person) if directing else None
         for name, row in self.rows.items():
             if not directing:
+                continue
+            if name in self.cut and self._lighting(row):
+                # In (or unchecked against) the reader's head or eyes: dark at once, whatever it's doing. Never eased.
+                self._release(name, row, now, self.cut[name])
+                row["cut_at"] = now
+                self._play(name, row, now, held)
                 continue
             if name != chosen or not task:
                 if self._lighting(row) and (person is None or row["job"] != person["track_id"]
@@ -509,8 +610,8 @@ class Preview:
             elif name == standby and row["pending"] is None:
                 self._stand_by(name, row, person, now)
             self._play(name, row, now, held)
-            if row["token"] is not None and not row["exiting"] and now >= row["keep_at"]:
-                row["keep_at"] = now + LEASE_S
+            if row["token"] is not None and not row["exiting"] and now >= row["keep_at"] and self._can_send(row, now):
+                row["keep_at"], row["leased_at"] = now + LEASE_S, now
                 self._submit(name, "keep_lit", row["move"]["decision_id"], token=row["token"])
             if (name not in (chosen, standby) and row["glide"] is None and row["pending"] is None
                     and not row["exiting"] and (
@@ -567,13 +668,20 @@ class Preview:
             if (not person["seated"] and row["target"] is not None
                     and math.dist(row["target"], person["target"]) <= PRE_AIM_STANDING_M):
                 return
+            if not self._can_send(row, now):
+                return
             self._move(name, row, target, 0.0, "dark", now, person, "pre_aim")
             return
         goal = self._goal(row, person)
         if not lit:
             if glide:
                 return   # landing first (P3 holds a MOVE that arrives during a move); it rises once it's there
-            if target != effective_target and not self._in_beam(row, person["target"]):
+            if target != effective_target and not (self._in_beam(row, person["target"]) and self._clear(
+                    row, person, self.core.eye.HEAD_CLEARANCE_M, None, self._admit_horizon())):
+                # Pointing elsewhere, or near the page but with the beam as it points too close to the head: a dark
+                # move to the target den-core's eye rule cleared, then the rise.
+                if not self._can_send(row, now):
+                    return
                 if row["timed"]:
                     # One timed MOVE: dark on the way, blooming from dark on arrival (the board starts the fade then).
                     row.update(goal=goal, ended_at=None)
@@ -587,7 +695,8 @@ class Preview:
             # Aimed, or near enough that the page is already in the beam: rise now, where it points. A page that's off
             # centre is settled onto by one lit glide once the rise is done.
             # Aimed: rise. A hand-off (another fixture fading out for this person) rises over the crossfade.
-            handoff = any(other is not row and other["exiting"] and other["job"] == person["track_id"]
+            # (Any other fixture lit for this person is leaving: it isn't chosen, whichever the loop reaches first.)
+            handoff = any(other is not row and other["job"] == person["track_id"] and self._lighting(other)
                           for other in self.rows.values())
             fade = self.settings["crossfade_s" if handoff else "fade_in_s"]
             row.update(goal=goal, job=person["track_id"], target=person["target"], basis=person["basis"],
@@ -598,8 +707,15 @@ class Preview:
             fade = self.settings["crossfade_s"] if back else fade
             # A rise's first step goes with the yes: the bloom starts one step in, already visible.
             start = now - row["step_s"] if curve == "ease_out" and not back else now
+            # A hand-off keeps the page's light whole with the other fixture's fall: a train eases the light itself;
+            # a timed board rises on its own ease_out against a fall on ease_in_out twice as long (direction.CROSSFADE).
+            space = "light" if handoff and not back and not row["timed"] else "level"
+            if handoff and not back and row["timed"]:
+                # Half the old fixture's fall, which can't outlast the validity its light was published with.
+                curve, fall = direction.CROSSFADE["in"], self._fall(row, person, now)
+                fade = min(fade, fall / direction.CROSSFADE["out_x"])
             row["ramp"] = direction.Ramp(row["level"], goal, fade, "ease_in_out" if back else curve, start,
-                                         "crossfade_in" if handoff or back else "fade_in")
+                                         "crossfade_in" if handoff or back else "fade_in", space)
             return
         if target != effective_target:
             if glide and not row["profile"].get("retarget_mid_move"):
@@ -607,6 +723,15 @@ class Preview:
             ramp = row["ramp"]
             if ramp is not None and ramp.end > ramp.start and not ramp.done(now):
                 return   # a rise finishes before the glide: one change at a time
+            if not row["profile"].get("lit_motion"):
+                # A board that can't move lit makes every re-aim a blink. So it holds its aim while the page is still
+                # well inside the beam; once the page has gone, a standby on its way there takes the job when it lands
+                # (_candidate), as a crossfade. Only with no standby does it fade down, move and rise.
+                if self._in_beam(row, person["target"], direction.DARK_HOLD):
+                    return
+                standby = self.rows.get(self.standby) if self.standby not in (None, name) else None
+                if standby is not None and standby["glide"] is not None and not self._lighting(standby):
+                    return
             travel = self.settings["move_style"] if row["profile"].get("lit_motion") else "dark"
             if travel != "dark":
                 # The owner's path rule (the beam's centre never sweeps through the lit person's head), with the same
@@ -629,7 +754,11 @@ class Preview:
                         math.radians(row["profile"].get("path_margin_cdeg", 0) / 100))
                     if near < self.core.eye.HEAD_CLEARANCE_M + other_margin:
                         travel = "dark"
+                if not self._clear(row, person, direction.AIM_KEEP_M, target):
+                    travel = "dark"   # where it would land lit isn't clear of the eyes
             if travel == "lit":
+                if not self._can_send(row, now):
+                    return
                 # One movement, one command: the glide carries the level the train has reached, and a rise in progress
                 # waits for it to land.
                 timed = {"min_duration_ms": round(self.settings["glide_min_s"] * 1000), "fade_ms": 0,
@@ -648,8 +777,22 @@ class Preview:
             row["ramp"] = direction.Ramp(row["level"], goal, self.settings["crossfade_s"], "ease_in_out", now, "level")
         row.update(job=person["track_id"], target=person["target"], basis=person["basis"])
 
-    def _in_beam(self, row, point):
-        """The beam as it points now has `point` well inside it: within 80 % of half its FWHM."""
+    def _fall(self, row, person, now):
+        """How long the other fixture lit for this person can take to fall in a hand-off on a timed board: twice the
+        crossfade, within EXIT_MAX_S and its light's published validity (or what's left of a fall it's already in)."""
+        fall = min(direction.EXIT_MAX_S, direction.CROSSFADE["out_x"] * self.settings["crossfade_s"])
+        for other in self.rows.values():
+            if other is row or other["job"] != person["track_id"] or not self._lighting(other):
+                continue
+            ramp = other["ramp"]
+            if other["exiting"] and ramp is not None:
+                fall = min(fall, max(0.0, ramp.started + ramp.duration - now))
+            elif other["lit_until"] is not None:
+                fall = min(fall, max(0.0, other["lit_until"] - now))
+        return fall
+
+    def _in_beam(self, row, point, fraction=.8):
+        """The beam as it points now has `point` well inside it: within `fraction` of half its FWHM."""
         joints = self.core.joints
         aim = joints.direction(row["current"][0] / 100, row["current"][1] / 100, row["horizontal_world_reference"])
         to = [point[i] - row["aim_origin_m"][i] for i in range(3)]
@@ -658,7 +801,106 @@ class Preview:
             return False
         cos = sum(aim[i] * to[i] for i in range(3)) / length
         half = row["profile"].get("beam_fwhm_deg", 20.0) / 2
-        return math.degrees(math.acos(max(-1.0, min(1.0, cos)))) <= .8 * half
+        return math.degrees(math.acos(max(-1.0, min(1.0, cos)))) <= fraction * half
+
+    def _outgrown(self, row, person):
+        """A lit fixture that can't move lit, whose page has left the middle of its beam."""
+        return (not row["profile"].get("lit_motion") and self._lighting(row) and not row["exiting"]
+                and row["glide"] is None and not self._in_beam(row, person["target"], direction.DARK_HOLD))
+
+    def _beam_clear(self, row, person, clearance=None, horizon=None):
+        """Every beam the board emits clears the head and the eyes by AIM_KEEP_M (or `clearance`), on its aim now. A MOVE
+        still flying dark is judged where it will light, at its landing aim. A dark fixture with nothing in flight
+        emits nothing."""
+        clearance = direction.AIM_KEEP_M if clearance is None else clearance
+        glide = row["glide"]
+        if row["level"] > 0:
+            return self._clear(row, person, clearance, None, horizon)
+        landing = glide is not None and (row["arrive_level"] or (row["ramp"] is not None and row["ramp"].sent
+                                                                 and row["ramp"].end > 0))
+        if landing:
+            return self._clear(row, person, clearance, glide.target, horizon)
+        return True
+
+    def _others_clear(self, row):
+        """Every other person's head is out of the beam the board emits, on its aim now (or a dark flight's landing),
+        by the direction's keep clearance: their heads are checked on the line to the page at admission (_candidate),
+        and here on the beam as it actually points."""
+        if not self.others:
+            return True
+        if row["level"] > 0:
+            joints = row["current"]
+        elif row["glide"] is not None and (row["arrive_level"] or (row["ramp"] is not None and row["ramp"].sent
+                                                                    and row["ramp"].end > 0)):
+            joints = row["glide"].target
+        else:
+            return True
+        aim = self.core.joints.direction(joints[0] / 100, joints[1] / 100, row["horizontal_world_reference"])
+        for other in self.others:
+            to = [other["head"][i] - row["aim_origin_m"][i] for i in range(3)]
+            along = sum(aim[i] * to[i] for i in range(3))
+            gap = (math.sqrt(sum(c * c for c in to)) if along <= 0
+                   else math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))))
+            if gap < direction.GLARE_KEEP_M:
+                return False
+        return True
+
+    def _ready(self, row, person):
+        """A dark fixture already pointing at the page (a standby that has landed), its beam as it points clearing the
+        head by admission's margin: it can take the job as a crossfade."""
+        return (not self._lighting(row) and row["glide"] is None and row["pending"] is None
+                and self._in_beam(row, person["target"], direction.DARK_HOLD)
+                and self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M, None, self._admit_horizon()))
+
+    def _age(self):
+        return max(0.0, self.clock() - self.captured) if self.captured is not None else 0.0
+
+    def _admit_horizon(self):
+        """How far ahead a beam that's about to light is checked against the head's path."""
+        return min(ADMIT_LEAD_MAX_S, self._age() + ADMIT_LEAD_S)
+
+    def _clear(self, row, person, clearance, joints=None, horizon=None):
+        """The beam as the fixture points now (its joints mid-glide, or `joints`) passes the head with at least
+        `clearance`: the distance from the beam's centre ray to den-core's head point and to each eye, where the newest
+        frame saw them and along their fitted path for `horizon` seconds (by default a lit beam's: the frame's age plus
+        HEAD_LEAD_S, at most HEAD_LEAD_MAX_S). False without a head."""
+        head = person.get("head")
+        if not head:
+            return False
+        joints = row["current"] if joints is None else joints
+        aim = self.core.joints.direction(joints[0] / 100, joints[1] / 100, row["horizontal_world_reference"])
+        points = [head] + list(person.get("eyes") or [])
+        heads = list(points)
+        velocity = person.get("head_v")
+        if horizon is None:
+            horizon = min(HEAD_LEAD_MAX_S, self._age() + HEAD_LEAD_S)
+        if velocity and horizon > 0:
+            heads += [[point[i] + velocity[i] * horizon * k for i in range(3)]
+                      for point in points for k in (.25, .5, .75, 1.0)]
+        facing = person.get("facing")
+        if person.get("seated") and facing and SLIDE_REACH_M > 0:
+            side = (-facing[1], facing[0], 0.0)   # along the sofa, where a seated reader slides
+            heads += [[point[i] + sign * SLIDE_REACH_M * side[i] for i in range(3)]
+                      for point in points for sign in (1, -1)]
+        for point in heads:
+            to = [point[i] - row["aim_origin_m"][i] for i in range(3)]
+            along = sum(aim[i] * to[i] for i in range(3))
+            gap = (math.sqrt(sum(c * c for c in to)) if along <= 0
+                   else math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))))
+            if gap < clearance:
+                return False
+        return True
+
+    @staticmethod
+    def _can_send(row, now):
+        """The firmware's radio rule for a real fixture (not a fictional one): at most RADIO_PER_S commands in any
+        second, Stop and keep-lit included. The direction's own commands wait their turn and take one slot fewer, so a
+        Stop, a release or a cut (dark at once) never has to be a third command in a second.
+        Those, and an exit's fade (the light going: dark within a second of standing), never wait, but they count. A
+        hand-off's fall waits like the rise it's paired with."""
+        if row["profile"].get("fictional"):
+            return True
+        return sum(1 for t in row["sends"] if t > now - 1.0 + 1e-9) < direction.RADIO_PER_S - 1
 
     def _standby(self, chosen, task, held, person):
         """The runner-up for the lit person: the best other admitted fixture (the same pick, keeping the current one)."""
@@ -680,6 +922,8 @@ class Preview:
         if (row["reason"] == "standby" and row["target"] is not None
                 and math.dist(row["target"], person["target"]) <= STANDBY_M):
             return
+        if not self._can_send(row, now):
+            return
         self._move(name, row, joints, 0.0, "dark", now, person, "standby")
 
     def _exit(self, name, row, now, reason, *, handoff=False, ending=None, leaving=False):
@@ -687,8 +931,13 @@ class Preview:
         by the light's last published validity, so an exit never keeps a beam on longer than a snapshot promised. A
         planned end (ending: the task's deadline) starts early enough to be dark at it. Off, Stop, expiry and a zero
         fade stay instant."""
-        fade = min(direction.EXIT_MAX_S,
-                   self.settings["crossfade_s" if handoff else "leave_fade_s" if leaving else "fade_out_s"])
+        # Leaving, a real board takes leave_fade_board_s: its send path uses up bar C's second (plan 05).
+        leave = "leave_fade_s" if row["profile"].get("fictional") else "leave_fade_board_s"
+        fade = min(direction.EXIT_MAX_S, self.settings["crossfade_s" if handoff else leave if leaving else "fade_out_s"]
+                   * (direction.CROSSFADE["out_x"] if handoff and row["timed"] else 1))
+        if row["leased_at"] is not None:
+            # No keep-lit goes in an exit, so it ends inside the board's lease from the last thing that renewed it.
+            fade = min(fade, row["leased_at"] + direction.EXIT_MAX_S - now)
         bound = row["lit_until"] if ending is None else min(row["lit_until"] or ending, ending)
         joins = row["timed"] and row["join"]
         too_short = fade <= 0 if row["timed"] else fade < 2 * row["step_s"]
@@ -699,10 +948,12 @@ class Preview:
             if ending is None or row["glide"] is not None:
                 self._release(name, row, now, reason)
             return
-        # The curves: a crossfade eases in and out; an exit lets most of the light go first (ease_out).
+        # The curves: a crossfade eases in and out (in light on a train; on a timed board its own ease_in_out over
+        # twice the rise); an exit lets most of the light go first (ease_out).
         curve = "ease_in_out" if handoff else "ease_out"
         row["ramp"] = direction.Ramp(row["level"], 0.0, min(fade, bound - now), curve, now,
-                                     "crossfade_out" if handoff else "fade_out")
+                                     "crossfade_out" if handoff else "fade_out",
+                                     "light" if handoff and not row["timed"] else "level")
         row.update(exiting=reason, reason=reason, dip=None, lit_until=bound, ended_at=ending)
 
     def _timed(self, ramp):
@@ -722,19 +973,27 @@ class Preview:
             return
         if row["pending"] is not None:
             return
-        if row["timed"]:
+        if row["timed"] and ramp.space == "level":
             self._play_timed(name, row, now, held, ramp)
-            return
+            return   # a crossfade eases the light, which the board's curves can't: it's a train even on a timed board
         if not row["exiting"] and (row["glide"] is not None or held):
             if last is not None:
                 ramp.paused(now - last)
             return
         if row["step_at"] is not None and now - row["step_at"] < row["step_s"] - 1e-9:
             return   # the train's cap: at most one level MOVE per step_s (direction.level_step_s)
+        if not self._can_send(row, now):
+            return   # the radio rule: every step waits its turn, an exit's included, so a cut has its slot
         code = direction.level_code(ramp.value(now))
         if code != direction.level_code(row["level"]):
-            row["step_at"] = now
             gliding = row["glide"] is not None
+            if (code and row["level"] <= 0 and self.track is not None
+                    and not self._clear(row, self.track, direction.AIM_KEEP_M,
+                                        row["glide"].target if gliding else row["current"])):
+                self._release(name, row, now, "beam_through_head")   # its first step would light into the eyes
+                row["cut_at"] = now
+                return
+            row["step_at"] = now
             self._move(name, row, row["glide"].target if gliding else row["current"], code / direction.LEVEL_CODES,
                        ("lit" if code else "dark") if gliding else "none", now, None, row["reason"],
                        deadline=row["lit_until"] if row["exiting"] else None, step=True, exiting=bool(row["exiting"]),
@@ -757,6 +1016,14 @@ class Preview:
             gliding = row["glide"] is not None
             if not row["exiting"] and (gliding or held):
                 return   # a rise waits for the landing and through a gap, as the train does
+            if not self._can_send(row, now):
+                return
+            if (ramp.end > 0 and row["level"] <= 0 and self.track is not None
+                    and not self._clear(row, self.track, direction.AIM_KEEP_M,
+                                        row["glide"].target if gliding else row["current"])):
+                self._release(name, row, now, "beam_through_head")   # it would light into the head or the eyes
+                row["cut_at"] = now
+                return
             ramp.start, ramp.started, ramp.sent = row["level"], now, True
             if row["exiting"]:
                 ramp.duration = max(0.0, min(ramp.duration, row["lit_until"] - now))
@@ -821,6 +1088,8 @@ class Preview:
         self._submit(name, "aim_move", self.latest_decision["decision_id"], ticket=ticket)
 
     def _submit(self, name, action, decision, *, token=None, ticket=None, receipt=None):
+        row, now = self.rows[name], self.clock()
+        row["sends"] = [t for t in row["sends"] if t > now - 1.0] + [now]   # the radio rule's window (_can_send)
         job = (name, action, decision, token, ticket, receipt)
         if not self.threaded:
             self._record(job)
@@ -917,14 +1186,16 @@ class Preview:
             glide = row["glide"]
             if glide is None or glide.target != target:   # a MOVE to the target being flown joins that flight
                 floor = timed["min_duration_ms"] / 1000 if timed else 0.0
-                row["glide"] = direction.Glide(start, target, row["profile"]["axes"], now, floor)
+                # A real board arrives after its settle (its predicted_ms counts it); a virtual one has no head to settle.
+                settle = 0.0 if row["profile"].get("fictional") else row["profile"].get("settle_s", 0.0)
+                row["glide"] = direction.Glide(start, target, row["profile"]["axes"], now, floor, settle)
                 row["current"] = start
         row["arrive_level"] = None
         if fading:
             # The board fades from what it shows to the MOVE's level, on the ramp's curve. Dark on the way, it blooms
             # from dark when it lands.
             if moving and effective["travel"] != "lit":
-                ramp.start, ramp.started = 0.0, row["glide"].started + row["glide"].duration
+                ramp.start, ramp.started = 0.0, row["glide"].arrival
                 row["level"] = 0.0
             else:
                 row["level"] = ramp.value(now)
@@ -934,6 +1205,8 @@ class Preview:
             row["level"] = level
         lit = level > 0 or row["level"] > 0   # a fade to 0 holds the lease until it ends
         row.update(move=record, token=record["sequence"] if lit else None, keep_at=now + LEASE_S)
+        if lit:
+            row["leased_at"] = now
         if not ticket["step"]:
             person = ticket["person"]
             row.update(target=person and person["target"], basis=person and person["basis"],

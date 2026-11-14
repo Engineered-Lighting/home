@@ -4,6 +4,7 @@ two people with no binding light nothing, and the bulbs get no reading scene whi
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import coordinator_live
 import preview
@@ -28,6 +29,11 @@ class PreviewPeopleTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = tmp.name
+        # The shared test room's F3 sits at the reader's side, so the direction's slide reach (a head 25 cm along the
+        # sofa) is always under its beam: these rules run without it, as test_preview's do; it has a test of its own.
+        reach = patch.object(preview, "SLIDE_REACH_M", 0.0)
+        reach.start()
+        self.addCleanup(reach.stop)
         self.now, self.seq, self.encoded = 100.0, 0, []
         self.rule, self.rule_epoch = seated_rule.Published(), 1
         self.preview = preview.Preview(self.core, binding=base.BINDING, fixtures=base.FIXTURES, state=self.path,
@@ -63,6 +69,17 @@ class PreviewPeopleTest(unittest.TestCase):
             self.track()
             seen.append(self.row()["on"])
         return seen
+
+    def test_a_head_in_the_beam_as_it_points_is_cut_even_off_the_line_to_the_page(self):
+        """Other people's heads are checked on the beam as it actually points, not only on the line to the page: a
+        fixture holding or rising off that line is cut at once when someone's head is in it."""
+        self.light()
+        row = self.preview.rows["F3"]
+        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
+                                         row["horizontal_world_reference"])
+        on_beam = [row["aim_origin_m"][i] + 1.0 * aim[i] for i in range(3)]   # a metre down the beam
+        self.assertFalse(all(self.walk(on_beam, .5)), "someone's head in the beam: dark at once")
+        self.assertEqual(self.preview.rows["F3"]["reason"], preview.THROUGH_ANOTHER_HEAD)
 
     def test_a_passer_by_never_darkens_the_reader(self):
         self.light()

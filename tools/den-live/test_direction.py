@@ -132,6 +132,25 @@ class FadeTest(unittest.TestCase):
         self.assertFalse(ramp.done(12.4))
         self.assertTrue(ramp.done(12.5))
 
+    def test_output_is_the_dimming_curve_and_level_for_output_its_inverse(self):
+        self.assertAlmostEqual(direction.output(.5), .1842, places=4, msg="level 0.5 gives 18 % of full")
+        self.assertEqual((direction.output(0), direction.output(1)), (0.0, 1.0))
+        for level in (0, .01, .05, .08, .3, .5, .9, 1):
+            self.assertAlmostEqual(direction.level_for_output(direction.output(level)), level, places=9)
+
+    def test_a_crossfade_in_light_keeps_the_page_whole(self):
+        """Two complementary ramps eased in light add up to the same light all the way; eased in levels they'd give
+        37 % of it half way."""
+        down = direction.Ramp(1.0, 0.0, 1.2, "ease_in_out", 0.0, "crossfade_out", "light")
+        up = direction.Ramp(0.0, 1.0, 1.2, "ease_in_out", 0.0, "crossfade_in", "light")
+        for k in range(13):
+            t = k * .1
+            self.assertAlmostEqual(direction.output(down.value(t)) + direction.output(up.value(t)), 1.0, places=9)
+        level_down = direction.Ramp(1.0, 0.0, 1.2, "ease_in_out", 0.0, "crossfade_out")
+        level_up = direction.Ramp(0.0, 1.0, 1.2, "ease_in_out", 0.0, "crossfade_in")
+        self.assertLess(direction.output(level_down.value(.6)) + direction.output(level_up.value(.6)), .4)
+        self.assertEqual(up.published(.6)["space"], "light")
+
     def test_level_codes_are_contract_fives(self):
         for level in (0, .002, .5, 1 / 254, 0.99, 1):
             self.assertEqual(direction.level_code(level), math.floor(level * 254 + .5))
@@ -145,53 +164,70 @@ def reader(dx=0.0, wrist_dz=0.0):
 
 
 class AimTest(unittest.TestCase):
-    def test_the_page_is_between_the_hands_toward_the_eyes(self):
-        page = direction.page_point(reader(), .2)
-        self.assertAlmostEqual(page[2], .85 + .2 * (1.28 - .85), places=6)
-        self.assertAlmostEqual(page[1], 1.0, places=6)
-        self.assertGreater(page[0], 1.0, "toward the eyes")
+    def test_the_page_faces_the_eyes_and_the_hold_sets_its_direction(self):
+        eyes = (1.32, 1.0, 1.28)
+        slopes = {}
+        for label, wrist_z in (("chest", .85), ("lap", .55)):
+            joints = reader()
+            joints["left_wrist"][2] = joints["right_wrist"][2] = wrist_z
+            hands = (1.0, 1.0, wrist_z)
+            page = direction.page_point(joints, .05)
+            offset = [page[i] - hands[i] for i in range(3)]
+            sight = [eyes[i] - hands[i] for i in range(3)]
+            self.assertAlmostEqual(math.hypot(*offset), .05, places=6, msg=label)
+            self.assertAlmostEqual(sum(a * b for a, b in zip(offset, sight)), 0.0, places=6,
+                                   msg=f"{label}: up the page is square to the line of sight")
+            self.assertAlmostEqual(page[1], 1.0, places=6)
+            self.assertLess(page[0], 1.0, f"{label}: never back toward the eyes")
+            self.assertGreater(page[2], wrist_z, f"{label}: above the hands")
+            slopes[label] = (page[2] - wrist_z) / (1.0 - page[0])
+        self.assertGreater(slopes["chest"], 1.5 * slopes["lap"], "it rises more at the chest; in the lap it lies ahead")
+        below = reader()
+        for name in ("left_wrist", "right_wrist"):
+            below[name][0] = 1.31
+        self.assertEqual(direction.page_point(below, .05)[:2], (1.31, 1.0), "hands under the eyes: the hands")
         joints = reader()
         del joints["right_wrist"]
-        self.assertIsNone(direction.page_point(joints, .2))
+        self.assertIsNone(direction.page_point(joints, .05))
 
     def test_a_page_turn_never_moves_a_lit_aim_and_a_shift_moves_it_once(self):
         aim = direction.AimFilter(.06, 1.5)
         t = 0.0
         for _ in range(8):
             t += .4
-            settled, _basis = aim.update(t, direction.page_point(reader(), .2), None, None, lit=True)
+            settled, _basis = aim.update(t, direction.page_point(reader(), .05), None, None, lit=True)
         moves = 0
         for k in range(3):   # a page turn: one hand up 15 cm for 0.8 s
             t += .4
-            point = direction.page_point(reader(wrist_dz=.15), .2)
+            point = direction.page_point(reader(wrist_dz=.15), .05)
             now, _basis = aim.update(t, point, None, None, lit=True)
             moves += now != settled
         self.assertEqual(moves, 0, "a page turn never moves the aim")
         changes, last = [], settled
         for _ in range(12):   # shift 30 cm along the sofa and stay
             t += .4
-            now, _basis = aim.update(t, direction.page_point(reader(dx=-.3), .2), None, None, lit=True)
+            now, _basis = aim.update(t, direction.page_point(reader(dx=-.3), .05), None, None, lit=True)
             if now != last:
                 changes.append(t)
                 last = now
         self.assertEqual(len(changes), 1, "one move, not a chase")
-        self.assertLess(math.dist(last, direction.page_point(reader(dx=-.3), .2)), .01)
+        self.assertLess(math.dist(last, direction.page_point(reader(dx=-.3), .05)), .01)
 
     def test_the_first_aim_is_the_median_and_dark_aims_follow_at_once(self):
         aim = direction.AimFilter(.06, 1.5)
-        page = direction.page_point(reader(), .2)
+        page = direction.page_point(reader(), .05)
         aim.update(0.0, (page[0] + .4, page[1], page[2]), None, None, lit=False)   # one wild first frame
         for t in (.4, .8):
             got, _basis = aim.update(t, page, None, None, lit=False)
         self.assertLess(math.dist(got, page), .01, "not locked on the first point")
-        moved = direction.page_point(reader(dx=-.1), .2)
+        moved = direction.page_point(reader(dx=-.1), .05)
         for t in (1.2, 1.6, 2.0):
             got, _basis = aim.update(t, moved, None, None, lit=False)
         self.assertLess(math.dist(got, moved), .01, "dark, it follows within a second")
 
     def test_missing_wrists_hold_the_page_then_fall_back(self):
         aim = direction.AimFilter(.06, 1.5)
-        page = direction.page_point(reader(), .2)
+        page = direction.page_point(reader(), .05)
         aim.update(0.0, page, None, None, lit=True)
         shoulders = (1.2, 1.0, .7)
         got, basis = aim.update(1.0, None, shoulders, "shoulders", lit=True)

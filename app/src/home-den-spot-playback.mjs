@@ -49,62 +49,67 @@ function stampPaint(epoch, seq, lit) {
 
 /* The den spot's motion, drawn the way the fixture makes it (den-live's direction.py; the lighting-direction note).
  *
- * The coordinator sends one MOVE per glide, and the board's planner (C12 v2 plan 5.1) flies both axes along one
- * jerk-limited S-curve on a shared path parameter s, from rest to rest. Each den-virtual-spots-1 row that is moving
- * carries that move as `glide {from_deg, to_deg, start_mono, duration_s, limits: [v, a, j], shape: "scurve-7"}`, and
- * Home evaluates the same curve every frame instead of stepping between 10 Hz snapshots. A row's level comes as the
- * level train's committed steps; Home eases between them over SPOT_EASE_MS, about one coordinator tick.
+ * The coordinator sends one MOVE per glide, and the board's planner flies both axes along one jerk-limited S-curve on
+ * a shared path parameter s, from rest to rest. Each den-virtual-spots-1 row that is moving carries that move as
+ * `glide {from_deg, to_deg, start_mono, duration_s, limits: [v, a, j, d], shape: "scurve-7"}`. Home evaluates the same
+ * curve every frame instead of stepping between 10 Hz snapshots. The curve is the firmware's own (tools/c12v2/
+ * duration.py at 62ea043): an acceleration ramp and a deceleration ramp on one jerk, with the same 100-step bisection.
+ * A timed MOVE's min_duration stretch arrives already in the limits (speed / k, acceleration and deceleration / k^2,
+ * jerk / k^3), so the duration Home computes is the stretched predicted_ms the board reports. A row's level comes as
+ * the coordinator's committed steps, or as its samples of the board's own fade; Home eases between them over
+ * SPOT_EASE_MS, about one coordinator tick.
  *
  * Shared vectors: tools/den-live/fixtures/direction-scurve-vectors.json (den-live's test_direction.py writes them). */
 export const SPOT_EASE_MS = 120;
 const SHAPE = 'scurve-7';
 
-function timeToSpeed(v, a, j) {
-    return v >= a * a / j ? v / a + a / j : 2 * Math.sqrt(v / j);
+function ramp(vp, A, J) {
+    if (vp <= 0) return { vp, A, J, tj: 0, T: 0 };
+    if (vp * J >= A * A) return { vp, A, J, tj: A / J, T: vp / A + A / J };
+    const tj = Math.sqrt(vp / J);
+    return { vp, A, J, tj, T: 2 * tj };
+}
+const rampDistance = r => r.vp * r.T / 2;
+function rampAt(r, t) {
+    if (r.T <= 0 || t <= 0) return [0, 0];
+    if (t >= r.T) return [rampDistance(r), r.vp];
+    const { J, tj, T, vp } = r, alim = J * tj;
+    if (t < tj) return [J * t ** 3 / 6, J * t * t / 2];
+    if (t < T - tj) return [alim / 6 * (3 * t * t - 3 * t * tj + tj * tj), alim * (t - tj / 2)];
+    const rest = T - t;
+    return [rampDistance(r) - vp * rest + J * rest ** 3 / 6, vp - J * rest * rest / 2];
 }
 
-/* A rest-to-rest move of s from 0 to 1 under speed v, acceleration a and jerk j (per second, squared, cubed):
- * den-core's scurve_time for its duration, and the jerk profile integrated for s(t). */
-export function scurve(v, a, j) {
-    if (!(v > 0 && a > 0 && j > 0)) throw RangeError('scurve_limits');
-    let peak = v;
-    if (v * timeToSpeed(v, a, j) > 1) {
+/* A rest-to-rest move of s from 0 to 1 under speed v, acceleration a, jerk j and deceleration d (per second,
+ * squared, cubed and squared; d defaults to a), as the board plans it. */
+export function scurve(v, a, j, d = a) {
+    if (!(v > 0 && a > 0 && j > 0 && d > 0)) throw RangeError('scurve_limits');
+    let up = ramp(v, a, j), down = ramp(v, d, j), peak = v, cruise;
+    if (rampDistance(up) + rampDistance(down) <= 1) cruise = (1 - rampDistance(up) - rampDistance(down)) / v;
+    else {
         let low = 0, high = v;
         for (let i = 0; i < 100; i++) {
             const middle = (low + high) / 2;
-            if (middle * timeToSpeed(middle, a, j) < 1) low = middle; else high = middle;
+            if (rampDistance(ramp(middle, a, j)) + rampDistance(ramp(middle, d, j)) > 1) high = middle; else low = middle;
         }
-        peak = high;
+        peak = low; cruise = 0; up = ramp(low, a, j); down = ramp(low, d, j);
     }
-    const [jerkS, flatS] = peak >= a * a / j ? [a / j, peak / a - a / j] : [Math.sqrt(peak / j), 0];
-    const accelerate = 2 * jerkS + flatS, cruise = Math.max(0, (1 - peak * accelerate) / peak);
-    const segments = [[jerkS, j], [flatS, 0], [jerkS, -j], [cruise, 0], [jerkS, -j], [flatS, 0], [jerkS, j]];
-    const duration = 2 * accelerate + cruise;
-    function integrate(t) {
-        let position = 0, speed = 0, acceleration = 0;
-        for (const [length, jerk] of segments) {
-            if (t <= 0) break;
-            const step = Math.min(length, t);
-            if (step <= 0) continue;
-            position += speed * step + acceleration * step * step / 2 + jerk * step ** 3 / 6;
-            speed += acceleration * step + jerk * step * step / 2;
-            acceleration += jerk * step;
-            t -= step;
-        }
-        return [position, speed];
+    const duration = up.T + cruise + down.T;
+    function at(t) {
+        if (t <= 0) return [0, 0];
+        if (t >= duration) return [1, 0];
+        if (t < up.T) return rampAt(up, t);
+        if (t < up.T + cruise) return [rampDistance(up) + peak * (t - up.T), peak];
+        const [gone, speed] = rampAt(down, duration - t);
+        return [1 - gone, speed];
     }
-    const total = integrate(duration)[0] || 1;
-    return {
-        duration,
-        s: t => t <= 0 ? 0 : t >= duration ? 1 : Math.min(1, Math.max(0, integrate(t)[0] / total)),
-        speed: t => t <= 0 || t >= duration ? 0 : integrate(t)[1] / total,
-    };
+    return { duration, s: t => Math.min(1, Math.max(0, at(t)[0])), speed: t => at(t)[1] };
 }
 
 /* A snapshot row's glide, checked, on Home's clock: startMs is the glide's start as Home's performance clock reads
  * it, and at(nowMs) the [pan_deg, tilt_deg] it has reached. Null when the row has no glide Home can draw. */
 function localGlideCurve(glide, startMs) {
-    if (!glide || glide.shape !== SHAPE || !Array.isArray(glide.limits) || glide.limits.length !== 3
+    if (!glide || glide.shape !== SHAPE || !Array.isArray(glide.limits) || ![3, 4].includes(glide.limits.length)
         || !glide.limits.every(value => finite(value) && value > 0) || !finite(startMs)
         || ![glide.from_deg, glide.to_deg].every(pair => Array.isArray(pair) && pair.length === 2 && pair.every(finite))) return null;
     try {

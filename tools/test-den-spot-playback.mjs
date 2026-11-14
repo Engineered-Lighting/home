@@ -179,8 +179,11 @@ const near = (actual, expected, tolerance, message) => assert.ok(Math.abs(actual
     `${message ?? ''} ${actual} vs ${expected}`);
 
 test('Home draws the S-curve den-live plans with: the shared vectors', () => {
-    assert.equal(vectors.schema, 'den-direction-scurve-vectors-1');
-    for (const { limits, duration_s: duration, samples } of vectors.cases) {
+    assert.equal(vectors.schema, 'den-direction-scurve-vectors-2');
+    assert.ok(vectors.cases.some(c => c.min_duration_s > 0), 'a glide stretched by a timed MOVE floor is among them');
+    assert.ok(vectors.cases.some(c => c.limits[3] !== c.limits[1]), 'and a harder brake than start (d_max)');
+    for (const { limits, duration_s: duration, samples, min_duration_s: floor } of vectors.cases) {
+        if (floor > 0) near(scurve(...limits).duration, Math.max(floor, duration), 1e-8, 'the stretched predicted duration');
         const curve = scurve(...limits);
         near(curve.duration, duration, 1e-8, 'duration');
         for (const [t, s, speed] of samples) {

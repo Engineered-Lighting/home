@@ -738,8 +738,9 @@ class Preview:
         by the light's last published validity, so an exit never keeps a beam on longer than a snapshot promised. A
         planned end (ending: the task's deadline) starts early enough to be dark at it. Off, Stop, expiry and a zero
         fade stay instant."""
-        fade = min(direction.EXIT_MAX_S,
-                   self.settings["crossfade_s" if handoff else "leave_fade_s" if leaving else "fade_out_s"])
+        # Leaving, a real board takes leave_fade_board_s: its send path uses up bar C's second (plan 05).
+        leave = "leave_fade_s" if row["profile"].get("fictional") else "leave_fade_board_s"
+        fade = min(direction.EXIT_MAX_S, self.settings["crossfade_s" if handoff else leave if leaving else "fade_out_s"])
         bound = row["lit_until"] if ending is None else min(row["lit_until"] or ending, ending)
         joins = row["timed"] and row["join"]
         too_short = fade <= 0 if row["timed"] else fade < 2 * row["step_s"]

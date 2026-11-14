@@ -26,6 +26,8 @@ SETTINGS = {
     "fade_in_s": 2.0,             # the spot's rise on a new task: it blooms (visible at once, full in 2 s)
     "fade_out_s": 1.0,            # the spot lets go when the task ends (book closed, phone): no hurry
     "leave_fade_s": 0.3,          # when you stand up or leave, it gets out of the way: dark within 1 s of standing
+    "leave_fade_board_s": 0.0,    # the same on a real board, whose send path (about 0.3 s after detection's 0.6 s)
+                                  # leaves plan 05's bar C (dark within 1.0 s on 4 of 5) no room for a fade: at once
                                   # (Stop, Off and expiry stay instant)
     "crossfade_s": 1.2,           # a hand-off: the old fixture's fall and the new one's rise overlap
     "glide_min_s": 1.0,           # a board with the timed MOVE flies a lit glide no faster than this: the same S-curve,
@@ -40,7 +42,8 @@ SETTINGS = {
     "ambient_restore_s": 1.5,     # when the task ends the room comes back as the spot goes out: no one sits in the dark
 }
 LIMITS = {"page_up_m": (0.0, 0.15), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
-          "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 2.5), "leave_fade_s": (0.0, 1.0), "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
+          "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 2.5), "leave_fade_s": (0.0, 1.0), "leave_fade_board_s": (0.0, 1.0),
+          "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
           "ambient_dim_s": (0.0, 20.0), "ambient_delay_s": (0.0, 5.0), "ambient_restore_s": (0.0, 10.0),
           "shift_m": (0.0, 1.0), "shift_hold_s": (0.0, 10.0)}
 

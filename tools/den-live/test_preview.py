@@ -1096,6 +1096,21 @@ class DirectionTest(PreviewTest):
         self.assertEqual(self.row()["level"], goal)
         self.assertEqual(len(self.moves(since)), 1, "and nothing more is sent for it")
 
+    def test_standing_is_dark_at_once_on_a_real_board(self):
+        """Plan 05's bar C: physically dark within 1.0 s of standing on 4 of 5. Detection and the send path take about
+        0.9 s of it, so a real board goes dark in one level-0 MOVE (leave_fade_board_s 0), while a virtual one keeps
+        its 0.3 s leave fade."""
+        self.timed_board()
+        self.lit_by_direction()
+        since = len(self.encoded)
+        self.now += .25
+        self.track(seated=False)
+        self.assertFalse(self.row()["on"], "dark at once")
+        moves = self.moves(since)
+        self.assertEqual(len(moves), 1)
+        self.assertEqual(moves[0]["effective"]["spot_level"], 0)
+        self.assertIsNone(moves[0]["requested"].get("timed"), "no fade on the board")
+
     def test_no_exit_outlasts_the_lease(self):
         """A fade to dark sends no keep-lit, and the board's lease lapses 3 s after the last one: every exit is at most
         direction.EXIT_MAX_S, and the setting can't ask for more."""
@@ -1131,6 +1146,7 @@ class DirectionTest(PreviewTest):
 
     def test_a_timed_glide_takes_the_gentle_floor_and_an_exit_joins_the_flight(self):
         self.timed_board()
+        self.preview.configure({"leave_fade_board_s": .3})   # a board fade on leaving, as P5 may allow
         self.seat()
         self.frames(6)
         self.read()

@@ -198,8 +198,9 @@ async function unusedPort() {
   return port;
 }
 // The suite runs as two files, so neither nears the touched-harness runner's 180 s per-file limit: this one (part 1:
-// the Serve shell, label CAS and the cross-home card) and test-den-live-serve-browser-part2.mjs (the phone Den's Stop,
-// the label editor and the real coordinator trace), which imports this module with part 2 selected.
+// the Serve shell with the managed HA WebSocket, and the cross-home card) and test-den-live-serve-browser-part2.mjs
+// (label CAS, the phone Den's Stop, the label editor and the real coordinator trace), which imports this module with
+// part 2 selected.
 const PART = globalThis.HOME_DEN_SERVE_PART ?? 1;
 const inPart = (part, ...args) => { if (part === PART) test(...args); };
 
@@ -328,17 +329,21 @@ async function startPreview(config) {
   throw Error('Python preview did not start\n' + stderr);
 }
 
-inPart(1, 'full Serve shell and managed HA WebSocket on a fresh desktop and phone', { timeout: 90000 }, async () => {
+inPart(1, 'full Serve shell and managed HA WebSocket on a fresh desktop and phone', { timeout: 120000 }, async () => {
   for (const mobile of [false, true]) {
     const { page, context } = await openHome(mobile);
     try {
+      // The handshake shares the browser's six HTTP/1.1 connections to this host with the shell's boot requests (and the
+      // JSX compiles in the browser here), so a socket opened mid-boot can wait well past 5 s for one. Let the apartment
+      // engine come up first, then give the handshake 15 s.
+      await page.waitForFunction(() => !!window.__APT_ENGINE, null, { timeout: 60000 });
       assert.equal(await page.locator('[data-look-only], input[placeholder="paste token"], iframe[src*="lighting-review"]').count(), 0);
       const auth = await page.evaluate(() => fetch('/auth/status').then(response => response.json()));
       assert.equal(auth.access, 'serve');
       assert.deepEqual(await context.cookies(), []);
       const pong = await page.evaluate(() => new Promise((resolve, reject) => {
         const socket = new WebSocket('wss://' + location.host + '/proxy/ha/api/websocket');
-        const timer = setTimeout(() => { socket.close(); reject(new Error('HA handshake timed out')); }, 5000);
+        const timer = setTimeout(() => { socket.close(); reject(new Error('HA handshake timed out')); }, 15000);
         socket.onerror = () => { clearTimeout(timer); reject(new Error('HA WebSocket failed')); };
         socket.onmessage = ({ data }) => {
           const value = JSON.parse(data);
@@ -354,7 +359,7 @@ inPart(1, 'full Serve shell and managed HA WebSocket on a fresh desktop and phon
   assert.equal((await request('http://127.0.0.1:' + ordinaryPort + '/')).status, 401);
 });
 
-inPart(1, 'label CAS, exact virtual controls and body rollback gate through the browser origin', { timeout: 90000 }, async () => {
+inPart(2, 'label CAS, exact virtual controls and body rollback gate through the browser origin', { timeout: 90000 }, async () => {
   const initial = { ...fake.control };
   const { page, context } = await openHome(false);
   try {

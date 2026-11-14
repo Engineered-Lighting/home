@@ -11,7 +11,7 @@ a pin update and a release switch. Never edit a release in place. The repo copy 
 | `pilot-20260926` | `installed-oak-capture-20261016.py` | Causal JPEG timing pilot |
 | `pilot-20261111-depth` | `installed-oak-capture-20261111.py` | Measured depth correction (`DEPTH_CORRECTION`) |
 | `pilot-20261114-slim` | `installed-oak-capture-20261114.py` | `/frame-slim.npz` (`den-camera-slim-1`) for den-live across the link |
-| `pilot-20261114-night` | `installed-oak-capture-20261114-night.py` | IR flood in the dark, and the mono plane to den-live (`den-camera-slim-2`) |
+| `pilot-20261114-night` | `installed-oak-capture-20261114-night.py` | With `--night auto` (off by default): the mono plane to den-live in the dark (`den-camera-slim-2`) |
 
 Keep earlier release directories in place: perception-lab releases already on the Jetson read their own
 pinned `capture.py` by path.
@@ -39,19 +39,24 @@ same (`If-None-Match`). Its metadata is the full bundle's, plus `bundle_schema: 
 
 The RGB camera sees nothing in a dark den. The OAK-D Pro's mono cameras are IR-sensitive global-shutter sensors, and
 the camera has an IR flood (940 nm, 0–1500 mA) and an IR dot projector (0–1200 mA). Every earlier release keeps both
-at 0. This release is `pilot-20261114-slim` plus a night switch (`NightSwitch`, `night_step`):
+at 0. This release is `pilot-20261114-slim` plus a night switch (`NightSwitch`, `night_step`), **off unless the service
+is started with `--night auto`**:
 
-- **When.** It reads the RGB preview's mean Y on every bundle with den-live's own too-dark rule: under 40 for 3 s is
-  night, over 60 for 3 s is day; anything between, or one frame the other way, restarts the count. Each camera
-  session starts in day, with both drivers at 0. The journal logs each switch.
-- **At night** the flood is on (`NIGHT['flood']`; the projector stays at `NIGHT['dots']`). A slim GET that says
+- **When.** It reads the RGB preview's mean Y on every bundle with den-live's own too-dark rule
+  (`claude/den-live-lamp`): under 6 for 3 s is night, over 9 for 3 s is day; anything between, or one frame the other
+  way, restarts the count. Each camera session starts in day, with both drivers at 0. The journal logs each switch.
+- **The IR stays off** (`NIGHT['flood']` and `NIGHT['dots']` are 0). Measured on 2026-11-14 with the night probe: on
+  this camera both light the right mono only. The left, which depth is aligned to, gains 1.6% of the right's
+  brightness, so stereo with one lit eye gets worse (61% valid → 54% with the flood, 42% with the dots), and the dots
+  move depth against the registration (they fail its held-out rule). Find out why before raising either.
+- **At night** a slim GET that says
   `X-Den-Bundle-Accept: den-camera-slim-2` gets the night bundle: the slim bundle plus the rectified-left mono plane
   (`left`, 400×640 uint8, the depth's own pixels), with `bundle_omits: ["right"]` and the IR state as `ir` (`mode`,
   `flood`, `dots`, `switches`, `rule`). Its ETag is the frame's with `-n`. The frame the switch happens on is still
   served as slim-1: it was exposed before the change.
 - **Unchanged:** `/frame.npz`, `den-camera-slim-1` for any client that doesn't ask for slim-2 (and for den-live by
   day), and every other path and error, byte for byte (`test_night_release.py` runs both releases' servers side by
-  side). At night `/frame.npz`'s `left` and `right` planes see the flood. `--night off` keeps both drivers at 0.
+  side). With `--night off`, the default, nothing changes at all.
 - **den-live** (`claude/den-live-night`) asks with that header and accepts either slim schema, so it runs on either
   release; on a night frame it detects on the mono plane (mode `infrared`).
 - **The Lab's pin stays at `pilot-20261111-depth`.** No clock check changes.

@@ -10,7 +10,9 @@ says `desk: null`. With it:
 - **light false is the dark rehearsal.** Every move goes with its spot at level 0, and no keep-lit goes. Home still
   shows the virtual spot.
 - **Readback (optional).** `readback` names the board's Home Assistant entities, read every second. Their values are
-  the snapshot's `devices` key, a device row in the trace when they change, and the Stop copy's latch read.
+  the snapshot's `devices` key, a device row in the trace when they change, and the Stop copy's latch read. Nothing
+  configures attribute reporting for 0xFC13 yet, so the values can be old: the Stop copy takes a latch only when Home
+  Assistant saw it change after den-live's own last Resume. The Stop and Resume answers' latch is read fresh.
 The room geometry stays `physical_commands: false`: the desk mapping is a separate setting.
 
 attach() goes on a Preview after it's built and before its first trace row, without changing preview.py: it wraps
@@ -19,6 +21,7 @@ fsynced row to the sender, and adds `devices` to every snapshot the preview publ
 """
 import argparse
 import collections
+import datetime
 import json
 import math
 import re
@@ -111,6 +114,16 @@ def load(folder, fixtures):
     return parse(data, fixtures)
 
 
+def changed_wall(state):
+    """When Home Assistant saw an entity's state change, in wall seconds, or None."""
+    text = state.get("last_changed") if isinstance(state, dict) else None
+    try:
+        when = datetime.datetime.fromisoformat(text)
+    except (TypeError, ValueError):
+        return None
+    return when.timestamp() if when.tzinfo is not None else None
+
+
 def readback_value(field, state):
     """One entity's state as the board reported it: None when unknown."""
     raw = state.get("state") if isinstance(state, dict) else None
@@ -186,7 +199,9 @@ class Desk:
         if changed:
             self.store({"schema": preview_trace.SCHEMA, "kind": "device", "run_id": self.preview.trace.epoch,
                         "fixture_id": self.fixture, "device": self.device, "at_mono": now, "values": dict(values)})
-        self.sender.observe(self.fixture, values.get("stop_latched"))
+        entity = self.desk["readback"].get("stop_latched")
+        self.sender.observe(self.fixture, values.get("stop_latched"),
+                            changed_wall(snapshot.get(entity)) if entity else None)
 
     def devices(self):
         problem = "no readback" if self.poller is None else self.poller.problem

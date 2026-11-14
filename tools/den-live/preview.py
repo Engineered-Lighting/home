@@ -766,6 +766,27 @@ class Preview:
             self.hands[(name, part)] = hand
         return self._hand_record(name)
 
+    def _adopt_aim(self, name, after):
+        """den-live's books follow the hand: where the owner left the fixture (Home's pan and tilt, or else the surface
+        point it was aimed at) becomes its aim, so when the hold ends it's dark where the hand left it, and its next MOVE
+        starts from there. Nothing is sent. A lit row is never re-aimed here (_hold has released it first)."""
+        row = self.rows[name]
+        if self._lighting(row):
+            return
+        if "pan_deg" in after or "tilt_deg" in after:
+            joints = (round(-after.get("pan_deg", -row["current"][0] / 100) * 100),
+                      round(-after.get("tilt_deg", -row["current"][1] / 100) * 100))   # published pan_deg is -cdeg/100
+        elif (after.get("target") or {}).get("point") is not None:
+            try:
+                joints = tuple(map(self.core.joints.to_cdeg, self.core.joints.room_to_joints(
+                    after["target"]["point"], row["aim_origin_m"], row["horizontal_world_reference"])))
+            except ValueError:
+                return
+        else:
+            return
+        row.update(current=tuple(min(hi, max(lo, int(a))) for a, (lo, hi) in zip(joints, row["ranges"])), glide=None,
+                   pre_at=None)
+
     def _hand_record(self, name):
         holds = {part: hand for (fixture, part), hand in self.hands.items() if fixture == name}
         if not holds:
@@ -903,6 +924,7 @@ class Preview:
             if recorded and learn:
                 self.learning.apply(context["key"], learn, event["at_ms"])
             hand = self._hold(event, now)
+            self._adopt_aim(event["fixture_id"], event["after"])
             self._evaluate(now)
             reply = {"ok": recorded, "event_id": event["event_id"], "recorded": recorded,
                      "learned": bool(recorded and learn), "why_not": why if recorded else "log_write_failed",

@@ -148,6 +148,25 @@ class PreviewManualTest(unittest.TestCase):
             self.assertAlmostEqual(got, want, places=6)
         self.assertTrue(self.preview.latest_decision["proposal"]["learned"]["aim"])
 
+    def test_when_the_hold_ends_the_fixture_is_dark_where_the_hand_left_it(self):
+        """The direction chat's rule: no snap back. den-live's books take the hand's aim (Home's pan and tilt, or the
+        surface point), so after the hold it's dark there, and it's re-admitted from there like any other."""
+        name = self.light()
+        row = self.fixtures()[name]
+        sent = len(self.moves(name))
+        pan, tilt = row["pan_deg"] + 10, row["tilt_deg"] - 5
+        self.change(name, {"pan_deg": row["pan_deg"], "tilt_deg": row["tilt_deg"]}, {"pan_deg": pan, "tilt_deg": tilt})
+        self.assertEqual((self.fixtures()[name]["pan_deg"], self.fixtures()[name]["tilt_deg"]), (pan, tilt))
+        self.stand()
+        row = self.fixtures()[name]
+        self.assertEqual((row["on"], row["hand"], row["pan_deg"], row["tilt_deg"]), (False, None, pan, tilt))
+        self.assertEqual(len(self.moves(name)), sent, "nothing was sent: not the hand's aim, not a cut")
+        point = [1.0, 1.5, .4]   # a surface the owner aimed it at, with no angles sent
+        self.change(name, {"target": None}, {"target": {"point": point, "normal": [0, 0, 1]}})
+        expected = [-a / 100 for a in map(self.core.joints.to_cdeg, self.core.joints.room_to_joints(
+            point, self.preview.rows[name]["aim_origin_m"], self.preview.rows[name]["horizontal_world_reference"]))]
+        self.assertEqual([self.fixtures()[name]["pan_deg"], self.fixtures()[name]["tilt_deg"]], expected)
+
     def test_aiming_the_light_somewhere_else_teaches_the_task_nothing(self):
         name = self.light()
         page = list(self.preview.track["target"])

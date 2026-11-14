@@ -4,6 +4,9 @@ The timed MOVE (from v2-b): an aim_move intent's optional `timed: {min_duration_
 bit 4 and puts the two u16s in bytes 10-13 in place of the velocity, with the fade's curve in bits 5-6 (zcl-fc13.md).
 It's refused with a velocity, a fade without set_spot, and a curve without a fade. Firmware before v2-b answers it
 bad_payload, so a sender sends it only to a board that advertises it (c12.get_profile's capabilities.timed_move).
+A timed fade to level 0 during lit travel keeps lit_during_move: the board then fades the spot out while the head flies
+on, instead of masking it dark at once (v2_app.h at 62ea043: moveLit_ is bit 0 and lit_motion, whatever the level, and
+a fade on a move that may be lit starts at once rather than blooming on arrival).
 """
 
 import hashlib
@@ -154,7 +157,9 @@ def _move(intent, profile, seq, source, current_joints, remaining_ms):
             style = "lit" if permitted_lit else "dark"
     if style not in ("lit", "dim", "dark"):
         raise Refusal("unsupported_motion_style")
-    lit = (moving and spot_level > 0 and style == "lit" and permitted_lit
+    timed = intent.get("timed")
+    fading = isinstance(timed, dict) and type(timed.get("fade_ms")) is int and timed["fade_ms"] > 0
+    lit = (moving and (spot_level > 0 or fading) and style == "lit" and permitted_lit
            and mode != 3 and profile.get("lit_motion") is True)
     flags = 0x08
     if lit:

@@ -63,8 +63,8 @@ LEVEL_CODES = 254               # the board's spot level, 0-254 (contract 5's ro
 LEVEL_STEP_S = 0.1
 RADIO_STEP_S = 0.5
 RADIO_PER_S = 2                 # every command a real fixture is sent, per rolling second (the firmware's rule);
-                                # while it's lit the direction keeps one free for a Stop or a release, so a lit
-                                # train steps at most once a second
+                                # the direction keeps one free for a Stop or a cut, so its own commands, a train's
+                                # steps included, go at most once a second
 # A board without lit travel (lit_motion false) holds its aim while the page is within this fraction of half the beam's
 # FWHM (at 0.5 the page keeps 84 % of the beam's centre light), because each re-aim there is a blink.
 DARK_HOLD = 0.5

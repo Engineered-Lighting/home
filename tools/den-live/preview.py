@@ -50,6 +50,9 @@ HEAD_LEAD_S = 0.4
 HEAD_LEAD_MAX_S = 1.0
 HEAD_SPEED_MAX_M_S = 1.5
 HEAD_V_FRAMES_S = (0.05, 1.5)   # two frames this far apart give a velocity
+# The clearance is to the eyes as well as to den-core's head point (the face joints' median, ears included, about 3 cm
+# behind the eyes): the eye and nose keypoints' median, or without them the head point this far along the facing.
+EYES_AHEAD_M = 0.03
 # The direction's choice hysteresis (lighting-direction note): a dark pre-aim moves at most once a second, and while the
 # person is on their feet only for a torso move of more than this.
 PRE_AIM_STANDING_M = .3
@@ -352,6 +355,16 @@ class Preview:
         # and out of "in front of you" by the shoulders' frame-to-frame swing.
         facing = self.facing.update(captured, body.facing(joints), seated)
         shoulders = body.shoulder_mid(joints) or head
+        front = [joints[name][:3] for name in ("left_eye", "right_eye", "nose")
+                 if joints.get(name) and len(joints[name]) >= 4 and joints[name][3] >= 0.5]
+        if front:
+            eyes = [sorted(point[i] for point in front)[len(front) // 2] if len(front) % 2 else
+                    sum(sorted(point[i] for point in front)[len(front) // 2 - 1:len(front) // 2 + 1]) / 2
+                    for i in range(3)]
+        elif head and facing:
+            eyes = [head[0] + EYES_AHEAD_M * facing[0], head[1] + EYES_AHEAD_M * facing[1], head[2]]
+        else:
+            eyes = None
         target, basis = shoulders, "torso"
         if seated:
             # The page, not the wrists: the aim filter's settled median, which a page turn never moves.
@@ -361,7 +374,7 @@ class Preview:
             target, basis = self.shift.update(captured, page, fallback, fallback_basis, self._lit_for(key[2]))
             self.target_basis = basis
         self.track = {"track_id": key[2], "head": head, "shoulder_mid": shoulders, "facing": facing,
-                      "target": target, "basis": basis, "seated": seated, "head_v": head_v}
+                      "target": target, "basis": basis, "seated": seated, "head_v": head_v, "eyes": eyes}
 
     def inference(self, reply):
         with self.lock:
@@ -448,7 +461,7 @@ class Preview:
                 # line to the page, but a rise in place, the hold without lit travel and a standby's hand-over all
                 # light a beam pointing up to 8 degrees off that line. Failing is a cut at once (_evaluate).
                 safe = result if kept else self._eye(name, row, person, True)
-                if safe.ok and not self._clear(row, person, direction.AIM_KEEP_M):
+                if not self._beam_clear(row, person):   # whatever den-core refused it for first
                     safe = self.core.eye.aim.Candidate(name, False, "beam_through_head")
                 if not safe.ok and safe.reason in EYE_REFUSALS:
                     self.cut[name] = reasons[name] = safe.reason
@@ -527,11 +540,22 @@ class Preview:
             self.decision_seq += 1
             self.latest_decision = {"version": "decision/v3", "decision_id": f"{self.epoch}-{self.decision_seq}",
                                     "actuation": "shadow", "subject": subject, "proposal": diagnostic}
+        if person is not None and not held and directing:
+            # Every beam the board emits, whatever den-core says and whether or not a candidate was chosen (a task's
+            # fade-out with pre-aim off, the leave fade), clears the head and the eyes, or is cut at once.
+            for name, row in self.rows.items():
+                if name not in self.cut and self._lighting(row) and not self._beam_clear(row, person):
+                    self.cut[name] = "beam_through_head"
         # The room's glow follows the task light: it dims a beat after the spot starts and comes back as it ends.
         self.ambient.direct(directing and task and chosen is not None, self.settings, now)
         standby = self._standby(chosen, task, held, person) if directing else None
         for name, row in self.rows.items():
             if not directing:
+                continue
+            if name in self.cut and self._lighting(row):
+                # In (or unchecked against) the reader's head or eyes: dark at once, whatever it's doing. Never eased.
+                self._release(name, row, now, self.cut[name])
+                self._play(name, row, now, held)
                 continue
             if name != chosen or not task:
                 if self._lighting(row) and (person is None or row["job"] != person["track_id"]
@@ -540,10 +564,6 @@ class Preview:
                     # darkens at once. So does a lit beam someone else's head has walked into (plan 04): never a
                     # fade in their eyes. Only the normal exits below fade.
                     self._release(name, row, now, reasons.get(name, "task_released"))
-                elif self._lighting(row) and name in self.cut:
-                    # In (or unchecked against) the reader's head or eyes, by the keep rule on where the beam points
-                    # now: dark at once, whatever fade it's in. Never eased.
-                    self._release(name, row, now, self.cut[name])
                 elif self._lighting(row) and not row["exiting"]:
                     # Standing up, seen on a fresh frame: the quick exit; a task that ended with the person still
                     # seated (an answer, the patience): the slow one; another fixture taking the job: the crossfade.
@@ -753,6 +773,18 @@ class Preview:
         return (not row["profile"].get("lit_motion") and self._lighting(row) and not row["exiting"]
                 and row["glide"] is None and not self._in_beam(row, person["target"], direction.DARK_HOLD))
 
+    def _beam_clear(self, row, person):
+        """Every beam the board emits clears the head and the eyes by AIM_KEEP_M, on its aim now. A MOVE still flying
+        dark is judged where it will light, at its landing aim. A dark fixture with nothing in flight emits nothing."""
+        glide = row["glide"]
+        if row["level"] > 0:
+            return self._clear(row, person, direction.AIM_KEEP_M)
+        landing = glide is not None and (row["arrive_level"] or (row["ramp"] is not None and row["ramp"].sent
+                                                                 and row["ramp"].end > 0))
+        if landing:
+            return self._clear(row, person, direction.AIM_KEEP_M, glide.target)
+        return True
+
     def _ready(self, row, person):
         """A dark fixture already pointing at the page (a standby that has landed), its beam as it points clearing the
         head by admission's margin: it can take the job as a crossfade."""
@@ -760,20 +792,21 @@ class Preview:
                 and self._in_beam(row, person["target"], direction.DARK_HOLD)
                 and self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M))
 
-    def _clear(self, row, person, clearance):
-        """The beam as the fixture points now (its joints mid-glide) passes the head with at least `clearance`: the
-        head's distance from the beam's centre ray, where the newest frame saw it and where it's going (HEAD_LEAD_S).
-        False without a head."""
+    def _clear(self, row, person, clearance, joints=None):
+        """The beam as the fixture points now (its joints mid-glide, or `joints`) passes the head with at least
+        `clearance`: the distance from the beam's centre ray to den-core's head point and to the eyes, where the newest
+        frame saw them and where they're going (HEAD_LEAD_S). False without a head."""
         head = person.get("head")
         if not head:
             return False
-        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
-                                         row["horizontal_world_reference"])
-        heads = [head]
+        joints = row["current"] if joints is None else joints
+        aim = self.core.joints.direction(joints[0] / 100, joints[1] / 100, row["horizontal_world_reference"])
+        points = [head] + ([person["eyes"]] if person.get("eyes") else [])
+        heads = list(points)
         velocity = person.get("head_v")
         if velocity and self.captured is not None:
             lead = min(HEAD_LEAD_MAX_S, max(0.0, self.clock() - self.captured) + HEAD_LEAD_S)
-            heads += [[head[i] + velocity[i] * lead * k for i in range(3)] for k in (.5, 1.0)]
+            heads += [[point[i] + velocity[i] * lead * k for i in range(3)] for point in points for k in (.5, 1.0)]
         for point in heads:
             to = [point[i] - row["aim_origin_m"][i] for i in range(3)]
             along = sum(aim[i] * to[i] for i in range(3))
@@ -786,15 +819,13 @@ class Preview:
     @staticmethod
     def _can_send(row, now):
         """The firmware's radio rule for a real fixture (not a fictional one): at most RADIO_PER_S commands in any
-        second, Stop and keep-lit included. The direction's own commands wait their turn, and while the board's light
-        is on they take one slot fewer, so a Stop or a release (dark at once) never has to be a third command in a second.
+        second, Stop and keep-lit included. The direction's own commands wait their turn and take one slot fewer, so a
+        Stop, a release or a cut (dark at once) never has to be a third command in a second.
         Those, and an exit's fade (the light going: dark within a second of standing), never wait, but they count. A
         hand-off's fall waits like the rise it's paired with."""
         if row["profile"].get("fictional"):
             return True
-        on = row["level"] > 0 or row["token"] is not None   # the board's light is on: a Stop may be needed
-        slots = direction.RADIO_PER_S - (1 if on else 0)
-        return sum(1 for t in row["sends"] if t > now - 1.0 + 1e-9) < slots
+        return sum(1 for t in row["sends"] if t > now - 1.0 + 1e-9) < direction.RADIO_PER_S - 1
 
     def _standby(self, chosen, task, held, person):
         """The runner-up for the lit person: the best other admitted fixture (the same pick, keeping the current one)."""

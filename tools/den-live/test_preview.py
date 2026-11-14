@@ -1005,6 +1005,75 @@ class DirectionTest(PreviewTest):
         self.assertTrue(self.preview._clear(row, dict(person, head_v=[-c * speed for c in toward]), .12),
                         "heading away, it does")
 
+    def test_the_clearance_is_to_the_eyes_too(self):
+        """den-core's head point is the face joints' median, ears included, about 3 cm behind the eyes: the keep margin
+        is also measured to the eyes."""
+        self.lit_by_direction()
+        row = self.preview.rows["F3"]
+        person = dict(self.preview.track, head_v=None)
+        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
+                                         row["horizontal_world_reference"])
+        along = sum(aim[i] * (person["head"][i] - row["aim_origin_m"][i]) for i in range(3))
+        on_ray = [row["aim_origin_m"][i] + along * aim[i] for i in range(3)]
+        away = [person["head"][i] - on_ray[i] for i in range(3)]
+        gap = math.sqrt(sum(c * c for c in away))
+        unit = [c / gap for c in away]
+        head = [on_ray[i] + .14 * unit[i] for i in range(3)]    # the head point 14 cm off the beam
+        eyes = [on_ray[i] + .10 * unit[i] for i in range(3)]    # and the eyes 10 cm
+        self.assertTrue(self.preview._clear(row, dict(person, head=head, eyes=None), .12))
+        self.assertFalse(self.preview._clear(row, dict(person, head=head, eyes=eyes), .12), "the eyes are inside 12 cm")
+
+    def test_every_emitting_beam_is_checked_whatever_den_core_says(self):
+        """A light easing out with no candidate chosen (the leave fade with pre-aim off), or one den-core refuses first for
+        another reason (too_far), is still cut at once if its beam points into the head or the eyes."""
+        for case in ("task_end", "too_far"):
+            with self.subTest(case):
+                self.encoded.clear()
+                self.rule, self.rule_epoch = seated_rule.Published(), 1
+                self.preview = self.make_preview()
+                self.preview.configure({"pre_aim": True})
+                self.lit_by_direction()
+                self.preview.configure({"pre_aim": case != "task_end"})
+                evaluate = preview.Preview._eye
+
+                def refuse(owner, name, row, person, kept):
+                    return self.core.eye.aim.Candidate(name, False, "too_far")
+                if case == "task_end":
+                    self.now = round(self.now + .1, 6)
+                    self.track(seated=False)   # the leave fade, with no candidate chosen (pre-aim off)
+                    self.assertEqual(self.row()["fade"]["purpose"], "fade_out")
+                    with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None: False):
+                        self.now = round(self.now + .1, 6)
+                        self.track(seated=False)
+                else:
+                    with patch.object(preview.Preview, "_eye", refuse), patch.object(
+                            preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None: False):
+                        self.now = round(self.now + .25, 6)
+                        self.track()
+                self.assertFalse(self.row()["on"], "cut at once")
+                self.assertIsNone(self.row()["fade"])
+                self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head")
+
+    def test_a_dark_flight_is_judged_where_it_will_light(self):
+        """A timed MOVE flying dark emits nothing on the way: it's cut only if its landing aim fails, not because the
+        sweep passes near the head."""
+        self.timed_board(pre_aim=False)
+        self.seat()
+        self.read()
+        row = self.preview.rows["F3"]
+        self.assertIsNotNone(row["glide"])
+        landing = row["glide"].target
+        with patch.object(preview.Preview, "_clear",
+                          lambda owner, row, person, clearance, joints=None: joints is not None):
+            self.now = round(self.now + .1, 6)
+            self.track()
+        self.assertIsNotNone(self.preview.rows["F3"]["glide"], "still flying: the sweep isn't what lights")
+        with patch.object(preview.Preview, "_clear",
+                          lambda owner, row, person, clearance, joints=None: tuple(joints or ()) != tuple(landing)):
+            self.now = round(self.now + .1, 6)
+            self.track()
+        self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head", "its landing aim fails: cut")
+
     def test_a_head_or_eyes_refusal_cuts_at_once_even_mid_crossfade(self):
         """Easing is for ordinary hand-offs: a light refused for the reader's head or eyes goes dark in the same
         snapshot, at level 0, whatever fade it's in."""
@@ -1168,10 +1237,12 @@ class DirectionTest(PreviewTest):
                            and row["action"] in ("aim_move", "keep_lit", "stop"))
             self.assertTrue(times, name)
             self.assertTrue(all(c - a >= 1.0 - 1e-9 for a, c in zip(times, times[2:])), name)
-            # and while lit, the direction leaves a slot free: no two of its own commands inside a second
+            # and the direction always leaves a slot free: no two of its own commands inside a second, lit or dark
             own = sorted(row["at"] for row in self.encoded if row.get("fixture_id", name) == name and "at" in row
-                         and row["action"] in ("aim_move", "keep_lit")
-                         and row["effective"].get("spot_level", 0) > 0)
+                         and (row["action"] == "keep_lit" or (row["action"] == "aim_move" and (
+                             row["requested"].get("cue") in ("pre_aim", "standby", "fade_in", "crossfade_in", "dip",
+                                                             "dip_move", "level")
+                             or row["effective"].get("spot_level", 0) > 0))))
             self.assertTrue(all(b - a >= 1.0 - 1e-9 for a, b in zip(own, own[1:])), name)
 
     def test_every_snapshot_is_one_home_accepts(self):

@@ -61,6 +61,10 @@ class InstallLaDesk(unittest.TestCase):
                    "transform_id": "test-transform", "scan_revision": "test-scan", "min_valid_depth_fraction": 0.2,
                    "head": asdict(HeadProfile(0.13, 0.055, 0.35, 1.0, 0.006, 0.5, 0.085))}
         (root / install.BODY_PROFILE_FILE).write_text(json.dumps(profile), encoding="utf-8")
+        import hashlib   # a profile goes with the record of the passing score that used it (body_profiles.py)
+        (root / install.BODY_QUALIFICATION_FILE).write_text(json.dumps({
+            "candidate_sha256": hashlib.sha256((root / install.BODY_PROFILE_FILE).read_bytes()).hexdigest(),
+            "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
         if ha:
             (root / install.HA_TOKEN_FILE).write_text("fake-ha-token\n", encoding="utf-8")
             (root / install.HA_URL_FILE).write_text("https://192.0.2.9:8123\n", encoding="utf-8")

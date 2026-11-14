@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from body import BodyChannel, head_exclusion
+from body import BodyChannel, head_exclusion, torso_cut
 from body_clock import AGE_HEADER, AGE_SCHEMA
 from body_head import HeadProfile
 from body_link import BodyLink
@@ -163,6 +163,38 @@ class RgbBodyTests(unittest.TestCase):
         ys, xs = np.divmod(keys, 640)
         self.assertFalse(((left <= xs) & (xs < right) & (top <= ys) & (ys < bottom)).any())
 
+    def test_with_the_shoulder_line_cut_a_hidden_ear_still_gives_a_head_free_figure(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        for n in range(55, 70):
+            f.frame(n, missing_ear=True)
+        self.assertEqual(f.last.observation, "person")
+        self.assertIn("cut", f.last.head_evidence)
+        self.assertNotIn("bounds_px", f.last.head_evidence, "no face envelope without the ear")
+        _, output = next(((scope, fields) for scope, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+        self.assertIsNotNone(output, f.link.why)
+        import numpy as np
+        from body import cut_pixels, cut_side
+        from test_body import decode
+        cut = cut_pixels(torso_cut(f.last.head_evidence, frame_key=f.last.frame_key, binding=f.last.binding()),
+                         np.frombuffer(f.depth, "<u2").reshape(400, 640), f.perceiver.camera.rig.left_k[0])
+        rows, cols = np.divmod(decode(output["frame"])["key"].ravel(), 640)
+        self.assertGreater(len(rows), 0)
+        self.assertFalse(cut_side(cols, rows, cut).any())
+
+    def test_a_profile_with_the_cut_never_publishes_on_the_face_envelope_alone(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        with patch("body_rgb.torso_cut", return_value=None):
+            f.frame(55)
+        self.assertEqual(f.last.observation, "unknown")
+
     def test_stale_unqualified_and_dark_empty_frames_do_not_feed_learning(self):
         f = self.f
         for seq, changes in enumerate(({"receipt": False}, {"age": 1}, {"skew": 0.068},
@@ -230,6 +262,7 @@ class RgbBodyTests(unittest.TestCase):
             receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
             profile = root / "body.json"
             profile.write_text(json.dumps(f.block), encoding="utf-8-sig")
+            record = root / run_local.body_profiles.QUALIFICATION_FILE
             renderer = root / "app" / "src" / "home-3d" / "apartment-people-layer.mjs"
             renderer.parent.mkdir(parents=True)
             renderer.touch()
@@ -246,6 +279,11 @@ class RgbBodyTests(unittest.TestCase):
                   patch.object(run_local.sc, "open_camera") as camera,
                   patch.object(run_local, "serve") as serve,
                   patch.object(run_local, "page", return_value=(None, "http://127.0.0.1:1/")) as page):
+                with self.assertRaisesRegex(run_local.Stop, "passing head-cut score"):
+                    run_local.run(**args)   # the local preview holds the profile to the installer's gate
+                import hashlib
+                record.write_text(json.dumps({"candidate_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+                                              "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
                 with self.assertRaisesRegex(run_local.Stop, "active scan"):
                     run_local.run(**args)
                 camera.assert_not_called()
@@ -264,7 +302,27 @@ class RgbBodyTests(unittest.TestCase):
         receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
         self.assertIsNone(install_la.body_profile(profile, receipt))
         profile.write_text(json.dumps(f.block), encoding="utf-8-sig")
-        self.assertEqual(install_la.body_profile(profile, receipt), f.block)
+        record = self.scratch / install_la.BODY_QUALIFICATION_FILE
+        import hashlib
+        digest = hashlib.sha256(profile.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+            install_la.body_profile(profile, receipt)   # no qualification record beside it
+        for mask, ok in (({"verdict": "pass", "basis": "zero_separation"}, True),
+                         ({"verdict": "pass", "basis": "measured_separation"}, True),
+                         ({"verdict": "pass", "basis": "candidate_separation"}, False),
+                         ({"verdict": "fail", "basis": "zero_separation"}, False)):
+            with self.subTest(mask=mask):
+                record.write_text(json.dumps({"candidate_sha256": digest, "mask": mask}), encoding="utf-8")
+                if ok:
+                    self.assertEqual(install_la.body_profile(profile, receipt), f.block)
+                else:
+                    with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+                        install_la.body_profile(profile, receipt)
+        record.write_text(json.dumps({"candidate_sha256": "0" * 64,
+                                      "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
+        with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+            install_la.body_profile(profile, receipt)   # another candidate's pass
+        record.unlink()
         profile.write_text(json.dumps(dict(f.block, transform_id="other")), encoding="utf-8")
         with self.assertRaisesRegex(install_la.Stop, "does not match"):
             install_la.body_profile(profile, receipt)

@@ -1,13 +1,27 @@
 """Private RGB head and upper-neck evidence in rectified-left depth pixels."""
 import math
 from dataclasses import dataclass, fields
+from typing import Optional
 from itertools import product
 
 
 # den-observe's COCO-17 order: nose, eyes, ears, then shoulders.
 FACE = (0, 1, 2, 3, 4)
 SHOULDERS = (5, 6)
+HIPS = (11, 12)
 ANCHORS = FACE + SHOULDERS
+# The shortest 2D torso, hips to shoulders in depth pixels, whose direction the shoulder-line cut trusts.
+TORSO_AXIS_PX = 20
+# A hip without a lift is placed from its 2D keypoint at the shoulders' depth when the detector gives it this score,
+# even a little outside the RGB image (a desk or the frame's edge hides it; the detector extrapolates), up to this
+# fraction of the image beyond each edge.
+HIP_MIN_SCORE, HIP_OUTSIDE = 0.3, 0.25
+# Every face and ear keypoint the detector scores at least this lies beyond the shoulder line, or the frame clears:
+# the signed check that the line faces the right way (a wrong hip can't flip it unseen).
+HEAD_MIN_SCORE = 0.3
+# Seen from the front or back the torso axis crosses the shoulder line square: it may lean this far off square
+# (cosine 0.57, 35 degrees) once the shoulder line is long enough in the image to say.
+AXIS_MAX_COS, SHOULDER_LINE_MIN = 0.57, 0.4
 
 
 def _finite(value):
@@ -28,6 +42,8 @@ class HeadProfile:
     mean to the shoulder midpoint. Localization bounds anchor error in metres.
     Alignment bounds remaining projection error directly in depth pixels.
     Motion bounds movement over the qualified exposure separation.
+    torso_cut_m, when set, turns on the shoulder-line cut: the qualified depth below the line through the shoulders,
+    across the hip-to-shoulder axis, within which the head and upper neck can reach (a bowed head's chin).
     """
 
     head_radius_m: float
@@ -37,21 +53,137 @@ class HeadProfile:
     localization_m: float
     max_motion_m_s: float
     max_separation_s: float
+    torso_cut_m: Optional[float] = None
 
     def __post_init__(self):
-        if any(not _finite(getattr(self, item.name)) or getattr(self, item.name) <= 0 for item in fields(self)):
+        if any(not _finite(getattr(self, item.name)) or getattr(self, item.name) <= 0 for item in fields(self)
+               if item.name != "torso_cut_m"):
             raise ValueError("head profile limits must be positive and finite")
+        if self.torso_cut_m is not None and (not _finite(self.torso_cut_m) or not 0 < self.torso_cut_m <= 0.5):
+            raise ValueError("the shoulder-line cut must be positive, finite and at most 0.5 m")
 
 
 def _mean(points):
     return tuple(sum(axis) / len(points) for axis in zip(*points))
 
 
+def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
+    """Private evidence for the shoulder-line cut on the caller's same-frame observation, or None.
+
+    It needs both shoulders with this frame's lifts, and a hip: lifted, or else its 2D keypoint, scored at least
+    HIP_MIN_SCORE, placed at the shoulders' depth (at a desk or behind a book a hip often has no depth). Each joint is
+    placed in the rectified-left depth image; a lift that slipped onto the surface behind, or a hip at the shoulders'
+    depth, moves it there by only the RGB-to-left parallax, a pixel or two, which the margin covers. The hips set only
+    the line's direction, and that direction must cross the shoulder line nearly square when the shoulder line is long
+    enough to judge, and every face or ear keypoint the detector sees (score HEAD_MIN_SCORE) must lie beyond the
+    line, else the frame clears. The line runs through the shoulder midpoint across the 2D torso axis. The margin is
+    one constant, live and scored alike: the qualified cut plus the localization bound plus the motion bound over the
+    profile's largest separation (never this frame's smaller one, which would thin the cut). No face landmark needs
+    depth, so it holds for a turned-away, bowed or reclined head, and for one the RGB view cuts off. The evidence also
+    carries both shoulders' pixels (the band whose nearest depth sets pixels per metre) and the shoulders' room height,
+    above which the figure keeps nothing."""
+    from camgeom import apply, inverse, project
+
+    if (not isinstance(profile, HeadProfile) or profile.torso_cut_m is None or frame_key is None
+            or not isinstance(binding, dict) or binding.get("transform_id") != camera.transform_id
+            or not isinstance(pose, dict) or pose.get("transform_id") != camera.transform_id
+            or pose.get("kind") != "keypoints" or pose.get("joint_set") != "coco17" or pose.get("validity") != "valid"
+            or pose.get("visibility") not in ("visible", "partial")
+            or not _finite(separation_s) or not 0 <= separation_s <= profile.max_separation_s):
+        return None
+    lifted, seen = {}, set()
+    for joint in pose.get("joints_room") or ():
+        if isinstance(joint, dict) and joint.get("j") in SHOULDERS + HIPS:
+            if joint["j"] in seen:
+                return None
+            seen.add(joint["j"])
+            xyz = joint.get("xyz")
+            if (joint.get("status") == "supported" and isinstance(xyz, (tuple, list)) and len(xyz) == 3
+                    and all(map(_finite, xyz))):
+                lifted[joint["j"]] = xyz
+    if not all(index in lifted for index in SHOULDERS):
+        return None
+    rig = camera.rig
+    to_depth = inverse(*camera.room_from_left)
+    pixels, rgb_depths = {}, []
+    for index, xyz in lifted.items():
+        point = apply(*to_depth, xyz)
+        if point[2] <= 0.1:
+            return None
+        pixels[index] = project(point, rig.left_k)
+        if index in SHOULDERS:
+            rgb_depths.append(apply(rig.rotation, rig.translation, point)[2])
+    keypoints = pose.get("keypoints")
+    if not isinstance(keypoints, (tuple, list)) or len(keypoints) != 17:
+        return None
+    width, height = rig.rgb_size
+    shoulder_depth = _mean([[z] for z in rgb_depths])[0]
+
+    def seen(index, min_score):
+        """The detector scored this keypoint at least min_score."""
+        pixel = keypoints[index]
+        return (isinstance(pixel, (tuple, list)) and len(pixel) == 3 and _finite(pixel[2]) and pixel[2] >= min_score)
+
+    def placed(index):
+        """The keypoint's rectified-left pixel at the shoulders' depth, or None: outside the band, or a ray that
+        misses."""
+        pixel = keypoints[index]
+        if (not all(map(_finite, pixel[:2])) or not -HIP_OUTSIDE * width <= pixel[0] < (1 + HIP_OUTSIDE) * width
+                or not -HIP_OUTSIDE * height <= pixel[1] < (1 + HIP_OUTSIDE) * height):
+            return None
+        where = rig.left_pixel(rig.rgb_ray(pixel[0], pixel[1]), shoulder_depth)
+        return where if where is not None and all(map(_finite, where)) else None
+
+    for index in HIPS:
+        if index not in lifted and seen(index, HIP_MIN_SCORE):
+            where = placed(index)
+            if where is not None:
+                pixels[index] = where
+    hip_pixels = [pixels[index] for index in HIPS if index in pixels]
+    if not hip_pixels:
+        return None
+    shoulder = _mean([pixels[index] for index in SHOULDERS])
+    hips = _mean(hip_pixels)
+    axis = (shoulder[0] - hips[0], shoulder[1] - hips[1])
+    length = math.hypot(*axis)
+    if not all(map(_finite, shoulder)) or not TORSO_AXIS_PX <= length:
+        return None
+    across = (pixels[SHOULDERS[0]][0] - pixels[SHOULDERS[1]][0], pixels[SHOULDERS[0]][1] - pixels[SHOULDERS[1]][1])
+    span = math.hypot(*across)
+    if span >= SHOULDER_LINE_MIN * length and abs(axis[0] * across[0] + axis[1] * across[1]) > AXIS_MAX_COS * span * length:
+        return None
+    unit = (axis[0] / length, axis[1] / length)
+    head = []
+    for index in FACE:
+        if seen(index, HEAD_MIN_SCORE):
+            where = placed(index)
+            if where is None:
+                return None   # a face or ear point the detector sees but that can't be placed: clear
+            head.append(where)
+    if not head or any((x - shoulder[0]) * unit[0] + (y - shoulder[1]) * unit[1] <= 0 for x, y in head):
+        return None   # unsure which side the head is on: clear
+    margin = profile.torso_cut_m + profile.localization_m + profile.max_motion_m_s * profile.max_separation_s
+    ceiling = _mean([lifted[index] for index in SHOULDERS])[2]
+    depth_width, depth_height = rig.depth_size
+    inside = lambda p: -depth_width <= p[0] <= 2 * depth_width and -depth_height <= p[1] <= 2 * depth_height
+    if (not 0 < margin <= 1.0 or not _finite(ceiling) or not -1.0 <= ceiling <= 3.0
+            or not all(inside(p) for p in [shoulder, *(pixels[index] for index in SHOULDERS)])):
+        return None   # the same bounds body.torso_cut holds the evidence to
+    return {"frame_key": frame_key, "binding": binding,
+            "cut": {"shoulder_px": [float(shoulder[0]), float(shoulder[1])], "axis_px": list(unit), "margin_m": margin,
+                    "shoulders_px": [[float(x) for x in pixels[index]] for index in SHOULDERS],
+                    "ceiling_m": float(ceiling)}}
+
+
 def _measured_points(pose):
-    """Use the supported stereo anchors from a single complete pose."""
+    """Use the supported stereo anchors from a single pose.
+
+    den-observe calls a pose partial when its RGB box touches the image edge or a 2D torso joint is missing: on the
+    sofa, legs leaving the frame or a hip behind a book. That says nothing about the head, so a partial pose is
+    accepted here; head_evidence then requires the whole padded head to lie inside the RGB image."""
     if (not isinstance(pose, dict) or pose.get("kind") != "keypoints"
             or pose.get("joint_set") != "coco17" or pose.get("validity") != "valid"
-            or pose.get("visibility") != "visible"):
+            or pose.get("visibility") not in ("visible", "partial")):
         return None
     joints = pose.get("joints_room")
     if not isinstance(joints, (tuple, list)):
@@ -100,6 +232,23 @@ def _matches_native_pixels(pose, rig, points):
         # Reprojection is a consistency check, not the localization margin.
         if (reprojection is None or not all(map(_finite, reprojection))
                 or math.dist(pixel[:2], reprojection) > PATCH_RADIUS_PX):
+            return False
+    return True
+
+
+def _head_inside_rgb(rig, head_left, radius_m):
+    """True when every corner of the cube around the head, in the left camera's frame, projects inside the RGB image:
+    the detector saw the whole head, so its face landmarks aren't guesses at a head the RGB view cuts off."""
+    width, height = rig.rgb_size
+    for corner in product(*[(axis - radius_m, axis + radius_m) for axis in head_left]):
+        if corner[2] <= 1e-6:
+            return False
+        try:
+            pixel = rig.to_rgb(corner)
+        except ZeroDivisionError:   # rational distortion is undefined for this point
+            return False
+        if (pixel is None or not all(map(_finite, pixel))
+                or not (0 <= pixel[0] < width and 0 <= pixel[1] < height)):
             return False
     return True
 
@@ -157,6 +306,8 @@ def head_evidence(pose, camera, *, frame_key, binding, profile, separation_s):
         return None
     head = apply(*to_depth, head)
     neck_base = apply(*to_depth, neck_base)
+    if not _head_inside_rgb(camera.rig, head, profile.head_radius_m + profile.localization_m):
+        return None
     volumes = (((head,), profile.head_radius_m), ((head, neck_base), profile.neck_radius_m))
     intrinsics = camera.rig.left_k
     bounds = _projection(volumes, intrinsics, 0)

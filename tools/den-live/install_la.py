@@ -35,6 +35,7 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+import body_profiles  # noqa: E402  the figure's profile and the record of its passing score
 import desk  # noqa: E402  the desk switch's file and its checks
 import perceive  # noqa: E402
 import release  # noqa: E402
@@ -144,17 +145,25 @@ def labels_seed(root):
     return path, len(doc["labels"])
 
 
+BODY_QUALIFICATION_FILE = body_profiles.QUALIFICATION_FILE   # body_profiles.py writes it beside the profile
+
+
 def body_profile(path, receipt):
-    """Read the optional owner-qualified profile before copying any release files."""
+    """Read the optional owner-qualified profile before copying any release files. It must be the very candidate a
+    passing head-cut score used: the qualification record beside it names its sha256 and its pass."""
     path = Path(path)
     if not path.is_file():
         return None
     try:
-        block = json.loads(path.read_text(encoding="utf-8-sig"))
+        data = path.read_bytes()
+        block = json.loads(data.decode("utf-8-sig"))
         registration = json.loads(Path(receipt).read_text(encoding="utf-8"))
         rs.RgbBodyProfile.from_config(block, registration)
     except (OSError, TypeError, KeyError, ValueError, OverflowError):
         raise Stop("the RGB figure profile does not match the camera registration") from None
+    if not body_profiles.qualified_bytes(data, path.parent / BODY_QUALIFICATION_FILE):
+        raise Stop("the RGB figure profile isn't the one a passing head-cut score used (%s beside it)"
+                   % BODY_QUALIFICATION_FILE)
     return block
 
 

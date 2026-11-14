@@ -361,6 +361,18 @@ class ServiceRefusals(unittest.TestCase):
             self.assertEqual('ProtectHome=tmpfs' in dropin, protect)
         self.assertIn('ProtectHome=tmpfs', rs.dropin_text(rs.camera_address('http://192.0.2.7:8090'), Path('/home/u/code/home/app/data/home-content')))
 
+    def test_an_install_without_a_body_profile_turns_the_figure_off(self):
+        base = scratch('den-live-install-')
+        packs = make_packs([[0, 0], [1, 0], [1, 1]])
+        settings = base / 'settings.json'
+        common = {'schema': rs.SETTINGS_SCHEMA, 'camera_url': 'http://192.0.2.5:8090', 'site': rl.den_site(), 'content_packs': str(packs)}
+        settings.write_text(json.dumps(dict(common, body_rgb={'qualification_id': 'fixture'})), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertEqual(config['body_rgb'], {'qualification_id': 'fixture'})
+        settings.write_text(json.dumps(common), encoding='utf-8')
+        config = rs.write_config(settings_path=settings, gateway_pid=0, venv_python='/v', models='/m', out=base / 'c.json', dropin=base / 'd.conf')
+        self.assertNotIn('body_rgb', config, 'the rollback: reinstall without the profile')
+
     def test_the_qwen_asks_settings_and_drop_in(self):
         base = scratch('den-live-install-')
         packs = make_packs([[0, 0], [1, 0], [1, 1]])

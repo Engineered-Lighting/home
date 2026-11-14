@@ -874,7 +874,7 @@ class Preview:
                         context["aim"] = "pointed_elsewhere"
                 if any(spot[key] is not None for key in ("lux_scale", "offset_m", "off")):
                     learn["spot"] = spot
-        glow = (after.get("radials") or []) + ([after["downward"]] if "downward" in after else [])
+        glow = (after.get("radials") or []) + ([after["downward"]] if after.get("downward") else [])
         if glow and entry["ambient"] is not None:
             levels = [0.0 if zone.get("on") is False else zone["brightness"] for zone in glow
                       if zone.get("on") is False or "brightness" in zone]
@@ -898,7 +898,7 @@ class Preview:
         for key in ("pan_deg", "tilt_deg"):
             if key in before and abs(before[key] - fixture[key]) > BEFORE_ANGLE_SLACK_DEG:
                 return "before_mismatch"
-        glow = (before.get("radials") or []) + ([before["downward"]] if "downward" in before else [])
+        glow = (before.get("radials") or []) + ([before["downward"]] if before.get("downward") else [])
         ambient = entry["ambient"]
         if ambient is not None and any("brightness" in zone and abs(zone["brightness"] - ambient["level"])
                                        > BEFORE_LEVEL_SLACK for zone in glow):

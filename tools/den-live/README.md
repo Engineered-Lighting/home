@@ -252,7 +252,7 @@ It says which one is missing if it can't start.
 - A small panel says what the stream says: the camera, how many people, how far behind, frames a second, and drops. A banner shows when something is wrong: "camera offline", "stream stopped", "depth not corrected at the camera", "detector errors", "too dark", or that the page shows another scan revision than the camera is registered to.
 
 **What runs, all on this PC:**
-- `source.py` fetches the camera's newest frame about 5 times a second.
+- `source.py` fetches the camera's newest frame about 5 times a second. From a camera on the slim release (`pilot-20261114-slim`), it asks for `/frame-slim.npz` (`den-camera-slim-1`: no left or right images, which nothing here reads) on one connection kept open, with `304` while the frame is unchanged. From an earlier release it pulls `/frame.npz` as before, and asks for the slim path again a minute later. `link_bench.py` measures both through a model of the den link.
 - `detect_worker.py`, in the detector's venv with no network, runs YOLO26s and RTMPose-m on each frame.
 - `perceive.py` runs den-observe and den-track, unedited, on step 2's registration. It checks every frame says the camera corrected its depth, and multiplies every depth plane by step 2's depth scale before any lift (the live body's depth too); at 1.0 nothing changes.
 - The live body (`body.py`) runs in the same detector process on the exact retained bundle. `body_link.py` keeps one body request in flight. The people stream starts without waiting for body setup.
@@ -319,6 +319,7 @@ python -B -X utf8 tools\den-live\test_live.py
   - too dark;
   - an invalidated registration.
 - The stream's tests check its events, heartbeat, Host check and client cap.
+- `test_camera_link.py` (no venv, a few seconds) holds the camera link: one kept connection for every pull, `304`s between frames, den-take's, den-observe's and the body's readers on the slim bundle, the fallback to `/frame.npz` and its retry, a connection the camera closed, and a refused schema or token.
 - The end-to-end test runs `run_local.run` with the real detector process, the fake camera and the page on the authored room. It needs the venv, Node and the `den-live-home` worktree, and takes about 40 s.
 - Home's layer has its own tests on that branch: `node --test tools\test-apartment-people-layer.mjs`.
 
@@ -495,7 +496,7 @@ python -B -X utf8 tools\den-live\test_service.py
 ```
 
 - No camera, LA, Home or ssh. Fakes on 127.0.0.1 stand in for the camera, the people stream and LA's half of the first check.
-- The camera's paths: any path but `/frame.npz` and `/calibration` is refused before a request is made. Every tool gets its camera client from one place. The fake camera logs every path, and each end-to-end test fails on any other.
+- The camera's paths: any path but `/frame-slim.npz`, `/frame.npz` and `/calibration` is refused before a request is made. Every tool gets its camera client from one place. The fake camera logs every path, and each end-to-end test fails on any other.
 - The service runs end to end against the fake camera with the real detector. Its credentials are in a temp folder, and the stream serves the reader. Its refusals are each one sentence.
 - The release builds a tarball whose files, sums and sha256 match, the same bytes each time, and it refuses a planted private string.
 - `install.sh` passes `bash -n`, and shellcheck when it's installed. Its pinned hashes are the lock's, and it refuses before changing anything.

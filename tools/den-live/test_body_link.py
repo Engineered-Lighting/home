@@ -77,6 +77,31 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(self.events[-1], (SCOPE, dict(frame=FRAME, capture_mono=99.9)))
         self.assertFalse(self.submit(frame_id=9))
 
+    def test_a_one_frame_miss_keeps_the_last_frame_until_its_lease_ends(self):
+        self.setup_worker()
+        self.submit()
+        self.detector.reply()
+        shown = len(self.events)
+        for frame_id, why in ((9, "pose_unavailable"), (10, "insufficient_depth")):
+            self.now += 0.5
+            self.submit(frame_id=frame_id)
+            self.detector.reply(frame=None, why=why)
+            self.assertEqual(len(self.events), shown, "%s: the figure keeps its own lease" % why)
+        self.now += BODY_LEASE_S
+        self.submit(frame_id=11)
+        self.detector.reply(frame=None, why="pose_unavailable")
+        self.assertEqual(self.events[-1][1], dict(reason="pose_unavailable"), "past the lease, the clear goes out")
+        self.submit(frame_id=12)
+        self.detector.reply()
+        self.now += 0.5
+        self.submit(frame_id=13, observation="empty")
+        self.detector.reply(frame=None, why="empty")
+        self.assertEqual(self.events[-1][1], dict(reason="empty"), "the room empty: at once")
+        self.submit(frame_id=14)
+        self.detector.reply()
+        self.link.clear("ambiguous")
+        self.assertEqual(self.events[-1][1], dict(reason="ambiguous"), "two people: at once")
+
     def test_busy_shared_worker_retries_setup_and_preserves_learning_reset(self):
         with patch.object(self.detector, "send_alone", return_value=False):
             self.assertFalse(self.submit())
@@ -236,7 +261,7 @@ class PipelineTests(unittest.TestCase):
         key = ["synthetic-run", 3, 1]
         self.assertEqual(calls, [("detect", {}),
                                  ("provider", {"frame_key": key, "mode": "none", "observations": (), "tracks": (),
-                                               "supported": (), "association": {}}),
+                                               "supported": (), "association": {}, "capture_mono": 100.0}),
                                  ("submit", 42, {"frame_key": key, "mode": "infrared"})])
         self.assertEqual(event["why"], "too dark")
 

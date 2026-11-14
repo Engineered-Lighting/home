@@ -73,6 +73,27 @@ class PreviewTest(unittest.TestCase):
                                      "eligible_track_id": "t1" if seated and not more and eligible else None,
                                      "tracks": [track, track] if more else [track]})
 
+    def stale(self):
+        """Perception's snapshot in a camera gap: no frame, status stale, same epoch."""
+        self.seq += 1
+        self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": self.rule_epoch, "seq": self.seq,
+                                     "frame": None, "status": "stale", "presence": "unknown", "eligibility_revision": 1,
+                                     "eligible_track_id": None, "tracks": []})
+
+    def gap(self, seconds, step=.1):
+        """A camera gap: the clock runs, stale snapshots every 0.5 s, the preview's own ticks between. Returns the lit
+        state seen at each step."""
+        seen, end, last_stale = [], self.now + seconds, self.now
+        while self.now + step <= end + 1e-9:
+            self.now = round(self.now + step, 6)
+            if self.now - last_stale >= .5 - 1e-9:
+                self.stale()
+                last_stale = self.now
+            else:
+                self.preview.tick()
+            seen.append(self.row()["on"])
+        return seen
+
     def read(self, *, at=None, start=None, kind="reading", frames=None, safe=True, **facts):
         at = self.now if at is None else at
         start = at if start is None else start
@@ -287,7 +308,7 @@ class PreviewTest(unittest.TestCase):
     def test_one_bad_snapshot_darkens_but_keeps_the_episode(self):
         """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens, and the episode, its onset, the need
         state and its requests survive it; the next good frame lights again with no new answer."""
-        for bad in ({"age": preview.POSE_AGE_S + .5}, {"association": "ambiguous"}, {"posed": False}, {"more": True}):
+        for bad in ({"association": "ambiguous"}, {"posed": False}, {"more": True}):
             with self.subTest(bad=bad):
                 self.light()
                 episode, requests = self.preview.episode, list(self.preview.episode.requests)
@@ -325,16 +346,78 @@ class PreviewTest(unittest.TestCase):
         self.assertIsNot(self.preview.episode, episode, "and its episode")
         self.assertFalse(self.row()["on"])
 
-    def test_a_stale_tick_darkens_but_keeps_the_episode(self):
+    def test_a_gap_holds_a_lit_spot_up_to_three_seconds(self):
+        """The gap hold: through a camera gap a lit spot stays lit, with keep-lit going on, until its newest fresh frame
+        is GAP_HOLD_S old; then it darkens, keeping the episode, and the next fresh frame lights it again. The
+        snapshot's validity never passes the hold."""
         self.light()
-        episode = self.preview.episode
-        self.now += preview.POSE_AGE_S + .1
-        self.preview.tick()
-        self.assertFalse(self.row()["on"])
+        episode, last = self.preview.episode, self.now
+        keeps = sum(row["action"] == "keep_lit" for row in self.encoded)
+        lit = self.gap(preview.GAP_HOLD_S - .1)
+        self.assertTrue(all(lit), "held through the gap")
+        self.assertLessEqual(self.preview.latest["valid_until_mono"], last + preview.GAP_HOLD_S)
+        self.assertGreater(sum(row["action"] == "keep_lit" for row in self.encoded), keeps, "keep-lit goes on")
+        self.assertTrue(self.preview.latest_decision["proposal"]["gap_hold"])
+        self.assertEqual(self.gap(.1), [False], "a gap over 3.0 s darkens")
         self.assertIs(self.preview.episode, episode)
         self.now += .1
         self.track()
-        self.assertTrue(self.row()["on"])
+        self.assertTrue(self.row()["on"], "the next fresh frame lights it again")
+
+    def test_a_late_frame_is_a_gap_too(self):
+        self.light()
+        self.now += .25
+        self.track(age=preview.POSE_AGE_S + .5)
+        self.assertTrue(self.row()["on"], "a frame older than the pose expiry teaches nothing and darkens nothing")
+
+    def test_the_harvests_gaps_never_blink(self):
+        """The first LA harvest: 25 gaps of 1.5-2.4 s in 5 minutes, replayed into a seated, lit episode at the camera's
+        2.2 frames a second, with an answer every 2 s while frames flow. Not one blink, and no dark move."""
+        self.light()
+        gaps = [round(1.5 + .9 * ((7 * i) % 25) / 24, 3) for i in range(25)]
+        self.assertEqual((min(gaps), max(gaps), len(gaps)), (1.5, 2.4, 25))
+        start, moves, seen = self.now, len(self.encoded), []
+        for gap in gaps:
+            flowing, asked = 12 - gap, self.now
+            end = self.now + flowing
+            while self.now + .45 <= end:
+                self.now = round(self.now + .45, 6)
+                self.track()
+                seen.append(self.row()["on"])
+                if self.now - asked >= 2:
+                    self.read()
+                    asked = self.now
+            seen.extend(self.gap(gap))
+        self.assertGreaterEqual(self.now - start, 290)
+        blinks = sum(1 for before, after in zip(seen, seen[1:]) if before and not after)
+        self.assertEqual(blinks, 0)
+        self.assertTrue(all(seen))
+        dark = [row for row in self.encoded[moves:] if row["action"] == "aim_move" and not row["requested"]["level"]]
+        self.assertEqual(dark, [], "no dark move went out")
+
+    def test_standing_in_a_gap_darkens_on_the_next_fresh_frame(self):
+        self.light()
+        self.assertTrue(all(self.gap(2.0)))
+        self.now += .1
+        self.track(seated=False)
+        self.assertFalse(self.row()["on"], "standing, seen on a fresh frame, darkens at once")
+        self.assertIsNone(self.preview.episode)
+
+    def test_lighting_still_needs_a_frame_within_the_pose_expiry(self):
+        """The hold keeps a lit spot; it never lights one. An answer that lands 2 s into a gap waits for a fresh frame."""
+        self.preview.configure({"pre_aim": True})
+        self.seat()
+        for _ in range(30):   # the dark pre-aim move settles
+            self.now += .25
+            self.track()
+        asked = self.now
+        self.gap(2.0)
+        self.read(at=asked)
+        self.assertTrue(self.preview.episode.need.engaged, "the answer is taken")
+        self.assertFalse(self.row()["on"], "but nothing lights from a 2 s old pose")
+        self.now += .1
+        self.track()
+        self.assertTrue(self.row()["on"], "the next fresh frame lights it")
 
     def test_a_new_association_revision_drops_the_episode(self):
         self.light()

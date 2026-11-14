@@ -45,6 +45,13 @@ release is `pilot-20261114-slim` plus the receipt from `pilot-20261112-body-cloc
   protected `den-body-clock-profile-1` JSON (mode 0600, owned by the service account). It is checked against the SDK,
   device, fps and depth correction at each camera session. Without it, or when it doesn't match, every answer is the
   slim release's, byte for byte (`test_body_receipt_release.py` runs the slim release's wire tests on it).
+- **Protected means every folder above it, too.** Each one, from `/` down, must be owned by root or the service
+  account, and none may be group- or world-writable. A home folder made with umask 002 (775) fails this. A named
+  profile that isn't protected is no fallback: `capture.py` exits 2 ("Protected commissioned body clock profile
+  required") and oak-den restarts in a loop. Before adding the drop-in, check the path as the service account:
+  `namei -l ~/victoria-camera/private/den-body-clock.json`. No line may have a `w` for the group or the others
+  (`drwxr-x---` and `drwxr-xr-x` pass, `drwxrwxr-x` doesn't), and each must be owned by root or the account. Remove a
+  folder's group write with `chmod g-w <folder>`, once you've checked that no other user is in its group.
 - **Sampled with the slim bundle.** When a frame's slim bundle is published, the camera samples the SDK clock against
   its own monotonic clock. With two consistent samples and exposures that fit the profile's bounds, the frame's slim
   and (once published) full bundles carry the same receipt. Equal bytes, the previous frame, a new session, a clock

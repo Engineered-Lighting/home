@@ -563,6 +563,18 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 
 **The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
 
+**Asking on a change** (`event_asks`; latency A4). It's **off by default** until AGENTS.md's den-live section allows asks sooner than 2 s apart, in the owner's own words. With it on, it asks sooner than the 2 s when:
+- a new episode starts: you sit down, or the gate reopens;
+- a wrist or your shoulders move 10 cm from where they were at the last ask, then hold still for a frame. A page turn or a fidget doesn't count, and a move still underway waits until it's done.
+
+Even then: at least 1 s after the last ask, one at a time, within the 30 a minute, and never at the back-off monitor's step 1 or above. Each ask's log line says what triggered it (`trigger`: seated, hands, posture, or none for the timer).
+
+**One verdict** (contract 3): `den_live_scene.close_up_verdict` says yes, no or unknown.
+- **No,** whatever the activity word: a phone, a screen or a closed book.
+- **Unknown:** anything but one person.
+
+The stream's `activity {word, close_up, verdict}` carries it, and the coordinator's `preview_evidence.activity` reads the same function.
+
 **What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
 - Two or three stills, chosen newest first and spanning at most 1 s back from the newest frame (`ask.STILLS_SPAN_S`, contract 3), so the first ask after a cue shows the cue. They come from a continuously supported subject window, none from before the seated episode began (`since_mono`) or the association became confident, made into JPEGs in the detector's process (`stills.py`). The reply's gate carries that `seated_since_mono`, the instant the lighting preview's episode starts from too.
 - **One bad frame** (contract 2's consumer rule): a stale snapshot or an unsafe frame is no new ask, and drops nothing. The stills, `eligibility_revision`, the earlier answer, a pending stills request and a reply in flight are kept, until the person binding (`service_run_id`, `camera_epoch`, `track_id`, `association_revision`) or the gate changes. A second person, or a gap of `PERCEPTION_S` or more, still resets.

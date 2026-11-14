@@ -181,9 +181,40 @@ def reply_from_proof(response, *, served_model=SERVED_MODEL):
         return None, None
 
 
+CLOSE_UP_WORDS = CLOSE_UP + ("desk_hobby", "craft")   # older words for the same close-up work, kept so they still count
+
+
+def _fact(facts, name):
+    return facts.get(name) if isinstance(facts, dict) else getattr(facts, name, None)
+
+
+def close_up_verdict(facts):
+    """Contract 3's one verdict on a reply's facts: "yes", "no" or "unknown". Home's Qwen line (through ask.py's activity)
+    and the coordinator (through preview_evidence.activity) both read it, so they can never disagree.
+    - unknown: no facts, people_visible other than one, or no activity word (or unclear);
+    - no, whatever the activity word says: a phone (its screen toward the face, or held and looked at), a screen
+      (hands on the keyboard, typing, or a screen facing the subject and looked at), or a reading word with a closed book;
+    - yes: reading or hobby (or an older word for the same work);
+    - no: anything else."""
+    if facts is None:
+        return "unknown"
+    word = _fact(facts, "activity_hypothesis")
+    if _fact(facts, "people_visible") != "one" or word in (None, "unclear"):
+        return "unknown"
+    visible = _fact(facts, "visible_basis") or ()
+    phone = "phone_screen_toward_face" in visible or (
+        _fact(facts, "held_object") == "phone" and _fact(facts, "gaze_target") == "phone")
+    screen = "hands_on_keyboard" in visible or _fact(facts, "typing_visible") == "yes" or (
+        _fact(facts, "screen_facing_subject") == "yes" and _fact(facts, "gaze_target") == "screen")
+    closed_book = _fact(facts, "book_state") == "closed" or "book_closed" in visible
+    if phone or screen or (word == "reading" and closed_book):
+        return "no"
+    return "yes" if word in CLOSE_UP_WORDS else "no"
+
+
 def close_up(facts):
-    """Whether a reply says one person doing close-up work: the coordinator's question, as need's playing sample."""
-    return isinstance(facts, dict) and facts.get("people_visible") == "one" and facts.get("activity_hypothesis") in CLOSE_UP
+    """Whether contract 3's verdict is yes: one person doing close-up work, no veto."""
+    return close_up_verdict(facts) == "yes"
 
 
 # ---- the request ---------------------------------------------------------------------------------------------------

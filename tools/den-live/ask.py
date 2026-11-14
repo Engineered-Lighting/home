@@ -6,6 +6,12 @@ When it asks (the owner, 2026-11-12: Qwen only once Frigate has noticed someone)
   on TrackEvidence.seated); the ask reads it and never works it out again, so it and the preview have one answer.
 - One ask in flight at a time; the next no sooner than min_interval_s after the last was sent (2 s; at least 4 s at the
   monitor's step 1); at most max_per_minute in any 60 s; BACKOFF_S after a failure.
+- Event-triggered asks (latency A4; event_asks, off by default until AGENTS.md allows it): a new episode, or a wrist or the shoulders moving
+  EVENT_MOVE_M from where they were at the last ask and then holding still, may ask sooner, but never sooner than
+  EVENT_GAP_S (1 s) after the last ask, never at the monitor's step 1 or above, and always within the per-minute cap.
+What it decides: contract 3's one verdict, den_live_scene.close_up_verdict (yes, no or unknown, with the phone, screen
+and closed-book vetoes). The stream's activity carries it, and the coordinator's preview_evidence.activity reads the same
+function, so Home's Qwen line and the light never disagree.
 What it sends: up to 3 stills, newest first, spanning at most STILLS_SPAN_S (1 s) back from the newest frame (contract 3,
 decision 4: the first ask after a cue shows the cue, not the seconds before it), none from before the seated episode's
 since_mono or the association's since, picked by spread(), made into JPEGs in the detector's process (stills.py), in
@@ -41,7 +47,9 @@ import den_live_scene as scene
 from contracts import INFERENCE_S, PERCEPTION_S, InferenceReply
 
 ASK_SCHEMA = "den-live-ask-1"
-SETTINGS_KEYS = {"asks_on": True, "labels_to_qwen": True, "min_interval_s": 2.0, "max_per_minute": 30}
+SETTINGS_KEYS = {"asks_on": True, "labels_to_qwen": True, "min_interval_s": 2.0, "max_per_minute": 30,
+                 "event_asks": False}   # _trigger may ask sooner than min_interval_s, within the cap. Off until the
+                                        # AGENTS.md amendment that allows it is the owner's, in their own words
 SLOW_INTERVAL_S = 4.0     # the back-off monitor's step 1
 BACKOFF_S = 30.0          # after a failed ask
 STILLS_TIMEOUT_S = 2.0
@@ -51,11 +59,32 @@ UNAVAILABLE_AFTER = 3     # failed asks in a row before the health line says Qwe
 RETENTION_DAYS = 14
 BACKOFF_STALE_S = 600.0   # the monitor writes its status each minute: older than this, it isn't running
 STILLS_SPAN_S = 1.0       # the stills reach back at most this far from the newest frame (contract 3, decision 4)
+# Event-triggered asks (latency A4): seated began, or the hands or upper body moved and settled.
+EVENT_GAP_S = 1.0         # a triggered ask comes no sooner than this after the last one (the cap still holds)
+EVENT_MOVE_M = 0.10       # a wrist, or the shoulders' midpoint, this far from the last ask's decision
+EVENT_STEADY_M = 0.05     # and within this of the previous frame: the move is over
+EVENT_STEADY_GAP_S = 1.0  # a previous frame older than this doesn't count as "the previous frame"
 MIN_STILL_GAP_S = 0.2     # two stills of one ask are at least this far apart
 
 
 class FramesUnavailable(Exception):
     pass
+
+
+def pose_points(supported_pose):
+    """{left_wrist, right_wrist, shoulders}: room points from a track's supported stereo joints, each only when seen."""
+    def point(name):
+        row = (supported_pose or {}).get(name)
+        if not row or len(row) != 2 or row[1] != "supported" or not row[0] or len(row[0]) != 3:
+            return None
+        return tuple(float(v) for v in row[0])
+    left, right = point("left_shoulder"), point("right_shoulder")
+    return {"left_wrist": point("left_wrist"), "right_wrist": point("right_wrist"),
+            "shoulders": tuple((a + b) / 2 for a, b in zip(left, right)) if left and right else None}
+
+
+def distance(a, b):
+    return sum((x - y) ** 2 for x, y in zip(a, b)) ** 0.5
 
 
 def track_binding(snapshot, track, current):
@@ -263,6 +292,7 @@ class Asker:
         self.lock = threading.Lock()
         self.pool = deque()
         self.binding = None      # (service_run_id, camera_epoch, track_id, association_revision), from good frames
+        self.asked_pose = self.last_pose = None   # _trigger: the points at the last ask, and on the previous frame
         self.pool_gate = None    # the gate revision the pool's frames were kept under
         self.eligibility = self.gate_signature = None
         self.eligibility_revision = self.gate_revision = 0
@@ -366,6 +396,7 @@ class Asker:
                 self.eligibility = episode
                 self.eligibility_revision += 1
                 self.reply = self.activity = self.prior = None
+                self.asked_pose = self.last_pose = None   # a new episode: its first frame is a "seated" trigger
             eligible = episode if track is not None and why is None else None   # this frame may start an ask
             self.snapshot = replace(snapshot, eligible_track_id=None if eligible is None else track.track_id,
                                     eligibility_revision=self.eligibility_revision)
@@ -378,9 +409,10 @@ class Asker:
                 elif not self._bound(now, pending):
                     self._done(now, pending)
                     self._record(pending, outcome="not_sent", why="the evidence changed")
+            trigger = self._trigger(frame, track) if eligible is not None else None
             may = (eligible is not None and self.inflight is None and now >= self.next_at and now >= self.backoff_until
-                   and self._paced(now, values, level))
-            request = self._prepare(now, track, occupancy, level) if may else None
+                   and self._paced(now, values, level, trigger))
+            request = self._prepare(now, track, occupancy, level, trigger) if may else None
             event = self._decorate(event, now, eligible is not None, why, level)
         if request is not None:
             self._request_stills(request)
@@ -392,18 +424,43 @@ class Asker:
             reply, self.reply = self.reply, None
             return reply
 
-    def _paced(self, now, values, level):
+    def _paced(self, now, values, level, trigger=None):
+        """The pace: min_interval_s apart (SLOW_INTERVAL_S at the monitor's step 1), at most max_per_minute in any 60 s.
+        A trigger (_trigger: seated began, or the hands or upper body moved and settled) may come sooner, but never
+        sooner than EVENT_GAP_S after the last ask, and only while event_asks is on and the monitor is at step 0."""
         self._last_minute(now)
         interval = max(values["min_interval_s"], SLOW_INTERVAL_S if (level or 0) >= 1 else 0)
+        if trigger is not None and values["event_asks"] and not level:
+            interval = EVENT_GAP_S
         return (len(self.sent) < values["max_per_minute"]
                 and (not self.sent or now - self.sent[-1] >= interval))
+
+    def _trigger(self, frame, track):
+        """With the lock held, on an eligible frame: why this frame is worth an ask sooner than the pace, or None.
+        - "seated": the episode has had no ask yet;
+        - "hands" or "posture": a wrist, or the shoulders' midpoint, is EVENT_MOVE_M or more from where it was when
+          the last ask was decided, and within EVENT_STEADY_M of where it was on the previous frame. The move is over,
+          so the stills show where it ended, and a page turn or a fidget never counts."""
+        points = pose_points(track.supported_pose)
+        previous, self.last_pose = self.last_pose, (frame.capture_mono, points)
+        if self.asked_pose is None:
+            return "seated"
+        if previous is None or frame.capture_mono - previous[0] > EVENT_STEADY_GAP_S:
+            return None
+        for name, kind in (("left_wrist", "hands"), ("right_wrist", "hands"), ("shoulders", "posture")):
+            then, before, here = self.asked_pose.get(name), previous[1].get(name), points.get(name)
+            if None in (then, before, here):
+                continue
+            if distance(then, here) >= EVENT_MOVE_M and distance(before, here) <= EVENT_STEADY_M:
+                return kind
+        return None
 
     def _last_minute(self, now):
         while self.sent and now - self.sent[0] >= 60.0:
             self.sent.popleft()
         return len(self.sent)
 
-    def _prepare(self, now, track, occupancy, level):
+    def _prepare(self, now, track, occupancy, level, trigger=None):
         seated_since = track.seated.since_mono   # eligible, so seated: the episode the stills must lie in
         start = max(track.association_since_mono, seated_since)
         try:
@@ -424,6 +481,7 @@ class Asker:
             "association": evidence, "seated_since_mono": seated_since,
             "eligibility_revision": self.eligibility_revision, "gate_revision": self.gate_revision,
             "occupancy": occupancy, "backoff_level": level, "valid_until_mono": latest.capture_mono + INFERENCE_S,
+            "trigger": trigger, "pose": (self.last_pose or (None, None))[1],
         }
         self.inflight = request
         return request
@@ -545,14 +603,16 @@ class Asker:
             now = self.clock()
             if self.inflight is not ask:
                 return
-            if why is not None or not self._bound(now, ask) or not self._paced(now, values, level):
+            if why is not None or not self._bound(now, ask) or not self._paced(now, values, level, ask.get("trigger")):
                 self._done(now, ask)
                 self._record(ask, outcome="not_sent", why="the gate or evidence changed before sending")
                 return
             ask.update(request_body_sha256=hashlib.sha256(body).hexdigest(),
                        labels={"labels_to_qwen": values["labels_to_qwen"], "near_person": near, "labels_revision": revision},
-                       settings={key: values[key] for key in ("asks_on", "min_interval_s", "max_per_minute")},
+                       settings={key: values[key] for key in ("asks_on", "min_interval_s", "max_per_minute", "event_asks")},
                        occupancy=occupancy, backoff_level=level, stage="posted", sent_mono=now, sent_at=self.wall())
+            if ask.get("pose") is not None:
+                self.asked_pose = ask["pose"]   # the next hands or posture trigger measures from here
             self.sent.append(now)
             self.counts["asked"] += 1
         response = self.post(body)
@@ -617,8 +677,11 @@ class Asker:
                             "reply_to_handoff": round((now - answered_mono) * 1000, 1)})
             if facts["people_visible"] == "one":
                 self.prior = facts, ask["valid_until_mono"]
+                # Contract 3's one verdict, the same one the coordinator reads (preview_evidence.activity), so Home's
+                # line never says close-up work while the light refuses it.
+                verdict = scene.close_up_verdict(facts)
                 self.activity = (track.track_id, ask["valid_until_mono"],
-                                 {"word": facts["activity_hypothesis"], "close_up": scene.close_up(facts),
+                                 {"word": facts["activity_hypothesis"], "close_up": verdict == "yes", "verdict": verdict,
                                   "at": round(answered_at, 3)})
             else:
                 # The coordinator needs the current negative observation to revoke support.
@@ -643,6 +706,8 @@ class Asker:
         interval = max(self.settings.get()["min_interval_s"],
                        SLOW_INTERVAL_S if (self.backoff.level() or 0) >= 1 else 0)
         self.inflight = None
+        if "sent_mono" in ask and self.settings.get()["event_asks"] and not (self.backoff.level() or 0):
+            interval = EVENT_GAP_S   # _paced holds the timer's spacing; a trigger may ask this soon after
         self.next_at = ask.get("sent_mono", now) + interval
         if failed:
             self.failed_in_row += 1
@@ -664,6 +729,7 @@ class Asker:
                 "gate": {"occupancy": ask["occupancy"]["effective"], "seated": [ask["track"].track_id],
                          "people": 1, "backoff_level": ask["backoff_level"]},
                 "association": ask["association"], "settings": ask.get("settings"), "labels": ask.get("labels"),
+                "trigger": ask.get("trigger"),
                 "stills": [{"frame_key": frame.key, "captured_at": frame.capture_ts,
                             "arrived_at": frame.capture_ts + (frame.arrival_mono - frame.capture_mono)} for frame in frames],
                 "decided_at": ask["decided_at"], "sent_at": ask.get("sent_at"), "answered_at": answered_at,

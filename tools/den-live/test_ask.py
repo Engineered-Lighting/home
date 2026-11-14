@@ -550,7 +550,7 @@ class AskTest(unittest.TestCase):
         self.run_for(6)
         revision, prior, sent = self.asker.eligibility_revision, self.asker.prior, self.asks_sent()
         self.assertIsNotNone(prior)
-        while self.clock.t + 0.25 < self.asker.next_at:   # good frames up to where the pace allows the next ask
+        while self.clock.t + 0.25 - self.asker.sent[-1] < 2.0:   # good frames up to where the 2 s timer allows the next
             self.tick()
         revision, prior, sent = self.asker.eligibility_revision, self.asker.prior, self.asks_sent()
         self.status = "ambiguous"
@@ -837,3 +837,125 @@ class SpreadTest(unittest.TestCase):
             ask.spread(pool, 100.1)
         with self.assertRaises(ask.FramesUnavailable):
             ask.spread(self.pool(5.0), 100.0 + PERCEPTION_S)
+
+
+class VerdictTest(unittest.TestCase):
+    """Contract 3's one verdict: Home's Qwen line and the coordinator read the same function."""
+
+    def cases(self):
+        def f(**over):
+            value = facts()
+            value.update(over)
+            return value
+        return [
+            (f(), "yes"),
+            (f(activity_hypothesis="hobby", held_object="craft"), "yes"),
+            (f(visible_basis=["phone_screen_toward_face"]), "no"),
+            (f(held_object="phone", gaze_target="phone"), "no"),
+            (f(book_state="closed"), "no"),
+            (f(visible_basis=["book_closed"]), "no"),
+            (f(visible_basis=["hands_on_keyboard"]), "no"),
+            (f(typing_visible="yes"), "no"),
+            (f(screen_facing_subject="yes", gaze_target="screen"), "no"),
+            (f(activity_hypothesis="phone_use", held_object="phone"), "no"),
+            (f(activity_hypothesis="resting"), "no"),
+            (f(people_visible="multiple"), "unknown"),
+            (f(activity_hypothesis="unclear"), "unknown"),
+            (None, "unknown"),
+        ]
+
+    def test_the_vetoes(self):
+        for value, want in self.cases():
+            self.assertEqual(scene.close_up_verdict(value), want, value)
+            self.assertEqual(scene.close_up(value), want == "yes")
+
+    def test_the_coordinator_reads_the_same_verdict(self):
+        import preview_evidence
+        for value, want in self.cases():
+            if value is not None:
+                self.assertEqual(preview_evidence.activity(value), preview_evidence.SAMPLE[want], value)
+
+
+class EventAskTest(AskTest):
+    """Asks triggered by seated beginning, or the hands or upper body moving and settling (latency A4). event_asks is
+    off by default until AGENTS.md allows it, so these turn it on."""
+
+    def setUp(self):
+        super().setUp()
+        self.asker.settings = ask.Settings(block={"event_asks": True})
+
+    def test_off_by_default(self):
+        self.assertFalse(ask.Settings().get()["event_asks"])
+        self.asker.settings = ask.Settings()
+        self.run_for(4)
+        self.until_an_ask_was_just_sent()
+        sent = self.asks_sent()
+        for _ in range(7):
+            self.tick(xy=(1.3, 1.0))
+        self.assertEqual(self.asks_sent(), sent, "no early ask with the default")
+
+    def until_an_ask_was_just_sent(self, **kw):
+        sent = self.asks_sent()
+        while self.asks_sent() == sent:
+            self.tick(**kw)
+
+    def test_a_settled_move_asks_before_the_timer(self):
+        self.run_for(4)
+        self.until_an_ask_was_just_sent()
+        sent_at, sent = self.asker.sent[-1], self.asks_sent()
+        for _ in range(7):   # 1.75 s: a move of 0.3 m, then still
+            self.tick(xy=(1.3, 1.0))
+        self.assertEqual(self.asks_sent(), sent + 1, "asked before the 2 s timer")
+        self.assertLess(self.asker.sent[-1] - sent_at, 2.0)
+        self.assertGreaterEqual(self.asker.sent[-1] - sent_at, ask.EVENT_GAP_S)
+        self.assertEqual(self.log_lines()[-1]["trigger"], "posture")
+
+    def test_a_move_still_underway_doesnt(self):
+        self.run_for(4)
+        self.until_an_ask_was_just_sent()
+        sent = self.asks_sent()
+        for step in range(6):   # 1.5 s, moving 0.1 m each frame
+            self.tick(xy=(1.1 + 0.1 * step, 1.0))
+        self.assertEqual(self.asks_sent(), sent)
+
+    def test_the_switch_and_the_monitors_slow_step(self):
+        for settings, level in ((ask.Settings(block={"event_asks": False}), None),
+                                (ask.Settings(block={"event_asks": True}), 1)):
+            self.setUp()
+
+            class Level:
+                def level(self):
+                    return level
+            self.asker.settings, self.asker.backoff = settings, Level()
+            self.run_for(4)
+            self.until_an_ask_was_just_sent()
+            sent = self.asks_sent()
+            for _ in range(7):
+                self.tick(xy=(1.3, 1.0))
+            self.assertEqual(self.asks_sent(), sent, (settings.values, level))
+
+    def test_the_cap_still_holds(self):
+        self.asker.settings = ask.Settings(block={"max_per_minute": 3, "event_asks": True})
+        self.run_for(3)   # seated first: perception's hold needs 2 s of stillness
+        for step in range(100):   # 25 s, a settled move every second
+            self.tick(xy=(1.0 + 0.3 * ((step // 4) % 2), 1.0))
+        self.assertEqual(self.asks_sent(), 3)
+
+    def test_a_new_episode_asks_at_once(self):
+        """A gate that closes and reopens (Frigate missing a frame of the person) starts a new episode, and its first
+        eligible frame with stills is a trigger: it needn't wait out the timer from the last episode's ask."""
+        self.run_for(4)
+        self.until_an_ask_was_just_sent()
+        sent_at, sent = self.asker.sent[-1], self.asks_sent()
+        self.occupancy.word = "off"
+        self.tick()
+        self.occupancy.word = "on"
+        for _ in range(5):
+            self.tick()
+            if self.asks_sent() > sent:
+                break
+        self.assertEqual(self.asks_sent(), sent + 1)
+        self.assertLess(self.asker.sent[-1] - sent_at, 2.0)
+        self.tick()   # its reply is taken up, and its line written, on the next frame
+        newest = max((line for line in self.log_lines() if line["sent_at"] is not None), key=lambda line: line["ask_id"])
+        self.assertEqual(newest["trigger"], "seated")

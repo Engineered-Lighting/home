@@ -32,19 +32,20 @@ SETTINGS = {
                                   # slower (a board without it flies at its profile's pace)
     "shift_m": 0.06,              # how far the book's settled place must move before a lit spot glides after it
     "shift_hold_s": 1.5,          # the window whose median is the book's settled place (a page turn is shorter)
-    "page_lift": 0.2,             # the page's centre: this fraction of the way from the hands toward the eyes
+    "page_up_m": 0.05,            # the page's centre: this far up the page from the hands (the page faces the eyes)
     "ambient_level": 0.75,        # the room's glow when nobody is doing a task (Home's own display default)
     "ambient_task_scale": 0.4,    # under a task light, the glow drops to this fraction
     "ambient_dim_s": 4.0,         # the room dims more slowly than the spot rises, so the eye follows it
     "ambient_delay_s": 0.5,       # and starts a beat after the spot, so the spot leads
     "ambient_restore_s": 1.5,     # when the task ends the room comes back as the spot goes out: no one sits in the dark
 }
-LIMITS = {"page_lift": (0.0, 0.5), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
+LIMITS = {"page_up_m": (0.0, 0.15), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
           "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 2.5), "leave_fade_s": (0.0, 1.0), "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
           "ambient_dim_s": (0.0, 20.0), "ambient_delay_s": (0.0, 5.0), "ambient_restore_s": (0.0, 10.0),
           "shift_m": (0.0, 1.0), "shift_hold_s": (0.0, 10.0)}
 
 AMBIENT_CCT_K = (3000, 2700)    # the house glow's white, and the warmer white it dims to under a task (dim to warm)
+CIE_KAPPA, CIE_EPSILON = 24389 / 27, 216 / 24389   # den-core's spot_light constants for output()
 LEVEL_CODES = 254               # the board's spot level, 0-254 (contract 5's rounding: floor(x * 254 + 0.5))
 # The level train's cap, per fixture: one level MOVE per step. A virtual fixture has no radio, so it steps each 0.1 s
 # tick. A real one shares HA, ZHA and Zigbee with one frame in flight, and until that path is measured the firmware's
@@ -53,6 +54,10 @@ LEVEL_CODES = 254               # the board's spot level, 0-254 (contract 5's ro
 # replace the train with one MOVE per cue where the board has it.
 LEVEL_STEP_S = 0.1
 RADIO_STEP_S = 0.5
+RADIO_PER_S = 2                 # every command a real fixture is sent, per rolling second (the firmware's rule)
+# A board without lit travel (lit_motion false) holds its aim while the page is within this fraction of half the beam's
+# FWHM (at 0.5 the page keeps 84 % of the beam's centre light), because each re-aim there is a blink.
+DARK_HOLD = 0.5
 # No exit fades for longer than this: a fade to dark sends no keep-lit (the desk sender treats a level-0 MOVE as unlit),
 # and the board's lease lapses 3 s after the last one, which would cut a longer fade-out short.
 EXIT_MAX_S = 2.5
@@ -77,10 +82,13 @@ SEATED_AIM_M = 0.03             # a dark pre-aim for a seated person tracks the 
 DARK_WINDOW_S = 0.6             # and on a shorter window, so the book coming up off the lap is followed before the yes
 SETTLE_S = 0.5                  # the book's settled place must stay past shift_m this long before a lit spot glides
 STILL_S = 0.8                   # and the book must be at rest over this window: the glide goes once, to where it rests
+PAGE_MIN_AHEAD_M = 0.02         # the hands must be this far ahead of the eyes to give the page a direction
 WRISTS_LOST_S = 2.0             # without both wrists for this long, the page falls back to den-core's task point
 FACING_WINDOW_S = 3.0           # a seated person's facing is the circular mean over this window
 GLARE_KEEP_M = 0.12             # a lit fixture keeps its job while its beam's centre clears the head by this much
                                 # (admission still needs den-core's 0.15 m): head jitter can't flip it
+FACING_KEEP_DEG = 15.0          # and while it's no more than this in front of side-on (admission: den-core's 5), so
+                                # the shoulders' swing can't hand a side-on socket's light to another fixture
 
 
 def level_code(level):
@@ -243,19 +251,41 @@ def ease(curve, x):
     return x
 
 
+def output(level):
+    """A 0-1 level's relative light output: CIE lightness read inversely, den-core's dimming curve
+    (spot_light.dimming_fraction, lit-model.mjs's assumed curve). Level 0.5 gives 18 % of full."""
+    lightness = 100.0 * min(1.0, max(0.0, level)) if math.isfinite(level) else 0.0
+    return ((lightness + 16.0) / 116.0) ** 3 if lightness > CIE_KAPPA * CIE_EPSILON else lightness / CIE_KAPPA
+
+
+def level_for_output(fraction):
+    """output()'s inverse: the level that gives this fraction of full light."""
+    fraction = min(1.0, max(0.0, fraction))
+    lightness = 116.0 * fraction ** (1.0 / 3.0) - 16.0 if fraction > CIE_EPSILON else CIE_KAPPA * fraction
+    return min(1.0, max(0.0, lightness / 100.0))
+
+
 class Ramp:
     """A level (or any value) moving from `start` to `end` over `duration` seconds on `curve`, begun at `started`.
-    paused() moves its clock on: a ramp waits while its fixture glides (one MOVE, one level)."""
+    paused() moves its clock on: a ramp waits while its fixture glides (one MOVE, one level).
 
-    def __init__(self, start, end, duration, curve, started, purpose):
+    space "light" eases the light itself rather than the level: a crossfade's two ramps then add up to the same light
+    on the page all the way through. Eased in levels, two complementary ramps give 37 % of the light half way, because
+    level 0.5 gives 18 % (output()). The board's own fade curves act on levels, so a light ramp is always a train."""
+
+    def __init__(self, start, end, duration, curve, started, purpose, space="level"):
         self.start, self.end, self.duration, self.curve = start, end, max(0.0, duration), curve
-        self.started, self.purpose = started, purpose
+        self.started, self.purpose, self.space = started, purpose, space
         self.sent = False   # a timed MOVE carries it: the board plays it, and the coordinator follows its curve
 
     def value(self, now):
         if self.duration <= 0:
             return self.end
-        return self.start + (self.end - self.start) * ease(self.curve, (now - self.started) / self.duration)
+        x = ease(self.curve, (now - self.started) / self.duration)
+        if self.space == "light":
+            low, high = output(self.start), output(self.end)
+            return level_for_output(low + (high - low) * x)
+        return self.start + (self.end - self.start) * x
 
     def done(self, now):
         return now - self.started >= self.duration
@@ -266,14 +296,18 @@ class Ramp:
     def published(self, now):
         return {"from": round(self.start, 4), "to": round(self.end, 4), "start_mono": self.started,
                 "duration_s": self.duration, "curve": self.curve, "purpose": self.purpose,
-                "value": round(self.value(now), 4), "board": self.sent}
+                "value": round(self.value(now), 4), "board": self.sent, "space": self.space}
 
 
 # ---- The aim: where the page is ---------------------------------------------------------------------------------------
 
-def page_point(joints, lift):
-    """The page's centre for a seated reader: between the wrists, raised `lift` of the way toward the eyes (a book is held
-    by its lower half, its page tilted to the face). None without both wrists and a head."""
+def page_point(joints, up_m):
+    """The page's centre for a seated reader. A book is read square to the line of sight and held by its lower half, so
+    its centre is `up_m` up the page from the wrists' midpoint. "Up the page" lies in the vertical plane through the
+    eyes and the hands, at right angles to the line between them. So the hold sets the direction: a book at the chest
+    is tipped back to the face, and its centre is ahead of and above the hands. A book in the lap lies nearly flat on
+    the thighs, and its centre is almost straight ahead of them. Never back toward the eyes. None without both wrists
+    and a head."""
     def joint(name):
         row = (joints or {}).get(name)
         return tuple(row[:3]) if row and len(row) >= 4 and row[3] >= 0.5 else None
@@ -283,7 +317,15 @@ def page_point(joints, lift):
         return None
     hands = tuple((left[i] + right[i]) / 2.0 for i in range(3))
     eyes = tuple(statistics.median(p[i] for p in face) for i in range(3))
-    return tuple(hands[i] + lift * (eyes[i] - hands[i]) for i in range(3))
+    sight = [hands[i] - eyes[i] for i in range(3)]
+    ahead = math.hypot(sight[0], sight[1])
+    length = math.hypot(ahead, sight[2])
+    if ahead < PAGE_MIN_AHEAD_M:
+        return hands   # hands straight below the eyes: no page direction to go by
+    # The line of sight is (ahead, down) in its vertical plane; up the page is that turned a quarter toward up.
+    forward = (sight[0] / ahead, sight[1] / ahead)
+    up = (-sight[2] / length, ahead / length)
+    return (hands[0] + up_m * up[0] * forward[0], hands[1] + up_m * up[0] * forward[1], hands[2] + up_m * up[1])
 
 
 class AimFilter:

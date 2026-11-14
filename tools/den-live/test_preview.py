@@ -31,12 +31,13 @@ FIXTURES = {"F3": {"aim_origin_m": [1.8, .2, 2.5], "horizontal_world_reference":
 INSTANT = {"fade_in_s": 0, "fade_out_s": 0, "leave_fade_s": 0, "crossfade_s": 0, "pre_aim": False}
 
 
-def joints(seated, turned=False, shift=0.0, page_turn=False):
-    """shift: the reader moved along the sofa (x, metres); page_turn: the right hand lifted 15 cm."""
+def joints(seated, turned=False, shift=0.0, page_turn=False, wrist_z=.65):
+    """shift: the reader moved along the sofa (x, metres); page_turn: the right hand lifted 15 cm; wrist_z: the hands'
+    height (the book at the chest, or in the lap)."""
     height = 0 if seated else .5
     xyz = {"left_shoulder": [1, 1, .95], "right_shoulder": [1.4, 1, .95], "left_hip": [1, 1, .45],
-           "right_hip": [1.4, 1, .45], "nose": [1.2, .9 if turned else 1.1, 1.18], "left_wrist": [1.1, 1.3, .65],
-           "right_wrist": [1.3, 1.3, .8 if page_turn else .65]}
+           "right_hip": [1.4, 1, .45], "nose": [1.2, .9 if turned else 1.1, 1.18], "left_wrist": [1.1, 1.3, wrist_z],
+           "right_wrist": [1.3, 1.3, wrist_z + .15 if page_turn else wrist_z]}
     return {key: [(x + shift, y, z + height), "supported"] for key, (x, y, z) in xyz.items()}
 
 
@@ -65,11 +66,12 @@ class PreviewTest(unittest.TestCase):
                                clock=lambda: self.now, **{"threaded": False, "append": self.encoded.append, **overrides})
 
     def track(self, *, seated=True, epoch=1, more=False, turned=False, posed=True, association="confident", revision=2,
-              age=0.0, eligible=True, eligibility=1, head=None, frame_extra=None, shift=0.0, page_turn=False):
+              age=0.0, eligible=True, eligibility=1, head=None, frame_extra=None, shift=0.0, page_turn=False,
+              wrist_z=.65):
         self.seq += 1
         if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
             self.rule, self.rule_epoch = seated_rule.Published(), epoch
-        pose = joints(seated, turned, shift, page_turn) if posed else {}
+        pose = joints(seated, turned, shift, page_turn, wrist_z) if posed else {}
         track = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": association,
                  "association_revision": revision, "current_obs_ids": ("pose",), "supported_pose": pose,
                  "seated": self.rule.update("t1", revision, self.now, pose)}   # perception's one answer
@@ -713,6 +715,28 @@ class DirectionTest(PreviewTest):
     def moves(self, since=0):
         return [row for row in self.encoded[since:] if row["action"] == "aim_move"]
 
+    def test_the_spot_aims_at_the_page_at_the_chest_and_in_the_lap(self):
+        """The aim is the page, not the hands, wherever the book is held: up the page, square to the line of sight, so
+        ahead of and above the hands, and never back toward the face. (The old lift toward the eyes put a lap reader's
+        spot about 15 cm behind the book.)"""
+        nose = (1.2, 1.1, 1.18)
+        for hold, wrist_z in (("chest", .65), ("lap", .52)):   # F3 sees both without passing the head
+            with self.subTest(hold):
+                self.preview = self.make_preview()
+                self.preview.configure({**{key: direction.SETTINGS[key] for key in INSTANT if key in direction.SETTINGS},
+                                        "pre_aim": True})
+                self.frames(8, wrist_z=wrist_z)
+                self.read()
+                self.frames(self.preview.settings["fade_in_s"] + .5, wrist_z=wrist_z)
+                self.assertTrue(self.row()["on"])
+                hands = (1.2, 1.3, wrist_z)
+                target = self.preview.track["target"]
+                self.assertEqual(self.preview.track["basis"], "page")
+                self.assertAlmostEqual(math.dist(target, hands), self.preview.settings["page_up_m"], places=6)
+                self.assertGreater(target[1], hands[1], "ahead of the hands")
+                self.assertGreater(target[2], hands[2], "above them")
+                self.assertGreater(math.dist(target, nose), math.dist(hands, nose), "never back toward the face")
+
     def test_a_yes_rises_on_the_curve_as_a_level_train(self):
         self.seat()
         self.frames(6)
@@ -915,6 +939,7 @@ class DirectionTest(PreviewTest):
                 return self.core.eye.aim.Candidate(name, False, "beam_through_head")
             return evaluate(owner, name, row, person, kept)
         since = len(self.snapshots)
+        old_goal = self.preview.rows[lit]["goal"]
         with patch.object(preview.Preview, "_eye", refuse):
             self.frames(self.preview.settings["crossfade_s"] + 1.5)
         seen = self.snapshots[since:]
@@ -923,6 +948,96 @@ class DirectionTest(PreviewTest):
                         "never dark between them")
         self.assertTrue(any(snapshot["fixtures"][lit]["on"] and snapshot["fixtures"][spare]["on"] for snapshot in seen),
                         "they overlap: a crossfade")
+        # Each fixture's light as a share of its own goal's (den-core sets each goal for the same light on the page):
+        # eased in light, the two add up to the whole page all the way through. One tick's two steps publish one
+        # snapshot each, a moment apart, so it's read once a tick, after both.
+        goals = {lit: old_goal, spare: self.preview.rows[spare]["goal"]}
+        ticks = {snapshot["sampled_mono"]: snapshot for snapshot in seen}
+        light = [sum(direction.output(snapshot["fixtures"][name]["level"]) / direction.output(goals[name])
+                     for name in goals) for snapshot in ticks.values()]
+        self.assertGreater(min(light), .9, "the page never dips during a hand-off")
+
+    def test_den_cores_dimming_curve_is_the_directions(self):
+        for level in (0, .01, .08, .2, .5, .77, 1):
+            self.assertAlmostEqual(direction.output(level), self.core.spot_light.dimming_fraction(level), places=12)
+
+    def test_a_lit_fixture_keeps_its_job_through_the_shoulders_swing(self):
+        """den-core admits a fixture at side-on or behind and keeps a lit one to 5 degrees in front; the direction keeps
+        a lit one to FACING_KEEP_DEG, so a side-on socket's light isn't handed on by the shoulders' swing. A real turn
+        still refuses it."""
+        person = {"track_id": "t1", "head": (1.2, 1.0, 1.25), "shoulder_mid": (1.2, 1.0, .95), "facing": (0.0, 1.0),
+                  "target": (1.2, 1.3, .7)}
+
+        def socket(degrees_in_front):
+            a = math.radians(degrees_in_front)
+            return {"aim_origin_m": [1.2 + 2 * math.cos(a), 1.0 + 2 * math.sin(a), 2.5],
+                    "horizontal_world_reference": [0, 1, 0]}
+        keep = direction.FACING_KEEP_DEG
+        self.assertEqual(self.preview._eye("X", socket(3), person, False).reason, "in_front_of_reader",
+                         "admission is den-core's")
+        self.assertTrue(self.preview._eye("X", socket(keep - 1), person, True).ok, "kept through the swing")
+        self.assertEqual(self.preview._eye("X", socket(keep + 1), person, True).reason, "in_front_of_reader",
+                         "a real turn refuses it")
+
+    def dark_only(self, *names):
+        """Real fixtures without lit travel (lit_motion false): the 0.5 s train and the radio rule."""
+        spots = {"F3": FIXTURES["F3"], "F4": {"aim_origin_m": [.6, .2, 2.5], "horizontal_world_reference": [0, 1, 0]}}
+        profile = {**self.core.scurve.FICTIONAL_PROFILE, "fictional": False, "lit_motion": False, "dim_motion": False,
+                   "label": "dark-travel-test"}
+        board = {name: {**spots[name], "profile": profile} for name in names}
+        self.preview = preview.Preview(self.core, binding=BINDING, fixtures=board, state=self.path,
+                                       clock=lambda: self.now, threaded=False, append=self.encoded.append)
+        self.preview.configure({"pre_aim": True})
+        self.preview.connect(lambda snapshot: self.snapshots.append(json.loads(json.dumps(snapshot))))
+
+    def test_a_board_without_lit_travel_holds_its_aim_through_a_small_shift(self):
+        """Every re-aim there is a blink, so while the page stays in the middle of the beam the aim holds."""
+        self.dark_only("F3")
+        self.lit_by_direction()
+        level, since = self.row()["level"], len(self.encoded)
+        self.frames(6, shift=-.08)
+        self.assertTrue(all(row["requested"]["start_cdeg"] == row["requested"]["target_cdeg"]
+                            for row in self.moves(since)), "no re-aim")
+        self.assertEqual(self.row()["level"], level, "and no dip")
+
+    def test_a_board_without_lit_travel_hands_a_moved_page_to_the_standby(self):
+        """When the page has left the lit fixture's beam (here, said so: in this room any shift big enough takes one of
+        the two sockets past the reader's head), the standby already aimed there takes the job as a crossfade: never
+        a fade down, a dark move and a rise."""
+        self.dark_only("F3", "F4")
+        self.lit_by_direction()
+        rows = self.preview.latest["fixtures"]
+        lit, spare = ("F3", "F4") if rows["F3"]["on"] else ("F4", "F3")
+        self.frames(1.5)
+        self.assertEqual(self.preview.rows[spare]["reason"], "standby")
+        outgrown = preview.Preview._outgrown
+
+        def gone(owner, row, person):
+            return row is owner.rows[lit] and owner._lighting(row) and not row["exiting"] or outgrown(owner, row, person)
+        since = len(self.snapshots)
+        with patch.object(preview.Preview, "_outgrown", gone):
+            self.frames(self.preview.settings["crossfade_s"] + 1.5)
+        seen = self.snapshots[since:]
+        self.assertTrue(seen[-1]["fixtures"][spare]["on"] and not seen[-1]["fixtures"][lit]["on"], "handed on")
+        self.assertTrue(all(any(row["on"] for row in snapshot["fixtures"].values()) for snapshot in seen),
+                        "never dark between them")
+        self.assertFalse(any((snapshot["fixtures"][lit].get("fade") or {}).get("purpose") == "dip" for snapshot in seen))
+        self.assertEqual(self.preview.rows[lit]["reason"], "handed_on")
+
+    def test_a_real_fixture_never_gets_more_than_two_commands_a_second(self):
+        """The firmware's radio rule, Stop and keep-lit included: a whole lit session (the pre-aim, the rise, the
+        keep-lits, page turns, a shift and a hand-over) never sends a fixture a third command inside a second."""
+        self.dark_only("F3", "F4")
+        self.lit_by_direction()
+        self.frames(4, page_turn=True)
+        for _ in range(4):
+            self.frames(2, shift=-.4)
+            self.read()
+        for name in ("F3", "F4"):
+            times = sorted(row["at"] for row in self.encoded if row.get("fixture_id", name) == name and "at" in row
+                           and row["action"] in ("aim_move", "keep_lit", "stop"))
+            self.assertTrue(times, name)
+            self.assertTrue(all(c - a >= 1.0 - 1e-9 for a, c in zip(times, times[2:])), name)
 
     def test_every_snapshot_is_one_home_accepts(self):
         """Home's validRow: lit means a level above 0 and the keep-lit token equal to the move's sequence; dark means

@@ -165,7 +165,7 @@ function browserOptions() {
 before(async () => {
   run = fs.mkdtempSync(path.join(os.tmpdir(), 'home-den-live-look-only-'));
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'registration');
-  fs.mkdirSync(packs); fs.mkdirSync(privateRoot);
+  fs.mkdirSync(packs); fs.mkdirSync(privateRoot, { mode: 0o700 }); // the store refuses a folder others can read (POSIX)
   den = installPack(packs, DEN_SITE);
   const other = installPack(packs, OTHER_SITE);
   fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1, packs: [den, other].map(item =>

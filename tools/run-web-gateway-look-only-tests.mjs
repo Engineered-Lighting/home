@@ -468,7 +468,7 @@ async function integrationTests() {
   process.stdout.write("\nlook_only_gateway\n");
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "home-gateway-look-only-"));
   const packs = path.join(temp, "packs"), privateRoot = path.join(temp, "registration");
-  fs.mkdirSync(packs); fs.mkdirSync(privateRoot);
+  fs.mkdirSync(packs); fs.mkdirSync(privateRoot, { mode: 0o700 }); // the store refuses a folder others can read (POSIX)
   const den = installPack(packs, DEN_SITE), other = installPack(packs, OTHER_SITE);
   fs.writeFileSync(path.join(packs, "index.json"), JSON.stringify({ schemaVersion: 1, packs: [den, other].map(item =>
     ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));

@@ -276,7 +276,9 @@ after(async () => {
 });
 
 async function openHome(mobile) {
-  const context = await browser.newContext({ ignoreHTTPSErrors: true, hasTouch: mobile, isMobile: mobile,
+  // The service worker is blocked, as in the other Home browser suites: its one takeover reload per build otherwise lands
+  // at an unpredictable point in a case and aborts whatever it was doing.
+  const context = await browser.newContext({ ignoreHTTPSErrors: true, hasTouch: mobile, isMobile: mobile, serviceWorkers: 'block',
     viewport: mobile ? { width: 390, height: 844 } : { width: 1366, height: 768 } });
   await context.route('**/*', route => {
     const url = route.request().url();

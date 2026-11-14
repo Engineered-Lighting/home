@@ -56,6 +56,7 @@ sys.path.insert(0, str(HERE))
 import ask  # noqa: E402  the Qwen ask (inference plan, step 2)
 import coordinator_live  # noqa: E402  the den lighting coordinator (coordinator plan, step 3)
 import desk  # noqa: E402  the desk switch: one fixture's commands to its board (plan 05, step 05-4)
+import hue_overlay  # noqa: E402  the bulbs, through den_lighting, behind the Bulbs switch (plan 04)
 import ha_link  # noqa: E402  its Home Assistant link
 import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
@@ -261,7 +262,8 @@ def coordinator_settings(config, fixed, *, credentials=None):
                 return None, "the registered geometry export is incomplete"
         if not isinstance(fixtures, dict) or not fixtures or not isinstance(binding, dict):
             return None, "preview needs the registered fixture geometry and binding"
-        return {"preview": True, "fixtures": fixtures, "binding": binding, "seat_mark": seat}, None
+        return {"preview": True, "fixtures": fixtures, "binding": binding, "seat_mark": seat,
+                "bulbs": block.get("bulbs") is True}, None
     virtual = block.get("mode") == "virtual"
     if fixed is None and not virtual:
         return None, "it needs the asks block's Home Assistant link (ha_url, and the ha-token.txt credential)"
@@ -328,27 +330,51 @@ def coordinator_starter(settings, fixed, *, state, tree, credentials=None):
                 return None
             fid = mapping["fixture_id"]
             fixtures = {**fixtures, fid: dict(fixtures[fid], profile=mapping["profile"])}
-        attached = None
+        attached = overlay = None
+        # The bulbs (plan 04): only with the block's own `bulbs: true` (a stale hue_overlay flag opens nothing) and the
+        # asks block's Home Assistant link. It reads den_lighting's status; it sends only while Bulbs is On.
+        bulbs = settings.get("bulbs") is True and fixed is not None and bool(fixed.get("token"))
+        if settings.get("bulbs") is True and not bulbs:
+            say("The bulbs stay den_lighting's: bulbs needs the asks block's Home Assistant link. The spots go on.")
         try:
-            core, _learn = coordinator_live.load_core(tree)
+            core, learn = coordinator_live.load_core(tree)
             service = preview.Preview(core, state=state, fixtures=fixtures,
                                       binding=settings["binding"], seat_mark=settings["seat_mark"])
             if mapping is not None:
                 attached = desk.attach(service, mapping, fixed)
+            if bulbs:
+                # Reads den_lighting's status always; sends only while the Bulbs switch is On (default Off).
+                session = ha_link.HaSession(fixed["ha_url"], fixed["token"], cafile=fixed.get("ha_ca_file"))
+                overlay = hue_overlay.HueOverlay(core, learn, hue_overlay.ReadOnly(session), service.lighting_context,
+                                                 state, sending=service.bulbs_switch, desired=service.bulb_desired,
+                                                 writer=session)
+                service.hue = overlay
             service.start()
+            if overlay is not None:
+                overlay.start()
         except Exception as exc:   # a type name only: its text could hold the URL
-            if attached is not None:
-                attached.close()
+            for part in (attached, overlay):
+                if part is not None:
+                    part.close()
             say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
             return None
-        if attached is None:
+        if overlay is not None:
+            say("The bulbs: planned from den_lighting's status, and sent only while Bulbs is On (it starts Off).")
+        if attached is None and overlay is None:
             return service, service.close
+        if attached is None:
+            def stop_bulbs():
+                service.close()
+                overlay.close()
+            return service, stop_bulbs
         say("The desk: %s's commands go to its board through Home Assistant%s." % (
             mapping["fixture_id"], "" if mapping["light"] else ", dark (light false: the spot stays at level 0)"))
 
         def stop():
             service.close()
             attached.close()
+            if overlay is not None:
+                overlay.close()
         return service, stop
     return start
 
@@ -447,7 +473,12 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     coordinator = config.get("coordinator") or {}
     preview_geometry = isinstance(coordinator, dict) and coordinator.get("preview") is True
     if preview_geometry:
-        config["coordinator"] = {"preview": True, "transform_id": coordinator.get("transform_id"), "hue_overlay": False}
+        # The bulbs (plan 04): only from this install's own settings (`bulbs: true`), never kept from the last one, and
+        # only with the Qwen ask's Home Assistant link. Even then it sends nothing until the owner turns Bulbs On.
+        own = settings.get("coordinator")
+        bulbs = isinstance(own, dict) and own.get("preview") is True and own.get("bulbs") is True and ha is not None
+        config["coordinator"] = {"preview": True, "transform_id": coordinator.get("transform_id"), "hue_overlay": False,
+                                 **({"bulbs": True} if bulbs else {})}
     # The desk (desk.py): only from this install's own settings, never kept from the last one, and only with this
     # install's preview and Home Assistant link, which its commands go through.
     desk_on = settings.get("desk") is True

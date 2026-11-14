@@ -16,6 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
+import bulb_plan
 import direction
 from contracts import PERCEPTION_S
 from preview_evidence import Episode, field, finite, head as published_head, pose, seated as published_seated
@@ -52,7 +53,7 @@ BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipmen
 
 class Preview:
     def __init__(self, core, *, binding, fixtures, state, seat_mark=None, clock=time.monotonic,
-                 publish=None, append=None, threaded=True):
+                 publish=None, append=None, threaded=True, bulb_lights=(), utc_offset_h=None):
         self.core, self.clock = core, clock
         self.binding = {key: binding[key] for key in BINDING_KEYS}
         revision = self.binding["equipment_revision"]
@@ -132,6 +133,12 @@ class Preview:
         self.worker = self.ticker = None
         self.hue = None
         self.site = None
+        # The bulbs (bulb_plan.py): planned and published always, sent only while this switch is On. A missing or
+        # unreadable file is Off, and neither On nor a restart sends anything by itself.
+        self.bulbs_on = self._read("bulbs-control.json", {}).get("on") is True
+        self.bulb_lights = tuple(bulb_lights or ())
+        self.utc_offset_h = (time.localtime().tm_gmtoff / 3600.0) if utc_offset_h is None else float(utc_offset_h)
+        self.bulb = self.bulb_since = None
         self._publish(self.clock())
 
     def _read(self, name, fallback):
@@ -884,6 +891,46 @@ class Preview:
                 row["reason"] = "standby"
         self._advance(row, now, self.task_until() is not None)
 
+    def _plan_bulbs(self, now, ambient=None):
+        """The bulb plan for this moment (bulb_plan.py), from the same situation as the spots. Off and Stop release
+        the bulbs to den_lighting's own rules. A change wakes the overlay, which sends it only while Bulbs is On."""
+        inputs = self.hue.inputs() if self.hue is not None else None
+        context = self._context(now)
+        key, learnable, source = bulb_plan.situation(self.core, context, inputs and inputs["attrs"], self.wall(),
+                                                     self.utc_offset_h)
+        if self.stopped or not self.on:
+            plan = bulb_plan.release(key, "stopped" if self.stopped else "off")
+        else:
+            lights = tuple((inputs and inputs["lights"]) or self.bulb_lights)
+            learned = self.hue.scenes(key, lights) if self.hue is not None and lights else {}
+            plan = bulb_plan.desired(key, people=context["people"], ambient=ambient,
+                                     learned=learned, lights=lights, warmest=inputs and inputs["warmest"],
+                                     house=inputs and inputs["house"])
+        current = {"key": (key, learnable, source), "plan": plan}
+        if current != self.bulb:
+            if self.bulb is None or plan != self.bulb["plan"]:
+                self.bulb_since = now
+            self.bulb = current
+            if self.hue is not None:
+                self.hue.wake()
+
+    def bulb_desired(self):
+        """For the overlay's worker: the plan as the preview last published it."""
+        with self.lock:
+            return self.bulb
+
+    def bulbs_switch(self):
+        return self.bulbs_on
+
+    def _bulb_record(self):
+        if self.bulb is None:
+            return None
+        readback = self.hue.readback() if self.hue is not None else {}
+        sending = self.hue is not None and self.bulbs_on and readback.get("active") is True
+        return bulb_plan.record(self.bulb["plan"], mode="sending" if sending else "shadow", since_mono=self.bulb_since,
+                                source=self.bulb["key"][2], sent_generation=readback.get("sent_generation") if sending else None,
+                                problem=readback.get("problem"))
+
     def _publish(self, now):
         self.seq += 1
         fixtures = {}
@@ -914,10 +961,11 @@ class Preview:
         # The room's glow (additive): what Home draws on every fixture's glow zones and downlight, and later the scale
         # den_lighting would apply to the room's bulbs. None while the coordinator is Off.
         ambient = self.ambient.published(self.settings, now) if self.on else None
+        self._plan_bulbs(now, ambient)   # the bulbs follow the same ambient record Home draws (contract 7)
         self.latest = {"schema": "den-virtual-spots-1", "home": "den", "site": self.site, "epoch": self.epoch, "seq": self.seq,
                        "binding": self.binding, "subject": self._subject(), "sampled_mono": now, "valid_until_mono": until,
                        "on": self.on, "stopped": self.stopped, "stop_counter": self.stop_counter, "fixtures": fixtures,
-                       "ambient": ambient}
+                       "ambient": ambient, "bulbs": self._bulb_record()}
         self.counts["snapshots"] += 1
         self.publish(self.latest)
 
@@ -956,7 +1004,7 @@ class Preview:
     def routes(self):
         routes = {("GET", "/coordinator"): self.state, ("POST", "/coordinator/switch"): self.switch,
                 ("POST", "/coordinator/stop"): self.stop, ("POST", "/coordinator/resume"): self.resume,
-                ("POST", "/coordinator/settings"): self.configure}
+                ("POST", "/coordinator/settings"): self.configure, ("POST", "/coordinator/bulbs"): self.bulbs}
         if self.hue is not None:
             routes[("POST", "/coordinator/learned/clear")] = self.hue.request_clear
         return {**routes, **{(method, path.replace("/coordinator", "/coordinator/virtual", 1)): handler
@@ -966,10 +1014,35 @@ class Preview:
         with self.lock:
             current = {**self._controls(), "snapshot": self.latest, "decision": self.latest_decision,
                        "server_mono": self.clock(), "settings": dict(self.settings), "problem": self.problem,
-                       "trace_event_index": self.trace_committed, "trace_complete": self.trace_complete}
+                       "trace_event_index": self.trace_committed, "trace_complete": self.trace_complete,
+                       "bulbs_on": self.bulbs_on, "bulb_plan": self._bulb_record(),
+                       "situation": self.bulb and self.bulb["key"][0]}
         if self.hue is not None:
-            current.update(self.hue.readback())
+            readback = self.hue.readback()
+            current.update({**readback, "situation": readback.get("situation") or current["situation"],
+                            "problem": current["problem"] or readback.get("problem")})
         return 200, current
+
+    def bulbs(self, data):
+        """The Bulbs switch (contract 6's fourth control). Off applies before the disk write, as Stop does; On only
+        once it's saved. Either way the overlay hears at once: Off releases a plan of ours, On may send one."""
+        if not isinstance(data, dict) or type(data.get("on")) is not bool:
+            return 400, {"ok": False, "error": "expected on"}
+        with self.control_lock:
+            if not data["on"]:
+                with self.lock:
+                    self.bulbs_on = False
+                    self._publish(self.clock())
+            try:
+                self._save("bulbs-control.json", {"on": data["on"]})
+            except OSError:
+                return 503, {"ok": False, "error": "bulb switch write failed", "on": self.bulbs_on}
+            with self.lock:
+                self.bulbs_on = data["on"]
+                self._publish(self.clock())
+        if self.hue is not None:
+            self.hue.wake()
+        return 200, {"ok": True, "on": data["on"]}
 
     def switch(self, data):
         if not isinstance(data, dict) or type(data.get("on")) is not bool:

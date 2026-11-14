@@ -16,7 +16,7 @@ import { captionFor, detailFor } from './home-den-inference-model.mjs';
 import { zoomRatio } from './home-3d/apartment-body-frame.mjs';
 
 const SVG = 'http://www.w3.org/2000/svg';
-const STALE_S = 3, SIDE = [0.42, 0.66], TAU_S = 0.24, PULSE_S = 0.7;
+const STALE_S = 3, SIDE = [0.42, 0.66], TAU_S = 0.24, PULSE_S = 0.7, MEASURE_MS = 250;
 
 export function attachDenCaption({ engine, host, markers, body = () => null, names = () => ({}),
     reducedMotion = () => false, clock = () => performance.now() } = {}) {
@@ -34,11 +34,19 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
     const captions = new Map(), v = new THREE.Vector3(), eye = new THREE.Vector3();
     let latest = null, latestAt = 0, spot = null, disposed = false, raf = null, last = null;
 
-    /* The canvas's box in the host, read once a frame before anything is written, so placing never forces a layout. */
-    let box = { x: 0, y: 0, width: 0, height: 0 };
+    /* The canvas's and the chip's boxes in the host. They're read on a resize and at most every MEASURE_MS, never in
+     * between, so a frame that only moves captions forces no layout. */
+    let box = null, measuredAt = -Infinity;
+    const resized = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { measuredAt = -Infinity; }) : null;
+    resized?.observe(host);
     function measure() {
+        if (box && clock() - measuredAt < MEASURE_MS) return box;
         const c = canvas.getBoundingClientRect(), h = host.getBoundingClientRect();
-        box = { x: c.left - h.left, y: c.top - h.top, width: c.width, height: c.height, host: h };
+        const chip = host.querySelector('[data-den-live-chip]')?.getBoundingClientRect();
+        box = { x: c.left - h.left, y: c.top - h.top, width: c.width, height: c.height, w: h.width, h: h.height,
+            chip: chip && chip.width > 0 ? { left: chip.left - h.left, right: chip.right - h.left, top: chip.top - h.top, bottom: chip.bottom - h.top } : null };
+        measuredAt = clock();
+        return box;
     }
     function project(p) {
         v.set(p[0], p[1], p[2]); parent.localToWorld(v);
@@ -72,9 +80,9 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
         captions.set(id, c);
         return c;
     }
-    const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
-    const setData = (node, key, value) => { if (node.dataset[key] !== value) node.dataset[key] = value; };   // no style churn when unchanged
-    const show = (node, on) => { if (node.hidden === on) node.hidden = !on; };
+    const setText = (node, text) => { if (node.textContent === text) return false; node.textContent = text; return true; };
+    const setData = (node, key, value) => { if (node.dataset[key] === value) return false; node.dataset[key] = value; return true; };   // no style churn when unchanged
+    const show = (node, on) => { if (node.hidden !== on) return false; node.hidden = !on; return true; };
 
     function anchorFor(track, marker, bodySnap) {
         const [mx, my] = marker.xy_m;
@@ -87,7 +95,7 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
     }
 
     function frame(dt, elapsed = dt) {
-        const w = host.clientWidth, h = host.clientHeight, dpr = Math.min(2, doc.defaultView?.devicePixelRatio || 1);
+        const { w, h, chip: chipBox } = measure(), dpr = Math.min(2, doc.defaultView?.devicePixelRatio || 1);
         if (leaders.width !== Math.round(w * dpr) || leaders.height !== Math.round(h * dpr)) { leaders.width = Math.round(w * dpr); leaders.height = Math.round(h * dpr); }
         lctx.setTransform(dpr, 0, 0, dpr, 0, 0); lctx.clearRect(0, 0, w, h);
         const compactFlag = w < 520 ? '1' : '0';
@@ -96,12 +104,8 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
         const seen = new Set();
         if (latest && since <= STALE_S + 2 && w > 0 && h > 0) {
             parent.updateWorldMatrix(true, false); camera.updateMatrixWorld();
-            measure();
             const byId = new Map(markers().map(m => [m.track_id, m]));
             const bodySnap = body(), current = spot, fixtureNames = names() || {}, reduce = reducedMotion();
-            const chipRect = host.querySelector('[data-den-live-chip]')?.getBoundingClientRect(), hostRect = box.host;
-            const chipBox = chipRect && chipRect.width > 0 ? { left: chipRect.left - hostRect.left, right: chipRect.right - hostRect.left,
-                top: chipRect.top - hostRect.top, bottom: chipRect.bottom - hostRect.top } : null;
             for (const track of latest.tracks) {
                 const marker = byId.get(track.track_id);
                 if (!marker) continue;
@@ -113,10 +117,10 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
                 const model = captionFor({ event: latest, track, sinceEventS: since, spot: current, names: fixtureNames });
                 const detail = detailFor(zoomRatio(at.distance));
                 const compact = w < 520;
-                render(c, model, detail, compact, since > STALE_S);
+                if (render(c, model, detail, compact, since > STALE_S) || !c.size) c.size = [c.el.offsetWidth, c.el.offsetHeight];
                 // place: keep the side until the anchor crosses 42% / 66% of the width; stay inside the view
                 if (at.x < w * SIDE[0]) c.side = 'right'; else if (at.x > w * SIDE[1]) c.side = 'left';
-                const gap = onBody ? (compact ? 22 : 34) : (compact ? 18 : 26), ew = c.el.offsetWidth, eh = c.el.offsetHeight;
+                const gap = onBody ? (compact ? 22 : 34) : (compact ? 18 : 26), [ew, eh] = c.size;
                 if (c.side === 'right' && at.x + gap + ew > w - 8 && at.x - gap - ew > 8) c.side = 'left';
                 if (c.side === 'left' && at.x - gap - ew < 8 && at.x + gap + ew < w - 8) c.side = 'right';
                 setData(c.el, 'side', c.side);
@@ -156,34 +160,36 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
 
     function render(c, model, detail, compact, stale) {
         const el = c.el;
-        setData(el, 'kind', model.identity.kind); setData(el, 'strength', model.identity.strength); setData(el, 'detail', String(detail));
-        setData(el, 'line', model.line.kind); setData(el, 'stale', stale ? '1' : '0'); setData(el, 'asking', model.line.asking ? '1' : '0');
-        setText(c.name, model.identity.name);
+        let d = 0;   // whether anything that sizes the caption changed
+        d |= setData(el, 'kind', model.identity.kind); d |= setData(el, 'strength', model.identity.strength); d |= setData(el, 'detail', String(detail));
+        d |= setData(el, 'line', model.line.kind); d |= setData(el, 'stale', stale ? '1' : '0'); d |= setData(el, 'asking', model.line.asking ? '1' : '0');
+        d |= setText(c.name, model.identity.name);
         const id = model.identity;
-        setText(c.prov, detail >= 2 ? (id.kind === 'household' ? `face ${id.score.toFixed(2)}${id.age_s != null ? ` · ${Math.round(id.age_s)} s ago` : ''}`
+        d |= setText(c.prov, detail >= 2 ? (id.kind === 'household' ? `face ${id.score.toFixed(2)}${id.age_s != null ? ` · ${Math.round(id.age_s)} s ago` : ''}`
             : id.kind === 'guest' ? 'face seen · not household' : 'no face seen yet') : '');
-        setText(c.word, stale ? 'Stream stopped' : model.line.words);
-        setText(c.age, stale ? '' : model.line.detail || '');
+        d |= setText(c.word, stale ? 'Stream stopped' : model.line.words);
+        d |= setText(c.age, stale ? '' : model.line.detail || '');
         const life = model.line.life;
-        show(c.ring, life != null);
-        const dash = `${((stale ? 0 : life || 0) * 100).toFixed(1)} 100`;
+        d |= show(c.ring, life != null);
+        const dash = `${((stale ? 0 : life || 0) * 100).toFixed(1)} 100`;   // the ring never changes the caption's size
         if (dash !== c.dash) { c.arc.setAttribute('stroke-dasharray', dash); c.dash = dash; }
         const answer = model.answer;
         if (answer && answer.at !== c.answerAt) {
             if (c.answerAt != null && !reducedMotion()) { c.pulseAt = clock(); c.word.classList.remove('is-new'); void c.word.offsetWidth; c.word.classList.add('is-new'); }
             c.answerAt = answer.at;
         } else if (!answer) c.answerAt = null;
-        show(c.object, !!answer?.object && (detail >= 1 || compact));
-        setText(c.object, answer?.object ? answer.object : '');
-        show(c.basis, !!answer?.basis.length && detail >= 2);
-        setText(c.basis, answer?.basis.length ? `Qwen saw ${answer.basis.join(' · ')}` : '');
+        d |= show(c.object, !!answer?.object && (detail >= 1 || compact));
+        d |= setText(c.object, answer?.object ? answer.object : '');
+        d |= show(c.basis, !!answer?.basis.length && detail >= 2);
+        d |= setText(c.basis, answer?.basis.length ? `Qwen saw ${answer.basis.join(' · ')}` : '');
         const house = model.house;
-        show(c.house, !!house && (detail >= 1 || compact));
-        setText(c.houseWords, house ? house.words : '');
-        setText(c.houseLevel, house && !house.dark && house.level != null ? `${Math.round(house.level * 100)}%${house.cct_k ? ` · ${house.cct_k} K` : ''}` : '');
-        if (house) setData(c.house, 'dark', house.dark ? '1' : '0');
-        show(c.near, detail === 1 && !compact && !!model.near);
-        setText(c.near, model.near || '');
+        d |= show(c.house, !!house && (detail >= 1 || compact));
+        d |= setText(c.houseWords, house ? house.words : '');
+        d |= setText(c.houseLevel, house && !house.dark && house.level != null ? `${Math.round(house.level * 100)}%${house.cct_k ? ` · ${house.cct_k} K` : ''}` : '');
+        if (house) d |= setData(c.house, 'dark', house.dark ? '1' : '0');
+        d |= show(c.near, detail === 1 && !compact && !!model.near);
+        d |= setText(c.near, model.near || '');
+        return d !== 0;
     }
 
     function loop(time) {
@@ -209,6 +215,7 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
             if (disposed) return;
             disposed = true;
             if (raf != null) cancelAnimationFrame(raf);
+            resized?.disconnect();
             layer.remove(); captions.clear();
         },
     };

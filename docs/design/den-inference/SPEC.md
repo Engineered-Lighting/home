@@ -145,10 +145,13 @@ Type: Geist 600 20 px name (17 compact), Geist 500 15 px word (14 compact), Geis
 - The DOM text changes only when its value does, at most at the event rate (about 3 a second) plus once a second for
   ages.
 - Each frame does one projection and one transform per caption, and draws the leaders on a single 2D canvas.
+- **Layout reads:** the canvas's and the chip's boxes are read on a resize and at most every 250 ms. A caption's own
+  size is re-read only after its text or visibility changed. A frame that only moves captions forces no layout.
 - The spot snapshot (10 Hz) only swaps a reference.
 - Nothing allocates per frame beyond the leader gradient during a pulse.
-- **Known cost:** each caption reads its own size every frame after a text write. That's fine for the den's one or
-  two people. Batch the reads if it ever labels a crowd.
+- **Known risk:** Home's phone Stop browser test, run under SwiftShader, was already marginal (3 of 4 on the
+  candidate). With the caption on it failed more often before this caching (2 passes and 1 failure in isolation, and
+  it failed in two full runs). See the design note for the runs after it.
 
 ## 8. Privacy
 

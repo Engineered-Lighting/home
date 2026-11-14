@@ -92,6 +92,15 @@ After a pass, a second 20 s take of the empty den, judged in the room.
   distance to the nearest such plane within 15 cm, plus how far past its patch the point lies, and 20 cm where there's
   none. Depth along each pixel's ray, the first version's measure, was blind to a sideways shift or a turn (the floor
   and the facing wall slide along themselves) and oversensitive to a small tilt at the floor's grazing angle.
+- **The floor the room still shows.** Added 2026-11-13, after the first real take: its nearest floor bins were mostly
+  furniture standing where the scan saw floor, and its farthest lay past the den, through a doorway. So a floor pixel
+  is judged only where the room still shows the scan's floor. It's **covered** when the take's point is more than
+  `held_covered_m` (15 cm) above the take's own floor plane: floor_plane's RANSAC plane on the take's depth, in the
+  camera's frame, so no pose being judged can mask the very pixels that would expose it. It's **outside** when its
+  point, lifted through the registration, falls outside the den's walkable polygon (the pack's `floor.json`, holes
+  excluded); that one uses the pose, as a small error barely moves the edge. Neither is judged; both shares go in the
+  receipt and in one summary line. The upper walls are never masked: they carry the test that doesn't lean on the
+  floor plane, and the summary line says which surface a failure was on.
 - **Within noise:** a residual at most max(`held_noise_min_m`, 2 sigma(z)), with z the pixel's range and sigma(z) =
   `noise_a_m` + `noise_b_per_m` z^2, the placement tool's stereo noise model.
 - **Range bins** of `held_bin_m` by the pixel's range; a bin with under `held_bin_min_pixels` isn't judged.
@@ -101,6 +110,34 @@ After a pass, a second 20 s take of the empty den, judged in the room.
 
 The receipt says `qualified: true` only when den-register registered, each sofa check is within 10 cm and the held-out
 take passes. den-live's installer, its service and its local run each require it.
+
+## Automatic registration (`--auto`)
+
+Added 2026-11-13 at the owner's request: the same paste with no click page and no scan page. Everything up to and
+including the depth check and the median copy is as above. Then:
+- **The pose.** Tilt and height come from the camera's own floor plane (floor_plane on the copy's depth), put on the
+  scan's floor: the mode of the scan's z within 25 cm of z = 0. Only yaw, x and y are searched: yaw all the way round,
+  x and y over the box of the den's walkable polygon, 0.5 m wider, coarse to fine on a truncated distance grid of the
+  scan's points 15 cm above its floor (4 degrees and 20 cm, then 1 degree and 5 cm around the best few), then
+  point-to-plane IRLS against the scan's local planes. The camera's points matched are those 20 cm above the floor.
+- **The stop.** The paste stops in one plain sentence when the take or the scan shows no floor, when the best pose
+  matches under `auto_min_share` of the camera's view within 5 cm, or when the best pose elsewhere (10 degrees or
+  0.5 m away) matches `auto_runner_up_max` of what the best does. On the first real take the runner-up matched 0.69 of
+  the best; on the den simulation's render, 0.23.
+- **The nine points.** Every 4th pixel whose 7 x 7 window has depth everywhere, spreads at most half the edge guard's
+  limit, lies at a middle depth (0.5-4 m, or up to 6 m when that leaves too few) and whose point, at the automatic
+  pose, is within `auto_stable_m` (3 cm) of the scan: stable structure, still where the scan saw it. Six fit points,
+  one low, mid and high (thirds of their height range) on each side of the picture, each as far as it can be from
+  those already chosen; three checks at least 30 cm from every fit point. With `--sofa-mark` (a
+  `home-registered-sofa-target-1` record), the first check is on fixed structure within `auto_sofa_near_m` (1.5 m)
+  of the sofa, across the floor, not on the sofa itself, where the room has one; the receipt's `checks_near_sofa` says
+  whether it did (null with no mark). The mark's numbers never print.
+- **Through den-register, unedited.** Each scan side is the scan point nearest the camera point at the automatic
+  pose. The nine are written as clicks on the copy's frame and as `measured_with: auto` room positions in the
+  worksheet (the method `auto + fit`, both set in memory as `scan-pick` is), so the edge guard, the distance check,
+  den-register's fit, the receipt and the held-out take all run as above. Each check must be within
+  `sofa_check_max_m` (10 cm); the field keeps its name, `sofa_check_errors_m`, and the receipt says `checks: auto` and
+  `registration: auto`.
 
 ## The numbers
 
@@ -155,5 +192,10 @@ held_bin_m = 1.0                  # range bins this wide, by the pixel's range
 held_bin_max_m = 0.10             # and no bin's median residual, in the room, over this
 held_bin_min_pixels = 200         # a bin with fewer pixels isn't judged
 held_min_pixels = 2000            # fewer floor, or upper-wall, pixels than this: the take can't qualify
+held_covered_m = 0.15             # held-out: a scan-floor pixel this far above the take's own floor is covered
 own_scale_band = 0.05             # the features' own scale, printed with a note outside 1 +/- this
+auto_stable_m = 0.03              # --auto: a point on stable structure is within this of the scan at the automatic pose
+auto_min_share = 0.25             # --auto: the best pose matches at least this share of the camera's view within 5 cm
+auto_runner_up_max = 0.80         # --auto: and the best pose elsewhere matches under this share of what the best does
+auto_sofa_near_m = 1.5            # --auto: a check this close to the sofa mark, across the floor, is near the sofa
 ```

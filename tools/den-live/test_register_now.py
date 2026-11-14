@@ -2,8 +2,9 @@
 
     python -B -X utf8 tools\\den-live\\test_register_now.py
 
-No camera, LA or ssh. The depth check, the edge guard, the distance check and the held-out check run on synthetic depth
-and synthetic rooms. The parts on renders need a prepared den-sim set (DEN_SIM_SET, else
+No camera, LA or ssh. The depth check, the edge guard, the distance check, the held-out check and --auto's search run
+on synthetic depth and synthetic rooms; --auto also runs end to end on the renders, with the render's points as the
+scan and no page. The parts on renders need a prepared den-sim set (DEN_SIM_SET, else
 %USERPROFILE%\\den-sim\\prepared\\fbc7bda3115e) and are skipped without it: test_sofa_check's fake camera serves the
 set's marks take (an empty rendered room, perfect depth), or a copy of it with its depth scaled; den-register's own
 ClickSession clicks nine features found on the render's depth; the scan page is the real scan_pick.mjs on the authored
@@ -734,6 +735,135 @@ class HeldOut(unittest.TestCase):
         self.assertGreater(residual[3], 0.05, 'beyond the wall\'s edge, along its plane')
         self.assertEqual(residual[4], rn.RESIDUAL_CAP_M, 'no surface within reach')
 
+    # ---- a room that changed since the scan: floor now covered, and floor beyond the den
+
+    TABLE = (1.2, 2.8, 2.4, 3.0, 0.6)   # standing where the scan saw floor: in the held-out take only
+    DEN = {'polygon': np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 3.5], [0.0, 3.5]]), 'holes': []}   # the den ends at y = 3.5
+    ROOM = {'polygon': np.array([[-0.1, -0.1], [4.1, -0.1], [4.1, 5.1], [-0.1, 5.1]]), 'holes': []}   # the whole box
+
+    def unmasked(self, registration, measured):
+        """The same take judged with no floor masked: what the held-out test did before."""
+        points = box_points()
+        planes = rn.surface_planes(points[points[:, 2] >= LIVE['held_wall_min_z_m'] - rn.SURFACE_BELOW_M])
+        return rn.held_out_numbers(rn.scan_view(points, registration, K, LIVE), measured,
+                                   rn.lift(measured, K, registration), planes, LIVE)
+
+    def beyond_the_den(self, depth, drop=0.2):
+        """depth with the floor past y = 3.5 seen drop lower, as through a doorway onto a floor the scan has elsewhere."""
+        room = rn.lift(depth, K, self.pose)
+        beyond = (np.abs(room[..., 2]) < 0.01) & (room[..., 1] > 3.5)
+        return np.where(beyond, depth * (self.pose[2, 3] + drop) / self.pose[2, 3], depth)
+
+    def test_furniture_not_in_the_scan_is_covered_and_not_judged(self):
+        measured = box_depth(self.pose, self.TABLE)
+        found = rn.held_out_check(box_points(), self.pose, K, measured, LIVE, self.ROOM)
+        self.assert_passes(found)
+        self.assertGreater(found['covered_share'], 0.10)
+        self.assertEqual(found['outside_share'], 0.0)
+        self.assertTrue(found['floor_view']['camera_floor'])
+        self.assertRegex(rn.masked_line(found), r"^Held-out take: \d+% of the scan's floor view is now covered by things "
+                                                r"not in the scan, and 0% lies outside the den's floor; neither is judged\.$")
+        before = self.unmasked(self.pose, measured)
+        self.assertEqual((before['ok'], before['failed_on']), (False, ['floor']), 'judged as before, the table fails it')
+
+    def test_floor_beyond_the_dens_polygon_or_in_a_hole_is_not_judged(self):
+        measured = self.beyond_the_den(box_depth(self.pose))
+        found = rn.held_out_check(box_points(), self.pose, K, measured, LIVE, self.DEN)
+        self.assert_passes(found)
+        self.assertGreater(found['outside_share'], 0.05)
+        self.assertEqual(found['covered_share'], 0.0, 'a floor lower than the camera\'s is never covered')
+        self.assertFalse(rn.held_out_check(box_points(), self.pose, K, measured, LIVE)['ok'], 'with no polygon it fails')
+        holed = {"polygon": self.DEN["polygon"], "holes": [np.array([[1.0, 2.2], [3.0, 2.2], [3.0, 3.0], [1.0, 3.0]])]}
+        more = rn.held_out_check(box_points(), self.pose, K, measured, LIVE, holed)
+        self.assertGreater(more['outside_share'], found['outside_share'] + 0.05)
+
+    def test_the_covered_mask_is_the_takes_own_so_a_wrong_pose_cant_hide_behind_it(self):
+        """At a registration 20 cm too high, the floor lifts 20 cm off z = 0. Masked by the pose's own room heights,
+        all of it would be 'covered' and the floor never judged; masked by the take's own floor plane, it's judged as it
+        is at the true pose, and fails. Sideways, the upper walls fail, unmasked, and the line says which."""
+        measured = box_depth(self.pose, self.TABLE)
+        true = rn.held_out_check(box_points(), self.pose, K, measured, LIVE, self.DEN)
+        up = rn.held_out_check(box_points(), moved(self.pose, [0.0, 0.0, 0.20]), K, measured, LIVE, self.DEN)
+        self.assertFalse(up['ok'])
+        self.assertIn('floor', up['failed_on'])
+        self.assertAlmostEqual(up['covered_share'], true['covered_share'], delta=0.03)
+        self.assertGreater(up['floor']['pixels'], 0.8 * true['floor']['pixels'], 'the floor is still judged')
+        heights, plane = rn.camera_floor_heights(measured, K, LIVE)
+        self.assertAlmostEqual(plane['height_m'], HEIGHT_TAPE, delta=0.01)
+        side = rn.held_out_check(box_points(), moved(self.pose, [0.30, 0.0, 0.0]), K, measured, LIVE, self.DEN)
+        self.assertEqual((side['ok'], side['failed_on']), (False, ['upper']))
+        self.assertTrue(rn.held_line(side).endswith('; failed on the upper walls.'), rn.held_line(side))
+        turn = rn.held_out_check(box_points(), turned(self.pose, 'x', 3, about='camera'), K, measured, LIVE, self.DEN)
+        self.assertFalse(turn['ok'], 'a 3 degree tilt still fails')
+
+
+# ---- --auto: the pose from the camera's own floor and the scan --------------------------------------------------------
+
+class AutoPose(unittest.TestCase):
+    """auto_pose on the synthetic box room: the camera's points from the ray-cast depth, the scan sampled every 2 cm."""
+    DEN = {'polygon': np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 5.0], [0.0, 5.0]]), 'holes': []}
+    CABINET = (0.3, 1.3, 2.2, 2.8, 2.0)   # tall, off the middle, in the scan and in the room: no turn of the box hides it
+
+    def camera(self, pose, table=None):
+        return rn.camera_points(box_depth(pose, table) * 1000, K)
+
+    def assert_near(self, found, pose, metres=0.03, degrees=1.0):
+        self.assertNotIn('why', found, found.get('why'))
+        apart = np.linalg.norm(found['pose'][:3, 3] - pose[:3, 3])
+        turn = math.degrees(math.acos(min(1.0, (np.trace(found['pose'][:3, :3] @ pose[:3, :3].T) - 1) / 2)))
+        self.assertLess(apart, metres)
+        self.assertLess(turn, degrees)
+
+    def test_a_room_with_a_cabinet_off_the_middle_is_found_to_a_few_centimetres(self):
+        for pose in (look_pose([1.6, 0.6, 1.7], yaw_deg=-10, pitch_deg=20), look_pose([0.5, 0.4, 2.3], yaw_deg=5, pitch_deg=30)):
+            found = rn.auto_pose(self.camera(pose, self.CABINET), box_points(table=self.CABINET), self.DEN, LIVE)
+            self.assert_near(found, pose)
+            self.assertLess(found['runner_up'], LIVE['auto_runner_up_max'] * found['share'])
+            self.assertLess(found['seconds'], 60)
+
+    def test_a_room_the_same_both_ways_round_stops_in_one_sentence(self):
+        """At the middle of a bare box, facing a wall, the view is the same turned 180 degrees."""
+        found = rn.auto_pose(self.camera(look_pose([2.0, 2.5, 1.7], pitch_deg=20)), box_points(), self.DEN, LIVE)
+        self.assertRegex(found['why'], r"^the automatic search can't tell two poses apart: the best matches \d+% of the "
+                                       r"camera's view and another, elsewhere, \d+%$")
+
+    def test_no_floor_in_the_take_or_in_the_scan_stops(self):
+        wall = look_pose([2.0, 4.0, 1.5], pitch_deg=0)   # a metre from a wall, level: no floor in the picture
+        found = rn.auto_pose(self.camera(wall), box_points(), self.DEN, LIVE)
+        self.assertEqual(found, {'why': "the camera's floor plane isn't found in the take"})
+        pose = look_pose([1.6, 0.6, 1.7], yaw_deg=-10, pitch_deg=20)
+        points = box_points(table=self.CABINET)
+        found = rn.auto_pose(self.camera(pose, self.CABINET), points[points[:, 2] > 0.3], self.DEN, LIVE)
+        self.assertEqual(found, {'why': 'the scan shows no floor near z = 0'})
+
+    def test_the_sofa_marks_distance_is_across_the_floor_to_its_footprint(self):
+        sofa = {'seat': [2.0, 1.0, 0.45], 'footprint': np.array([[1.0, 0.6], [3.0, 0.6], [3.0, 1.4], [1.0, 1.4]])}
+        np.testing.assert_allclose(rn.sofa_distance(np.array([[2.0, 1.0], [2.0, 2.9], [4.0, 1.0]]), sofa), [0.0, 1.5, 1.0])
+        np.testing.assert_allclose(rn.sofa_distance(np.array([[2.0, 2.0]]), dict(sofa, footprint=None)), [1.0])
+
+    def test_a_sofa_mark_is_read_by_its_schema_and_its_numbers_never_printed(self):
+        folder = scratch('den-live-sofa-')
+        good = folder / 'mark.json'
+        good.write_text(json.dumps({'schema': 'home-registered-sofa-target-1', 'seat': {'point_m': [1.25, 2.5, 0.45]},
+                                    'zone': {'vertices_m': [[1, 2, 0], [2, 2, 0], [2, 3, 0]]}}), encoding='utf-8')
+        mark = rn.sofa_mark(good)
+        self.assertEqual(mark['seat'], [1.25, 2.5, 0.45])
+        self.assertEqual(mark['footprint'].shape, (3, 2))
+        bad = folder / 'other.json'
+        bad.write_text(json.dumps({'schema': 'something-else', 'seat': {'point_m': [1.25, 2.5, 0.45]}}), encoding='utf-8')
+        with self.assertRaises(rn.Stop) as stop:
+            rn.sofa_mark(bad)
+        self.assertNotIn('1.25', str(stop.exception))
+
+    def test_the_vectorised_window_spread_is_window_spread(self):
+        depth = floor_plane_depth()
+        depth[250:350, 300:310] += 0.3   # a step
+        spreads = rn.window_spreads(depth)
+        for u, v in ((100, 300), (305, 300), (298, 260), (320, 390)):
+            np.testing.assert_allclose(spreads[v, u], rn.window_spread(depth, u, v, 3)[0], atol=1e-9)
+        self.assertGreater(spreads[260, 298], 0.1)
+        self.assertTrue(np.isnan(spreads[1, 1]) and np.isnan(spreads[100, 200]), 'by the edge, or a pixel without depth')
+
 
 def ply_bytes(points):
     """points as Home's points.ply: binary little-endian x, y, z float32 and an intensity byte."""
@@ -744,13 +874,26 @@ def ply_bytes(points):
     return header.encode('ascii') + body.tobytes()
 
 
-def write_packs(folder, revision, ply, site=SITE, tamper=False):
-    """A content packs folder with one active pack holding points.ply, as Home's packs lay it out."""
+def floor_box(points, also=(), pad=0.3):
+    """A walkable polygon for synthetic packs: the box of the points' x and y (and of any others in also), pad wider."""
+    xy = np.vstack([np.asarray(points)[:, :2]] + [np.asarray(p, dtype=float)[None, :2] for p in also])
+    (x0, y0), (x1, y1) = xy.min(axis=0) - pad, xy.max(axis=0) + pad
+    return [[float(x0), float(y0)], [float(x1), float(y0)], [float(x1), float(y1)], [float(x0), float(y1)]]
+
+
+def write_packs(folder, revision, ply, site=SITE, tamper=False, floor=None):
+    """A content packs folder with one active pack holding points.ply and floor.json, as Home's packs lay them out. The
+    floor is {walkable_polygon, holes}, by default floor_box of the points."""
     pack = Path(folder) / site / revision
     pack.mkdir(parents=True, exist_ok=True)
     (pack / 'points.ply').write_bytes(ply + (b'x' if tamper else b''))
-    (pack / 'content-pack.json').write_text(json.dumps({'assets': {'points.ply': {'path': 'points.ply', 'bytes': len(ply),
-                                                                                   'sha256': rn.sha256_bytes(ply)}}}), encoding='utf-8')
+    floor = floor or {'walkable_polygon': floor_box(rn.read_ply(ply)), 'holes': []}
+    floor_data = json.dumps({'frame': 'synthetic', **floor}).encode('utf-8')
+    (pack / 'floor.json').write_bytes(floor_data)
+    (pack / 'content-pack.json').write_text(json.dumps({'assets': {
+        'points.ply': {'path': 'points.ply', 'bytes': len(ply), 'sha256': rn.sha256_bytes(ply)},
+        'floor.json': {'path': 'floor.json', 'bytes': len(floor_data), 'sha256': rn.sha256_bytes(floor_data)}}}),
+        encoding='utf-8')
     (Path(folder) / site / 'ACTIVE').write_text(revision + '\n', encoding='utf-8')
     return Path(folder)
 
@@ -773,6 +916,21 @@ class ScanPoints(unittest.TestCase):
         self.assertEqual(rn.scan_points(tampered, SITE, 'rev-2')[1], "the scan's points.ply doesn't match its pack's manifest")
         self.assertEqual(rn.scan_points(scratch('den-live-packs-'), SITE, 'rev-2')[1],
                          "the scan's active content pack has no readable points.ply")
+
+    def test_the_dens_floor_comes_from_the_same_pack_with_its_holes(self):
+        ply = ply_bytes(box_points(step=0.5))
+        floor = {'walkable_polygon': [[0, 0], [4, 0], [4, 3.5], [0, 3.5]], 'holes': [[[1, 1], [2, 1], [2, 2], [1, 2]]]}
+        packs = write_packs(scratch('den-live-packs-'), 'rev-2', ply, floor=floor)
+        area, why = rn.scan_floor_area(packs, SITE, 'rev-2')
+        self.assertIsNone(why)
+        np.testing.assert_allclose(rn.in_floor_area(np.array([[0.5, 0.5], [1.5, 1.5], [3, 3], [3, 4]]), area),
+                                   [True, False, True, False])
+        self.assertEqual(rn.scan_floor_area(packs, SITE, 'rev-1')[1],
+                         'the active scan is rev-2, but the registration was made on rev-1')
+        broken = write_packs(scratch('den-live-packs-'), 'rev-2', ply, floor={'walkable_polygon': [[0, 0], [1, 1]]})
+        self.assertIn('no walkable polygon', rn.scan_floor_area(broken, SITE, 'rev-2')[1])
+        self.assertEqual(rn.scan_floor_area(scratch('den-live-packs-'), SITE, 'rev-2')[1],
+                         "the scan's active content pack has no readable floor.json")
 
 
 # ---- the summary block, exactly in step 02-2's format ----------------------------------------------------------------
@@ -1232,6 +1390,11 @@ class ScanPageFolder(unittest.TestCase):
 # ---- end to end, on the rendered marks take -------------------------------------------------------------------------
 
 FAST = rn.Timing(lead_s=0.2, window_s=4.0, poll_s=0.2)
+HELD_LINE = r'^Held-out take: \d+% of floor and \d+% of upper-wall pixels within noise; worst range bin \d+\.\d cm\.$'
+HELD_LINE_FAILED = (r'^Held-out take: \d+% of floor and \d+% of upper-wall pixels within noise; worst range bin \d+\.\d cm; '
+                    r'failed on (the floor|the upper walls|the floor and the upper walls)\.$')
+MASKED_LINE = (r"^Held-out take: \d+% of the scan's floor view is now covered by things not in the scan, and \d+% lies "
+               r"outside the den's floor; neither is judged\.$")
 TARGETS = {'f1': (0.2, 0.85), 'f2': (0.8, 0.85), 'f3': (0.2, 0.5), 'f4': (0.8, 0.5), 'f5': (0.2, 0.15), 'f6': (0.8, 0.15),
            'c1': (0.35, 0.65), 'c2': (0.5, 0.7), 'c3': (0.65, 0.65)}   # where in the picture each feature is looked for
 
@@ -1352,7 +1515,10 @@ class OnRenders(unittest.TestCase):
         cls.room = {pid: f['room'] for pid, f in cls.features.items()}
         cls.height, cls.wall = render_tapes(plane, cls.k, cls.pose)
         scan = rn.camera_points(plane, cls.k, step=1) @ cls.pose[:3, :3].T + cls.pose[:3, 3]
+        cls.scan = scan
         cls.ply = ply_bytes(scan)
+        # The den's floor: the render's room, and the camera's own place, as a den's walkable polygon holds both.
+        cls.floor = {'walkable_polygon': floor_box(scan, also=[cls.pose[:3, 3]]), 'holes': []}
 
     @classmethod
     def tearDownClass(cls):
@@ -1411,7 +1577,8 @@ class OnRenders(unittest.TestCase):
                 with urllib.request.urlopen(origin + '/__pick/state', timeout=20) as response:
                     self.seen['pick_state'] = json.loads(response.read())
                 if self.ply_now is not None:
-                    write_packs(self.root / 'packs', self.seen['pick_state']['binding']['content_revision'], self.ply_now)
+                    write_packs(self.root / 'packs', self.seen['pick_state']['binding']['content_revision'], self.ply_now,
+                                floor=self.floor)
                 with urllib.request.urlopen(origin + '/?apartmentRedesign=1&worldZoom=off', timeout=20) as response:
                     token = re.search(r'__scanPick=\{token:"([0-9a-f]+)"\}', response.read().decode()).group(1)
                 chosen = {pid: {'point_m': (moved or {}).get(pid, xyz), 'surface_ref': REF} for pid, xyz in self.room.items()
@@ -1437,7 +1604,7 @@ class OnRenders(unittest.TestCase):
             urllib.request.urlopen(request, timeout=20).read()
         return lambda work, take: rn.scan_page(work, take, 'show', opener=opener, extra=('--room', 'authored', '--tmp', str(TMP), '--port', str(port)))
 
-    def paste(self, again=False, tapes=None, wait=time.sleep, timing=FAST, **kw):
+    def paste(self, again=False, tapes=None, wait=time.sleep, timing=FAST, argv=(), **kw):
         typed = iter(['%.6f' % value for value in (tapes or (self.height, self.wall))])
         self.seen['asked'] = 0
 
@@ -1446,7 +1613,7 @@ class OnRenders(unittest.TestCase):
             return next(typed)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            code = rn.main(['--again'] if again else [], root=self.root, camera_url=self.camera.url, token_file=self.token_file,
+            code = rn.main((['--again'] if again else []) + list(argv), root=self.root, camera_url=self.camera.url, token_file=self.token_file,
                            timing=timing, speak=lambda text: self.seen.setdefault('spoken', []).append(text), wait=wait,
                            console=lambda: True, method_file=self.method, ask=ask, packs=self.root / 'packs', site=SITE, **kw)
         text = out.getvalue()
@@ -1478,7 +1645,7 @@ class OnRenders(unittest.TestCase):
                   r'^Fit: 6 fit \+ 3 check\. Residuals \d+\.\d-\d+\.\d cm\. Leave-one-out worst \d+\.\d cm\. Sofa checks '
                   r'\d+\.\d, \d+\.\d, \d+\.\d cm\.$',
                   r'^REGISTERED den-oak@\d{4}-\d{2}-\d{2}\.\d+: gate 15 cm, error bound \d+\.\d cm\.$',
-                  r'^Held-out take: \d+% of floor and \d+% of upper-wall pixels within noise; worst range bin \d+\.\d cm\.$',
+                  HELD_LINE if qualified else HELD_LINE_FAILED, MASKED_LINE,
                   r'^QUALIFIED: yes$' if qualified else r'^QUALIFIED: no, because .+\.$']
         self.assertEqual(len(block), len(shapes), block)
         for line, shape in zip(block, shapes):
@@ -1880,6 +2047,127 @@ class OnRenders(unittest.TestCase):
     def fail_if_called(self, *args):
         raise AssertionError('a page opened that should not have')
 
+    # ---- --auto: no clicks, no scan page
+
+    def auto_paste(self, *extra, again=False, ply=None, packs=True):
+        """A paste with --auto: the render's scan and the den's floor laid out as the active pack first, as Home's are
+        before any paste; no page may open."""
+        if packs:
+            write_packs(self.root / 'packs', 'den-sim-render', self.ply if ply is None else ply, floor=self.floor)
+        return self.paste(again=again, argv=['--auto', *extra], clicker=self.fail_if_called, picker=self.fail_if_called,
+                          shower=self.fail_if_called)
+
+    def sofa_file(self, seat_xy, half=(0.8, 0.4)):
+        """A home-registered-sofa-target-1 record with its seat at seat_xy and a footprint round it, in this test's
+        folder (never a real mark)."""
+        x, y = seat_xy
+        path = self.root / 'sofa-mark.json'
+        corners = [[x - half[0], y - half[1], 0.0], [x + half[0], y - half[1], 0.0], [x + half[0], y + half[1], 0.0],
+                   [x - half[0], y + half[1], 0.0]]
+        path.write_text(json.dumps({'schema': 'home-registered-sofa-target-1', 'seat': {'point_m': [x, y, 0.45]},
+                                    'zone': {'vertices_m': corners}}), encoding='utf-8')
+        return path
+
+    def assert_auto_block(self, text, near='not known'):
+        block = [line.strip() for line in self.summary(text).splitlines()[1:] if line.strip()]
+        block = block[:next(i for i, line in enumerate(block) if line.startswith('QUALIFIED:')) + 1]
+        shapes = [r'^Method REGISTER-LIVE-20261113, scan den-sim-render\.$',
+                  r'^Registration: automatic \(no clicks\)\.$',
+                  r'^Depth correction at the camera: not required by this method file \(\d+ of \d+ frames say applied\)\.$',
+                  r'^Depth check: floor [+-]\d+\.\d%, wall [+-]\d+\.\d%, bend \d+\.\d points; den-live scale (none|x[01]\.\d+)\.$',
+                  r"^Automatic pose: it matches \d+% of the camera's view within 5 cm; the best pose elsewhere, \d+%\. "
+                  r"Points: 9 of 9 on stable structure, clear of depth edges\.$",
+                  r'^Distance check: 9 agree; median pair difference \d+\.\d cm\.$',
+                  r'^Fit: 6 fit \+ 3 check\. Residuals \d+\.\d-\d+\.\d cm\. Leave-one-out worst \d+\.\d cm\. Checks '
+                  r'\d+\.\d, \d+\.\d, \d+\.\d cm\.$',
+                  r'^Checks near the sofa: %s[;,] .+\.$' % near,
+                  r'^REGISTERED den-oak@\d{4}-\d{2}-\d{2}\.\d+: gate 15 cm, error bound \d+\.\d cm\.$',
+                  HELD_LINE, MASKED_LINE, r'^QUALIFIED: yes$']
+        self.assertEqual(len(block), len(shapes), block)
+        for line, shape in zip(block, shapes):
+            self.assertRegex(line, shape)
+
+    def registered_pose(self):
+        models = R.records.read_jsonl(self.work() / 'room-model.jsonl', 'x')
+        entry = R.records.resolve(models, self.receipt()['fit']['transform_id'])['entry']
+        return np.array(entry['pose']['room_from_camera'], dtype=np.float64)
+
+    def test_auto_registers_the_render_with_no_clicks_and_qualifies_at_the_true_pose(self):
+        started = time.time()
+        code, text = self.auto_paste()
+        seconds = time.time() - started
+        self.assertEqual(code, 0, text)
+        self.assert_auto_block(text)
+        self.assertIn('Finding the camera in your scan from its own view: no clicks, no scan page.', text)
+        receipt = self.receipt(1)
+        self.assertEqual((receipt['registration'], receipt['checks'], receipt['checks_near_sofa'], receipt['qualified']),
+                         ('auto', 'auto', None, True))
+        self.assertEqual((receipt['schema'], receipt['scan_revision'], receipt['fit']['result']),
+                         ('den-live-register-now-2', 'den-sim-render', 'registered'))
+        self.assertEqual(sorted(receipt['sofa_check_errors_m']), ['c1', 'c2', 'c3'])
+        self.assertLessEqual(max(receipt['sofa_check_errors_m'].values()), LIVE['sofa_check_max_m'])
+        self.assertGreater(receipt['auto']['share'], 0.9)
+        held = receipt['held_out']
+        self.assertTrue(held['ok'])
+        self.assertTrue(set(held) >= {'covered_share', 'outside_share', 'failed_on'})
+        pose = self.registered_pose()
+        apart = np.linalg.norm(pose[:3, 3] - self.pose[:3, 3])
+        turn = math.degrees(math.acos(min(1.0, (np.trace(pose[:3, :3] @ self.pose[:3, :3].T) - 1) / 2)))
+        self.assertLess(apart, 0.03, 'the true pose, to a few centimetres')
+        self.assertLess(turn, 1.0, 'and to a degree')
+        sheet = json.loads((self.work() / 'worksheet.json').read_text(encoding='utf-8'))
+        self.assertEqual({p['measured_with'] for p in sheet['points']}, {'auto'})
+        self.assertEqual([p['id'] for p in sheet['points']], list(rn.IDS))
+        self.assertIn('"auto + fit"', (self.work() / 'room-model.jsonl').read_text(encoding='utf-8'))
+        self.assertNotIn('pick_state', self.seen)
+        self.assertLess(seconds, 120, 'the whole paste, takes included')
+
+    def test_auto_with_a_sofa_mark_puts_a_check_near_the_sofa_and_never_prints_the_mark(self):
+        floor = self.scan[np.abs(self.scan[:, 2]) < 0.02]
+        seat = [round(float(np.median(floor[:, 0])), 3), round(float(np.percentile(floor[:, 1], 70)), 3)]
+        code, text = self.auto_paste('--sofa-mark', str(self.sofa_file(seat)))
+        self.assertEqual(code, 0, text)
+        self.assert_auto_block(text, near='yes')
+        self.assertIs(self.receipt()['checks_near_sofa'], True)
+        sheet = {p['id']: p for p in json.loads((self.work() / 'worksheet.json').read_text(encoding='utf-8'))['points']}
+        mark = rn.sofa_mark(self.root / 'sofa-mark.json')
+        across = rn.sofa_distance(np.array([sheet[pid]['room_xyz_m'][:2] for pid in rn.CHECKS]), mark)
+        self.assertLessEqual(across.min(), LIVE['auto_sofa_near_m'])
+        for value in seat:
+            self.assertNotIn('%g' % value, text, 'the mark is never printed')
+        code, text = self.auto_paste('--sofa-mark', str(self.sofa_file([seat[0] + 50.0, seat[1] + 50.0])))
+        self.assertEqual(code, 0, text)
+        self.assertIs(self.receipt()['checks_near_sofa'], False)
+        self.assertIn('Checks near the sofa: no;', self.summary(text))
+
+    def test_auto_again_keeps_the_take_and_its_tapes_and_is_qualified_already(self):
+        code, text = self.auto_paste()
+        self.assertEqual(code, 0, text)
+        code, text = self.auto_paste(again=True)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.seen['asked'], 0, 'the tapes kept beside the take')
+        self.assertIn('Using the take', text)
+        self.assertIn('from these same points.', text)
+        self.assertIn("It's qualified already: nothing changed, nothing to do.", text)
+        self.assertEqual((self.receipt()['registration'], self.receipt()['qualified']), ('auto', True))
+
+    def test_auto_stops_in_one_sentence_when_the_scan_shows_no_floor(self):
+        code, text = self.auto_paste(ply=ply_bytes(self.scan[self.scan[:, 2] > 0.3]))
+        self.assertEqual(code, 2, text)
+        self.assertIn('register: stopped: the scan shows no floor near z = 0. Nothing was registered; register by '
+                      'clicking instead: paste the line without --auto', text)
+        self.assertIn('QUALIFIED: no, because the scan shows no floor near z = 0.', self.summary(text))
+        self.assertIn('Registration: automatic (no clicks).', self.summary(text))
+        self.assertFalse((self.work() / 'room-model.jsonl').exists())
+        self.assertEqual(self.receipt()['registration'], 'auto')
+
+    def test_auto_without_a_scan_stops_before_any_search(self):
+        code, text = self.auto_paste(packs=False)
+        self.assertEqual(code, 2, text)
+        self.assertIn('register: stopped: --auto needs your scan: no active scan in the content packs. Nothing was '
+                      'registered', text)
+        self.assertNotIn('Finding the camera', text)
+
 
 class Wiring(unittest.TestCase):
     def test_no_console_touches_nothing(self):
@@ -1896,6 +2184,22 @@ class Wiring(unittest.TestCase):
         with contextlib.redirect_stdout(out):
             self.assertEqual(rn.main(['--again'], root=root, console=lambda: True), 2)
         self.assertIn('no earlier take', out.getvalue())
+
+    def test_a_sofa_mark_goes_with_auto_and_a_bad_one_stops_before_the_camera(self):
+        root = scratch('den-live-root-')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(rn.main(['--sofa-mark', str(root / 'mark.json')], root=root, console=lambda: True), 2)
+        self.assertIn('register: refused, --sofa-mark goes with --auto. Nothing was recorded.', out.getvalue())
+        self.assertEqual(list(root.iterdir()), [])
+        (root / 'mark.json').write_text(json.dumps({'schema': 'something-else'}), encoding='utf-8')
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(rn.main(['--auto', '--sofa-mark', str(root / 'mark.json')], root=root, console=lambda: True,
+                                     ask=lambda prompt: self.fail('asked')), 2)
+        self.assertIn("register: stopped: the file given with --sofa-mark isn't a home-registered-sofa-target-1 record "
+                      "with a seat point", out.getvalue())
+        self.assertFalse((root / 'private').exists())
 
     def test_a_missing_token_says_where_it_goes_before_any_question(self):
         root = scratch('den-live-root-')

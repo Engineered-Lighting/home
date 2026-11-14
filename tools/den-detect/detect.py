@@ -38,6 +38,7 @@ import csv
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import statistics
@@ -66,9 +67,63 @@ PERSON_MIN, MAX_PEOPLE = 0.5, 2              # pose_composition.POLICY: minimum_
 LIMIT_S, TOLERANCE_PX = 1.0, 1.0             # den-observe's proposed detector_max_age_s; the reproduce check
 TOLERANCE_SCORE = 1e-3                       # the reproduce check on a person's score and each joint's
 WIDTH, HEIGHT = 640, 360
+ROW_DETECTIONS = 64                          # den-observe's MAX_DETECTIONS: a row with more is refused whole
+MIN_SIDE_PX = 1.0                            # a box thinner than a pixel after clipping says nothing; it's dropped
 AUTHORIZE = "answered yes by detect.py: no Lab admission runs on this PC"
 NETWORK = ("socket.connect", "socket.bind", "socket.sendto", "socket.sendmsg", "socket.getaddrinfo",
            "socket.gethostbyname", "socket.gethostbyaddr", "socket.getnameinfo")
+
+
+def _number(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return value if math.isfinite(value) else None
+
+
+def _span(start, length, limit):
+    """[start, start + length] clipped into [0, limit], as a start and a length whose sum never passes limit."""
+    lo, hi = min(max(start, 0.0), float(limit)), min(max(start + length, 0.0), float(limit))
+    length = hi - lo
+    while length > 0 and lo + length > limit:   # float rounding can put lo + (hi - lo) one ulp past hi
+        length = math.nextafter(length, 0.0)
+    return lo, length
+
+
+def fit_to_frame(result, width=WIDTH, height=HEIGHT, limit=ROW_DETECTIONS):
+    """The detector's boxes made fit for one den-detections-1 row, in place, so one stray box never costs the frame.
+
+    den-observe's validate refuses a whole row for one box past the frame's edge (a person in the doorway at the edge,
+    or x + w a hair over 640 from float rounding), a box with no area, a non-finite number, a bad label or score, a
+    repeated id, or more than ROW_DETECTIONS boxes. Each box here is clipped into the frame; one that is then thinner
+    than MIN_SIDE_PX, or not finite, or without a label and a 0..1 score, or a repeat of an earlier id, is dropped with
+    its objects entry; past the limit, people are kept first, then the most confident. Returns how many were dropped.
+    """
+    boxes, kept, ids = result.get("boxes") or [], [], set()
+    for box in boxes:
+        if type(box) is not dict:
+            continue
+        x, y, w, h, score = (_number(box.get(k)) for k in ("x", "y", "w", "h", "confidence"))
+        label, key = box.get("label"), box.get("instance_id")
+        if None in (x, y, w, h, score) or not 0.0 <= score <= 1.0 or not isinstance(label, str) or not 1 <= len(label) <= 128:
+            continue
+        if not 1 <= len(str(key)) <= 128 or str(key) in ids:
+            continue
+        x, w = _span(x, w, width)
+        y, h = _span(y, h, height)
+        if w < MIN_SIDE_PX or h < MIN_SIDE_PX:
+            continue
+        ids.add(str(key))
+        kept.append({**box, "x": x, "y": y, "w": w, "h": h, "confidence": score})
+    if len(kept) > limit:
+        kept.sort(key=lambda b: (b["label"] != "person", -b["confidence"]))
+        kept = kept[:limit]
+    left = {b.get("instance_id") for b in kept}
+    result["boxes"] = kept
+    if isinstance(result.get("objects"), list):
+        result["objects"] = [o for o in result["objects"] if type(o) is dict and o.get("instance_id") in left]
+    return len(boxes) - len(kept)
 
 
 class Refused(Exception):
@@ -237,6 +292,7 @@ class Detector:
         """Steps 3 to 5 on one BGR frame: (result, person boxes merged away, compute seconds)."""
         started = time.perf_counter()
         result = self.yolo.infer(bgr, frame_id=frame_id, request_id=frame_id)
+        fit_to_frame(result)
         kept = {o["instance_id"] for o in self.distinct_people(result)}
         merged = sum(1 for b in result["boxes"] if b["label"] == "person" and b["instance_id"] not in kept)
         result["boxes"] = [b for b in result["boxes"] if b["label"] != "person" or b["instance_id"] in kept]

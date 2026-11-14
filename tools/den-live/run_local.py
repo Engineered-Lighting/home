@@ -153,7 +153,9 @@ def status_line(perceiver, latest, logs=()):
     health, camera, c = event.get("health") or {}, event.get("camera") or {}, perceiver.counts
     lag = health.get("lag_s_median")
     skipped = [(log.skipped, log.name) for log in logs]
-    problems = ", ".join([*("%d %s" % (c[key], words) for key, words in (
+    names = getattr(perceiver, "error_names", None) or {}
+    named = " (%s)" % ", ".join("%s %d" % kv for kv in sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))) if names else ""
+    problems = ", ".join([*("%d %s%s" % (c[key], words, named if key == "detector_errors" else "") for key, words in (
         ("refused_depth", "refused for depth"), ("detector_errors", "detector errors"), ("unreadable", "unreadable"),
         ("out_of_order", "out of order"), ("expired", "too late")) if c[key]),
         *("%d %s not kept today: the day's %s is at its cap" % (count, "line" if count == 1 else "lines", name)

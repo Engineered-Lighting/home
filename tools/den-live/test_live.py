@@ -690,6 +690,8 @@ class Perceiving(unittest.TestCase):
         loop.join(5)
         self.assertIsNone(loop.stop_reason)
         self.assertEqual(p.counts['detector_errors'], 12)
+        self.assertEqual(p.error_names, {'RuntimeError': 12}, 'each error kept by its type name')
+        self.assertIn('12 detector errors (RuntimeError 12)', rl.status_line(p, published[-1]))
         self.assertGreaterEqual(len(published), 2)
         self.assertTrue(all(e['camera']['why'] == 'detector errors' and e['tracks'] == [] for e in published))
 

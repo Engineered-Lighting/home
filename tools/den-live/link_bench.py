@@ -162,7 +162,8 @@ class Camera:
                 time.sleep(owner.link.answer_s(len(data) + 250, self.link_state, self.first))
                 self.first = False
                 self.send_response(status)
-                self.send_header('Content-Length', str(len(data)))
+                if status != 304:   # as the slim release: a 304 carries no length
+                    self.send_header('Content-Length', str(len(data)))
                 for name, value in headers.items():
                     self.send_header(name, value)
                 self.end_headers()

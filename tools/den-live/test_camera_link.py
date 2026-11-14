@@ -125,7 +125,8 @@ class FakeCamera:
                         headers[body_clock.AGE_HEADER] = json.dumps(owner.age_receipt)
                     status, body = (304, b'') if self.headers.get('If-None-Match') == etag else (200, slim)
                 self.send_response(status)
-                self.send_header('Content-Length', str(len(body)))
+                if status != 304:   # as the slim release: a 304 carries no length
+                    self.send_header('Content-Length', str(len(body)))
                 for name, value in headers.items():
                     self.send_header(name, value)
                 self.end_headers()

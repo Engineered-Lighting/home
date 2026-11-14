@@ -1,0 +1,14 @@
+---
+title: The den spot is directed, not switched
+target: deploy
+type: changed
+---
+
+The den spotlight preview (`tools/den-live/preview.py`) now plays every change of its light decision the way a director of photography would: it uses the same FC13 commands a real C12 fixture executes, and Home can draw the same motion. The rules for when a spot lights are unchanged. The new `direction.py` decides how each change looks.
+- **It blooms on.** A new task light rises over 2 s on a smooth curve. The board has no fade, so the rise is a level train: one stationary MOVE each time the 0–254 level changes, at most one a tick. The light Home shows is always the last MOVE the trace committed.
+- **It glides once.** The aim is the page, not the wrists: between the hands and a fifth of the way toward the eyes. A settled median replaces den-core's first-sample shift filter. A page turn never moves a lit spot. A real shift moves it once, as one lit MOVE, after the book comes to rest. Each glide is published with the S-curve the board flies (`glide`: from, to, start, duration and path limits). Its duration is den-core's planner time.
+- **It doesn't flip-flop.** A seated reader's facing is averaged over 3 s, so a side-on fixture isn't flipped in and out of "in front of you" by the shoulders' frame-to-frame swing. A lit fixture keeps its job while its beam's centre clears the head by 12 cm (admission still needs 15 cm). A fixture already pre-aimed keeps the pre-aim. While a spot is lit, the runner-up waits on the same page, dark, so a hand-off is a 1.2 s crossfade and never a dark move.
+- **It leaves gracefully.** Standing up or leaving fades out in 0.3 s, dark within 1 s of standing. A task that ends while you're still seated (an answer, the phone patience) fades out over 1 s and is dark at its deadline. One badly measured frame holds the light and lets go late, so the next good frame catches it. No exit keeps a beam on past the validity a snapshot already promised. Stop, Off and expiry stay instant.
+- **The room follows the spot.** The snapshot gains `ambient {level, scale, cct_k}`. Under a task light, the room's glow dims to 40% (and warms to 2700 K) over 4 s, starting a beat after the spot. It comes back over 1.5 s as the spot leaves. It's published only: nothing is written to Home Assistant, and the real Hue lights are untouched.
+- **New settings,** all changeable from Home: `fade_in_s` 2.0, `fade_out_s` 1.0, `leave_fade_s` 0.3, `crossfade_s` 1.2, `shift_m` 0.06, `shift_hold_s` 1.5, `page_lift` 0.2, and the ambient levels and times.
+- **Before and after**, on a synthetic reading session at the camera's live rate, lag and ask pace (30 runs per case): the beam's centre on the page goes from 19.5 cm to 3.5 cm off at p50, and from 47% to 96% of the time within half the beam's width. Blinks while reading go from 0.9–1.9 per session to none. The coordinator's own time from the yes to light-on goes from 0.74 s to 0.14 s.

@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import ask
 import coordinator_live
+import direction
 from contracts import PERCEPTION_S, FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
 import preview
 import run_local
@@ -26,14 +27,16 @@ HERE = Path(__file__).resolve().parent
 GOLDEN = json.loads((HERE / "fixtures" / "preview-f3.json").read_text(encoding="utf-8"))
 BINDING = GOLDEN["snapshot"]["binding"]
 FIXTURES = {"F3": {"aim_origin_m": [1.8, .2, 2.5], "horizontal_world_reference": [0, 1, 0]}}
+INSTANT = {"fade_in_s": 0, "fade_out_s": 0, "leave_fade_s": 0, "crossfade_s": 0, "pre_aim": False}
 
 
-def joints(seated, turned=False):
+def joints(seated, turned=False, shift=0.0, page_turn=False):
+    """shift: the reader moved along the sofa (x, metres); page_turn: the right hand lifted 15 cm."""
     height = 0 if seated else .5
     xyz = {"left_shoulder": [1, 1, .95], "right_shoulder": [1.4, 1, .95], "left_hip": [1, 1, .45],
            "right_hip": [1.4, 1, .45], "nose": [1.2, .9 if turned else 1.1, 1.18], "left_wrist": [1.1, 1.3, .65],
-           "right_wrist": [1.3, 1.3, .65]}
-    return {key: [(x, y, z + height), "supported"] for key, (x, y, z) in xyz.items()}
+           "right_wrist": [1.3, 1.3, .8 if page_turn else .65]}
+    return {key: [(x + shift, y, z + height), "supported"] for key, (x, y, z) in xyz.items()}
 
 
 class PreviewTest(unittest.TestCase):
@@ -52,18 +55,20 @@ class PreviewTest(unittest.TestCase):
         self.encoded = []
         self.rule, self.rule_epoch = seated_rule.Published(), 1
         self.preview = self.make_preview()
-        self.preview.configure({"fade_in_s": 0, "pre_aim": False})
+        # The rules' tests play every change at once: the direction's fades and crossfades have tests of their own
+        # (test_direction.py, and the direction tests below).
+        self.preview.configure(INSTANT)
 
     def make_preview(self, **overrides):
         return preview.Preview(self.core, binding=BINDING, fixtures=FIXTURES, state=self.path,
                                clock=lambda: self.now, **{"threaded": False, "append": self.encoded.append, **overrides})
 
     def track(self, *, seated=True, epoch=1, more=False, turned=False, posed=True, association="confident", revision=2,
-              age=0.0, eligible=True, eligibility=1, head=None, frame_extra=None):
+              age=0.0, eligible=True, eligibility=1, head=None, frame_extra=None, shift=0.0, page_turn=False):
         self.seq += 1
         if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
             self.rule, self.rule_epoch = seated_rule.Published(), epoch
-        pose = joints(seated, turned) if posed else {}
+        pose = joints(seated, turned, shift, page_turn) if posed else {}
         track = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": association,
                  "association_revision": revision, "current_obs_ids": ("pose",), "supported_pose": pose,
                  "seated": self.rule.update("t1", revision, self.now, pose)}   # perception's one answer
@@ -466,7 +471,9 @@ class PreviewTest(unittest.TestCase):
         self.assertFalse(self.row()["on"])
 
     def test_facing_jitter_under_a_second_keeps_the_lit_fixture(self):
-        """Contract 10, for 04: a facing refusal of the lit fixture holds it for KEEP_HOLD_S before releasing it."""
+        """Contract 10, for 04: a facing refusal of the lit fixture holds it for KEEP_HOLD_S before releasing it. The
+        direction's seated facing is the mean of the last 3 s (direction.FACING_WINDOW_S), so a turn becomes a
+        refusal only once most of that window has turned: a real turn still releases it, a little later."""
         self.light()
         for _ in range(3):   # 0.75 s turned the other way
             self.now += .25
@@ -475,10 +482,13 @@ class PreviewTest(unittest.TestCase):
         self.now += .25
         self.track()
         self.assertTrue(self.row()["on"])
-        for _ in range(5):   # 1.25 s turned
+        seen = []
+        for _ in range(12):   # 3 s turned
             self.now += .25
             self.track(turned=True)
-        self.assertFalse(self.row()["on"], "a refusal that lasts past the hold releases it")
+            seen.append(self.row()["on"])
+        self.assertTrue(all(seen[:5]), "1.25 s turned: the averaged facing hasn't turned yet")
+        self.assertFalse(seen[-1], "a refusal that lasts past the hold releases it")
         self.assertEqual(self.row()["reason"], "in_front_of_reader")
 
     def test_the_subject_names_the_person_and_the_reply(self):
@@ -666,6 +676,210 @@ class PreviewTest(unittest.TestCase):
             self.assertEqual(events["spot_clock"]["epoch"], snapshot["epoch"])
             self.assertTrue(snapshot["stopped"])
             self.assertFalse(snapshot["fixtures"]["F3"]["on"])
+
+
+class DirectionTest(PreviewTest):
+    """The light direction at its own defaults (the lighting-direction note): a rise is a level train of stationary
+    MOVEs on the smooth curve; a lit move is one MOVE flown on the board's S-curve; the room's glow dims under the task
+    light; an exit is a fade that's dark by the light's last published validity; Stop and expiry stay instant. Only these
+    tests run here: the rules' tests run in PreviewTest, with every change instant."""
+
+    def setUp(self):
+        super().setUp()
+        self.preview.configure({**{key: direction.SETTINGS[key] for key in INSTANT if key in direction.SETTINGS},
+                                "pre_aim": True})
+        self.snapshots = []
+        self.preview.connect(lambda snapshot: self.snapshots.append(json.loads(json.dumps(snapshot))))
+
+    def frames(self, seconds, step=.25, **track):
+        for _ in range(round(seconds / step)):
+            self.now = round(self.now + step, 6)
+            self.track(**track)
+
+    def lit_by_direction(self):
+        """Seated, the dark pre-aim settled on the page, one yes, and the rise finished."""
+        self.seat()
+        self.frames(6)
+        self.assertFalse(self.row()["on"])
+        self.read()
+        self.frames(self.preview.settings["fade_in_s"] + .5)
+        self.assertTrue(self.row()["on"])
+        self.assertIsNone(self.row()["fade"])
+
+    def moves(self, since=0):
+        return [row for row in self.encoded[since:] if row["action"] == "aim_move"]
+
+    def test_a_yes_rises_on_the_curve_as_a_level_train(self):
+        self.seat()
+        self.frames(6)
+        since = len(self.encoded)
+        self.read()
+        levels = [self.row()["level"]]
+        self.assertEqual(self.row()["fade"]["purpose"], "fade_in")
+        for _ in range(10):
+            self.now = round(self.now + .25, 6)
+            self.track()
+            levels.append(self.row()["level"])
+        goal = self.preview.rows["F3"]["goal"]
+        self.assertLess(levels[1], .2 * goal, "it blooms: dim at first")
+        self.assertTrue(all(b >= a for a, b in zip(levels, levels[1:])), "never dips on the way up")
+        self.assertEqual(levels[-1], direction.level_code(goal) / 254)
+        steps = self.moves(since)
+        self.assertGreater(len(steps), 4)
+        self.assertTrue(all(row["requested"]["start_cdeg"] == row["requested"]["target_cdeg"]
+                            and row["requested"]["travel"] == "none" for row in steps), "stationary MOVEs only")
+        codes = [row["effective"]["spot_level"] for row in steps]
+        self.assertEqual(codes, sorted(set(codes)), "one MOVE per new level code")
+        self.assertEqual(round(self.row()["level"] * 254), codes[-1], "the light is what the trace committed")
+        self.assertEqual(self.row()["keep_lit_token"], steps[-1]["sequence"])
+
+    def test_standing_leaves_quickly_and_never_past_its_validity(self):
+        self.lit_by_direction()
+        promised = self.preview.latest["valid_until_mono"]
+        since = len(self.encoded)
+        self.now += .25
+        self.track(seated=False)
+        stood, levels = self.now, [self.row()["level"]]
+        self.assertEqual(self.row()["fade"]["purpose"], "fade_out")
+        while self.row()["on"]:
+            self.now = round(self.now + .05, 6)
+            self.preview.tick()
+            levels.append(self.row()["level"])
+        self.assertLessEqual(self.now - stood, self.preview.settings["leave_fade_s"] + .05 + 1e-9, "dark within 1 s")
+        self.assertLessEqual(self.now, promised + 1e-9, "never lit past what a snapshot promised")
+        self.assertTrue(all(b <= a for a, b in zip(levels, levels[1:])))
+        self.assertEqual(self.moves(since)[-1]["effective"]["spot_level"], 0)
+
+    def test_a_planned_end_is_dark_at_its_deadline(self):
+        self.preview.configure({"phone_patience_s": 3})
+        self.lit_by_direction()
+        self.read(kind="phone_use")
+        deadline = self.preview.task_until()
+        fade = self.preview.settings["fade_out_s"]
+        full = direction.level_code(self.preview.rows["F3"]["goal"]) / 254
+        while self.now < deadline - fade - .05:
+            self.now = round(self.now + .05, 6)
+            self.preview.tick()
+            self.assertEqual(self.row()["level"], full, "full until the exit has to start")
+        while self.now < deadline:
+            self.now = round(self.now + .05, 6)
+            self.preview.tick()
+        self.assertFalse(self.row()["on"], "dark at the patience's end, not after it")
+
+    def test_stop_and_expiry_stay_instant(self):
+        self.lit_by_direction()
+        self.preview.stop({})
+        self.assertFalse(self.row()["on"], "Stop: dark at once, no fade")
+        self.assertIsNone(self.row()["fade"])
+        self.preview.resume({"stop_counter": self.preview.stop_counter})
+        self.lit_by_direction()
+        self.gap(preview.GAP_HOLD_S - .1)
+        self.assertTrue(self.row()["on"])
+        self.assertEqual(self.gap(.1), [False], "the gap hold's end: dark at once")
+
+    def test_a_page_turn_never_moves_a_lit_spot_and_a_shift_is_one_lit_glide(self):
+        self.lit_by_direction()
+        since = len(self.encoded)
+        self.frames(.75, page_turn=True)
+        self.frames(1.5)
+        self.assertEqual([row for row in self.moves(since) if row["requested"]["start_cdeg"]
+                          != row["requested"]["target_cdeg"]], [], "a page turn moves nothing")
+        level = self.row()["level"]
+        glide = None
+        for _ in range(16):
+            self.now = round(self.now + .25, 6)
+            self.track(shift=-.3)
+            glide = glide or self.row()["glide"]
+            self.assertTrue(self.row()["on"], "lit all the way")
+        glides = [row for row in self.moves(since) if row["requested"]["start_cdeg"] != row["requested"]["target_cdeg"]]
+        self.assertEqual(len(glides), 1, "one movement, one command")
+        self.assertEqual((glides[0]["requested"]["travel"], glides[0]["effective"]["lit_during_move"]), ("lit", True))
+        self.assertEqual(glides[0]["effective"]["spot_level"], round(level * 254), "it glides at the level it had")
+        start, target = glides[0]["requested"]["start_cdeg"], glides[0]["requested"]["target_cdeg"]
+        expected = self.core.scurve.move_time(tuple((b - a) / 100 for a, b in zip(start, target)),
+                                              self.core.scurve.FICTIONAL_PROFILE["axes"])
+        self.assertAlmostEqual(glide["duration_s"], expected, places=5, msg="Home draws the board's own S-curve")
+        self.assertEqual(glide["to_deg"], [-target[0] / 100, -target[1] / 100])
+
+    def test_the_room_dims_under_the_task_light_and_comes_back(self):
+        self.assertEqual(self.preview.latest["ambient"]["scale"], 1.0)
+        self.lit_by_direction()
+        settings = self.preview.settings
+        self.frames(settings["ambient_delay_s"] + settings["ambient_dim_s"])
+        ambient = self.preview.latest["ambient"]
+        self.assertEqual((ambient["scale"], ambient["cct_k"]), (settings["ambient_task_scale"], 2700))
+        self.now += .25
+        self.track(seated=False)
+        self.frames(settings["ambient_restore_s"] + .25, seated=False)
+        self.assertEqual(self.preview.latest["ambient"]["scale"], 1.0)
+        self.preview.switch({"on": False})
+        self.assertIsNone(self.preview.latest["ambient"], "Off: the coordinator directs no room light")
+
+    def test_a_poseless_frame_dips_but_never_blinks(self):
+        self.lit_by_direction()
+        goal = self.row()["level"]
+        self.now += .25
+        self.track(posed=False)
+        lowest = goal
+        for _ in range(12):
+            self.now = round(self.now + .25, 6)
+            self.track()
+            lowest = min(lowest, self.row()["level"])
+            self.assertTrue(self.row()["on"])
+        self.assertGreater(lowest, .6 * goal, "the next good frame catches it high")
+        self.assertEqual(self.row()["level"], goal, "and it comes back")
+
+    def test_a_hand_off_is_a_crossfade_from_the_standby(self):
+        fixtures = {"F3": FIXTURES["F3"], "F4": {"aim_origin_m": [.6, .2, 2.5], "horizontal_world_reference": [0, 1, 0]}}
+        self.preview = preview.Preview(self.core, binding=BINDING, fixtures=fixtures, state=self.path,
+                                       clock=lambda: self.now, threaded=False, append=self.encoded.append)
+        self.preview.configure({"pre_aim": True})
+        self.preview.connect(lambda snapshot: self.snapshots.append(json.loads(json.dumps(snapshot))))
+        self.lit_by_direction()
+        rows = self.preview.latest["fixtures"]
+        lit, spare = ("F3", "F4") if rows["F3"]["on"] else ("F4", "F3")
+        self.frames(1.5)
+        self.assertEqual(self.preview.rows[spare]["reason"], "standby", "the runner-up waits on the page, dark")
+        self.assertFalse(self.preview.latest["fixtures"][spare]["on"])
+        evaluate = preview.Preview._eye
+
+        def refuse(owner, name, row, person, kept):
+            if name == lit:
+                return self.core.eye.aim.Candidate(name, False, "beam_through_head")
+            return evaluate(owner, name, row, person, kept)
+        since = len(self.snapshots)
+        with patch.object(preview.Preview, "_eye", refuse):
+            self.frames(self.preview.settings["crossfade_s"] + 1.5)
+        seen = self.snapshots[since:]
+        self.assertTrue(seen[-1]["fixtures"][spare]["on"] and not seen[-1]["fixtures"][lit]["on"])
+        self.assertTrue(all(any(row["on"] for row in snapshot["fixtures"].values()) for snapshot in seen),
+                        "never dark between them")
+        self.assertTrue(any(snapshot["fixtures"][lit]["on"] and snapshot["fixtures"][spare]["on"] for snapshot in seen),
+                        "they overlap: a crossfade")
+
+    def test_every_snapshot_is_one_home_accepts(self):
+        """Home's validRow: lit means a level above 0 and the keep-lit token equal to the move's sequence; dark means
+        level 0 and no token; a glide only while moving; the validity never before the sample."""
+        self.lit_by_direction()
+        self.frames(4, shift=-.3)
+        self.now += .25
+        self.track(seated=False, shift=-.3)
+        self.frames(1, seated=False, shift=-.3)
+        self.assertGreater(len(self.snapshots), 50)
+        for snapshot in self.snapshots:
+            self.assertGreaterEqual(snapshot["valid_until_mono"], snapshot["sampled_mono"])
+            for row in snapshot["fixtures"].values():
+                if row["on"]:
+                    self.assertGreater(row["level"], 0)
+                    self.assertEqual(row["keep_lit_token"], row["move_sequence"])
+                else:
+                    self.assertEqual((row["level"], row["keep_lit_token"]), (0, None))
+                self.assertEqual(row["glide"] is not None, row["motion_phase"] == "moving")
+
+
+for _name in [name for name in vars(PreviewTest) if name.startswith("test_")]:
+    setattr(DirectionTest, _name, None)   # the rules' tests run once, in PreviewTest
+
 
 
 if __name__ == "__main__":

@@ -47,6 +47,9 @@ EYE_REFUSALS = ("beam_through_head", "no_head")
 EYES_AHEAD_M = 0.03
 # After a cut for the head or the eyes, the fixture isn't admitted again for this long: no cut-and-relight cycles.
 CUT_HOLD_S = 1.5
+# A lit glide's path is checked against the head and the eyes this often, in joint space (0.25 degrees: about 7 mm at
+# 1.7 m, well inside the 3 cm between the keep clearance and admission's).
+SWEEP_STEP_CDEG = 25
 # The direction's choice hysteresis (lighting-direction note): a dark pre-aim moves at most once a second, and while the
 # person is on their feet only for a torso move of more than this.
 PRE_AIM_STANDING_M = .3
@@ -587,7 +590,7 @@ class Preview:
             for name, row in self.rows.items():
                 if name not in self.cut and self._lighting(row) and not self._beam_clear(row, person):
                     self.cut[name] = "beam_through_head"
-                elif name not in self.cut and self._lighting(row) and not self._others_clear(row):
+                elif name not in self.cut and self._lighting(row) and not self._others_clear(row, person["target"]):
                     self.cut[name] = THROUGH_ANOTHER_HEAD   # someone else's head in the beam as it points
         # The room's glow follows the task light: it dims a beat after the spot starts and comes back as it ends. A
         # task light the owner holds, lit, counts as the task light.
@@ -1034,9 +1037,11 @@ class Preview:
             if glide:
                 return   # landing first (P3 holds a MOVE that arrives during a move); it rises once it's there
             if target != effective_target and not (self._in_beam(row, person["target"]) and self._clear(
-                    row, person, self.core.eye.HEAD_CLEARANCE_M)):
-                # Pointing elsewhere, or near the page but with the beam as it points too close to the head: a dark
-                # move to the target den-core's eye rule cleared, then the rise.
+                    row, person, self.core.eye.HEAD_CLEARANCE_M) and self._others_clear(
+                    row, person["target"], row["current"], self.core.eye.HEAD_CLEARANCE_M)):
+                # Pointing elsewhere, or near the page but with the beam as it points too close to the reader's head or
+                # anyone else's (admission measured the line to the page): a dark move to the target den-core's eye
+                # rule cleared, then the rise.
                 if not self._can_send(row, now):
                     return
                 if row["timed"]:
@@ -1113,8 +1118,8 @@ class Preview:
                         math.radians(row["profile"].get("path_margin_cdeg", 0) / 100))
                     if near < self.core.eye.HEAD_CLEARANCE_M + other_margin:
                         travel = "dark"
-                if not self._clear(row, person, direction.AIM_KEEP_M, target):
-                    travel = "dark"   # where it would land lit isn't clear of the eyes
+                if not self._swept_clear(row, person, target):
+                    travel = "dark"   # the head or an eye inside the floor's clearance on the way, or where it lands
             if travel == "lit":
                 if not self._can_send(row, now):
                     return
@@ -1131,6 +1136,10 @@ class Preview:
                 return
             # Dim or dark travel (or a path past the head): fade down, move, rise again.
             down = min(self.settings["move_dim_level"] if travel == "dim" else 0.0, row["level"])
+            if not down and not self._admits(name, row, person, target):
+                # Dark, it's no longer kept, and it lands where admission (stricter than keep) refuses it: it would never
+                # relight there. So the frame holds, lit; the floor still checks the beam as it points every tick.
+                return
             row["dip"] = (target, down, person)
             row["ramp"] = direction.Ramp(row["level"], down, self.settings["fade_out_s"], "ease_out", now, "dip")
             return
@@ -1183,28 +1192,50 @@ class Preview:
             return self._clear(row, person, direction.AIM_KEEP_M, glide.target)
         return True
 
-    def _others_clear(self, row):
-        """Every other person's head is out of the beam the board emits, on its aim now (or a dark flight's landing),
-        by the direction's keep clearance: their heads are checked on the line to the page at admission (_candidate),
-        and here on the beam as it actually points."""
+    def _others_clear(self, row, page, joints=None, clearance=None):
+        """Every other person's head is out of the beam the board emits, on its aim now (or a dark flight's landing, or
+        `joints`), by `clearance` (the direction's keep clearance unless given). Admission checks their heads on the line
+        to the page (_clear_of_others), and here they're checked on the beam as it actually points, measured the same
+        way: to the beam's centre from the fixture as far as the page, so a head past the book is as far as it is from
+        the page, as admission found it (a head the cut and admission disagree on was a cut-and-relight blink)."""
         if not self.others:
             return True
-        if row["level"] > 0:
-            joints = row["current"]
-        elif row["glide"] is not None and (row["arrive_level"] or (row["ramp"] is not None and row["ramp"].sent
-                                                                    and row["ramp"].end > 0)):
-            joints = row["glide"].target
-        else:
-            return True
+        if joints is None:
+            if row["level"] > 0:
+                joints = row["current"]
+            elif row["glide"] is not None and (row["arrive_level"] or (row["ramp"] is not None and row["ramp"].sent
+                                                                        and row["ramp"].end > 0)):
+                joints = row["glide"].target
+            else:
+                return True
+        clearance = direction.GLARE_KEEP_M if clearance is None else clearance
+        origin = row["aim_origin_m"]
+        reach = math.dist(origin, page) if page is not None else math.inf   # no page: the whole beam
         aim = self.core.joints.direction(joints[0] / 100, joints[1] / 100, row["horizontal_world_reference"])
         for other in self.others:
-            to = [other["head"][i] - row["aim_origin_m"][i] for i in range(3)]
-            along = sum(aim[i] * to[i] for i in range(3))
-            gap = (math.sqrt(sum(c * c for c in to)) if along <= 0
-                   else math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))))
-            if gap < direction.GLARE_KEEP_M:
+            to = [other["head"][i] - origin[i] for i in range(3)]
+            along = max(0.0, min(reach, sum(aim[i] * to[i] for i in range(3))))   # den-core's centre_clear's clamp
+            if math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))) < clearance:
                 return False
         return True
+
+    def _swept_clear(self, row, person, target):
+        """A lit glide from the beam's aim now to `target` keeps the reader's head and each eye out by the floor's own
+        clearance (AIM_KEEP_M, _beam_clear's) at every point on the way, landing included: the board flies a straight
+        line in joint space (direction.Glide), so the floor never has to cut a glide the direction approved."""
+        start = row["current"]
+        steps = max(1, math.ceil(max(abs(b - a) for a, b in zip(start, target)) / SWEEP_STEP_CDEG))
+        return all(self._clear(row, person, direction.AIM_KEEP_M,
+                               tuple(round(a + (b - a) * k / steps) for a, b in zip(start, target)))
+                   for k in range(1, steps + 1))
+
+    def _admits(self, name, row, person, joints):
+        """A dark fixture aimed at `joints` would be admitted for this person, as _candidate admits one: den-core's eye
+        rule, the reader's head and eyes on the beam at admission's clearance, and everyone else's on the line to the
+        page."""
+        return (self._eye(name, row, person, False).ok
+                and self._clear(row, person, self.core.eye.HEAD_CLEARANCE_M, joints)
+                and self._clear_of_others(row["aim_origin_m"], person["target"]))
 
     def _ready(self, row, person):
         """A dark fixture already pointing at the page (a standby that has landed), its beam as it points clearing the
@@ -1279,7 +1310,9 @@ class Preview:
             # No keep-lit goes in an exit, so it ends inside the board's lease from the last thing that renewed it.
             fade = min(fade, row["leased_at"] + direction.EXIT_MAX_S - now)
         bound = row["lit_until"] if ending is None else min(row["lit_until"] or ending, ending)
-        joins = row["timed"] and row["join"]
+        # A board that joins a flight fades during a glide as it does at rest, and so does a virtual fixture: its level
+        # steps join the glide (_apply), so an exit mid-creep is a fade, not a cut, and a planned end is played out.
+        joins = (row["timed"] and row["join"]) or bool(row["profile"].get("fictional"))
         too_short = fade <= 0 if row["timed"] else fade < 2 * row["step_s"]
         if too_short or bound is None or now >= bound or row["level"] <= 0 or (row["glide"] is not None and not joins):
             # A fade too short for this fixture's train, a spent validity, or a fixture in the middle of a glide: one

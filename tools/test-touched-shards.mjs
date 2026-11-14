@@ -85,9 +85,9 @@ const FILE_SETS = [
   ['tools/run-touched-harnesses.mjs'], ['web-gateway/server.mjs', 'app/src/index.html'],
 ];
 
-test('for the actual base, every worker count 1..8 partitions the unsharded --list exactly', () => {
+test('for the actual base, every worker count 1..12 partitions the unsharded --list exactly', () => {
   const base = actualBase();
-  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6, 7, 8]);
+  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6, 7, 8, 12]);
   const listed = run(['--base', base, '--list']).stdout.split('\n')[0];
   assert.match(listed, new RegExp(`^\\[touched-harnesses\\] \\d+ changed files → ${full.filter(name => name !== 'check-jsx.js').length} harnesses`));
 });

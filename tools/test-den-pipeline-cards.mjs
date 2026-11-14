@@ -21,11 +21,11 @@ test('a live den: each card says one thing, in den-live’s own numbers', () => 
   assert.deepEqual(c.coordinator.target, [2, 2.7, .8]);
 });
 
-test('occupancy: Frigate’s own word when den-live sends it, else the Qwen gate, marked as inferred', () => {
+test('occupancy: Frigate’s own word when den-live sends it, else "Not reported" (never inferred from Qwen’s gate)', () => {
   assert.equal(pipelineCards(event({ health: health({ occupancy: { effective: 'off', why: 'no one' } }) }), 0, null).occupancy.value, 'Empty');
-  const gate = pipelineCards(event(), 0, null).occupancy;
-  assert.equal(gate.value, 'Gate open'); assert.equal(gate.inferred, true);
-  assert.equal(pipelineCards(event({ health: health({ qwen: { state: 'off', why: 'no one seated' } }) }), 0, null).occupancy.value, 'Gate closed');
+  assert.equal(pipelineCards(event({ health: health({ occupancy: { effective: 'on', why: 'person' } }) }), 0, null).occupancy.value, 'Occupied');
+  const absent = pipelineCards(event(), 0, null).occupancy;
+  assert.deepEqual([absent.value, absent.state], ['Not reported', 'off']);
 });
 
 test('stale, dark, expired and stopped say so instead of the last good value', () => {

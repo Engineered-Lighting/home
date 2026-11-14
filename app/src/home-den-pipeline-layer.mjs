@@ -5,7 +5,7 @@
  * where the data has a place: from perception to each person's floor marker, and from the coordinator to where the
  * spot's beam lands (its target_m). The loop reads camera → machines → back into the room as light.
  * - Every value is den-live's own: health, the people event's tracks and activity, the applied spot snapshot. A field
- *   den-live doesn't send yet (health.occupancy) is read when present; until then the occupancy card shows Qwen's gate.
+ *   den-live doesn't send yet (health.occupancy) is read when present; until then the occupancy card says "Not reported".
  * - A wire brightens only when a record has just gone through it (a people event, a new Qwen answer, a change in the
  *   spot), and fades over WIRE_HOT_MS. Nothing moves when nothing arrives. Reduced motion keeps the brightening, without
  *   the travelling dot.
@@ -56,9 +56,7 @@ export function pipelineCards(event, sinceS, spot, names = {}) {
     if (occ && typeof occ === 'object' && typeof occ.effective === 'string')
         cards.occupancy = { state: !live ? 'attention' : occ.effective === 'on' ? 'live' : occ.effective === 'off' ? 'idle' : 'attention',
             value: occ.effective === 'on' ? 'Occupied' : occ.effective === 'off' ? 'Empty' : 'Unknown', sub: '', why: occ.why ? String(occ.why).slice(0, 80) : '' };
-    else if (q) cards.occupancy = { state: !live ? 'attention' : q.state === 'off' ? 'idle' : 'live',
-        value: q.state === 'off' ? 'Gate closed' : 'Gate open', sub: '', why: q.state === 'off' && q.why ? String(q.why).slice(0, 80) : '', inferred: true };
-    else cards.occupancy = { state: 'off', value: 'Not sent', sub: 'den-live without the ask' };
+    else cards.occupancy = { state: 'off', value: 'Not reported', sub: '' };   // until den-live sends health.occupancy
     cards.perception = !live ? { state: event ? 'attention' : 'off', value: event ? 'Stale' : '—', sub: '' }
         : { state: dark ? 'attention' : 'live', value: tracks.length === 0 ? 'No one' : tracks.length === 1 ? '1 person' : `${tracks.length} people`,
             sub: finite(h.lag_s_median) ? `${secs(h.lag_s_median + (h.transit_s_median || 0))} behind` : '' };
@@ -231,7 +229,6 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
             const dl = doc.createElement('dl');
             for (const [k, val] of rows) { const dt = doc.createElement('dt'); dt.textContent = k; const dd = doc.createElement('dd'); dd.textContent = val; dl.append(dt, dd); }
             pop.append(h, dl);
-            if (m.inferred) { const n = doc.createElement('p'); n.className = 'home-den-pipeline-pop-note'; n.textContent = 'den-live doesn’t send Frigate’s occupancy yet; this is Qwen’s gate.'; pop.append(n); }
         }
         if (r && box) {
             const left = Math.max(8, Math.min(box.w - 268, r.left));
@@ -245,7 +242,7 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
         if (id === 'camera') return [['Frames in', finite(h.fps_in) ? `${h.fps_in.toFixed(2)} a second` : '—'], ['Fetch', p('fetch')], ['Transit', finite(h.transit_s_median) ? ms(h.transit_s_median * 1000) : '—'],
             ['Dropped', finite(h.dropped_per_min) ? `${h.dropped_per_min} a minute` : '—'], ['Mode', e?.mode ?? '—'], ['Last event', since == null ? '—' : `${secs(since)} ago`]];
         if (id === 'occupancy') return h.occupancy ? [['Frigate', String(h.occupancy.effective)], ['Why', String(h.occupancy.why || '—')], ['Gates', 'whether den-live asks Qwen']]
-            : [['Qwen gate', q.state ?? '—'], ['Why', q.why ?? '—']];
+            : [['Frigate', 'not reported'], ['Why', 'den-live doesn’t send its occupancy yet']];
         if (id === 'perception') return [['People', String((e?.tracks || []).length)], ['Detector', p('detector')], ['Lift', p('lift')], ['Track', p('track')],
             ['Behind', finite(h.lag_s_median) ? secs(h.lag_s_median + (h.transit_s_median || 0)) : '—'], ['Status', e?.perception_status ?? '—']];
         if (id === 'qwen') return [['State', q.state ?? '—'], ['Why', q.why ?? '—'], ['Reply', secs(q.reply_s_median)], ['Asks', finite(q.asks_per_min) ? `${q.asks_per_min} a minute` : '—'],

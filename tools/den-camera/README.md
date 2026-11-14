@@ -23,7 +23,8 @@ reads only `depth_mm`, `rgb_nv12` and the metadata. `/frame-slim.npz` is that fr
 (about half the bytes, lossless). It's compressed in about 20 ms and published before the full bundle (about
 110 ms), and it keeps its connection open: one round trip per frame, and `304` with no body while the frame is the
 same (`If-None-Match`). Its metadata is the full bundle's, plus `bundle_schema: den-camera-slim-1` and
-`bundle_omits`. Every other path, `/frame.npz` included, answers exactly as `pilot-20261111-depth` does.
+`bundle_omits`. Every other answer, on every path (`/frame.npz` included) and for every error, is exactly
+`pilot-20261111-depth`'s: HTTP/1.0, then close. A slim body the client stops reading closes its connection.
 
 - **The Lab's pin stays at `pilot-20261111-depth`.** This release changes no clock check
   (`test_slim_release.py` proves it), so keep that directory: the Lab reads it by path. No perception-lab deploy.
@@ -31,18 +32,7 @@ same (`If-None-Match`). Its metadata is the full bundle's, plus `bundle_schema: 
   pulls `/frame.npz` as before and asks for the slim path again a minute later.
 - **Measure it offline** on any recorded bundle, or on the camera host with a bundle piped in:
   `python -I -B tools/den-camera/slim_bundle_bench.py <bundle.npz>`.
-- **Ship it** as below, with these names. Stage it in step 1's folder, from the running release's dependencies
-  (the same wheels):
-
-  ```bash
-  mkdir -m 700 pilot-20261114-slim
-  cp -a pilot-20261111-depth/dependencies pilot-20261111-depth/wheels pilot-20261111-depth/requirements.txt pilot-20261114-slim/
-  install -m 600 installed-oak-capture-20261114.py pilot-20261114-slim/capture.py && rm installed-oak-capture-20261114.py
-  sha256sum pilot-20261114-slim/capture.py   # must equal the repo copy's SHA256
-  ```
-
-  Then `switch-capture-release.sh check` and `switch` with `pilot-20261114-slim` and that SHA256. Its rollback
-  is the switcher's own: den-live falls back to `/frame.npz` meanwhile.
+- **Ship it** with "Ship a release" below, which is written for this release.
 
 ## Depth correction
 
@@ -62,18 +52,21 @@ ssh <account>@victoria-den-jetson "~/victoria-camera/venv/bin/python -I ~/victor
 
 ## Ship a release
 
+These steps ship `pilot-20261114-slim`; for another release, change its names. Its `<SHA256>` is the repo copy's:
+`(Get-FileHash tools\fixtures\installed-oak-capture-20261114.py).Hash.ToLower()` in PowerShell.
+
 1. Stage it as the service user (no sudo, nothing restarts). Copy the script and this switcher over, then
    build the release from the running release's dependencies:
 
    ```powershell
-   scp tools/fixtures/installed-oak-capture-20261111.py tools/den-camera/switch-capture-release.sh <account>@victoria-den-jetson:victoria-camera-pilot/
+   scp tools/fixtures/installed-oak-capture-20261114.py tools/den-camera/switch-capture-release.sh <account>@victoria-den-jetson:victoria-camera-pilot/
    ```
 
    ```bash
-   cd ~/victoria-camera-pilot && mkdir -m 700 pilot-20261111-depth
-   cp -a pilot-20260926/dependencies pilot-20260926/wheels pilot-20260926/requirements.txt pilot-20261111-depth/
-   install -m 600 installed-oak-capture-20261111.py pilot-20261111-depth/capture.py && rm installed-oak-capture-20261111.py
-   sha256sum pilot-20261111-depth/capture.py   # must equal CAMERA_SHA
+   cd ~/victoria-camera-pilot && mkdir -m 700 pilot-20261114-slim
+   cp -a pilot-20261111-depth/dependencies pilot-20261111-depth/wheels pilot-20261111-depth/requirements.txt pilot-20261114-slim/
+   install -m 600 installed-oak-capture-20261114.py pilot-20261114-slim/capture.py && rm installed-oak-capture-20261114.py
+   sha256sum pilot-20261114-slim/capture.py   # must equal <SHA256>
    ```
 
 2. Switch (owner, sudo). `check` changes nothing. `switch` swaps only the release directory in the drop-in's
@@ -81,15 +74,15 @@ ssh <account>@victoria-den-jetson "~/victoria-camera/venv/bin/python -I ~/victor
    by itself and prints the rollback command:
 
    ```powershell
-   ssh -t <account>@victoria-den-jetson "sudo bash ~/victoria-camera-pilot/switch-capture-release.sh check pilot-20261111-depth <CAMERA_SHA>"
-   ssh -t <account>@victoria-den-jetson "sudo bash ~/victoria-camera-pilot/switch-capture-release.sh switch pilot-20261111-depth <CAMERA_SHA>"
+   ssh -t <account>@victoria-den-jetson "sudo bash ~/victoria-camera-pilot/switch-capture-release.sh check pilot-20261114-slim <SHA256>"
+   ssh -t <account>@victoria-den-jetson "sudo bash ~/victoria-camera-pilot/switch-capture-release.sh switch pilot-20261114-slim <SHA256>"
    ```
 
 3. Verify with `depth_tape_check.py`: `declared_depth_correction.applied` must be true, and both tape errors
-   must be within a few percent.
+   must be within a few percent. For `pilot-20261114-slim`, den-live's fetch time (`timings_ms.fetch` in its
+   health) also drops to about 0.1–0.2 s within a minute of the switch.
 
-4. Deploy perception-lab as usual so its pin follows the new release, when the release changes a clock check.
-   `pilot-20261114-slim` doesn't; for it, stage `pilot-20261114-slim` and switch to it with the same three
-   commands, then skip this step.
+4. Deploy perception-lab so its pin follows the new release, but only when the release changes a clock check.
+   `pilot-20261114-slim` changes none, and the Lab keeps `pilot-20261111-depth`, so skip this step.
 
 The switched drop-in is owned by `switch-capture-release.sh`; `pilot-service.py` refuses to touch it.

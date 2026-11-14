@@ -16,9 +16,10 @@ the left and right images, for a consumer across a slow link that never reads
 them: depth_mm, rgb_nv12 and metadata_json only, lossless, with the full
 metadata (every plane's frame metadata, intrinsics, depth_correction) plus
 bundle_schema and bundle_omits. It is published before the full bundle is
-compressed. It alone keeps its HTTP/1.1 connection open between requests, and
-answers If-None-Match with 304 and no body while the frame is the same. Every
-other path answers exactly as the earlier release: HTTP/1.0, then close.
+compressed. Its GET alone is answered in HTTP/1.1 and keeps its connection open
+between requests; If-None-Match on the same frame gets 304 and no body. Every
+other answer, on every path and for every error, is the earlier release's:
+HTTP/1.0, then close. A body the client stops reading closes the connection.
 """
 import argparse
 import base64
@@ -839,35 +840,31 @@ class State:
 
 def serve(state, bind, port, token):
     class Handler(BaseHTTPRequestHandler):
-        # HTTP/1.1 so that SLIM_PATH can keep its connection; do_GET answers every other path as HTTP/1.0, then closes.
-        protocol_version = 'HTTP/1.1'
-
         def setup(self):
             self.request.settimeout(5)
             super().setup()
 
-        def handle_expect_100(self):
-            return True   # GET only: never an interim response, as under HTTP/1.0
-
         def do_GET(self):
             self.connection.settimeout(5)
-            slim = self.path == SLIM_PATH
-            if not slim:   # the earlier release's answer exactly: one HTTP/1.0 response, then close
-                self.protocol_version = 'HTTP/1.0'
-                self.close_connection = True
             supplied = self.headers.get('Authorization', '')
             if ((self.path in ('/frame.jpg', '/timing') and not token) or
                     (token and not hmac.compare_digest(supplied, 'Bearer ' + token))):
                 self.send_error(401)
                 return
             headers = {}
+            kept = False
             if self.path == '/frame.jpg':
                 status, content_type, body, headers = state.jpeg_response()
-            elif slim:
+            elif self.path == SLIM_PATH:
                 status, content_type, body, headers = state.slim_response(self.headers.get('If-None-Match'))
-                if status in (200, 304) and not self.close_connection:
-                    # The connection stays open, so nothing closes it to flush a body's last short segment:
-                    # without this, Nagle holds that segment until everything before it is acknowledged.
+                # Only a slim GET's answer is HTTP/1.1, kept open for the next ask unless the client says otherwise.
+                # Every other answer, errors included, is the earlier release's HTTP/1.0, then close.
+                self.protocol_version = 'HTTP/1.1'
+                kept = (status in (200, 304) and self.request_version == 'HTTP/1.1'
+                        and self.headers.get('Connection', '').lower() != 'close')
+                if kept:
+                    # Nothing closes a kept connection to flush a body's last short segment: without this, Nagle
+                    # holds that segment until everything before it is acknowledged.
                     self.connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 else:
                     headers = dict(headers, Connection='close')
@@ -875,15 +872,18 @@ def serve(state, bind, port, token):
                 status, content_type, body = state.response(self.path)
             self.send_response(status)
             self.send_header('Content-Type', content_type)
-            self.send_header('Content-Length', str(len(body)))
+            if status != 304:   # a 304 carries no body
+                self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
             for name, value in headers.items():
                 self.send_header(name, value)
             self.end_headers()
+            self.protocol_version = 'HTTP/1.0'   # whatever this connection reads next is answered as before
+            self.close_connection = not kept
             try:
                 self.wfile.write(body)
             except (BrokenPipeError, ConnectionResetError, TimeoutError):
-                pass
+                self.close_connection = True   # a partial body: the connection is never asked again
 
         def log_message(self, *args):
             pass

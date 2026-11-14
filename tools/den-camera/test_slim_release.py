@@ -13,12 +13,14 @@ import importlib.util
 import io
 import json
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 import unittest
+import unittest.mock
 import zipfile
 from pathlib import Path
 
@@ -258,6 +260,7 @@ class Wire(unittest.TestCase):
             _connection, again, empty = self.get(port, '/frame-slim.npz', {'If-None-Match': first.getheader('ETag')},
                                                  connection)
             self.assertEqual((again.status, empty, again.getheader('ETag')), (304, b'', first.getheader('ETag')))
+            self.assertIsNone(again.getheader('Content-Length'), 'a 304 carries no body, so no length')
         arrays, meta = frames(2), metadata(state.session, sequence=8, t_host=12.7)
         state.publish_slim(self.new.encode_slim_bundle(arrays, meta), meta['frames']['rgb'])
         _connection, newer, body = self.get(port, '/frame-slim.npz', {'If-None-Match': first.getheader('ETag')},
@@ -315,6 +318,80 @@ class Wire(unittest.TestCase):
                     self.assertEqual(npz(new_body).keys(), npz(old_body).keys())
                 elif path not in ('/health', '/timing'):
                     self.assertEqual(new_body, old_body)
+
+    @staticmethod
+    def raw(port, request, timeout=5):
+        """The status line and header names of one raw request's answer: what a client sees before any parsing."""
+        with socket.create_connection(('127.0.0.1', port), timeout=timeout) as sock:
+            sock.sendall(request)
+            data = b''
+            while b'\r\n\r\n' not in data:
+                try:
+                    chunk = sock.recv(65536)
+                except ConnectionResetError:
+                    break
+                if not chunk:
+                    break
+                data += chunk
+        head = data.split(b'\r\n\r\n', 1)[0].decode('latin-1').split('\r\n')
+        return head[0], sorted(line.split(':', 1)[0] for line in head[1:] if line)
+
+    def test_malformed_and_other_method_answers_are_the_earlier_releases(self):
+        _s, old_port, _a, _m = self.serve(self.old)
+        _s, new_port, _a, _m = self.serve(self.new)
+        auth = ('Authorization: Bearer %s\r\n' % TOKEN).encode()
+        cases = {
+            'HEAD': b'HEAD /frame.npz HTTP/1.1\r\nHost: camera\r\n' + auth + b'\r\n',
+            'POST': b'POST /frame-slim.npz HTTP/1.1\r\nHost: camera\r\nContent-Length: 0\r\n' + auth + b'\r\n',
+            # Each ends where the server stops reading, so it closes with nothing unread (no reset).
+            'oversized header': b'GET /frame.npz HTTP/1.1\r\nX-Big: ' + b'a' * (65_537 - 7),
+            'too many headers': b'GET /frame.npz HTTP/1.1\r\n' + b''.join(b'X-%d: 1\r\n' % i for i in range(101)),
+            'long request line': b'GET /' + b'a' * (65_537 - 5),
+            'bad version': b'GET /frame.npz HTTP/2.0\r\n\r\n',
+            'full bundle over 1.1': b'GET /frame.npz HTTP/1.1\r\nHost: camera\r\n' + auth + b'\r\n',
+            'expect 100 continue': b'GET /frame.npz HTTP/1.1\r\nExpect: 100-continue\r\n' + auth + b'\r\n',
+        }
+        for name, request in cases.items():
+            with self.subTest(case=name):
+                old, new = self.raw(old_port, request), self.raw(new_port, request)
+                self.assertEqual(new, old)
+                if name != 'bad version':   # http.server answers that one with no status line at all, as before
+                    self.assertTrue(new[0].startswith('HTTP/1.0 '), new[0])
+
+    def test_only_a_slim_get_says_http_1_1(self):
+        _s, port, _a, _m = self.serve(self.new)
+        auth = ('Authorization: Bearer %s\r\n' % TOKEN).encode()
+        status, names = self.raw(port, b'GET /frame-slim.npz HTTP/1.1\r\nExpect: 100-continue\r\n' + auth + b'\r\n')
+        self.assertEqual(status, 'HTTP/1.1 200 OK', 'no interim 100 Continue either')
+        self.assertIn('ETag', names)
+        status, _names = self.raw(port, b'GET /frame-slim.npz HTTP/1.1\r\n\r\n')
+        self.assertTrue(status.startswith('HTTP/1.0 401'), status)
+
+    def test_a_slim_body_whose_write_gives_up_closes_its_connection(self):
+        """A client that stops reading makes the body's write give up. On the camera host that's the 5 s timeout,
+        since its send buffer holds 4 MB at most. Windows loopback takes any body whole, so here the server's large
+        writes are made to fail, on real sockets. Either way the connection closes at once, with part of a body
+        sent: it's never kept for another ask (which would wait out the 5 s idle timeout instead)."""
+        state, port, _arrays, meta = self.serve(self.new)
+        state.publish_slim(bytes(4 << 20), meta['frames']['rgb'])
+        request = ('GET /frame-slim.npz HTTP/1.1\r\nAuthorization: Bearer %s\r\n\r\n' % TOKEN).encode()
+        real = socket.socket.sendall
+        for failure in (TimeoutError, BrokenPipeError, ConnectionResetError):
+            def sendall(sock, data, *args, failure=failure):
+                if len(data) >= 1 << 20:
+                    raise failure('fictional: the client stopped reading')
+                return real(sock, data, *args)
+            with self.subTest(failure=failure.__name__), unittest.mock.patch.object(socket.socket, 'sendall', sendall):
+                with socket.create_connection(('127.0.0.1', port), timeout=3) as sock:
+                    sock.sendall(request)
+                    started, data = time.monotonic(), b''
+                    while True:
+                        chunk = sock.recv(65536)   # a kept connection: TimeoutError at 3 s
+                        if not chunk:
+                            break
+                        data += chunk
+                    self.assertLess(time.monotonic() - started, 2.0)
+                    self.assertTrue(data.startswith(b'HTTP/1.1 200 OK\r\n'), data[:40])
 
     def test_an_http_1_0_client_gets_one_answer_then_close(self):
         _state, port, _arrays, _meta = self.serve(self.new)

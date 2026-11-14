@@ -37,6 +37,7 @@ import os
 import re
 import struct
 import sys
+import time
 from pathlib import Path
 
 sys.dont_write_bytecode = True
@@ -93,7 +94,30 @@ def own_stdout():
 
 def row_reason(exc):
     """A RowError's reason with any detection id replaced, at most 160 characters: den-observe's own fixed words."""
-    return re.sub(r"detection [^:]{0,200}:", "detection <id>:", str(exc))[:160]
+    return re.sub(r"detection .{1,200}?: ", "detection <id>: ", str(exc))[:160]   # live ids are rgb-<seq>:<index>
+
+
+class Guards:
+    """How often the row guards fired, said to the worker's log once a minute when any did: rows whose ready time was
+    raised to their capture (a capture mapped a hair after its arrival by the clock offset), and boxes fit_to_frame
+    dropped (past den-observe's 64, or unusable)."""
+
+    def __init__(self, clock=time.monotonic, every_s=60.0):
+        self.clock, self.every_s = clock, every_s
+        self.since, self.clamped, self.fitted = clock(), 0, 0
+
+    def count(self, clamped, fitted):
+        self.clamped += bool(clamped)
+        self.fitted += int(fitted or 0)
+        now = self.clock()
+        if now - self.since < self.every_s:
+            return None
+        line = None
+        if self.clamped or self.fitted:
+            line = "den-detect: in the last %.0f s, %d rows raised to their capture time, %d boxes dropped to fit the row" % (
+                now - self.since, self.clamped, self.fitted)
+        self.since, self.clamped, self.fitted = now, 0, 0
+        return line
 
 
 def available(capture_ts, delay_s, compute_s):
@@ -133,6 +157,7 @@ def main(argv=None):
          **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {})})
     stream = sys.stdin.buffer
     kept, bodies, ring, image_module = None, None, stills.Ring(), None
+    guards = Guards()
     while True:
         got = read_frame(stream)
         if got is None:
@@ -173,7 +198,11 @@ def main(argv=None):
             rgb = detector.decode(plane, detect.WIDTH, detect.HEIGHT)
             seq, t = int(header["rgb_seq"]), float(header["t_host"])
             result, _merged, compute_s = detector.run(np.ascontiguousarray(rgb[:, :, ::-1]), "rgb-%d" % seq)
-            row = detector.row_of(result, capture_ts=t, available_ts=available(t, float(header["delay_s"]), compute_s), rgb_seq=seq,
+            ready = available(t, float(header["delay_s"]), compute_s)
+            line = guards.count(ready > t + float(header["delay_s"]) + compute_s, getattr(detector, "fitted", 0))
+            if line:
+                print(line, file=sys.stderr, flush=True)
+            row = detector.row_of(result, capture_ts=t, available_ts=ready, rgb_seq=seq,
                                   width=detect.WIDTH, height=detect.HEIGHT, boxes_version="yolo26s-8.4.0",
                                   keypoints_version=detector.pose.manifest["model_version"])
             say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1), **identity})

@@ -292,7 +292,7 @@ class Detector:
         """Steps 3 to 5 on one BGR frame: (result, person boxes merged away, compute seconds)."""
         started = time.perf_counter()
         result = self.yolo.infer(bgr, frame_id=frame_id, request_id=frame_id)
-        fit_to_frame(result)
+        self.fitted = fit_to_frame(result)   # boxes dropped to make the row valid; the worker counts them
         kept = {o["instance_id"] for o in self.distinct_people(result)}
         merged = sum(1 for b in result["boxes"] if b["label"] == "person" and b["instance_id"] not in kept)
         result["boxes"] = [b for b in result["boxes"] if b["label"] != "person" or b["instance_id"] in kept]

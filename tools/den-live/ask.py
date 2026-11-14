@@ -93,8 +93,10 @@ def track_binding(snapshot, track, current):
     A good frame (track: Asker._track's one supported, confident subject) sets it. A bad frame, stale, unsafe or with
     no subject seen, keeps current: contract 2's consumer rule. But some frames end the person whatever their quality:
     - another service run or camera epoch;
-    - on a fresh frame, more than one person, since there's no single subject;
-    - on a fresh frame, one person under another track id or association revision."""
+    - on a fresh frame with tracks, the bound track missing from them, or there under another association revision.
+    The bound track among others, seen or coasting, keeps it (plan 04, step 3): a passer-by, even one who stands in
+    front of the reader, never ends the reader's episode. Coasting is bounded by den-track, and a swap shows up as a
+    revision bump. No ask starts while several people are seen, and one in flight across a crowd is dropped."""
     frame = snapshot.frame
     if track is not None:
         return (*frame.key[:2], track.track_id, track.association_revision)
@@ -102,9 +104,8 @@ def track_binding(snapshot, track, current):
         return None
     if frame is not None and tuple(frame.key[:2]) != tuple(current[:2]):
         return None
-    if snapshot.status == "fresh" and frame is not None:
-        seen = [t for t in snapshot.tracks if t.current_obs_ids]
-        if len(seen) > 1 or (len(seen) == 1 and (seen[0].track_id, seen[0].association_revision) != tuple(current[2:])):
+    if snapshot.status == "fresh" and frame is not None and snapshot.tracks:
+        if not any((t.track_id, t.association_revision) == tuple(current[2:]) for t in snapshot.tracks):
             return None
     return current
 
@@ -296,6 +297,7 @@ class Asker:
         self.pool_gate = None    # the gate revision the pool's frames were kept under
         self.eligibility = self.gate_signature = None
         self.eligibility_revision = self.gate_revision = 0
+        self.crowd_revision = 0  # up on every fresh frame with several people: an ask in flight across one is dropped
         self.snapshot = self.reply = self.activity = self.prior = None
         self.inflight = self.completed = None
         self.next_at = self.backoff_until = 0.0
@@ -361,6 +363,17 @@ class Asker:
         with self.lock:
             values, level, occupancy, why = self._gate()
             gate_why = why
+            bound = self.binding is not None and frame is not None and tuple(frame.key[:2]) == tuple(self.binding[:2])
+            # The bound reader coasting behind someone (03's review): the one person seen is never the subject.
+            shadowed = (track is not None and bound
+                        and (track.track_id, track.association_revision) != tuple(self.binding[2:])
+                        and any((t.track_id, t.association_revision) == tuple(self.binding[2:]) for t in snapshot.tracks))
+            if shadowed:
+                track = None
+            crowded = (snapshot.status == "fresh" and frame is not None
+                       and (shadowed or sum(1 for t in snapshot.tracks if t.current_obs_ids) > 1))
+            if crowded:
+                self.crowd_revision += 1
             binding = track_binding(snapshot, track, self.binding)
             if binding != self.binding or self.gate_revision != self.pool_gate:
                 # A new person, or a gate that closed or reopened: stills come only from the new window.
@@ -413,7 +426,7 @@ class Asker:
             may = (eligible is not None and self.inflight is None and now >= self.next_at and now >= self.backoff_until
                    and self._paced(now, values, level, trigger))
             request = self._prepare(now, track, occupancy, level, trigger) if may else None
-            event = self._decorate(event, now, eligible is not None, why, level)
+            event = self._decorate(event, now, eligible is not None, why, level, crowded)
         if request is not None:
             self._request_stills(request)
         return event
@@ -480,7 +493,8 @@ class Asker:
             "frames": frames, "keys": [list(frame.key) for frame in frames], "track": track, "binding": self.binding,
             "association": evidence, "seated_since_mono": seated_since,
             "eligibility_revision": self.eligibility_revision, "gate_revision": self.gate_revision,
-            "occupancy": occupancy, "backoff_level": level, "valid_until_mono": latest.capture_mono + INFERENCE_S,
+            "crowd_revision": self.crowd_revision, "occupancy": occupancy, "backoff_level": level,
+            "valid_until_mono": latest.capture_mono + INFERENCE_S,
             "trigger": trigger, "pose": (self.last_pose or (None, None))[1],
         }
         self.inflight = request
@@ -502,9 +516,10 @@ class Asker:
         return (not self.halt.is_set() and ask.get("binding") is not None and ask["binding"] == self.binding
                 and ask["eligibility_revision"] == self.eligibility_revision
                 and ask["gate_revision"] == self.gate_revision
+                and ask.get("crowd_revision") == self.crowd_revision
                 and now < ask["valid_until_mono"])
 
-    def _decorate(self, event, now, open_, why, level):
+    def _decorate(self, event, now, open_, why, level, crowded=False):
         failing = ("Qwen isn't answering" if self.failed_in_row >= UNAVAILABLE_AFTER else
                    "the pictures aren't being made" if self.stills_failed_in_row >= UNAVAILABLE_AFTER else None)
         health = {"state": ("unavailable" if failing else "asking") if open_ else "off",
@@ -516,7 +531,7 @@ class Asker:
             track_id, expiry, value = self.activity
             if now >= expiry:
                 self.activity = None
-            else:
+            elif not crowded:   # with several people seen, no track is labeled (it comes back when alone)
                 for track in event.get("tracks") or []:
                     if track.get("track_id") == track_id:
                         track["activity"] = dict(value)

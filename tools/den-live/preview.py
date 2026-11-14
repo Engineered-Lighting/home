@@ -16,6 +16,7 @@ import time
 import uuid
 from pathlib import Path
 
+import bulb_plan
 import direction
 from contracts import PERCEPTION_S
 from preview_evidence import Episode, field, finite, head as published_head, pose, seated as published_seated
@@ -46,13 +47,16 @@ PRE_AIM_STANDING_M = .3
 STANDBY_M = .1
 # Exits a fixture can come back from (its job wasn't refused): it's still the incumbent while it fades.
 RECOVERABLE = ("task_released", "task_ending")
+# Several people (plan 04, step 3): the person the light is for keeps it while others are in the room, and every other
+# person's head is kept out of every beam by the same clearance as the reader's own (den-core eye.HEAD_CLEARANCE_M).
+THROUGH_ANOTHER_HEAD = "beam_through_another_head"   # den-core eye's own is beam_through_head
 CONTROL_KEYS = ("on", "stopped", "stop_counter")
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
 
 
 class Preview:
     def __init__(self, core, *, binding, fixtures, state, seat_mark=None, clock=time.monotonic,
-                 publish=None, append=None, threaded=True):
+                 publish=None, append=None, threaded=True, bulb_lights=(), utc_offset_h=None):
         self.core, self.clock = core, clock
         self.binding = {key: binding[key] for key in BINDING_KEYS}
         revision = self.binding["equipment_revision"]
@@ -116,6 +120,7 @@ class Preview:
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
         self.hold_until = None   # while lit, the track holds to here through a camera gap (GAP_HOLD_S)
         self.eligible_track = None
+        self.others = ()       # everyone else on the newest fresh frame: {track_id, head}, kept out of every beam
         self.captured = None   # the newest frame taken for the track
         self.since = None      # the published seated since_mono the episode was built at
         self.shift = None
@@ -132,6 +137,12 @@ class Preview:
         self.worker = self.ticker = None
         self.hue = None
         self.site = None
+        # The bulbs (bulb_plan.py): planned and published always, sent only while this switch is On. A missing or
+        # unreadable file is Off, and neither On nor a restart sends anything by itself.
+        self.bulbs_on = self._read("bulbs-control.json", {}).get("on") is True
+        self.bulb_lights = tuple(bulb_lights or ())
+        self.utc_offset_h = (time.localtime().tm_gmtoff / 3600.0) if utc_offset_h is None else float(utc_offset_h)
+        self.bulb = self.bulb_since = None
         self._publish(self.clock())
 
     def _read(self, name, fallback):
@@ -199,6 +210,7 @@ class Preview:
         state and its requests all go."""
         self.track_binding = self.track = self.track_until = self.hold_until = self.episode = self.eligibility = None
         self.eligible_track = None
+        self.others = ()
         self.captured = self.since = None
         self.shift = self.target_basis = None
         self.facing = direction.FacingFilter()
@@ -207,6 +219,32 @@ class Preview:
         """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens. No light until a current, posed,
         seated frame of the same person; the episode, its onset, the need state and the requests stay."""
         self.track = self.track_until = self.hold_until = None
+        self.others = ()
+
+    def _subject_of(self, tracks):
+        """(the track the light is for, everyone else). One track is the subject, as it always was. Among several, the
+        subject is the one the current binding names (track id and association revision), and only that one: a person
+        who walks in never becomes the subject while others are there, and with no binding nobody is lit."""
+        if len(tracks) == 1:
+            return tracks[0], ()
+        bound = self.track_binding and tuple(self.track_binding[2:])
+        for track in tracks:
+            if bound and (field(track, "track_id"), field(track, "association_revision")) == bound:
+                return track, tuple(other for other in tracks if field(other, "track_id") != bound[0])
+        return None, tuple(tracks)
+
+    def _other(self, track):
+        joints = pose(track)
+        head = field(track, "coarse_head_room_m") or self.core.body.head(joints)
+        if not (isinstance(head, (list, tuple)) and len(head) == 3 and all(map(finite, head))):
+            return None
+        return {"track_id": field(track, "track_id"), "head": tuple(head)}
+
+    def _clear_of_others(self, origin, point, kept=False):
+        """Whether the beam from `origin` to `point` keeps every other person's head out by the reader's clearance: den-core's
+        to be admitted, direction's keep clearance for a fixture already lit (the same hysteresis as the reader's glare)."""
+        clearance = direction.GLARE_KEEP_M if kept else self.core.eye.HEAD_CLEARANCE_M
+        return all(self.core.eye.centre_clear(origin, point, other["head"]) >= clearance for other in self.others)
 
     def tracking(self, snapshot):
         with self.lock:
@@ -234,14 +272,18 @@ class Preview:
                 # No new frame (a camera gap: perception's stale snapshots) or a late one: nothing to learn here.
                 # _expire darkens at the light's deadline, or, while a spot is lit, at the gap hold's.
                 pass
-            elif (field(snapshot, "presence") != "present" or len(tracks) != 1
+            elif (field(snapshot, "presence") != "present" or not tracks
                     or any(field(frame, k) != self.binding[k] for k in ("transform_id", "scan_revision"))):
                 self._darken()
+            elif self._subject_of(tracks)[0] is None:
+                self._darken()   # several people and none of them the one the light is for
             else:
+                subject, others = self._subject_of(tracks)
                 eligibility = field(snapshot, "eligibility_revision")
                 if self.eligibility is not None and eligibility != self.eligibility:
                     self.episode = self.shift = self.target_basis = None
-                self._track(tracks[0], captured, deadline, captured + GAP_HOLD_S, now)
+                self._track(subject, captured, deadline, captured + GAP_HOLD_S, now)
+                self.others = tuple(row for row in map(self._other, others) if row is not None)
                 # The ask names the eligible track only on a frame that may start an ask. A bad frame publishes None
                 # with the same eligibility revision, and the person stays eligible for the reply already in flight.
                 eligible = field(snapshot, "eligible_track_id")
@@ -384,6 +426,9 @@ class Preview:
             except ValueError:
                 reasons[name] = "ambiguous_aim"
                 continue
+            if not self._clear_of_others(row["aim_origin_m"], person["target"], kept):
+                reasons[name] = THROUGH_ANOTHER_HEAD
+                continue
             if any(not lo <= a <= hi for a, (lo, hi) in zip(target, row["ranges"])):
                 reasons[name] = "out_of_range"
                 continue
@@ -408,7 +453,10 @@ class Preview:
         person = self.track
         # A light needs a current, posed, seated frame: a reply that lands while the frames are stale, poseless or
         # unsafe (say, an ask sent as the person stood up) is taken into the episode but lights nothing.
-        task = self.task_until() is not None and bool(person and person["seated"])
+        # Gaming is dark (the owner's default, plan 04): while den_lighting's gaming signal reads playing, no spot
+        # lights a task. The bulbs play den_lighting's gaming scene instead.
+        gaming = self._gaming()
+        task = self.task_until() is not None and bool(person and person["seated"]) and not gaming
         # In a camera gap (the newest frame older than POSE_AGE_S, held while lit up to GAP_HOLD_S): the fixture lit for
         # this person keeps its job, aim and level, and nothing new is aimed or lit.
         held = person is not None and now >= self.track_until
@@ -428,7 +476,7 @@ class Preview:
             chosen, target, reasons = self._candidate(person, now)
         diagnostic = {"kind": "task" if task else "pre_aim", "fixture": chosen, "refused": reasons,
                       "target_basis": person and person["basis"], "joints_cdeg": list(target) if target else None,
-                      "gap_hold": held}
+                      "gap_hold": held, "gaming": gaming}
         subject = self._subject()
         previous = self.latest_decision or {}
         if diagnostic != previous.get("proposal") or subject != previous.get("subject"):
@@ -442,9 +490,11 @@ class Preview:
             if not directing:
                 continue
             if name != chosen or not task:
-                if self._lighting(row) and (person is None or row["job"] != person["track_id"]):
+                if self._lighting(row) and (person is None or row["job"] != person["track_id"]
+                                            or reasons.get(name) == THROUGH_ANOTHER_HEAD):
                     # Contract 2's consumer rule, unchanged: a stale or unsafe snapshot, or another person binding,
-                    # darkens at once. Only the normal exits below fade.
+                    # darkens at once. So does a lit beam someone else's head has walked into (plan 04): never a
+                    # fade in their eyes. Only the normal exits below fade.
                     self._release(name, row, now, reasons.get(name, "task_released"))
                 elif self._lighting(row) and not row["exiting"]:
                     # Standing up, seen on a fresh frame: the quick exit; a task that ended with the person still
@@ -570,6 +620,15 @@ class Preview:
                     math.radians(row["profile"].get("path_margin_cdeg", 0) / 100))
                 if closest < direction.GLARE_KEEP_M + margin:
                     travel = "dark"
+                # Everyone else's head too (plan 04, step 3), at the admission clearance plus the same margin.
+                for other in self.others:
+                    _, near = self.core.eye.path_clear(row["aim_origin_m"], row["horizontal_world_reference"],
+                        tuple(x / 100 for x in row["current"]), tuple(x / 100 for x in target),
+                        math.dist(row["aim_origin_m"], person["target"]), other["head"])
+                    other_margin = math.dist(row["aim_origin_m"], other["head"]) * math.tan(
+                        math.radians(row["profile"].get("path_margin_cdeg", 0) / 100))
+                    if near < self.core.eye.HEAD_CLEARANCE_M + other_margin:
+                        travel = "dark"
             if travel == "lit":
                 # One movement, one command: the glide carries the level the train has reached, and a rise in progress
                 # waits for it to land.
@@ -884,6 +943,50 @@ class Preview:
                 row["reason"] = "standby"
         self._advance(row, now, self.task_until() is not None)
 
+    def _plan_bulbs(self, now, ambient=None):
+        """The bulb plan for this moment (bulb_plan.py), from the same situation as the spots. Off and Stop release
+        the bulbs to den_lighting's own rules. A change wakes the overlay, which sends it only while Bulbs is On."""
+        inputs = self.hue.inputs() if self.hue is not None else None
+        context = self._context(now)
+        key, learnable, source = bulb_plan.situation(self.core, context, inputs and inputs["attrs"], self.wall(),
+                                                     self.utc_offset_h)
+        if self.stopped or not self.on:
+            plan = bulb_plan.release(key, "stopped" if self.stopped else "off")
+        else:
+            lights = tuple((inputs and inputs["lights"]) or self.bulb_lights)
+            learned = self.hue.scenes(key, lights) if self.hue is not None and lights else {}
+            plan = bulb_plan.desired(key, people=context["people"], ambient=ambient,
+                                     learned=learned, lights=lights, warmest=inputs and inputs["warmest"],
+                                     house=inputs and inputs["house"])
+        current = {"key": (key, learnable, source), "plan": plan}
+        if current != self.bulb:
+            if self.bulb is None or plan != self.bulb["plan"]:
+                self.bulb_since = now
+            self.bulb = current
+            if self.hue is not None:
+                self.hue.wake()
+
+    def _gaming(self):
+        inputs = self.hue.inputs() if self.hue is not None else None
+        return bool(inputs) and inputs["attrs"].get("gaming_signal") == "playing"
+
+    def bulb_desired(self):
+        """For the overlay's worker: the plan as the preview last published it."""
+        with self.lock:
+            return self.bulb
+
+    def bulbs_switch(self):
+        return self.bulbs_on
+
+    def _bulb_record(self):
+        if self.bulb is None:
+            return None
+        readback = self.hue.readback() if self.hue is not None else {}
+        sending = self.hue is not None and self.bulbs_on and readback.get("active") is True
+        return bulb_plan.record(self.bulb["plan"], mode="sending" if sending else "shadow", since_mono=self.bulb_since,
+                                source=self.bulb["key"][2], sent_generation=readback.get("sent_generation") if sending else None,
+                                problem=readback.get("problem"))
+
     def _publish(self, now):
         self.seq += 1
         fixtures = {}
@@ -914,10 +1017,11 @@ class Preview:
         # The room's glow (additive): what Home draws on every fixture's glow zones and downlight, and later the scale
         # den_lighting would apply to the room's bulbs. None while the coordinator is Off.
         ambient = self.ambient.published(self.settings, now) if self.on else None
+        self._plan_bulbs(now, ambient)   # the bulbs follow the same ambient record Home draws (contract 7)
         self.latest = {"schema": "den-virtual-spots-1", "home": "den", "site": self.site, "epoch": self.epoch, "seq": self.seq,
                        "binding": self.binding, "subject": self._subject(), "sampled_mono": now, "valid_until_mono": until,
                        "on": self.on, "stopped": self.stopped, "stop_counter": self.stop_counter, "fixtures": fixtures,
-                       "ambient": ambient}
+                       "ambient": ambient, "bulbs": self._bulb_record()}
         self.counts["snapshots"] += 1
         self.publish(self.latest)
 
@@ -944,7 +1048,7 @@ class Preview:
         signature = self.track_binding, episode, task, known
         if signature != self.context_signature:
             self.context_signature, self.context_since = signature, now
-        return {"people": int(self.track is not None), "task": task, "seated": episode is not None,
+        return {"people": int(self.track is not None) + len(self.others), "task": task, "seated": episode is not None,
                 "activity_known": known, "since_mono": self.context_since}
 
     def _controls(self):
@@ -956,7 +1060,7 @@ class Preview:
     def routes(self):
         routes = {("GET", "/coordinator"): self.state, ("POST", "/coordinator/switch"): self.switch,
                 ("POST", "/coordinator/stop"): self.stop, ("POST", "/coordinator/resume"): self.resume,
-                ("POST", "/coordinator/settings"): self.configure}
+                ("POST", "/coordinator/settings"): self.configure, ("POST", "/coordinator/bulbs"): self.bulbs}
         if self.hue is not None:
             routes[("POST", "/coordinator/learned/clear")] = self.hue.request_clear
         return {**routes, **{(method, path.replace("/coordinator", "/coordinator/virtual", 1)): handler
@@ -966,10 +1070,35 @@ class Preview:
         with self.lock:
             current = {**self._controls(), "snapshot": self.latest, "decision": self.latest_decision,
                        "server_mono": self.clock(), "settings": dict(self.settings), "problem": self.problem,
-                       "trace_event_index": self.trace_committed, "trace_complete": self.trace_complete}
+                       "trace_event_index": self.trace_committed, "trace_complete": self.trace_complete,
+                       "bulbs_on": self.bulbs_on, "bulb_plan": self._bulb_record(),
+                       "situation": self.bulb and self.bulb["key"][0]}
         if self.hue is not None:
-            current.update(self.hue.readback())
+            readback = self.hue.readback()
+            current.update({**readback, "situation": readback.get("situation") or current["situation"],
+                            "problem": current["problem"] or readback.get("problem")})
         return 200, current
+
+    def bulbs(self, data):
+        """The Bulbs switch (contract 6's fourth control). Off applies before the disk write, as Stop does; On only
+        once it's saved. Either way the overlay hears at once: Off releases a plan of ours, On may send one."""
+        if not isinstance(data, dict) or type(data.get("on")) is not bool:
+            return 400, {"ok": False, "error": "expected on"}
+        with self.control_lock:
+            if not data["on"]:
+                with self.lock:
+                    self.bulbs_on = False
+                    self._publish(self.clock())
+            try:
+                self._save("bulbs-control.json", {"on": data["on"]})
+            except OSError:
+                return 503, {"ok": False, "error": "bulb switch write failed", "on": self.bulbs_on}
+            with self.lock:
+                self.bulbs_on = data["on"]
+                self._publish(self.clock())
+        if self.hue is not None:
+            self.hue.wake()
+        return 200, {"ok": True, "on": data["on"]}
 
     def switch(self, data):
         if not isinstance(data, dict) or type(data.get("on")) is not bool:

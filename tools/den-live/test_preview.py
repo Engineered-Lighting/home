@@ -181,11 +181,12 @@ class PreviewTest(unittest.TestCase):
         self.read()
         self.assertTrue(self.preview.episode.need.engaged, "one confident yes inside the episode")
 
-    def test_second_person_and_new_epoch_clear(self):
+    def test_a_repeated_track_is_one_person_and_new_epoch_clears(self):
+        # A second person no longer darkens the reader (plan 04, step 3: test_preview_people.py has those cases).
         self.light()
         self.now += .25
         self.track(more=True)
-        self.assertFalse(self.row()["on"])
+        self.assertTrue(self.row()["on"])
         self.now += .25
         self.track(epoch=2)
         self.read()
@@ -303,19 +304,20 @@ class PreviewTest(unittest.TestCase):
                 self.now += .25
                 self.track(seated=False)   # stand up, so the next cue starts a new episode
 
-    def test_multiple_people_in_the_stills_revokes_current_support(self):
+    def test_nobody_in_the_stills_revokes_current_support(self):
+        # "multiple" is unknown, not no (contract 3, 2026-11-14): test_preview_people.py has that case.
         self.light()
-        self.read(people_visible="multiple")
+        self.read(people_visible="none")
         self.assertFalse(self.row()["on"])
         self.assertIsNone(self.row()["keep_lit_token"])
 
     def test_the_next_frame_keeps_a_negative_and_older_stills_are_refused(self):
-        """The review's false light: a valid multiple reply moves the episode's start on to it. The next tracking frame,
+        """The review's false light: a valid none reply moves the episode's start on to it. The next tracking frame,
         whose published since hasn't moved, keeps that episode, so replies whose stills began before the negative are
         refused and two of them light nothing. The control: stills after the negative are taken."""
         self.light()
         episode, negative = self.preview.episode, self.now
-        self.read(people_visible="multiple")
+        self.read(people_visible="none")
         self.assertEqual(episode.started, negative)
         self.assertFalse(self.row()["on"])
         for _ in range(2):
@@ -334,7 +336,8 @@ class PreviewTest(unittest.TestCase):
     def test_one_bad_snapshot_darkens_but_keeps_the_episode(self):
         """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens, and the episode, its onset, the need
         state and its requests survive it; the next good frame lights again with no new answer."""
-        for bad in ({"association": "ambiguous"}, {"posed": False}, {"more": True}):
+        # A second person isn't a bad frame any more (plan 04, step 3): test_preview_people.py.
+        for bad in ({"association": "ambiguous"}, {"posed": False}):
             with self.subTest(bad=bad):
                 self.light()
                 episode, requests = self.preview.episode, list(self.preview.episode.requests)
@@ -818,7 +821,8 @@ class DirectionTest(PreviewTest):
 
     def test_a_stale_or_unsafe_frame_still_darkens_at_once(self):
         """Contract 2's consumer rule is the rules', unchanged: only the normal exits fade."""
-        for bad in ({"posed": False}, {"more": True}, {"association": "ambiguous"}):
+        # A second person isn't an unsafe frame any more (plan 04, step 3): test_preview_people.py.
+        for bad in ({"posed": False}, {"association": "ambiguous"}):
             with self.subTest(bad=bad):
                 self.lit_by_direction()
                 goal = self.row()["level"]

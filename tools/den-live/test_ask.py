@@ -365,7 +365,7 @@ class AskTest(unittest.TestCase):
         self.accepted = []
         self.rule, self.rule_epoch = seated.Published(), 1   # perception's seated, as perceive.py publishes it
 
-    def tick(self, seconds=0.25, hip=0.5, people=1, xy=(1.0, 1.0), epoch=1, usable=True, drain=True):
+    def tick(self, seconds=0.25, hip=0.5, people=1, xy=(1.0, 1.0), epoch=1, usable=True, drain=True, coasting=()):
         """One frame: confirmed tracks seated (or not), the ask's observe, and any stills reply sent at once."""
         self.clock.t += seconds
         self.frame_id += 1
@@ -377,10 +377,10 @@ class AskTest(unittest.TestCase):
         pose = {name: (tuple(xyz), "supported") for name, (xyz, _) in joints(hip, x=xy[0]).items()}
         if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
             self.rule, self.rule_epoch = seated.Published(), epoch
-        evidence = tuple(TrackEvidence(t["track_id"], "confirmed", xy, 0.1, "stereo", ("obs",), self.status,
-                                       self.revision, self.since, pose,
+        evidence = tuple(TrackEvidence(t["track_id"], "confirmed", xy, 0.1, "stereo",
+                                       () if n in coasting else ("obs",), self.status, self.revision, self.since, pose,
                                        seated=self.rule.update(t["track_id"], self.revision, captured, pose))
-                         for t in tracks)
+                         for n, t in enumerate(tracks))
         snapshot = TrackingSnapshot("run", epoch, self.frame_id, frame if usable else None,
                                     "fresh" if usable else "stale", None, "present", evidence)
         event = self.asker.observe({"tracks": tracks, "health": {}}, snapshot)
@@ -611,6 +611,32 @@ class AskTest(unittest.TestCase):
         self.assertTrue(all("activity" not in track for track in event["tracks"]))
         self.assertEqual(self.accepted, [])
         self.assertEqual(self.log_lines()[-1]["invalid_reason"], "evidence_changed")
+
+    def test_a_passer_by_keeps_the_readers_episode_but_starts_no_ask(self):
+        """Plan 04, step 3: a second person never ends the reader's episode (its eligibility revision holds), no ask
+        starts while two are seen, nobody is labeled, and the asks go on once the reader is alone again."""
+        self.run_for(4)
+        revision, sent = self.asker.eligibility_revision, self.asks_sent()
+        self.assertGreater(sent, 0)
+        for _ in range(12):
+            event = self.tick(people=2)
+            self.assertTrue(all("activity" not in track for track in event["tracks"]))
+        self.assertEqual((self.asker.eligibility_revision, self.asks_sent()), (revision, sent))
+        self.run_for(4)
+        self.assertEqual(self.asker.eligibility_revision, revision)
+        self.assertGreater(self.asks_sent(), sent)
+
+    def test_a_passer_by_in_front_of_the_reader_keeps_the_episode(self):
+        """03's review: the reader's track coasts while the passer is the only one seen. The binding holds, since the
+        bound track is still in the snapshot, and no ask starts on the passer."""
+        self.run_for(4)
+        revision, sent = self.asker.eligibility_revision, self.asks_sent()
+        for _ in range(12):
+            self.tick(people=2, coasting=(0,))
+        self.assertEqual((self.asker.eligibility_revision, self.asks_sent()), (revision, sent))
+        self.run_for(4)
+        self.assertEqual(self.asker.eligibility_revision, revision)
+        self.assertGreater(self.asks_sent(), sent)
 
     def test_a_late_completion_cannot_cross_a_camera_restart(self):
         while self.asks_sent() == 0:

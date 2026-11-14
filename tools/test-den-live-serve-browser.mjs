@@ -29,6 +29,9 @@ const listen = server => new Promise((resolve, reject) => {
   server.listen(0, '127.0.0.1', () => resolve(server.address().port));
 });
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+// The den pipeline (HOME_WEB_DEN_PIPELINE) is off by default in production, so the suite runs without it and its own
+// case is opt-in: HOME_DEN_PIPELINE_SUITE=1 node --test --test-name-pattern "pipeline runs" tools/test-den-live-serve-browser.mjs
+const PIPELINE_SUITE = process.env.HOME_DEN_PIPELINE_SUITE === '1';
 
 async function clickCoordinator(page, button, command) {
   const [response] = await Promise.all([
@@ -256,7 +259,7 @@ before(async () => {
     HOME_WEB_AUTH_FILE: path.join(folder, 'missing-auth.json'), HOME_WEB_BASIC_AUTH: 'fixture:ordinary-auth-required',
     HOME_CONTENT_PACKS_DIR: packs, HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: '1',
     HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: registration, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin,
-    HOME_WEB_DEN_LIVE: '1', HOME_WEB_DEN_BODY_V2: '1', HOME_WEB_DEN_VIRTUAL: '1', HOME_WEB_DEN_PIPELINE: '1',
+    HOME_WEB_DEN_LIVE: '1', HOME_WEB_DEN_BODY_V2: '1', HOME_WEB_DEN_VIRTUAL: '1', HOME_WEB_DEN_PIPELINE: PIPELINE_SUITE ? '1' : '0',
     HOME_WEB_DEN_LIVE_TARGET: target + '/api/den-live', HOME_WEB_ENABLE_LEGACY_HA_PROXY: '1',
     HOME_WEB_HA_TARGET: target, HOME_WEB_HA_TOKEN_FILE: haFile,
     HOME_WEB_SERVE_LIGHTING_RELAY_CREDENTIAL_FILE: relayFile, HOME_WEB_AGENT_BFF_TARGET: target + '/api/agent' });
@@ -702,7 +705,7 @@ inPart(2, 'the real coordinator trace, virtual spot and Stop agree through Full 
   }
 });
 
-test('the pipeline runs through the room: camera to perception to Qwen to the light, and back onto the person', { timeout: 120000 }, async () => {
+test('the pipeline runs through the room: camera to perception to Qwen to the light, and back onto the person', { timeout: 120000, skip: !PIPELINE_SUITE && 'set HOME_DEN_PIPELINE_SUITE=1' }, async () => {
   const initial = { ...fake.control };
   try {
     for (const mobile of [false, true]) {

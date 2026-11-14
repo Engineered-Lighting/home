@@ -1099,9 +1099,10 @@ button.hg-no-press:active {
 /* The den's capsule (home-den-live-view.mjs, with the caption or the pipeline on): the chip, made one row, in the
  * Perception Lab's card language: near-black, a hairline border, small corners, mono detail; three icons hold what
  * used to be separate buttons and drawers. */
-.home-den-live-chip.home-den-live-chip--capsule { top: 12px; left: 12px; z-index: 15; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px);
-  height: 36px; padding: 0 4px 0 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(10,10,10,.92);
-  pointer-events: auto; font: 400 12.5px/1 'Geist', ui-sans-serif, system-ui, sans-serif; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.home-den-live-chip.home-den-live-chip--capsule { top: 12px; left: 12px; z-index: 15; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; max-width: min(560px, calc(100% - 24px));
+  min-height: 36px; padding: 3px 4px 3px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(10,10,10,.92);
+  pointer-events: none; font: 400 12.5px/1 'Geist', ui-sans-serif, system-ui, sans-serif; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.home-den-live-chip-actions { pointer-events: auto; }   /* like the old chip: only the controls take the pointer */
 .home-den-live-chip--capsule p { white-space: nowrap; }
 .home-den-live-chip--capsule .home-den-live-chip-title { font-weight: 560; }
 .home-den-live-chip--capsule .home-den-live-chip-facts { font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; color: var(--hg-fg-2, #a1a1a1); }
@@ -1116,10 +1117,8 @@ button.hg-no-press:active {
 .home-den-live-chip-icon[aria-pressed="true"] { color: #fff; border-color: rgba(255,255,255,.4); background: rgba(255,255,255,.08); }
 .home-den-live-chip-icon:focus-visible { outline: 1px solid #0072f5; outline-offset: 2px; }
 .home-den-live-chip-icon[hidden] { display: none; }
-.home-den-live-sheet { position: absolute; top: calc(100% + 6px); left: -1px; width: min(320px, calc(100vw - 32px)); padding: 10px 12px; cursor: auto;
-  border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(10,10,10,.96); }
-.home-den-live-sheet[hidden] { display: none; }
-.home-den-live-sheet .home-den-live-coordinator { margin: 0; padding: 0; border: 0; }
+/* The coordinator's drawer keeps its own row under the capsule's status row. */
+.home-den-live-chip--capsule .home-den-live-coordinator { flex: 1 0 100%; margin: 1px 0 5px; padding-top: 6px; }
 .apt-home-stage:has(.home-den-live-chip--capsule) .home-den-labels-toggle { display: none; }
 /* The den's pipeline through the room (home-den-pipeline-layer.mjs). Stations on one hairline along the canvas's top:
  * a lit dot per system with its words below, no boxes, so the room stays the picture. Wires are light, a record runs

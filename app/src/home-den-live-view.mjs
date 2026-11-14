@@ -303,11 +303,10 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     /* The chip sits in the room view's top left corner, under Home's own overlays. The older layouts keep a toolbar
      * row there, and the chip joins its end instead of covering it. */
     /* With the pipeline (or the caption) on, the chip becomes one capsule in the Perception Lab's card language: the
-     * den's status and Qwen's line, and three icons that hold what used to be separate buttons and drawers. The
-     * pipeline icon turns the pipeline on and off, the light icon opens the coordinator's controls in a sheet under the
-     * capsule, and the labels icon opens the label editor (whose own button the capsule then hides). */
+     * den's status and Qwen's line, with icons for the pipeline and the label editor (whose own button the capsule
+     * then hides). The coordinator's drawer stays under the status row, as #441 has it. */
     const capsule = !!(captionKit || pipelineKit);
-    const ICON = {"pipeline": '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="2.8" cy="8" r="1.7"/><circle cx="8" cy="8" r="1.7"/><circle cx="13.2" cy="8" r="1.7"/><path d="M4.5 8h1.8M9.7 8h1.8M2.8 6.3C3.6 2.8 12.4 2.8 13.2 6.3"/></svg>', "light": '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.6 1.8h4.8l-.9 3.4H6.5z"/><path d="M6.5 5.2 3.6 13.4c1.5 1 7.3 1 8.8 0L9.5 5.2"/></svg>', "labels": '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 2.2h5.4l6.2 6.2-5.4 5.4-6.2-6.2z"/><circle cx="5.3" cy="5.3" r="1"/></svg>'};
+    const ICON = {"pipeline": '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="2.8" cy="8" r="1.7"/><circle cx="8" cy="8" r="1.7"/><circle cx="13.2" cy="8" r="1.7"/><path d="M4.5 8h1.8M9.7 8h1.8M2.8 6.3C3.6 2.8 12.4 2.8 13.2 6.3"/></svg>', "labels": '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 2.2h5.4l6.2 6.2-5.4 5.4-6.2-6.2z"/><circle cx="5.3" cy="5.3" r="1"/></svg>'};
     function iconButton(name, label, onClick) {
         const button = document.createElement('button');
         button.type = 'button';
@@ -340,19 +339,10 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                 actions.className = 'home-den-live-chip-actions';
                 actions.setAttribute('role', 'group');
                 actions.setAttribute('aria-label', 'Den view');
-                const sheet = document.createElement('div');
-                sheet.className = 'home-den-live-sheet';
-                sheet.hidden = true;
                 if (pipelineKit) actions.append(iconButton('pipeline', 'Pipeline', () => { pipeline?.setOn(!pipeline.status().on); render(); }));
-                if (panel) {
-                    sheet.append(panel.element);
-                    panel.element.open = true;
-                    actions.append(iconButton('light', 'Lighting coordinator', button => {
-                        sheet.hidden = !sheet.hidden; button.setAttribute('aria-pressed', String(!sheet.hidden));
-                    }));
-                }
                 actions.append(iconButton('labels', 'Labels', () => document.querySelector('.home-den-labels-toggle')?.click()));
-                chip.append(actions, sheet);
+                // the status row's icons sit before the coordinator's drawer, which keeps its own row
+                if (panel) chip.insertBefore(actions, panel.element); else chip.append(actions);
             }
         }
         const canvas = engine.renderer.domElement;

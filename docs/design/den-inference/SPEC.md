@@ -198,13 +198,18 @@ The owner asked for the Perception Lab's graph (design v8) to live with the 3D h
   - The coordinator drops a warm line onto where the beam lands (`target_m`), with a soft bloom.
   - A wire brightens, and a short comet runs it, only when a record has just gone through: a people event, a new Qwen answer, or a change in the spot.
 - **Minimal while on:** the room's fixture pills step back, because the coordinator card names the lit fixture in its sheet. With the caption on, its house line still shows up close.
+- **One floating label (the spine, 2026-11-14):** the body's System caption carries the name, posture, Qwen's word (cleared when it expires), the house line and "Qwen saw". `home-den-live-view.mjs` feeds its `person`, `activity`, `house` and `evidence` callbacks from `home-den-inference-model.mjs`, which reads the face work's `who {state, label, basis}`. The separate caption (`HOME_WEB_DEN_CAPTION`) stays off and unused.
 - **The light direction's hooks** (additive in `den-virtual-spots-1`, from the lighting-direction work):
   - While a level train runs, the coordinator card shows where it's heading ("40% → 79%").
   - Its sheet names the change from `fade.purpose` (rising, taking over, handing over, letting go, dipping to move, adjusting) and its duration, and the room glow from `ambient` ("40% of the house · 2700 K").
   - The caption's house line names a running fade ("Spot 4 · taking over").
   - The reasons `standby` and `task_ending` have words.
 - **Occupancy:** the card reads den-live's `health.occupancy {effective, why}` (accepted for den-live on 2026-11-14) and says "Not reported" until it's sent. It's never inferred from Qwen's gate.
-- **The capsule:** with the caption or the pipeline on, the den's chip becomes one Lab-style row: status, then three icons (pipeline, the coordinator's controls in a sheet, and labels). It replaces the separate Labels button and the chip's drawer.
+- **The capsule:**
+  - With the pipeline on (its flag), the den's chip becomes a Lab-style capsule: the status, Qwen's line, and two icons (pipeline and labels). It replaces the separate Labels button.
+  - The coordinator's drawer keeps its own row under the status, as #441 has it, so the production controls and their tests are unchanged.
+  - Only the controls take the pointer.
+- **The browser case is opt-in,** because the flag is off in production. Run it with `HOME_DEN_PIPELINE_SUITE=1 node --test --test-name-pattern "pipeline runs" tools/test-den-live-serve-browser.mjs`. The suite's other cases run production defaults.
 - **Code:**
   - `app/src/home-den-pipeline-layer.mjs`: the layer, and `pipelineCards()`, which is pure and tested by `tools/test-den-pipeline-cards.mjs`.
   - Mounted by `home-den-live-view.mjs` when `HomeDenLive.pipeline` is set (`HOME_WEB_DEN_PIPELINE`, off by default).

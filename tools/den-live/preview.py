@@ -654,10 +654,15 @@ class Preview:
             fade = self.settings["crossfade_s"] if back else fade
             # A rise's first step goes with the yes: the bloom starts one step in, already visible.
             start = now - row["step_s"] if curve == "ease_out" and not back else now
-            # A hand-off eases the light, not the level, so with the other fixture's fall the page keeps its light.
+            # A hand-off keeps the page's light whole with the other fixture's fall: a train eases the light itself;
+            # a timed board rises on its own ease_out against a fall on ease_in_out twice as long (direction.CROSSFADE).
+            space = "light" if handoff and not back and not row["timed"] else "level"
+            if handoff and not back and row["timed"]:
+                # Half the old fixture's fall, which can't outlast the validity its light was published with.
+                curve, fall = direction.CROSSFADE["in"], self._fall(row, person, now)
+                fade = min(fade, fall / direction.CROSSFADE["out_x"])
             row["ramp"] = direction.Ramp(row["level"], goal, fade, "ease_in_out" if back else curve, start,
-                                         "crossfade_in" if handoff or back else "fade_in",
-                                         "light" if handoff and not back else "level")
+                                         "crossfade_in" if handoff or back else "fade_in", space)
             return
         if target != effective_target:
             if glide and not row["profile"].get("retarget_mid_move"):
@@ -717,6 +722,20 @@ class Preview:
             row["ramp"] = direction.Ramp(row["level"], goal, self.settings["crossfade_s"], "ease_in_out", now, "level")
         row.update(job=person["track_id"], target=person["target"], basis=person["basis"])
 
+    def _fall(self, row, person, now):
+        """How long the other fixture lit for this person can take to fall in a hand-off on a timed board: twice the
+        crossfade, within EXIT_MAX_S and its light's published validity (or what's left of a fall it's already in)."""
+        fall = min(direction.EXIT_MAX_S, direction.CROSSFADE["out_x"] * self.settings["crossfade_s"])
+        for other in self.rows.values():
+            if other is row or other["job"] != person["track_id"] or not self._lighting(other):
+                continue
+            ramp = other["ramp"]
+            if other["exiting"] and ramp is not None:
+                fall = min(fall, max(0.0, ramp.started + ramp.duration - now))
+            elif other["lit_until"] is not None:
+                fall = min(fall, max(0.0, other["lit_until"] - now))
+        return fall
+
     def _in_beam(self, row, point, fraction=.8):
         """The beam as it points now has `point` well inside it: within `fraction` of half its FWHM."""
         joints = self.core.joints
@@ -767,13 +786,14 @@ class Preview:
     @staticmethod
     def _can_send(row, now):
         """The firmware's radio rule for a real fixture (not a fictional one): at most RADIO_PER_S commands in any
-        second, Stop and keep-lit included. The direction's own commands wait their turn, and while the fixture is lit
-        they take one slot fewer, so a Stop or a release (dark at once) never has to be a third command in a second.
+        second, Stop and keep-lit included. The direction's own commands wait their turn, and while the board's light
+        is on they take one slot fewer, so a Stop or a release (dark at once) never has to be a third command in a second.
         Those, and an exit's fade (the light going: dark within a second of standing), never wait, but they count. A
         hand-off's fall waits like the rise it's paired with."""
         if row["profile"].get("fictional"):
             return True
-        slots = direction.RADIO_PER_S - (1 if Preview._lighting(row) else 0)
+        on = row["level"] > 0 or row["token"] is not None   # the board's light is on: a Stop may be needed
+        slots = direction.RADIO_PER_S - (1 if on else 0)
         return sum(1 for t in row["sends"] if t > now - 1.0 + 1e-9) < slots
 
     def _standby(self, chosen, task, held, person):
@@ -807,7 +827,8 @@ class Preview:
         fade stay instant."""
         # Leaving, a real board takes leave_fade_board_s: its send path uses up bar C's second (plan 05).
         leave = "leave_fade_s" if row["profile"].get("fictional") else "leave_fade_board_s"
-        fade = min(direction.EXIT_MAX_S, self.settings["crossfade_s" if handoff else leave if leaving else "fade_out_s"])
+        fade = min(direction.EXIT_MAX_S, self.settings["crossfade_s" if handoff else leave if leaving else "fade_out_s"]
+                   * (direction.CROSSFADE["out_x"] if handoff and row["timed"] else 1))
         bound = row["lit_until"] if ending is None else min(row["lit_until"] or ending, ending)
         joins = row["timed"] and row["join"]
         too_short = fade <= 0 if row["timed"] else fade < 2 * row["step_s"]
@@ -818,10 +839,12 @@ class Preview:
             if ending is None or row["glide"] is not None:
                 self._release(name, row, now, reason)
             return
-        # The curves: a crossfade eases in and out; an exit lets most of the light go first (ease_out).
+        # The curves: a crossfade eases in and out (in light on a train; on a timed board its own ease_in_out over
+        # twice the rise); an exit lets most of the light go first (ease_out).
         curve = "ease_in_out" if handoff else "ease_out"
         row["ramp"] = direction.Ramp(row["level"], 0.0, min(fade, bound - now), curve, now,
-                                     "crossfade_out" if handoff else "fade_out", "light" if handoff else "level")
+                                     "crossfade_out" if handoff else "fade_out",
+                                     "light" if handoff and not row["timed"] else "level")
         row.update(exiting=reason, reason=reason, dip=None, lit_until=bound, ended_at=ending)
 
     def _timed(self, ramp):

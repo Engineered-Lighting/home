@@ -1246,6 +1246,49 @@ class DirectionTest(PreviewTest):
         self.assertEqual(moves[0]["effective"]["spot_level"], 0)
         self.assertIsNone(moves[0]["requested"].get("timed"), "no fade on the board")
 
+    def test_a_timed_board_hands_off_on_its_own_curves_without_a_dip(self):
+        """On boards with the timed MOVE a hand-off is one MOVE each: the new fixture rises on ease_out over crossfade_s
+        and the old falls on ease_in_out over twice that, so their light never sums below the page's whole."""
+        if getattr(c12_fc13, "TIMED", None) is None:
+            self.skipTest("the pinned codec predates the timed MOVE (firmware 62ea043)")
+        caps = {"timed_move": True, "fade_curves": True, "join_flight": True, "at_rest": True}
+        profile = {**self.core.scurve.FICTIONAL_PROFILE, "fictional": False, "label": "timed-test", "capabilities": caps}
+        board = {"F3": {**FIXTURES["F3"], "profile": profile},
+                 "F4": {"aim_origin_m": [.6, .2, 2.5], "horizontal_world_reference": [0, 1, 0], "profile": profile}}
+        self.preview = preview.Preview(self.core, binding=BINDING, fixtures=board, state=self.path,
+                                       clock=lambda: self.now, threaded=False, append=self.encoded.append)
+        self.preview.configure({"pre_aim": True})
+        self.preview.connect(lambda snapshot: self.snapshots.append(json.loads(json.dumps(snapshot))))
+        self.lit_by_direction()
+        rows = self.preview.latest["fixtures"]
+        lit, spare = ("F3", "F4") if rows["F3"]["on"] else ("F4", "F3")
+        self.frames(1.5)
+        goals = {lit: self.preview.rows[lit]["goal"]}
+        evaluate = preview.Preview._eye
+
+        def refuse(owner, name, row, person, kept):
+            if name == lit:
+                return self.core.eye.aim.Candidate(name, False, "too_far")
+            return evaluate(owner, name, row, person, kept)
+        self.read()   # a current answer, so the task's own deadline isn't what bounds the fall
+        since, seen = len(self.encoded), len(self.snapshots)
+        crossfade = self.preview.settings["crossfade_s"]
+        with patch.object(preview.Preview, "_eye", refuse):
+            for _ in range(round((2 * crossfade + 1) / .1)):
+                self.now = round(self.now + .1, 6)
+                self.track()
+        goals[spare] = self.preview.rows[spare]["goal"]
+        timed = {row["fixture_id"]: row["requested"]["timed"] for row in self.moves(since) if row["requested"].get("timed")}
+        fall, rise = timed[lit]["fade_ms"], timed[spare]["fade_ms"]
+        self.assertEqual((timed[spare]["fade_curve"], timed[lit]["fade_curve"]), ("ease_out", "ease_in_out"))
+        self.assertLessEqual(fall, round(preview.POSE_AGE_S * 1000), "the fall within the light's published validity")
+        self.assertLessEqual(rise, round(crossfade * 1000), "the rise at most the crossfade (half the fall it plans on)")
+        ticks = {snapshot["sampled_mono"]: snapshot for snapshot in self.snapshots[seen:]}
+        light = [sum(direction.output(snapshot["fixtures"][name]["level"]) / direction.output(goals[name])
+                     for name in goals) for snapshot in ticks.values()]
+        self.assertGreater(min(light), .95, "never a dip")
+        self.assertTrue(self.row_of(spare)["on"] and not self.row_of(lit)["on"])
+
     def test_no_exit_outlasts_the_lease(self):
         """A fade to dark sends no keep-lit, and the board's lease lapses 3 s after the last one: every exit is at most
         direction.EXIT_MAX_S, and the setting can't ask for more."""

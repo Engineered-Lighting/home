@@ -68,6 +68,10 @@ RADIO_PER_S = 2                 # every command a real fixture is sent, per roll
 # A board without lit travel (lit_motion false) holds its aim while the page is within this fraction of half the beam's
 # FWHM (at 0.5 the page keeps 84 % of the beam's centre light), because each re-aim there is a blink.
 DARK_HOLD = 0.5
+# A hand-off on boards with the timed MOVE, whose fade curves act on levels: the new fixture rises on ease_out over
+# crossfade_s while the old falls on ease_in_out over out_x times that. Their light then never sums below the page's
+# whole (at most 23 % over, half way), each in one MOVE. (Both on ease_in_out over the same time would leave 37 %.)
+CROSSFADE = {"in": "ease_out", "out_x": 2.0}
 # No exit fades for longer than this: a fade to dark sends no keep-lit (the desk sender treats a level-0 MOVE as unlit),
 # and the board's lease lapses 3 s after the last one, which would cut a longer fade-out short.
 EXIT_MAX_S = 2.5

@@ -43,6 +43,12 @@ For trace-3's send rows, pass every run a board took part in, in time order. The
 - **Drops:** a move whose `valid_ms` ran out before its call is never sent. A keep-lit's `lit_seq` is the wire `seq` of the latest accepted lit move, and a keep-lit for any other move is dropped.
 - **Hooks for the preview:** `on_release(fixture, move_trace_id, reason)` fires for a refused or expired move, and after two failed keep-lits in a row. `on_board_stop(fixture, reason)` fires for a Stop den-live didn't send: a move refused `stopped`, or a latch read more than 2 s after den-live's own Resume answer. `copy_stop_into(preview)` turns that into Home's Stop. Wiring the release into the preview is a later step.
 
+**Fitted to the real `c12` integration** (the firmware chat's P5, at its commit `4b9b1c7`):
+- `velocity_cdeg_s` goes only when den-live's own MOVE has velocity, because the integration sets `has_velocity` whenever the field is given.
+- An answer of `send_failed` has bytes but nothing on the air, so its send row says `sent: false`. `seq_unknown`, `dropped_expired` and `dropped_stopped` send nothing. All of them are refusals that release the row.
+- From firmware v2-b a STOP with seq 0 means "no seq": the replay's check 4 and `desk_report.py` never take it as the count, and the integration's count skips 0.
+- Nothing reports 0xFC13's attributes yet, so the readback's entities can be old. The Stop copy takes a latch only when Home Assistant saw it change after den-live's own last Resume. The latch in a Stop's or Resume's answer is read fresh by the integration.
+
 `fake_c12_ha.py` is a fake of that Home Assistant for the tests. Its integration reads the board's `last_seq` when it starts, sends only Stop while it can't, resends a move once with the same `seq`, and drives the v2-a host simulator (when `C12_TEST_SIM` is set) or a model of the P3 board with its 3 s lease. Run `python -B -m unittest discover -s tools/den-live -p test_c12_send.py` from the repo root.
 
 ## The desk switch

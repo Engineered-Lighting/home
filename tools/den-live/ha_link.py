@@ -58,7 +58,8 @@ class HaClient:
             if str(exc) == "Home Assistant said 404":
                 return None
             raise
-        return {"state": got.get("state"), "attributes": got.get("attributes") or {}} if isinstance(got, dict) else None
+        return ({"state": got.get("state"), "attributes": got.get("attributes") or {},
+                 "last_changed": got.get("last_changed")} if isinstance(got, dict) else None)
 
     def call(self, domain, service, data, *, response=False):
         suffix = "?return_response" if response else ""
@@ -136,7 +137,8 @@ class HaSession:
             if str(exc) == "Home Assistant said 404":
                 return None
             raise
-        return {"state": got.get("state"), "attributes": got.get("attributes") or {}} if isinstance(got, dict) else None
+        return ({"state": got.get("state"), "attributes": got.get("attributes") or {},
+                 "last_changed": got.get("last_changed")} if isinstance(got, dict) else None)
 
     def call(self, domain, service, data, *, response=False, timeout_s=None):
         suffix = "?return_response" if response else ""

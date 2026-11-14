@@ -11,6 +11,17 @@ The path (plan 05 §3.1): the preview decides, PreviewTrace encodes, the storage
 The integration owns the wire `seq`: it reads the board's `last_seq` when it starts and counts on. den-live's trace
 `seq` never goes on the air, so a den-live restart can't be refused as stale.
 
+c12-service-1 as the firmware chat built it (P5, `ha/custom_components/c12`, fitted at 4b9b1c7):
+- `c12.move` sets `has_velocity` whenever `velocity_cdeg_s` is given, so it goes only when den-live's own MOVE has it;
+  `spot_level` always goes (den-live's MOVE always sets the spot), and with it `spot_mired`.
+- Its answers beyond the board's: `no_ack` (sent, no ack), `send_failed` (the radio refused every attempt: bytes, but
+  nothing on the air), and `seq_unknown`, `dropped_expired` and `dropped_stopped` (nothing sent). keep_lit, stop and
+  resume answer `status` (`sent`, `send_failed`, `seq_unknown`, `dropped_stopped`); stop and resume also the
+  `stop_latched` the integration read back, which is fresh.
+- Nothing configures attribute reporting for 0xFC13 yet, so the readback's entities can hold old values. The Stop copy
+  takes a latch read only when Home Assistant saw it change after den-live's own last Resume (`observe`'s
+  `changed_wall`).
+
 The rules:
 - Stop first. Stop and Resume ride their own lane, so a move waiting up to about 1 s for its MOVE_ACK never holds a
   Stop back. A Stop cancels its fixture's unsent keep-lit and move. A move or keep-lit waits while its fixture has a
@@ -49,6 +60,8 @@ CALL_TIMEOUT_S = 2.0   # c12.move waits up to about 1 s for its MOVE_ACK
 STOP_CALLS = 3
 KEEP_LIT_FAILURES = 2
 RESUME_GUARD_S = 2.0
+CLOCK_SKEW_S = 1.0   # LA's and Home Assistant's wall clocks, both on NTP: a latch change this close to a Resume is ours
+HAS_VELOCITY = 0x04
 CONTROL = "control"   # the Stop and Resume lane
 OUTCOMES = ("acked", "refused", "no_answer", "dropped_expired", "dropped_superseded", "dropped_dark")
 
@@ -80,6 +93,11 @@ def _wire(entry):
     return None
 
 
+def _delivered(entry):
+    """A stop's or resume's frame left the radio: it has bytes and the integration didn't say send_failed."""
+    return _wire(entry) is not None and entry.get("status") != "send_failed"
+
+
 def _entry(answer, device):
     """Stop's and Resume's answer for one device: {seq, payload_hex, status, stop_latched}."""
     fixtures = answer.get("fixtures") if isinstance(answer, dict) else None
@@ -89,7 +107,7 @@ def _entry(answer, device):
 
 class Sender:
     def __init__(self, fixtures, client_factory, *, record, on_release=None, on_board_stop=None,
-                 clock=time.monotonic, threaded=True, light=True):
+                 clock=time.monotonic, threaded=True, light=True, wall=time.time):
         """fixtures: {fixture_id: the board's HA device reference}. client_factory() gives each lane its own client
         (ha_link.HaSession). record(row) stores a send row. clock must be the preview's own: a move's deadline counts
         from its row's `at`."""
@@ -100,7 +118,7 @@ class Sender:
         self.client_factory, self.record_sink = client_factory, record
         self.on_release = on_release or (lambda *_: None)
         self.on_board_stop = on_board_stop or (lambda *_: None)
-        self.clock, self.threaded, self.light = clock, threaded, light is not False
+        self.clock, self.threaded, self.light, self.wall = clock, threaded, light is not False, wall
         self.lock = threading.Lock()
         self.changed = threading.Condition(self.lock)
         self.record_lock = threading.Lock()
@@ -109,6 +127,7 @@ class Sender:
         self.busy = set()
         self.resuming = dict.fromkeys(self.devices, 0)
         self.resumed_at = dict.fromkeys(self.devices, -math.inf)   # den-live's latest Resume answer
+        self.resumed_wall = dict.fromkeys(self.devices, -math.inf)   # the same, on the wall clock
         self.own_stop = dict.fromkeys(self.devices, False)   # den-live's own Stop taken, and no Resume answered since
         self.lit = dict.fromkeys(self.devices)   # (trace seq, wire seq, trace_id) of the latest accepted lit move
         self.keep_failures = dict.fromkeys(self.devices, 0)
@@ -150,10 +169,18 @@ class Sender:
         for old in dropped:
             self._log(old, outcome="dropped_superseded", reason="replaced_before_its_call")
 
-    def observe(self, fixture_id, stop_latched):
-        """The board's `stop_latched` as the readback polled it."""
-        if stop_latched is True and fixture_id in self.devices:
-            self._copy(fixture_id, self.clock() - RESUME_GUARD_S, "stop_latched_read")
+    def observe(self, fixture_id, stop_latched, changed_wall=None):
+        """The board's `stop_latched` as the readback polled it, and, when known, when Home Assistant saw it change
+        (wall seconds). A latch that changed no later than den-live's own last Resume answer is den-live's own, or an
+        old value nothing has reported since: never copied."""
+        if stop_latched is not True or fixture_id not in self.devices:
+            return
+        if changed_wall is not None:
+            with self.lock:
+                old = changed_wall <= self.resumed_wall[fixture_id] + CLOCK_SKEW_S
+            if old:
+                return
+        self._copy(fixture_id, self.clock() - RESUME_GUARD_S, "stop_latched_read")
 
     # ---- lanes ----
 
@@ -260,14 +287,17 @@ class Sender:
         data = {"fixture": self.devices[fid], "pan_cdeg": e["pan_cdeg"], "tilt_cdeg": e["tilt_cdeg"],
                 "spot_level": e["spot_level"] if self.light else 0, "spot_mired": e["spot_mired"],
                 "lit_during_move": e["lit_during_move"] and self.light,
-                "source": e["source"], "velocity_cdeg_s": list(e["velocity_cdeg_s"]), "valid_ms": e["valid_ms"]}
+                "source": e["source"], "valid_ms": e["valid_ms"]}
+        if e["flags"] & HAS_VELOCITY:   # given at all, the field sets has_velocity
+            data["velocity_cdeg_s"] = list(e["velocity_cdeg_s"])
         expected = row["payload_hex"] if self.light else dark_payload(bytes.fromhex(row["payload_hex"])).hex()
         answer, called, answered, problem = self._call(client, "move", data, CALL_TIMEOUT_S)
         result = answer.get("result") if isinstance(answer, dict) else None
         wire = _wire(answer)
         outcome = ("acked" if result == "accepted" else "no_answer" if answer is None or result == "no_ack"
                    else "refused")
-        self._log(job, called=called, answered=answered, sent=None if answer is None else wire is not None,
+        self._log(job, called=called, answered=answered,
+                  sent=None if answer is None else wire is not None and result != "send_failed",
                   outcome=outcome, wire=wire,
                   answer=answer and {"result": result, "predicted_ms": answer.get("predicted_ms")},
                   matches=wire and wire["payload_hex"][4:] == expected[4:], reason=problem)
@@ -297,7 +327,8 @@ class Sender:
         status = answer.get("status") if isinstance(answer, dict) else None
         wire = _wire(answer)
         outcome = "acked" if status == "sent" else "no_answer" if answer is None else "refused"
-        self._log(job, called=called, answered=answered, sent=None if answer is None else wire is not None,
+        self._log(job, called=called, answered=answered,
+                  sent=None if answer is None else wire is not None and status != "send_failed",
                   outcome=outcome, wire=wire, answer=answer and {"status": status},
                   matches=wire and wire["payload_hex"][4:8] == struct.pack("<H", lit[1]).hex(), reason=problem)
         with self.lock:
@@ -317,7 +348,7 @@ class Sender:
             outcome = ("acked" if entry.get("status") == "sent" and latched is True
                        else "no_answer" if answer is None else "refused")
             self._log(job, attempt=attempt, called=called, answered=answered,
-                      sent=None if answer is None else _wire(entry) is not None, outcome=outcome, wire=_wire(entry),
+                      sent=None if answer is None else _delivered(entry), outcome=outcome, wire=_wire(entry),
                       answer=answer and {"status": entry.get("status"), "stop_latched": latched},
                       matches=_wire(entry) is not None or None, reason=problem)
             if outcome == "acked":
@@ -335,13 +366,14 @@ class Sender:
             outcome = ("acked" if entry.get("status") == "sent" and latched is False
                        else "no_answer" if answer is None else "refused")
             self._log(job, called=called, answered=answered,
-                      sent=None if answer is None else _wire(entry) is not None, outcome=outcome, wire=_wire(entry),
+                      sent=None if answer is None else _delivered(entry), outcome=outcome, wire=_wire(entry),
                       answer=answer and {"status": entry.get("status"), "stop_latched": latched},
                       matches=_wire(entry) is not None or None, reason=problem)
         finally:
             with self.lock:
                 self.resuming[fid] -= 1
                 self.resumed_at[fid], self.own_stop[fid] = answered, False
+                self.resumed_wall[fid] = self.wall()
                 self.changed.notify_all()
 
     # ---- outcomes ----

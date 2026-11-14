@@ -4,8 +4,8 @@ Trace v3 (plan 05, step 05-3) adds the FC13 sender's send rows, and five checks 
 1. every send row names an earlier encoded row of its run and fixture;
 2. its wire payload equals the encoded payload, except the seq (and a keep-lit's lit_seq);
 3. a keep-lit's lit_seq is the wire seq of the latest accepted lit move of its run and fixture;
-4. per board, across runs in time order, each wire seq is new to the board (STOP is taken at any seq; a repeat is only
-   a retry of the same row);
+4. per board, across runs in time order, each wire seq is new to the board (STOP is taken at any seq, and from v2-b a
+   STOP with seq 0 means "no seq" and never moves last_seq; a repeat is only a retry of the same row);
 5. with --sim, those frames through the simulator give the answers the board gave (replay_wire).
 A run whose header maps no desk fixture may send nothing, and a desk run only to its one fixture. A desk run with
 light false is the dark rehearsal: each MOVE goes with its spot at level 0 and no lit travel, and no keep-lit goes.
@@ -328,7 +328,9 @@ class WireCheck:
         called, answered = row["called_mono"], row["answered_mono"]
         if not finite(called) or not finite(answered) or answered < called:
             raise ReplayError("send row's call and answer times are missing or out of order")
-        if (sent is None) != (answer is None) or (sent is True) != (wire is not None):
+        refused_by_radio = isinstance(answer, dict) and "send_failed" in (answer.get("result"), answer.get("status"))
+        if ((sent is None) != (answer is None) or (sent is True and wire is None)
+                or (sent is False and wire is not None and not refused_by_radio)):
             raise ReplayError("send row's sent, wire and answer disagree")
         if outcome == "acked" and sent is not True:
             raise ReplayError("an acknowledged command has no wire frame")
@@ -360,7 +362,7 @@ class WireCheck:
             self.lit[(run, fixture)] = (source["sequence"], wire["seq"]) if lit else None
         if cmd == codec.CMD_STOP and outcome == "acked":
             self.lit[(run, fixture)] = None
-        delivered = cmd == codec.CMD_MOVE or answer.get("status") == "sent"
+        delivered = sent is True and (cmd == codec.CMD_MOVE or answer.get("status") == "sent")
         at_mono, at_ts = header["at_mono"], header["at_ts"]
         self.frames.setdefault(device, []).append(WireFrame(
             line, row["trace_id"], cmd, wire["seq"], sent_payload, at_ts + called - at_mono,
@@ -396,7 +398,7 @@ class WireCheck:
                         raise ReplayError(f"line {frame.line}: the board would refuse this wire seq as stale")
                     if kind == "duplicate" and owner.get(frame.seq) != frame.trace_id:
                         raise ReplayError(f"line {frame.line}: a wire seq repeats for another command")
-                if kind == "new":
+                if kind == "new" and not (frame.command_id == codec.CMD_STOP and frame.seq == 0):
                     last, owner[frame.seq] = frame.seq, frame.trace_id
         return sum(len(frames) for frames in self.frames.values())
 

@@ -99,6 +99,7 @@ class TrackEvidence:
     body_facing: BodyFacing | None = None   # None until a sample, and once it expires
     head_point_m: HeadPoint | None = None   # None with fewer than two face joints
     wrists_m: Mapping[str, tuple[float, float, float]] = field(default_factory=lambda: MappingProxyType({}))
+    posture: str | None = None   # person_fields.POSTURES: sitting, standing, walking or unclear
 
 
 @dataclass(frozen=True)

@@ -42,7 +42,9 @@ Numbers this phase sets, with where they come from:
 
 An event holds tracks' floor positions in your scan's frame, their spread, heading and age: no joints, no image, no
 name. The heading is the track's body_facing (contract 2, person_fields.py), so it goes when the pose expires; the
-snapshot's evidence also carries the track's head_point_m and wrists_m. Only confirmed and coasting tracks go out,
+snapshot's evidence also carries the track's head_point_m and wrists_m. For Home's caption each track carries seated
+(true while seated) and posture (person_fields.posture: sitting, standing, walking or unclear), and who, null until
+the face-recognition work fills it; the event's capture_ts is its frame's capture time on the wall clock. Only confirmed and coasting tracks go out,
 and only once a pose or a person box at 0.5 or more has supported them (plan L3). Track ids carry the epoch
 (e1-trk-1), so a camera restart's new tracks never take an old marker over. Each track also carries near: what's near it from your confirmed labels (room_labels.near_phrase, for example "at the
 desk, beside the 3D printer"), or null with no labels, none near, or labels placed on another scan revision. Home
@@ -448,6 +450,7 @@ class Perceiver:
         self.seated = seated_rule.Published()   # contract 2's seated, once per track per frame
         self.facing = person_fields.Facing(self.t.records.body_heading,   # contract 2's body_facing, the same way
                                            self.track_method.tracker["heading_max_sd_deg"])
+        self.speed = person_fields.Speed()   # each track's floor speed, for posture's walking
 
     def _epoch(self, *, clock_reset=False):
         self._clear_body("scope_changed")
@@ -821,6 +824,8 @@ class Perceiver:
             safe = safe and current == committed
             stereo = stereo_joints(pose) if meta.get("intrinsics") is not None else {}
             facing = self.facing.update(track_id, revision, capture_mono, pose if stereo else None)
+            seated = self.seated.update(track_id, revision, capture_mono, stereo)
+            posture = person_fields.posture(seated, stereo, self.speed.update(track_id, capture_mono, tuple(marker["xy_m"])))
             position_observations = [o for o in sources if o.get("room_position")]
             if not position_observations:
                 basis = "coast"
@@ -830,13 +835,15 @@ class Perceiver:
             evidence.append(TrackEvidence(track_id, marker["state"], tuple(marker["xy_m"]), marker["sigma_m"],
                                           basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
                                           revision, since, MappingProxyType(stereo), marker.get("near"),
-                                          seated=self.seated.update(track_id, revision, capture_mono, stereo),
-                                          body_facing=facing, head_point_m=person_fields.head_point(stereo),
-                                          wrists_m=person_fields.wrists(stereo)))
+                                          seated=seated, body_facing=facing, head_point_m=person_fields.head_point(stereo),
+                                          wrists_m=person_fields.wrists(stereo), posture=posture))
             # The people projection carries the person binding (contract 2): run, epoch, track id, revision; and its
             # arrow is body_facing's, gone when that expires.
+            # For Home's caption: seated and posture, as perception has them, and a who slot that nothing fills
+            # yet (the face-recognition work's, contract 2's who; null until then).
             marker.update(service_run_id=self.run_id, camera_epoch=self.sessions, association_revision=revision,
-                          heading_deg=None if facing is None else round(facing.deg, 1))
+                          heading_deg=None if facing is None else round(facing.deg, 1),
+                          seated=bool(seated and seated.state), posture=posture, who=None)
             if safe and stereo and ref.depth is not None:
                 depth_mono = ref.depth.host_s + offset
                 if (abs(ref.depth.host_s - ref.rgb.host_s) <= RGB_PAIR_S + 1e-9
@@ -857,6 +864,7 @@ class Perceiver:
         self.associations = {e.track_id: self.associations[e.track_id] for e in evidence}
         self.seated.keep([e.track_id for e in evidence])
         self.facing.keep([e.track_id for e in evidence])
+        self.speed.keep([e.track_id for e in evidence])
         possible_person = any(o["kind"] in ("person_box", "keypoints") for o in observations)
         presence = "present" if candidates else "unknown" if possible_person or tracks else "empty"
         self._submit_body(prepared, observations=observations, tracks=tracks, supported=supported, association=association)

@@ -60,7 +60,8 @@ def track_record(track):
             "body_facing": None if facing is None else {"deg": _number(facing.deg, 1), "sd_deg": _number(facing.sd_deg, 1),
                                                         "as_of_mono": _number(facing.as_of_mono), "n": facing.n},
             "head_point_m": None if head is None else {"xyz": [_number(v) for v in head.xyz], "n": head.n},
-            "wrists_m": {name: [_number(v) for v in xyz] for name, xyz in sorted(track.wrists_m.items())}}
+            "wrists_m": {name: [_number(v) for v in xyz] for name, xyz in sorted(track.wrists_m.items())},
+            "posture": track.posture}
 
 
 def serialise(snapshot):

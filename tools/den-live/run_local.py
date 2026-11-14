@@ -512,11 +512,27 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
             cleanup()
 
 
+NOT_READ = {"effective": "unknown", "why": "den-live doesn't read Frigate here: the Qwen ask isn't set up"}
+
+
+def occupancy_health(asker):
+    """health.occupancy {effective, why}: Frigate's own word for the den (its occupancy sensor, as the ask's reader has
+    it: on, off or unknown, with on held 2 minutes as den_lighting does), never Qwen's gate. Without the ask, den-live
+    reads no Frigate, and says so."""
+    reader = getattr(asker, "occupancy", None)
+    try:
+        return reader.health() if reader is not None else dict(NOT_READ)
+    except Exception as exc:  # a type name only; the read never stops the loop
+        return {"effective": "unknown", "why": "Frigate's word couldn't be read (%s)" % type(exc).__name__}
+
+
 def evidence_observer(asker, lighting, person_log=None):
     """Deliver current typed tracking before any reply tied to that snapshot. person_log (a person_state.Log) gets the
-    same snapshot the coordinator gets, the ask's eligibility on it, and never stops the loop."""
+    same snapshot the coordinator gets, the ask's eligibility on it, and never stops the loop. Each event's health
+    gets occupancy (occupancy_health): Frigate's own word, for Home's Frigate card."""
     def observe(event, snapshot):
         current = snapshot
+        event.setdefault("health", {})["occupancy"] = occupancy_health(asker)
         try:
             if asker is not None:
                 try:

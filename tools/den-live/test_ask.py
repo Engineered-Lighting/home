@@ -258,6 +258,20 @@ class SeatedTest(unittest.TestCase):
 # ---- Frigate's occupancy ------------------------------------------------------------------------------------------
 
 class OccupancyTest(unittest.TestCase):
+    def test_health_is_the_gates_word_and_never_moves_its_revision(self):
+        """The people stream's health.occupancy: the same word the ask's gate sees, read without touching the gate."""
+        words, now = ["on"], [0.0]
+        reader = occupancy.Occupancy(lambda: words[0], clock=lambda: now[0])
+        self.assertEqual(reader.health(), {"effective": "unknown", "why": "Frigate unread: not read yet"})
+        reader.poll_once()
+        self.assertEqual(reader.health(), {"effective": "on", "why": None})
+        start = reader.evidence()["revision"]
+        words[0], now[0] = "off", 121.0
+        reader.poll_once()
+        for _ in range(3):
+            self.assertEqual(reader.health(), {"effective": "off", "why": "Frigate sees nobody"})
+        self.assertEqual(reader.evidence()["revision"], start + 1, "one transition, counted once, by the gate only")
+
     def test_on_hold_off_and_unknown(self):
         words, now = ["on"], [0.0]
         reader = occupancy.Occupancy(lambda: words[0], clock=lambda: now[0])

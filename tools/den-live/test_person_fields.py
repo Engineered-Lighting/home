@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import perceive  # noqa: E402
 import person_fields as pf  # noqa: E402
 import sofa_check as sc  # noqa: E402
-from contracts import PERCEPTION_S, BodyFacing, HeadPoint  # noqa: E402
+from contracts import PERCEPTION_S, BodyFacing, HeadPoint, SeatedState  # noqa: E402
 from test_live import TOOLS  # noqa: E402
 
 SHOULDER_HALF, HIP_HALF = 0.20, 0.17
@@ -122,6 +122,44 @@ class Fields(unittest.TestCase):
         self.assertEqual(pf.head_point(stereo), HeadPoint((1.0, 2.05, 1.24), 3))
         self.assertEqual(dict(pf.wrists(stereo)), {"left_wrist": (0.8, 2.3, 0.6)})
         self.assertEqual(dict(pf.wrists({})), {})
+
+
+class Posture(unittest.TestCase):
+    """posture: sitting while seated; walking at 0.3 m/s or more; standing with the hips above the seated band (or the
+    head at 1.30 m or more without them); else unclear. Qwen's own words for subject_posture, less lying."""
+
+    @staticmethod
+    def joints(hip_z=None, head_z=None):
+        out = {}
+        if hip_z is not None:
+            out.update(left_hip=((0.9, 2.0, hip_z), "supported"), right_hip=((1.1, 2.0, hip_z), "supported"))
+        if head_z is not None:
+            out.update(nose=((1.0, 2.1, head_z), "supported"), left_eye=((0.97, 2.1, head_z + 0.03), "supported"))
+        return out
+
+    def test_the_rule(self):
+        seated, standing_up = SeatedState(True, 1.0, "hips"), SeatedState(False, None, None)
+        self.assertEqual(pf.posture(seated, self.joints(0.5), 0.0), "sitting")
+        self.assertEqual(pf.posture(seated, {}, 1.0), "sitting", "seated decides first")
+        self.assertEqual(pf.posture(standing_up, self.joints(0.95), 0.05), "standing")
+        self.assertEqual(pf.posture(None, self.joints(0.95), None), "standing", "no speed yet")
+        self.assertEqual(pf.posture(standing_up, self.joints(0.95), 0.6), "walking")
+        self.assertEqual(pf.posture(standing_up, {}, 0.6), "walking", "moving with no stereo pose")
+        self.assertEqual(pf.posture(standing_up, self.joints(0.5), 0.6), "unclear", "low hips that aren't seated, moving")
+        self.assertEqual(pf.posture(standing_up, self.joints(0.5), 0.0), "unclear", "low hips, not seated yet")
+        self.assertEqual(pf.posture(standing_up, self.joints(head_z=1.6), 0.0), "standing", "no hips: the head")
+        self.assertEqual(pf.posture(standing_up, self.joints(head_z=1.1), 0.0), "unclear")
+        self.assertEqual(pf.posture(standing_up, {}, 0.1), "unclear")
+        self.assertEqual(set(pf.POSTURES), {"sitting", "standing", "walking", "unclear"})
+
+    def test_the_speed_is_over_the_last_second(self):
+        s = pf.Speed()
+        self.assertIsNone(s.update("t", 10.0, (0.0, 0.0)))
+        self.assertIsNone(s.update("t", 10.4, (0.2, 0.0)), "under half a second of positions")
+        self.assertAlmostEqual(s.update("t", 10.8, (0.4, 0.0)), 0.5)
+        self.assertAlmostEqual(s.update("t", 11.6, (0.4, 0.0)), 0.0, msg="the window keeps 10.6-11.6 only")
+        s.keep(["u"])
+        self.assertIsNone(s.update("t", 11.8, (0.4, 0.0)), "a track not in the frame is forgotten")
 
 
 if __name__ == "__main__":

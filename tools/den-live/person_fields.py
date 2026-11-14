@@ -15,7 +15,14 @@ rule: lift stereo, status supported, a room position):
   fewer than two. A position only: nothing measures a head direction.
 - wrists_m: the stereo-supported wrists, {left_wrist: xyz, right_wrist: xyz}, each only when it's there.
 
-The people projection's heading_deg is body_facing's deg (None without it). The preview reads head_point_m.
+- posture: one closed word, from what perception measures, in Qwen's own words for subject_posture (den-live-scene-2)
+  less lying, which nothing here measures: sitting while seated (seated.Published); else walking when the track's
+  floor position moved at WALK_MPS or more over the last SPEED_S, upright or with no stereo pose; else standing when
+  the mid-hip is above den-core's seated band (HIP_Z, 0.75 m), or with no pair of hips the head point is at
+  HEAD_SEATED_MAX_Z (1.30 m) or more; else unclear.
+
+The people projection's heading_deg is body_facing's deg (None without it), and it carries seated and posture. The
+preview reads head_point_m.
 """
 import math
 import statistics
@@ -23,12 +30,17 @@ from collections import deque
 from types import MappingProxyType
 
 from contracts import PERCEPTION_S, BodyFacing, HeadPoint
+from seated import HEAD_SEATED_MAX_Z, HIP_Z
 
 WINDOW_S = 1.0       # the circular median's window, ending at the newest sample
 FLIP_DEG = 150.0     # a turn this far from the published facing waits for a second sample
 HIP_AGREE_DEG = 60.0  # the hips join the shoulders only when their lines agree this well
 FACE = ("nose", "left_eye", "right_eye", "left_ear", "right_ear")
 WRISTS = ("left_wrist", "right_wrist")
+POSTURES = ("sitting", "standing", "walking", "unclear")
+WALK_MPS = 0.3       # a floor speed this fast or more is walking
+SPEED_S = 1.0        # over this long: the newest position against the oldest within it, at least MIN_SPAN_S apart
+MIN_SPAN_S = 0.5
 SHOULDERS = (5, 6)   # coco17 indices, den-observe's joints_room j
 HIPS = (11, 12)
 
@@ -80,6 +92,44 @@ def head_point(stereo):
 def wrists(stereo):
     """wrists_m from a track's stereo-supported joints: each wrist that's there."""
     return MappingProxyType({name: tuple(stereo[name][0]) for name in WRISTS if name in stereo})
+
+
+def posture(seated, stereo, speed_mps):
+    """posture from this frame's seated (a SeatedState or None), stereo-supported joints and floor speed (or None)."""
+    if seated is not None and seated.state:
+        return "sitting"
+    hips = [stereo[name][0] for name in ("left_hip", "right_hip") if name in stereo]
+    head = head_point(stereo)
+    if len(hips) == 2:
+        upright = (hips[0][2] + hips[1][2]) / 2.0 > HIP_Z[1]
+    else:
+        upright = head is not None and head.xyz[2] >= HEAD_SEATED_MAX_Z
+    if speed_mps is not None and speed_mps >= WALK_MPS and (upright or not stereo):
+        return "walking"
+    return "standing" if upright else "unclear"
+
+
+class Speed:
+    """Each track's floor positions over the last SPEED_S, for posture's walking."""
+
+    def __init__(self):
+        self.paths = {}
+
+    def update(self, track_id, t, xy):
+        """The floor speed in m/s over the last SPEED_S, or None with under MIN_SPAN_S of positions."""
+        path = self.paths.setdefault(track_id, deque())
+        path.append((t, xy))
+        while path and t - path[0][0] > SPEED_S:
+            path.popleft()
+        span = path[-1][0] - path[0][0]
+        if span < MIN_SPAN_S:
+            return None
+        (x0, y0), (x1, y1) = path[0][1], path[-1][1]
+        return math.hypot(x1 - x0, y1 - y0) / span
+
+    def keep(self, track_ids):
+        for gone in set(self.paths) - set(track_ids):
+            self.paths.pop(gone, None)
 
 
 class Facing:

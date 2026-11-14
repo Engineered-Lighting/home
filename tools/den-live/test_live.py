@@ -181,10 +181,10 @@ class PersonStateLog(unittest.TestCase):
     FRAME_KEYS = {'service_run_id', 'camera_epoch', 'frame_id', 'capture_mono', 'arrival_mono', 'capture_ts',
                   'transform_id', 'scan_revision', 'depth_calibration_sha256'}
     TRACK_KEYS = {'track_id', 'state', 'xy_m', 'sigma_m', 'position_basis', 'current_obs_ids', 'association',
-                  'supported_pose', 'seated', 'body_facing', 'head_point_m', 'wrists_m'}
+                  'supported_pose', 'seated', 'body_facing', 'head_point_m', 'wrists_m', 'posture'}
     WORDS = {'den-person-state-1', 'confirmed', 'coasting', 'stereo', 'plane', 'coast', 'confident', 'ambiguous',
              'supported', 'hips', 'head', 'fresh', 'stale', 'starting', 'offline', 'refused', 'degraded', 'present',
-             'empty', 'unknown'}
+             'empty', 'unknown', 'sitting'}
 
     @staticmethod
     def snapshot(run='a' * 32, seq=7):
@@ -195,7 +195,8 @@ class PersonStateLog(unittest.TestCase):
         track = TrackEvidence(f'{run}-e2-trk-1', 'confirmed', (1.23456, -0.5), 0.1234, 'stereo', ('o-den-oak-1234567-0',),
                               'confident', 3, 1230.5, pose, near='on the sofa', seated=SeatedState(True, 1231.25, 'hips'),
                               body_facing=BodyFacing(271.23456, 8.04, 1234.56789, 4),
-                              head_point_m=HeadPoint((1.0, 2.1, 1.12345), 3), wrists_m={'left_wrist': (0.9, 2.3, 0.6543)})
+                              head_point_m=HeadPoint((1.0, 2.1, 1.12345), 3), wrists_m={'left_wrist': (0.9, 2.3, 0.6543)},
+                              posture='sitting')
         return TrackingSnapshot(run, 2, seq, frame, 'fresh', 'too dark', 'present', (track,), track.track_id, 4)
 
     def test_each_snapshot_is_one_numbers_only_line_with_the_contracts_fields_and_an_anchor(self):
@@ -237,6 +238,7 @@ class PersonStateLog(unittest.TestCase):
         self.assertEqual(track['body_facing'], {'deg': 271.2, 'sd_deg': 8.0, 'as_of_mono': 1234.568, 'n': 4})
         self.assertEqual(track['head_point_m'], {'xyz': [1.0, 2.1, 1.123], 'n': 3})
         self.assertEqual(track['wrists_m'], {'left_wrist': [0.9, 2.3, 0.654]})
+        self.assertEqual(track['posture'], 'sitting')
         self.assertEqual((track['xy_m'], track['supported_pose']['nose']), ([1.235, -0.5], [[1.0, 2.1, 1.123], 'supported']))
         self.assertEqual((line['frame']['capture_mono'], line['frame']['depth_calibration_sha256']), (1234.568, 'c' * 64))
         self.assertEqual((line['eligibility_revision'], line['seq']), (9, 7))
@@ -336,6 +338,39 @@ class PersonStateLog(unittest.TestCase):
         log.write(nobody(309, status='stale'))
         self.assertEqual(seqs()[-1], 309, 'the next second')
 
+    def test_each_event_says_frigates_occupancy_as_den_live_reads_it(self):
+        """health.occupancy {effective, why}, for Home's Frigate card: the ask's own reader's word; without the ask,
+        den-live reads no Frigate and says so; a reader that fails says that, and the loop goes on."""
+        import occupancy
+        event = {'tracks': [], 'health': {'fps_in': 3.0}}
+        rl.evidence_observer(None, None)(event, self.snapshot())
+        self.assertEqual(event['health'], {'fps_in': 3.0, 'occupancy': {
+            'effective': 'unknown', 'why': "den-live doesn't read Frigate here: the Qwen ask isn't set up"}})
+        reader = occupancy.Occupancy(lambda: 'on', clock=lambda: 5.0)
+        reader.poll_once()
+
+        class Asker:
+            snapshot = None
+
+            def __init__(self, reader):
+                self.occupancy = reader
+
+            def observe(self, event, snapshot):
+                return event
+
+            def pop_reply(self):
+                return None
+        event = {'tracks': []}
+        rl.evidence_observer(Asker(reader), None)(event, self.snapshot())
+        self.assertEqual(event['health']['occupancy'], {'effective': 'on', 'why': None})
+
+        class Broken:
+            def health(self):
+                raise OSError('no')
+        event = {'tracks': []}
+        rl.evidence_observer(Asker(Broken()), None)(event, self.snapshot())
+        self.assertEqual(event['health']['occupancy'], {'effective': 'unknown', 'why': "Frigate's word couldn't be read (OSError)"})
+
     def test_a_log_that_cant_write_never_stops_the_loop(self):
         import person_state
         blocked = scratch('den-live-person-state-') / 'not-a-folder'
@@ -423,7 +458,14 @@ class Perceiving(unittest.TestCase):
         self.assertLess(math.dist(last['xy_m'], truth(READING)), 0.3, last['xy_m'])
         self.assertEqual(last['state'], 'confirmed')
         self.assertEqual(set(last), {'track_id', 'state', 'xy_m', 'sigma_m', 'heading_deg', 'age_s', 'near', 'service_run_id',
-                                     'camera_epoch', 'association_revision'}, 'no joints, no image, no name')
+                                     'camera_epoch', 'association_revision', 'seated', 'posture', 'who'},
+                         'no joints, no image, no name')
+        # Home's caption: perception's seated and posture, and a who slot nothing fills yet. The reader sits.
+        self.assertEqual((last['seated'], last['posture'], last['who']), (True, 'sitting', None))
+        self.assertEqual(p.snapshot.tracks[0].posture, 'sitting', 'one answer: the evidence and the marker agree')
+        self.assertTrue(all(t['posture'] in ('sitting', 'standing', 'walking', 'unclear') for e in events for t in e['tracks']))
+        self.assertTrue(all(t['seated'] == (t['posture'] == 'sitting') for e in events for t in e['tracks']))
+        self.assertIsNotNone(events[-1]['capture_ts'], "the event's capture_ts: its frame's capture time")
         self.assertEqual((last['service_run_id'], last['camera_epoch']), (p.run_id, 1))
         self.assertIsNone(last['near'], 'no labels, no phrase')
         self.assertEqual(events[-1]['schema'], 'den-live-people-1')

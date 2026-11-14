@@ -108,7 +108,15 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             panel?.pollNow();
         });
     }
+    /* While the live body figure shows a person, their floor dot steps back: the body, its label and the ring under it
+     * carry them (design A). The dot stays the fallback for a track with no body, and comes back the moment the body
+     * clears. */
+    function shareBody(owned) {
+        const track = body === owned && owned.ready && owned.lastPaintAge != null ? bodyTrack(owned) : null;
+        layer?.setBodies?.(track ? [track.track_id] : []);
+    }
     function clearBody(owned, reason) {
+        if (body === owned) layer?.setBodies?.([]);
         owned.ready = null;
         owned.reason = reason;
         owned.lastPaintAge = null;
@@ -127,6 +135,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     }
     function disposeBody(owned = body) {
         if (!owned || body !== owned) return;
+        layer?.setBodies?.([]);   // the dot comes back with the body gone
         body = null;
         clearBody(owned, 'unavailable');
         closeBodySource(owned);
@@ -201,6 +210,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                     }
                     owned.layer.tick(deltaSeconds);
                     owned.labels.tick(deltaSeconds);
+                    shareBody(owned);
                 }, onPresentationDispose: () => disposeBody(owned) });
             if (!presentation || !admitted()) { presentation?.dispose(); disposeBody(owned); return; }
             owned.layer = bodyKit.attachLayer(current, { measuredOnly: true, animate: false,

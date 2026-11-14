@@ -119,3 +119,21 @@ test("each marker keeps what's near it from den-live's labels, words only", () =
     f.layer.update(f.event([f.track('t-1', [1, 2], { near: null })]));
     assert.equal(f.layer.markers().find(m => m.track_id === 't-1').near, null);
 });
+
+test('under a live body figure the dot and arrow step back, the ring stays, and the dot returns when the body clears', () => {
+    const f = fixture();
+    f.layer.update(f.event([f.track('trk-1', [0, 0], { heading_deg: 90 }), f.track('trk-2', [2, 0], { heading_deg: 0 })]));
+    f.advance(.02);
+    const parts = id => { const [disc, ring, pivot] = f.root().getObjectByName(`person-${id}`).children; return { disc, ring, pivot }; };
+    f.layer.setBodies(['trk-1']);
+    for (const step of [0, .02]) {
+        f.advance(step || .001);
+        assert.deepEqual([parts('trk-1').disc.visible, parts('trk-1').pivot.visible, parts('trk-1').ring.visible], [false, false, true], 'the body carries trk-1');
+        assert.deepEqual([parts('trk-2').disc.visible, parts('trk-2').pivot.visible], [true, true], 'no body: trk-2 keeps its dot');
+    }
+    assert.deepEqual(f.layer.markers().map(m => [m.track_id, m.dot]), [['trk-1', false], ['trk-2', true]]);
+    f.layer.setBodies([]);
+    assert.deepEqual([parts('trk-1').disc.visible, parts('trk-1').pivot.visible], [true, true], 'the body cleared: the dot is back at once');
+    f.layer.setBodies(['', 'x'.repeat(65), null]);
+    assert.ok(f.layer.markers().every(m => m.dot), 'ids that are not track ids hide nothing');
+});

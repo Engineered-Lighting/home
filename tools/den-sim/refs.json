@@ -1,0 +1,21 @@
+{
+  "schema": "den-sim-refs-1",
+  "note": "Pinned refs for the den simulation. Results refer to these shas; local branches keep moving. Run output goes to output_root, outside every checkout.",
+  "base": {
+    "ref": "origin/main",
+    "sha": "bd57ecc604aaa9b70648f3481c303b8973c4d2b7"
+  },
+  "tools": {
+    "rung-2-observe": "ab491a88",
+    "claude/rung-3-track-local-514d6b": "72397215",
+    "rung-5-bundle": "cf659ba8",
+    "den-core-live": "78a6b6a2"
+  },
+  "codec": {
+    "note": "On no git ref, so it is read by path and each run logs its sha. It is older than the release origin/main pins in room_production_canonical_provider.py.",
+    "tools": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\tools",
+    "contracts": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\contracts\\c12"
+  },
+  "content_packs": "C:\\claude\\home\\app\\data\\home-content",
+  "output_root": "%LOCALAPPDATA%\\den-sim"
+}

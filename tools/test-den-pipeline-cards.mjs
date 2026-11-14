@@ -37,3 +37,14 @@ test('stale, dark, expired and stopped say so instead of the last good value', (
   assert.equal(pipelineCards(event(), 0, spot({ stopped: true })).coordinator.value, 'Stop');
   assert.equal(pipelineCards(event(), 0, null).coordinator.value, 'No snapshot');
 });
+
+test('the light direction\u2019s hooks: where a fade is heading, what it does, and the room glow', () => {
+  const rising = spot({ ambient: { level: .4, scale: .4, cct_k: 2700 }, fixtures: [{ fixture_id: 'F3', on: true, level: .4, cct_k: 2700, reason: 'task',
+    motion_phase: 'settled', target_m: [2, 2.7, .8], fade: { from: 0, to: .79, start_mono: 1, duration_s: 2, curve: 'smooth', purpose: 'fade_in' } }] });
+  const c = pipelineCards(event(), 0, rising, { F3: 'Spot 3' }).coordinator;
+  assert.equal(c.value, '40% → 79%');
+  assert.equal(c.change, 'rising over 2 s');
+  assert.equal(c.ambient, '40% of the house · 2700 K');
+  const settled = pipelineCards(event(), 0, spot(), { F3: 'Spot 3' }).coordinator;
+  assert.deepEqual([settled.value, settled.change, settled.ambient], ['70%', null, null]);
+});

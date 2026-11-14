@@ -198,6 +198,11 @@ The owner asked for the Perception Lab's graph (design v8) to live with the 3D h
   - The coordinator drops a warm line onto where the beam lands (`target_m`), with a soft bloom.
   - A wire brightens, and a short comet runs it, only when a record has just gone through: a people event, a new Qwen answer, or a change in the spot.
 - **Minimal while on:** the room's fixture pills step back, because the coordinator card names the lit fixture in its sheet. With the caption on, its house line still shows up close.
+- **The light direction's hooks** (additive in `den-virtual-spots-1`, from the lighting-direction work):
+  - While a level train runs, the coordinator card shows where it's heading ("40% → 79%").
+  - Its sheet names the change from `fade.purpose` (rising, taking over, handing over, letting go, dipping to move, adjusting) and its duration, and the room glow from `ambient` ("40% of the house · 2700 K").
+  - The caption's house line names a running fade ("Spot 4 · taking over").
+  - The reasons `standby` and `task_ending` have words.
 - **Occupancy:** the card reads den-live's `health.occupancy {effective, why}` (accepted for den-live on 2026-11-14) and says "Not reported" until it's sent. It's never inferred from Qwen's gate.
 - **The capsule:** with the caption or the pipeline on, the den's chip becomes one Lab-style row: status, then three icons (pipeline, the coordinator's controls in a sheet, and labels). It replaces the separate Labels button and the chip's drawer.
 - **Code:**

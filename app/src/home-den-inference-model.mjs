@@ -34,7 +34,10 @@ const BASIS = Object.freeze({ person_visible: 'person in view', no_person_visibl
 const OUTCOME = Object.freeze({ unbound_two_people: "Can't tell whose answer: two people in view",
     unbound_person_changed: 'Answer dropped: the person changed', failed: "Qwen didn't answer" });
 export const REASON = Object.freeze({ task: 'reading light', pre_aim: 'aimed, dark, ready', task_released: 'fading out',
-    stopped: 'Stop is holding', off: 'automation off' });
+    task_ending: 'letting go', standby: 'standby, dark', stopped: 'Stop is holding', off: 'automation off' });
+/* What a running fade is doing (the light direction's fade.purpose, additive in den-virtual-spots-1). */
+export const FADE = Object.freeze({ fade_in: 'rising', fade_out: 'letting go', crossfade_in: 'taking over',
+    crossfade_out: 'handing over', dip: 'dipping to move', level: 'adjusting' });
 const POSTURE = Object.freeze({ sitting: 'Seated', standing: 'Standing', walking: 'Walking', lying: 'Lying down' });
 
 const finite = value => typeof value === 'number' && Number.isFinite(value);
@@ -84,7 +87,8 @@ export function houseOf(track, spot, names = {}) {
     if (spot.stopped) return { words: 'Stop is holding the spots', dark: true, level: null, cct_k: null, fixture_id: null, request_id: null };
     if (!aimed) return null;
     const name = words(names[aimed.fixture_id], 40) || 'Spot';
-    if (lit) return { words: `${name} · ${REASON[lit.reason] || 'lit'}`, dark: false, level: lit.level, cct_k: finite(lit.cct_k) ? lit.cct_k : null,
+    const change = lit && Object.hasOwn(FADE, lit.fade?.purpose) ? FADE[lit.fade.purpose] : null;
+    if (lit) return { words: `${name} · ${change || REASON[lit.reason] || 'lit'}`, dark: false, level: lit.level, cct_k: finite(lit.cct_k) ? lit.cct_k : null,
         fixture_id: lit.fixture_id, request_id: typeof subject.request_id === 'string' ? subject.request_id : null, moving: lit.motion_phase === 'moving' };
     return { words: `${name} aimed, dark`, dark: true, level: 0, cct_k: null, fixture_id: aimed.fixture_id, request_id: null, moving: aimed.motion_phase === 'moving' };
 }

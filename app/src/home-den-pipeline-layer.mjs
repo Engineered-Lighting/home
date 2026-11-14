@@ -19,7 +19,7 @@
  *   Current; Stale; Unavailable; Idle).
  * - Text goes in with textContent. Role names, not host names: the page shows what each system does. */
 import * as THREE from 'three';
-import { answerOf, identityOf } from './home-den-inference-model.mjs';
+import { FADE, answerOf, identityOf } from './home-den-inference-model.mjs';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const WIRE_HOT_MS = 1100, STALE_S = 3, MEASURE_MS = 250, COMPACT_PX = 640, FIT_MS = 450, DOT_R = 4.5, COMET_PX = 26;
@@ -35,7 +35,8 @@ const NODES = Object.freeze([
 ]);
 const RAIL_WIRES = Object.freeze([['camera', 'perception'], ['perception', 'qwen'], ['qwen', 'coordinator']]);   // the camera's line; Frigate gates Qwen
 const REASON = Object.freeze({ task: 'Lit for close-up work', pre_aim: 'Aimed, dark', waiting_for_task: 'Waiting for close-up work',
-    waiting_for_tracking: 'Nobody tracked', task_released: 'Fading out', stopped: 'Stop holds', off: 'Automation off' });
+    waiting_for_tracking: 'Nobody tracked', task_released: 'Fading out', task_ending: 'Letting go: the task ended',
+    standby: 'Standby: aimed at the page, dark', stopped: 'Stop holds', off: 'Automation off' });
 const finite = value => typeof value === 'number' && Number.isFinite(value);
 const ms = value => finite(value) ? `${Math.round(value)} ms` : '—';
 const secs = value => finite(value) ? (value < 10 ? `${value.toFixed(1)} s` : `${Math.round(value)} s`) : '—';
@@ -76,10 +77,16 @@ export function pipelineCards(event, sinceS, spot, names = {}) {
         const who = subject ? identityOf(subject, event, sinceS).name : spot.subject ? 'a track no longer seen' : 'no one';
         const name = aimed ? (names[aimed.fixture_id] || 'Spot') : '';
         cards.coordinator = spot.stopped ? { state: 'attention', value: 'Stop', sub: 'every spot dark' }
-            : lit ? { state: 'live', value: `${Math.round(lit.level * 100)}%`, sub: `for ${who}`, fixture: name, why: REASON[lit.reason] || lit.reason }
+            : lit ? { state: 'live', sub: `for ${who}`, fixture: name, why: REASON[lit.reason] || lit.reason,
+                // while a level train runs, where it's heading: "40% → 79%"
+                value: finite(lit.fade?.to) && Math.round(lit.fade.to * 100) !== Math.round(lit.level * 100)
+                    ? `${Math.round(lit.level * 100)}% → ${Math.round(lit.fade.to * 100)}%` : `${Math.round(lit.level * 100)}%`,
+                change: Object.hasOwn(FADE, lit.fade?.purpose) ? `${FADE[lit.fade.purpose]}${finite(lit.fade.duration_s) ? ` over ${lit.fade.duration_s} s` : ''}` : null }
             : aimed ? { state: 'idle', value: 'Aimed', sub: `dark, for ${who}`, fixture: name, why: REASON[aimed.reason] || aimed.reason }
             : { state: 'idle', value: 'Dark', sub: (REASON[rows[0]?.reason] || 'waiting').toLowerCase() };
         cards.coordinator.target = (lit || aimed)?.target_m ?? null;
+        const ambient = spot.ambient;   // the room glow (additive): {level, scale, cct_k}
+        cards.coordinator.ambient = ambient && finite(ambient.scale) ? `${Math.round(ambient.scale * 100)}% of the house${finite(ambient.cct_k) ? ` · ${ambient.cct_k} K` : ''}` : null;
     }
     return cards;
 }
@@ -249,6 +256,7 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
             ['Answer', model.qwen?.value ?? '—']];
         const rows = Array.isArray(spot?.fixtures) ? spot.fixtures : [];
         return [['Light', `${model.coordinator?.value ?? '—'}${model.coordinator?.fixture ? ` · ${model.coordinator.fixture}` : ''}`], ['Why', model.coordinator?.why ?? '—'], ['For', (model.coordinator?.sub ?? '—').replace(/^for /, '')],
+            ...(model.coordinator?.change ? [['Change', model.coordinator.change]] : []), ...(model.coordinator?.ambient ? [['Room glow', model.coordinator.ambient]] : []),
             ...rows.map(row => [names()?.[row.fixture_id] || 'Spot', `${row.on ? `${Math.round(row.level * 100)}%` : 'dark'} · ${String(row.reason).replace(/_/g, ' ')}`])];
     }
 

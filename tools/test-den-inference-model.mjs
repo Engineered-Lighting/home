@@ -101,3 +101,12 @@ test("the light line belongs to the spot's subject only, in the same epoch and r
 test('detail steps follow the zoom', () => {
     assert.equal(detailFor(0), 2); assert.equal(detailFor(.5), 1); assert.equal(detailFor(1), 0);
 });
+
+test('the house line names a running fade, and the new reasons have words', () => {
+  const t = track();
+  const crossfade = { stopped: false, subject: { track_id: t.track_id, camera_epoch: 1, association_revision: 2 },
+    fixtures: [{ fixture_id: 'F4', on: true, level: .5, cct_k: 2700, reason: 'task', target_m: [2, 2.7, .8], fade: { from: 0, to: .8, purpose: 'crossfade_in' } }] };
+  assert.equal(houseOf(t, crossfade, { F4: 'Spot 4' }).words, 'Spot 4 · taking over');
+  const ending = { ...crossfade, fixtures: [{ ...crossfade.fixtures[0], reason: 'task_ending', fade: undefined }] };
+  assert.equal(houseOf(t, ending, { F4: 'Spot 4' }).words, 'Spot 4 · letting go');
+});

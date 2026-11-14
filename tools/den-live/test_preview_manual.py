@@ -204,11 +204,14 @@ class PreviewManualTest(unittest.TestCase):
         self.stand()   # the task's light ends with the task; the glow's parts with its cue
         self.assertIsNone(self.fixtures()[name]["hand"])
 
-    def test_homes_panel_reads_the_spot_and_the_room_in_the_one_learned_map(self):
+    def test_the_spot_and_the_room_are_in_learned_from_you_and_learned_stays_the_bulbs(self):
+        """#444 (2fbc5bd0) lists `learned` as bulbs and reads learned_from_you beside it: nothing of the fixtures'
+        goes into the bulbs' map, or the panel would show it twice."""
         name = self.light()
         self.dim(name)
         state = self.preview.state()[1]
-        self.assertEqual(state["learned"]["task/evening"]["spot"], state["learned_from_you"]["task/evening"]["spot"])
+        self.assertIn("spot", state["learned_from_you"]["task/evening"])
+        self.assertNotIn("learned", state)   # no bulbs overlay here, so no bulbs' learning either
 
     def test_aiming_the_light_somewhere_else_teaches_the_task_nothing(self):
         name = self.light()

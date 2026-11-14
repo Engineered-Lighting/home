@@ -1715,12 +1715,8 @@ class Preview:
             readback = self.hue.readback()
             current.update({**readback, "situation": readback.get("situation") or current["situation"],
                             "problem": current["problem"] or readback.get("problem")})
-        # Home's panel reads one map (#444): each situation's bulbs ("light.*", the overlay's) beside the spot and the
-        # room glow the owner taught here. learned_from_you keeps the fixtures' part on its own.
-        bulbs = current.get("learned") if isinstance(current.get("learned"), dict) else {}
-        mine = current["learned_from_you"]
-        current["learned"] = {key: {**(bulbs.get(key) or {}), **mine.get(key, {})}
-                              for key in sorted(set(bulbs) | set(mine))}
+        # `learned` stays the bulbs' alone (the overlay's, "light.*"): Home's panel (#444, 2fbc5bd0) lists it as bulbs and
+        # reads the spot and the room glow from learned_from_you beside it.
         return 200, current
 
     def bulbs(self, data):

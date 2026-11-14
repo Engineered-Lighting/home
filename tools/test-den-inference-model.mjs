@@ -110,3 +110,13 @@ test('the house line names a running fade, and the new reasons have words', () =
   const ending = { ...crossfade, fixtures: [{ ...crossfade.fixtures[0], reason: 'task_ending', fade: undefined }] };
   assert.equal(houseOf(t, ending, { F4: 'Spot 4' }).words, 'Spot 4 · letting go');
 });
+
+test('who: named by a face, carried as "Name?", Unknown for a face nobody labelled, Someone otherwise', () => {
+  const e = event([]);
+  assert.equal(identityOf(track({ who: { state: 'named', label: 'Sam', basis: 'face', labelable: false } }), e).name, 'Sam');
+  const carried = identityOf(track({ who: { state: 'named', label: 'Sam', basis: 'carried' } }), e);
+  assert.deepEqual([carried.name, carried.strength], ['Sam?', 'weak']);
+  assert.equal(identityOf(track({ who: { state: 'unknown', label: null, basis: 'face', labelable: true } }), e).name, 'Unknown');
+  assert.equal(identityOf(track({ who: { state: 'unconfirmed', label: null, basis: 'none' } }), e).name, 'Someone');
+  assert.equal(identityOf(track({ who: { state: 'named', label: '', basis: 'face' } }), e).name, 'Someone', 'no label, no name');
+});

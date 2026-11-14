@@ -33,10 +33,14 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     const captionKit = config.caption === true
         ? await import(`./home-den-inference-caption.mjs${cb}`).catch(error => { console.warn('[den-live] caption unavailable', error); return null; })
         : null;
+    // The data behind the body's System caption: always loaded with the body, which is the only floating label.
+    const inferenceKit = typeof config.body === 'string'
+        ? await import(`./home-den-inference-model.mjs${cb}`).catch(error => { console.warn('[den-live] caption data unavailable', error); return null; })
+        : null;
     const pipelineKit = config.pipeline === true
         ? await import(`./home-den-pipeline-layer.mjs${cb}`).catch(error => { console.warn('[den-live] pipeline unavailable', error); return null; })
         : null;
-    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit, pipelineKit);
+    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit, pipelineKit, inferenceKit);
     if (typeof config.body === 'string') {
         void Promise.all([import(`./home-3d/apartment-body-layer.mjs${cb}`), import(`./home-3d/apartment-body-labels.mjs${cb}`),
             import(`./home-3d/apartment-body-frame.mjs${cb}`)])
@@ -46,7 +50,7 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     }
 }
 
-function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit = null, pipelineKit = null) {
+function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit = null, pipelineKit = null, inferenceKit = null) {
     const lookOnly = window.HomeLookOnly?.active === true;
     let engine = null, scope = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
     let panel = null, caption = null, pipeline = null;
@@ -201,10 +205,41 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             if (!presentation || !admitted()) { presentation?.dispose(); disposeBody(owned); return; }
             owned.layer = bodyKit.attachLayer(current, { measuredOnly: true, animate: false,
                 reducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches });
-            // The caption speaks for the person when it's on; the body then draws no labels of its own.
+            // The body's System caption is the person's one floating label (the spine, 2026-11-14). Its words come from
+            // home-den-inference-model.mjs: who, Qwen's word until the moment it expires, and the light only when the
+            // spot's subject is this person. The separate caption (HOME_WEB_DEN_CAPTION) stays off and unused.
             owned.labels = caption ? { tick() {}, clear() {}, dispose() {} }
-                : bodyKit.attachLabels({ engine: current, host, layer: owned.layer, animate: false });
+                : bodyKit.attachLabels({ engine: current, host, layer: owned.layer, animate: false, ...(inferenceKit ? captionData(owned) : {}) });
         } catch (error) { console.warn('[den-live] body layer not mounted', error); disposeBody(owned); }
+    }
+    /* The person the body belongs to, in the newest people event: the body's own track, else the one track within
+     * 0.6 m of its centroid. */
+    function bodyTrack(owned) {
+        const tracks = sameScan(latest) ? latest.tracks : [], id = owned.ready?.event?.track_id;
+        const own = tracks.find(track => track.track_id === id);
+        if (own) return own;
+        const c = owned.layer?.snapshot?.()?.centroid;
+        const near = c ? tracks.filter(track => Math.hypot(track.xy_m[0] - c[0], track.xy_m[1] - c[1]) < 0.6) : [];
+        return near.length === 1 ? near[0] : null;
+    }
+    function captionData(owned) {
+        const since = () => (performance.now() - lastAt) / 1000;
+        const names = () => Object.fromEntries((owned.engine.overlay?.virtualFixturesReadback?.()?.fixtures || [])
+            .filter(row => typeof row.label === 'string').map(row => [row.fixture_id, row.label]));
+        return {
+            person: () => {
+                const track = bodyTrack(owned);
+                if (!track) return null;
+                const id = inferenceKit.identityOf(track, latest, since());
+                return id.kind === 'household' || id.kind === 'unknown'
+                    ? { name: id.name, known: true, source: id.basis === 'carried' ? 'carried over' : 'face', confidence: id.score } : null;
+            },
+            activity: () => { const track = bodyTrack(owned); return track ? inferenceKit.answerOf(track, latest, since())?.words ?? null : null; },
+            house: () => {
+                const track = bodyTrack(owned), house = track ? inferenceKit.houseOf(track, spots?.current() ?? null, names()) : null;
+                return house ? `${house.words}${!house.dark && house.level != null ? ` · ${Math.round(house.level * 100)}%` : ''}` : null;
+            },
+        };
     }
     function mountCaption(current) {
         const canvas = current.renderer.domElement;
@@ -262,10 +297,10 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
 
     /* The chip sits in the room view's top left corner, under Home's own overlays. The older layouts keep a toolbar
      * row there, and the chip joins its end instead of covering it. */
-    /* With the caption or the pipeline on, the chip becomes one glass capsule: the den's status, and three icons that
-     * hold what used to be separate buttons and drawers. The pipeline icon turns the pipeline on and off, the light
-     * icon opens the coordinator's controls in a glass sheet under the capsule, and the labels icon opens the label
-     * editor (whose own button the capsule then hides). */
+    /* With the pipeline (or the caption) on, the chip becomes one capsule in the Perception Lab's card language: the
+     * den's status and Qwen's line, and three icons that hold what used to be separate buttons and drawers. The
+     * pipeline icon turns the pipeline on and off, the light icon opens the coordinator's controls in a sheet under the
+     * capsule, and the labels icon opens the label editor (whose own button the capsule then hides). */
     const capsule = !!(captionKit || pipelineKit);
     const ICON = {"pipeline": '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="2.8" cy="8" r="1.7"/><circle cx="8" cy="8" r="1.7"/><circle cx="13.2" cy="8" r="1.7"/><path d="M4.5 8h1.8M9.7 8h1.8M2.8 6.3C3.6 2.8 12.4 2.8 13.2 6.3"/></svg>', "light": '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.6 1.8h4.8l-.9 3.4H6.5z"/><path d="M6.5 5.2 3.6 13.4c1.5 1 7.3 1 8.8 0L9.5 5.2"/></svg>', "labels": '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.2 2.2h5.4l6.2 6.2-5.4 5.4-6.2-6.2z"/><circle cx="5.3" cy="5.3" r="1"/></svg>'};
     function iconButton(name, label, onClick) {

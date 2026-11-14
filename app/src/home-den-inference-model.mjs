@@ -12,8 +12,10 @@
  *   when den-live sends it.
  * - Qwen asks about a seated person only. A track says so with seated (contract 2, planned); until then, the track with
  *   the answer, or the only track, is the one asked about.
- * - A name needs identity with a kind of household and a match at or over IDENTITY_STRONG; a weaker household match
- *   reads "Name?", a face that matched nobody "Guest", and no face "Someone". Never a face image.
+ * - Who someone is comes from the track's who {state, label, basis} (the face work's field for den-live-people-1):
+ *   named by a face reads the name, a name carried over a track reset reads "Name?" until a face confirms it, a face
+ *   that matches nobody labelled reads "Unknown", and anything else (no clear face yet, night, side-on) "Someone".
+ *   Never a face image. The older draft shape identity {kind, label, score} still reads, with IDENTITY_STRONG.
  * - The light line belongs to a person only when the spot snapshot's subject names their track, in the same camera
  *   epoch and association revision.
  * Fields den-live doesn't send yet (identity, activity.facts, activity.basis, activity.valid_for_s,
@@ -46,6 +48,16 @@ const own = (object, key) => object != null && typeof object === 'object' && Obj
 
 /* Who: { name, kind: household | guest | unknown, strength: strong | weak | none, score, age_s }. */
 export function identityOf(track, event, sinceEventS = 0) {
+    const who = own(track, 'who');
+    if (who && typeof who === 'object') {
+        if (who.state === 'named' && words(who.label, 40)) {
+            const carried = who.basis === 'carried';
+            return { name: carried ? `${words(who.label, 40)}?` : words(who.label, 40), kind: 'household', strength: carried ? 'weak' : 'strong',
+                score: null, age_s: null, basis: carried ? 'carried' : 'face' };
+        }
+        if (who.state === 'unknown') return { name: 'Unknown', kind: 'unknown', strength: 'none', score: null, age_s: null, basis: 'face', labelable: who.labelable === true };
+        return { name: 'Someone', kind: 'unconfirmed', strength: 'none', score: null, age_s: null, basis: 'none' };
+    }
     const id = own(track, 'identity');
     const age = id && finite(id.at) && finite(event?.emitted_ts) ? Math.max(0, event.emitted_ts - id.at + Math.max(0, sinceEventS)) : null;
     if (id && id.kind === 'household' && words(id.label, 40) && finite(id.score)) {

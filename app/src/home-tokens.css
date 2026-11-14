@@ -1105,7 +1105,8 @@ button.hg-no-press:active {
 .home-den-live-chip--capsule p { white-space: nowrap; }
 .home-den-live-chip--capsule .home-den-live-chip-title { font-weight: 560; }
 .home-den-live-chip--capsule .home-den-live-chip-facts { font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; color: var(--hg-fg-2, #a1a1a1); }
-.home-den-live-chip--capsule .home-den-live-chip-qwen { display: none; }
+.home-den-live-chip--capsule .home-den-live-chip-qwen { max-width: 240px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--hg-fg-1, #ededed); }
+.home-den-live-chip--capsule .home-den-live-chip-qwen:not(:empty)::before { content: "· "; color: var(--hg-fg-3, #8f8f8f); }
 .home-den-live-chip--capsule .home-den-live-chip-banner { margin: 0 !important; font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; }
 .home-den-live-chip-actions { display: flex; gap: 2px; margin-left: 2px; padding-left: 6px; border-left: 1px solid rgba(255,255,255,.12); }
 .home-den-live-chip-icon { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent;

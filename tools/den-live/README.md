@@ -379,7 +379,7 @@ python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\install_la.py
 `install.sh` does this on LA, and every step is safe to run again:
 - It checks the tarball against its sha256, and every file in it against the release's own list.
 - It unpacks to `/opt/den-live/releases/<id>/`.
-- It builds the detector's venv in `/opt/den-live/venvs/<id>/`, with exactly its lock's versions. On LA, which has an NVIDIA GPU, that's `requirements-cuda.lock`: CUDA 12.8 torch from PyTorch's cu128 index and `onnxruntime-gpu`, about 4.6 GB the first time (about 4.2 GB more than the CPU build), with 12 GB free under `/opt` first, and ten minutes or so. On a host without one, it's `requirements.lock`: CPU torch, about 400 MB. rtmlib comes from its wheel, the rest from PyPI. Then it loads the models once through the detector's own checks, and says where each runs.
+- It builds the detector's venv in `/opt/den-live/venvs/<id>/`, with exactly its lock's versions. On LA, which has an NVIDIA GPU, that's `requirements-cuda.lock`: CUDA 12.8 torch from PyTorch's own wheels, each held to its sha256, and `onnxruntime-gpu`, about 4.6 GB the first time (about 4.2 GB more than the CPU build), with 12 GB free under `/opt` first, and ten minutes or so. On a host without one, it's `requirements.lock`: CPU torch, about 400 MB. rtmlib comes from its wheel, the rest from PyPI. Then it loads the models once through the detector's own checks, and says where each runs.
 - It writes `/etc/den-live/config.json`: the camera, the gateway's content-pack folder, the venv, the models, port 8111.
 - It puts the three private inputs, root-only, in `/etc/den-live/private/`.
 - It installs `den-live.service` and starts it.
@@ -395,7 +395,7 @@ ssh -t hav-ubuntu "sudo systemctl disable --now den-live"
 
 **The service, on LA:**
 - `den-live.service` runs as a dynamic user. Its private inputs come in through `LoadCredential`.
-- It's held to `MemoryMax=6G` (CUDA's libraries take about 2 GB of it) and `CPUQuota=150%`, and restarts 10 s after any stop.
+- It's held to `MemoryMax=4G` (on the GPU the detector's process holds about 1.7 GB) and `CPUQuota=150%`, and restarts 10 s after any stop.
 - **The GPU:** YOLO26s and RTMPose-m run on LA's GPU when CUDA can: same weights, FP32. The detector uses the GPU only with 3 GB of it free, and caps torch's allocator at 2 GB, because the GPU is vLLM's first. Each model falls back to the CPU on its own if CUDA fails to load or warm it up, and the start-up line says where each runs (`Detector: YOLO26s and RTMPose-m on the GPU.`). The unit sees the NVIDIA device nodes and no other device (`PrivateDevices=no`, `DevicePolicy=closed`, `DeviceAllow=` the nvidia nodes).
 - It may reach only this host's loopback and the camera's one address.
 - The people stream binds 127.0.0.1:8111 only. The detector process still refuses Python sockets itself.

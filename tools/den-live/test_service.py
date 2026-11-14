@@ -600,7 +600,7 @@ class Unit(unittest.TestCase):
         self.lines = [line.strip() for line in self.text.splitlines() if line.strip() and not line.startswith('#')]
 
     def test_the_units_settings(self):
-        for line in ('DynamicUser=yes', 'StateDirectory=den-live', 'MemoryMax=6G', 'CPUQuota=150%', 'Restart=always', 'RestartSec=10',
+        for line in ('DynamicUser=yes', 'StateDirectory=den-live', 'MemoryMax=4G', 'CPUQuota=150%', 'Restart=always', 'RestartSec=10',
                      'RestartPreventExitStatus=3', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ProtectHome=yes', 'PrivateTmp=yes',
                      'IPAddressDeny=any', 'IPAddressAllow=localhost',
                      'LoadCredential=room-model.jsonl:/etc/den-live/private/room-model.jsonl',

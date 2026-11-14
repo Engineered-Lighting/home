@@ -5,11 +5,15 @@
 # glibc 2.39, NVIDIA driver 595.84, RTX PRO 6000 Blackwell), where that runtime was installed and run on 2026-09-26.
 # detect.py holds a venv with CUDA torch (+cu128) to this file, and any other to requirements.lock.
 #
-# install.sh builds it on LA, wheels only, each with --no-deps: torch and torchvision from
-# https://download.pytorch.org/whl/cu128, rtmlib from its wheel in the release, the rest from PyPI. About 4.6 GB to
+# install.sh builds it on LA, wheels only, each with --no-deps: torch and torchvision from the two url lines below,
+# PyTorch's own cu128 wheels, each held by pip to its sha256 (the ones the LA trial installed); rtmlib from its wheel in
+# the release; the rest from PyPI. About 4.6 GB to
 # download, measured from the wheels' sizes on 2026-11-14 (torch 917 MB, cuDNN 707 MB, cuBLAS 594 MB, onnxruntime-gpu
 # 301 MB, ...): about 4.2 GB more than the CPU venv's 400 MB, and 7 to 9 GB on disk. The weights are the same files.
 # If CUDA or the GPU isn't usable, the detector runs on the CPU in this same venv (detect.gpu_usable).
+#
+# url torch https://download-r2.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=628e89bd5110ced7debee2a57c69959725b7fbc64eab81a39dd70e46c7e28ba5
+# url torchvision https://download-r2.pytorch.org/whl/cu128/torchvision-0.25.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=1255a0ca2bf987acf9f103b96c5c4cfe3415fc4a1eef17fa08af527a04a4f573
 certifi==2026.10.23
 charset-normalizer==3.5.2
 colorama==0.4.6

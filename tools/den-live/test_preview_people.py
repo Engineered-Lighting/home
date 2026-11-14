@@ -48,7 +48,7 @@ class PreviewPeopleTest(unittest.TestCase):
         if self.guest is not None:
             tracks.append({"track_id": "t2", "state": "confirmed", "position_basis": "stereo",
                            "association_status": "confident", "association_revision": 1, "current_obs_ids": ("pose",),
-                           "supported_pose": {}, "coarse_head_room_m": list(self.guest), "seated": None})
+                           "supported_pose": {}, "head_point_m": {"xyz": list(self.guest)}, "seated": None})
         alone = self.guest is None
         self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": epoch, "seq": self.seq,
                                      "frame": {**base.BINDING, "capture_mono": self.now}, "status": "fresh",
@@ -118,7 +118,7 @@ class PreviewPeopleTest(unittest.TestCase):
                   "association_revision": 2, "current_obs_ids": (), "supported_pose": {}, "seated": None}
         passer = {"track_id": "t2", "state": "confirmed", "position_basis": "stereo", "association_status": "confident",
                   "association_revision": 1, "current_obs_ids": ("pose",), "supported_pose": {},
-                  "coarse_head_room_m": list(AWAY), "seated": None}
+                  "head_point_m": {"xyz": list(AWAY)}, "seated": None}
         self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": 1, "seq": self.seq,
                                      "frame": {**base.BINDING, "capture_mono": self.now}, "status": "fresh",
                                      "presence": "present", "eligibility_revision": 1, "eligible_track_id": None,

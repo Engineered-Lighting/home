@@ -235,7 +235,7 @@ class Preview:
 
     def _other(self, track):
         joints = pose(track)
-        head = field(track, "coarse_head_room_m") or self.core.body.head(joints)
+        head = published_head(track) or self.core.body.head(joints)   # contract 2's head_point_m, as for the reader
         if not (isinstance(head, (list, tuple)) and len(head) == 3 and all(map(finite, head))):
             return None
         return {"track_id": field(track, "track_id"), "head": tuple(head)}

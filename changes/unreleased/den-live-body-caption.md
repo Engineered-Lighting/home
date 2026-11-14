@@ -1,6 +1,6 @@
 ---
 title: The live body's pointer turns smoothly, starts at the shoulders, and its caption never outlives Qwen's answer
-target: frontend
+target: web
 type: changed
 ---
 

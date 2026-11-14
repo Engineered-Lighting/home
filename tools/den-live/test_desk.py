@@ -134,6 +134,8 @@ class DeskTest(unittest.TestCase):
         on, board, _ha = self.desk_preview()
         h = self.h
         h.light()
+        h.now += .5   # the measured board relights after its settle, so its first keep-lit is a beat later
+        h.track()
         _, stopped = h.preview.stop({})
         self.assertTrue(board.stop_latched())
         self.assertEqual(h.preview.resume(stopped)[0], 200)
@@ -156,6 +158,8 @@ class DeskTest(unittest.TestCase):
     def test_the_dark_rehearsal_sends_level_zero_and_no_keep_lit(self):
         _on, board, _ha = self.desk_preview(light=False)
         self.h.light()
+        self.h.now += .5   # the measured board relights after its settle, so its first keep-lit is a beat later
+        self.h.track()
         self.assertTrue(self.h.row()["on"], "Home still shows the virtual spot")
         self.assertFalse(board.spot_lit(), "the board's spot stays dark")
         rows = self.rows()

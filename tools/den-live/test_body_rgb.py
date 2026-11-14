@@ -6,7 +6,7 @@ import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from body import BodyChannel, head_exclusion
 from body_clock import AGE_HEADER, AGE_SCHEMA
@@ -18,7 +18,7 @@ from perceive import Perceiver, Tools, track_method_copy
 import run_local
 import run_service
 from sofa_check import archive
-from source import Bundle, camera_client
+from source import SLIM_PATH, Bundle, camera_client
 
 CALIBRATION = "a" * 64
 TIMING_EVIDENCE = "fixture-capture-clock"
@@ -272,20 +272,35 @@ class RgbBodyTests(unittest.TestCase):
 
 class TransportTests(unittest.TestCase):
     def test_age_receipt_comes_from_the_same_get(self):
+        """A camera without the slim path (404) gets the full /frame.npz pull, and its receipt is that GET's own."""
         take = SimpleNamespace(Camera=lambda *args: SimpleNamespace(host="fixture", port=1234), MAX_BODY=100)
         camera = camera_client(take, "http://fixture:1234", "fixture-token", body_timing=True)
         header = (AGE_HEADER, json.dumps({"schema": AGE_SCHEMA, "frame_key": ["fixture", 2, 3]}))
+        other = (AGE_HEADER, json.dumps({"schema": AGE_SCHEMA, "frame_key": ["fixture", 1, 1]}))
+        full_headers = [[header]]
         with patch("source.http.client.HTTPConnection") as connect:
             socket = connect.return_value
-            response = socket.getresponse.return_value
-            response.status, response.length = 200, 0
-            response.read.return_value = b"bundle"
-            response.getheaders.return_value = [header]
+
+            def answer():
+                response = MagicMock()
+                if socket.request.call_args.args[1] == SLIM_PATH:   # an earlier camera release: no slim path
+                    response.status, response.length, response.will_close = 404, 0, True
+                    response.read.return_value = b"Unavailable\n"
+                    response.getheaders.return_value = [other]
+                else:
+                    response.status, response.length = 200, 0
+                    response.read.return_value = b"bundle"
+                    response.getheaders.return_value = full_headers[0]
+                return response
+            socket.getresponse.side_effect = answer
             self.assertEqual(camera.get_bundle(), (200, b"bundle", json.loads(header[1])))
-            socket.request.assert_called_once_with("GET", "/frame.npz", headers={"Authorization": "Bearer fixture-token"})
-            socket.close.assert_called_once()
-            response.getheaders.return_value = [header, header]
+            auth = {"Authorization": "Bearer fixture-token"}
+            self.assertEqual([(c.args, c.kwargs) for c in socket.request.call_args_list],
+                             [(("GET", SLIM_PATH), {"headers": auth}), (("GET", "/frame.npz"), {"headers": auth})])
+            self.assertEqual(socket.close.call_count, 2, "the slim ask's connection and the full GET's, each closed")
+            full_headers[0] = [header, header]
             self.assertEqual(camera.get_bundle(), (200, b"bundle", None))
+            self.assertEqual(socket.request.call_args_list[-1].args, ("GET", "/frame.npz"), "no slim ask within a minute")
 
 
 if __name__ == "__main__":

@@ -113,8 +113,12 @@ class FakeCamera:
                     self.send_error(401)
                     return
                 headers, status, body = {}, 404, b'Not found\n'
+                if owner.age_receipt is not None:   # on every answer; a 404's is a decoy no client may return
+                    headers[body_clock.AGE_HEADER] = json.dumps(dict(owner.age_receipt, decoy=True))
                 if self.path == '/frame.npz':
                     status, body = 200, full
+                    if owner.age_receipt is not None:
+                        headers[body_clock.AGE_HEADER] = json.dumps(owner.age_receipt)
                 elif kept:
                     headers = {'ETag': etag, 'X-Den-Bundle-Schema': owner.schema}
                     if owner.age_receipt is not None:
@@ -270,6 +274,17 @@ class LinkTests(unittest.TestCase):
         _camera, client = self.camera(age_receipt=receipt)
         self.assertEqual(client.get_bundle()[2], receipt)
         self.assertEqual(client.get_bundle()[:3], (304, b'', None))
+
+    def test_through_the_fallback_the_receipt_is_the_full_gets_own(self):
+        receipt = {'schema': body_clock.AGE_SCHEMA, 'fictional': True}
+        camera, client = self.camera(slim=False, age_receipt=receipt)
+        status, body, got = client.get_bundle()
+        self.assertEqual((status, got), (200, receipt), "the /frame.npz GET's receipt, not the 404's decoy")
+        self.assertIn('left.npy', zipfile.ZipFile(io.BytesIO(body)).namelist())
+        self.assertEqual(camera.paths(), [source.SLIM_PATH, '/frame.npz'])
+        camera.publish(2)
+        self.assertEqual(client.get_bundle()[2], receipt)
+        self.assertEqual(camera.paths(), [source.SLIM_PATH, '/frame.npz', '/frame.npz'])
 
     def test_the_slim_path_is_on_the_allowlist_and_nothing_else_is_new(self):
         self.assertEqual(source.ALLOWED_PATHS, ('/frame.npz', '/calibration', '/frame-slim.npz'))

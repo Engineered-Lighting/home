@@ -91,7 +91,8 @@ def level_step_s(profile):
 SEATED_AIM_M = 0.03             # a dark pre-aim for a seated person tracks the book this closely: dark moves are free
 DARK_WINDOW_S = 0.6             # and on a shorter window, so the book coming up off the lap is followed before the yes
 SETTLE_S = 0.5                  # the book's settled place must stay past shift_m this long before a lit spot glides
-STILL_S = 0.8                   # and the book must be at rest over this window: the glide goes once, to where it rests
+STILL_S = 1.2                   # and the book must be at rest over this window: the glide goes once, to where it rests
+                                # (1.2 s: one move for every slide in the reading sim; 0.8 made a move and a correction)
 PAGE_MIN_AHEAD_M = 0.02         # the hands must be this far ahead of the eyes to give the page a direction
 WRISTS_LOST_S = 2.0             # without both wrists for this long, the page falls back to den-core's task point
 FACING_WINDOW_S = 3.0           # a seated person's facing is the circular mean over this window

@@ -306,6 +306,6 @@ test('Parent: reapplyVirtualFixtureMemory skips the owned fixture',()=>{
   const reapply=extracted('reapplyVirtualFixtureMemory',ctx);
   reapply(overlay,'fixture-1');assert.deepEqual(log,['state:fixture-0','aim:fixture-2']);
   log.length=0;reapply(overlay,null);assert.deepEqual(log,['state:fixture-0','state:fixture-1','aim:fixture-1','aim:fixture-2']);
-  assert.match(parentRaw,/reapplyVirtualFixtureMemory\(overlay, preview\?\.active \? preview\.fixtureId : null\)/,
+  assert.match(parentRaw,/reapplyVirtualFixtureMemory\(overlay, preview\?\.active \? preview\.fixtureId : null, coordinator\)/,
     'the scene effect passes the active preview fixture');
 });

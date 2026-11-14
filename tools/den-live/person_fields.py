@@ -17,9 +17,9 @@ rule: lift stereo, status supported, a room position):
 
 - posture: one closed word, from what perception measures, in Qwen's own words for subject_posture (den-live-scene-2)
   less lying, which nothing here measures: sitting while seated (seated.Published); else walking when the track's
-  floor position moved at WALK_MPS or more over the last SPEED_S, upright or with no stereo pose; else standing when
-  the mid-hip is above den-core's seated band (HIP_Z, 0.75 m), or with no pair of hips the head point is at
-  HEAD_SEATED_MAX_Z (1.30 m) or more; else unclear.
+  floor position moved at WALK_MPS or more over the last SPEED_S, upright or with no stereo pose; else standing on the
+  seated rule's clear standing evidence (seated.standing_evidence: a head at 1.50 m or more; with no head, a mid-hip
+  over 0.95 m; or the mid-hip 0.35 m over the knees); else unclear. Hips at the sofa band's edge are no evidence.
 
 The people projection's heading_deg is body_facing's deg (None without it), and it carries seated and posture. The
 preview reads head_point_m.
@@ -30,7 +30,7 @@ from collections import deque
 from types import MappingProxyType
 
 from contracts import PERCEPTION_S, BodyFacing, HeadPoint
-from seated import HEAD_SEATED_MAX_Z, HIP_Z
+from seated import body_joints, standing_evidence
 
 WINDOW_S = 1.0       # the circular median's window, ending at the newest sample
 FLIP_DEG = 150.0     # a turn this far from the published facing waits for a second sample
@@ -98,12 +98,7 @@ def posture(seated, stereo, speed_mps):
     """posture from this frame's seated (a SeatedState or None), stereo-supported joints and floor speed (or None)."""
     if seated is not None and seated.state:
         return "sitting"
-    hips = [stereo[name][0] for name in ("left_hip", "right_hip") if name in stereo]
-    head = head_point(stereo)
-    if len(hips) == 2:
-        upright = (hips[0][2] + hips[1][2]) / 2.0 > HIP_Z[1]
-    else:
-        upright = head is not None and head.xyz[2] >= HEAD_SEATED_MAX_Z
+    upright = standing_evidence(body_joints(stereo))
     if speed_mps is not None and speed_mps >= WALK_MPS and (upright or not stereo):
         return "walking"
     return "standing" if upright else "unclear"

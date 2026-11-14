@@ -141,9 +141,14 @@ class Posture(unittest.TestCase):
         seated, standing_up = SeatedState(True, 1.0, "hips"), SeatedState(False, None, None)
         self.assertEqual(pf.posture(seated, self.joints(0.5), 0.0), "sitting")
         self.assertEqual(pf.posture(seated, {}, 1.0), "sitting", "seated decides first")
-        self.assertEqual(pf.posture(standing_up, self.joints(0.95), 0.05), "standing")
-        self.assertEqual(pf.posture(None, self.joints(0.95), None), "standing", "no speed yet")
-        self.assertEqual(pf.posture(standing_up, self.joints(0.95), 0.6), "walking")
+        self.assertEqual(pf.posture(standing_up, self.joints(1.0), 0.05), "standing")
+        self.assertEqual(pf.posture(None, self.joints(1.0), None), "standing", "no speed yet")
+        self.assertEqual(pf.posture(standing_up, self.joints(1.0), 0.6), "walking")
+        # The seated rule's own evidence (2026-11-14): hips on the sofa band's edge under a seated head are no evidence
+        # of standing (the copy's 0.75 m called them standing), and with no head, hips must be over 0.95 m.
+        self.assertEqual(pf.posture(standing_up, self.joints(0.8, head_z=1.25), 0.0), "unclear", "the band's edge")
+        self.assertEqual(pf.posture(standing_up, self.joints(0.9), 0.0), "unclear")
+        self.assertEqual(pf.posture(standing_up, self.joints(0.8, head_z=1.6), 0.0), "standing", "the head")
         self.assertEqual(pf.posture(standing_up, {}, 0.6), "walking", "moving with no stereo pose")
         self.assertEqual(pf.posture(standing_up, self.joints(0.5), 0.6), "unclear", "low hips that aren't seated, moving")
         self.assertEqual(pf.posture(standing_up, self.joints(0.5), 0.0), "unclear", "low hips, not seated yet")

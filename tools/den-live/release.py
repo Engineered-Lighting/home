@@ -75,6 +75,12 @@ WORD = re.compile(r"[a-z]+")
 TAILNET = re.compile(r"\.ts\.net(?![a-z0-9-])", re.IGNORECASE)
 TAILNET_V6 = re.compile(r"fd7a:115c:a1e0[:]", re.IGNORECASE)   # [:] so this line isn't one itself
 IPV4 = re.compile(r"(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\d.])")
+# A dotted quad that is a version, not an address: a pip requirement's (a distribution name at the line's start, then
+# ==, as cuRAND's 10-dot pin is in requirements-cuda.lock), or a wheel file name's (name-<version>[+local]-[build-]
+# py3/cp312/...-<platform>.whl). An address anywhere else on the line still counts.
+PIN_BEFORE = re.compile(r"\s*[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9,._-]*\])?\s*==\s*$")
+WHEEL_NAME_BEFORE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.]*-$")
+WHEEL_REST_AFTER = re.compile(r"(?:(?:\+|%2B)[A-Za-z0-9.]+)?-(?:\d[A-Za-z0-9_]*-)?(?:py|cp|pp)\d[A-Za-z0-9_.]*-[^\s#]*\.whl")
 RUN = re.compile(r"[A-Za-z0-9_-]{24,}")
 # A user's own folder: C:\Users\<name> (one or two backslashes, or a slash), /Users/<name> or /home/<name>.
 PROFILE = re.compile(r"(?:(?<![A-Za-z])[A-Za-z]:(?:\\{1,2}|/)Users(?:\\{1,2}|/)|(?<![A-Za-z0-9._-])/(?:Users|home)/)([A-Za-z0-9._-]+)")
@@ -97,6 +103,15 @@ KNOWN_PINNED = {
 @functools.lru_cache(maxsize=65536)
 def _digest(word):
     return hashlib.sha256(word.encode("utf-8")).hexdigest()
+
+
+def version_not_address(line, match):
+    """Whether an IPV4 match in line is a pip pin's or a wheel file name's version (PIN_BEFORE, WHEEL_REST_AFTER)."""
+    before = line[:match.start()]
+    if PIN_BEFORE.fullmatch(before):
+        return True
+    tail = before.rsplit("/", 1)[-1]
+    return bool(WHEEL_NAME_BEFORE.fullmatch(tail) and WHEEL_REST_AFTER.match(line, match.end()))
 
 
 def private_address(a, b, c, d):
@@ -146,7 +161,7 @@ def scan_text(text, secrets=()):
             kinds.add("tailnet address")
         if any(not placeholder_user(m.group(1)) for m in PROFILE.finditer(line)):
             kinds.add("a user's own folder")
-        if any(private_address(*m.groups()) for m in IPV4.finditer(line)):
+        if any(private_address(*m.groups()) and not version_not_address(line, m) for m in IPV4.finditer(line)):
             kinds.add("private address")
         if any(token_like(m.group()) for m in RUN.finditer(line)):
             kinds.add("token-like string")

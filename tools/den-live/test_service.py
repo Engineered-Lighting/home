@@ -755,6 +755,32 @@ class ReleaseScan(unittest.TestCase):
         self.assertIn('tools/den-live/planted.txt, line 2', str(stop.exception))
         self.assertNotIn(site, str(stop.exception), 'the refusal never names the string')
 
+    def test_a_pip_pins_version_is_not_an_address_but_a_real_one_in_a_lock_still_refuses(self):
+        """A dotted-quad version (cuRAND's pin in requirements-cuda.lock, or its wheel's file name) isn't an address; an
+        address anywhere else in a lock file, a pin's line too, still refuses the release. The addresses are made here,
+        so this file carries none."""
+        def quad(*octets):
+            return '.'.join(str(o) for o in octets)
+        curand, ten, home, cgnat = quad(10, 3, 9, 90), quad(10, 0, 0, 5), quad(192, 168, 1, 20), quad(100, 64, 2, 3)
+        for line in ('nvidia-curand-cu12==' + curand, 'Pkg[extra] == ' + curand, 'nvidia-curand-cu12==' + home,
+                     'nvidia_curand_cu12-%s-py3-none-manylinux_2_27_x86_64.whl' % curand,
+                     '# url x https://pypi.org/p/nvidia_curand_cu12-%s-py3-none-manylinux_2_27_x86_64.whl#sha256=%s' % (curand, '0' * 64),
+                     'torch-%s%%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl' % quad(10, 1, 2, 3)):
+            self.assertEqual(self.kinds(line), [], line)
+        for line in ('--index-url http://%s/simple' % ten, '# a mirror at ' + home, '[[ "$host" == %s ]]' % ten,
+                     'pkg @ http://%s/pkg-1.0-py3-none-any.whl' % home, 'nvidia-curand-cu12==%s  # from %s' % (curand, ten),
+                     'see %s-py3 here' % curand, 'http://%s-py3-none-any.whl.example/x' % curand, 'peer ' + cgnat):
+            self.assertIn('private address', self.kinds(line), line)
+        lock = (HERE.parent / 'den-detect' / 'requirements-cuda.lock').read_text(encoding='utf-8')
+        self.assertIn('nvidia-curand-cu12==' + curand, lock, 'the line that tripped the scan')
+        self.assertEqual(release.scan_text(lock), [], "the CUDA lock as it is passes, with no known-lines allowance")
+        planted = (lock + '--extra-index-url http://%s/simple\n' % quad(10, 20, 30, 40)).encode()
+        with self.assertRaises(sc.Stop) as stop:
+            release.scan({'tools/den-detect/requirements-cuda.lock': (planted, None, None)}, [])
+        self.assertIn('tools/den-detect/requirements-cuda.lock, line %d' % (lock.count('\n') + 1), str(stop.exception))
+        self.assertIn('private address', str(stop.exception))
+        self.assertNotIn(quad(10, 20, 30, 40), str(stop.exception), 'the refusal never names the string')
+
     def test_known_pinned_lines_pass_only_for_their_own_blob(self):
         data, key, inner = release.tree_files()['trees/observe-%s/tools/den-take/take.py' % sc.refs()['rung-2-observe']]
         site = rl.den_site()

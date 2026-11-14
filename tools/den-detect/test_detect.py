@@ -145,8 +145,14 @@ class Lock(unittest.TestCase):
                 name, _, version = line.split(" ")[0].partition("==")
                 trial[name] = version
         self.assertEqual({k: cuda["versions"][k] for k in added}, {k: trial[k] for k in added})
-        self.assertIn("torch-2.10.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl",
-                      (ROOT / "tools/la-detector-trial/requirements.lock").read_text(encoding="utf-8"), "the trial ran cu128 torch")
+        trial_text = (ROOT / "tools/la-detector-trial/requirements.lock").read_text(encoding="utf-8")
+        urls = {line.split()[2]: line.split()[3] for line in detect.LOCK_CUDA.read_text(encoding="utf-8").splitlines()
+                if line.startswith("# url ")}
+        self.assertEqual(set(urls), {"torch", "torchvision"})
+        for name, url in urls.items():
+            self.assertIn("%s @ %s" % (name, url), trial_text, "the very wheel and sha256 the LA trial installed")
+            self.assertIn("/%s-%s-" % (name, cuda["versions"][name].replace("+", "%2B")), url, "the lock's own version")
+            self.assertRegex(url, r"#sha256=[0-9a-f]{64}$")
 
     def test_a_venv_is_held_to_the_lock_of_its_torch(self):
         self.assertEqual(detect.lock_for({"torch": "2.10.0+cu128"}), detect.lock(detect.LOCK_CUDA))

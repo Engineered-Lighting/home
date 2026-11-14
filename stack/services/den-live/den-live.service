@@ -42,8 +42,9 @@ RestartPreventExitStatus=3
 
 # Resource limits: the detector is YOLO26s and RTMPose-m, on the GPU when CUDA can (about 1 GB of it: torch's
 # allocator is capped at 2 GB, and the detector needs 3 GB of the GPU free to use it at all, because the GPU is vLLM's
-# first), else on the CPU, about one core while the den is occupied. CUDA's libraries add about 2 GB of memory here.
-MemoryMax=6G
+# first), else on the CPU, about one core while the den is occupied. On the GPU the detector's process held about 1.7 GB
+# on the workstation, against about 0.5 GB for the whole service on the CPU (the person-models audit, 2026-11-14).
+MemoryMax=4G
 MemorySwapMax=0
 CPUQuota=150%
 TasksMax=256

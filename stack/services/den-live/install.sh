@@ -11,7 +11,7 @@
 #     and copies the models to /opt/den-live/models/.
 #  4. Builds the detector's venv in /opt/den-live/venvs/<first 12 of its lock's sha256>/ with exactly the lock's
 #     versions, wheels only, each with --no-deps. On a host with an NVIDIA GPU (/dev/nvidiactl), the lock is
-#     requirements-cuda.lock: CUDA 12.8 torch from PyTorch's cu128 index and onnxruntime-gpu, about 4.6 GB, with
+#     requirements-cuda.lock: CUDA 12.8 torch from PyTorch's exact wheels (sha256-held) and onnxruntime-gpu, about 4.6 GB, with
 #     12 GB free under /opt first. Otherwise it's requirements.lock: CPU torch from PyTorch's CPU index, about 400 MB.
 #     rtmlib comes from its wheel in the release, the rest from PyPI. Then it holds the venv to the lock as the detector
 #     does, and loads the models once through the detector's own checks, which say where each model runs: the GPU, or
@@ -184,7 +184,7 @@ say "Models: YOLO26s and RTMPose-m match their pinned sha256 (646f8bc3, 5c0a4bf6
 # ---- 4. the detector's venv ------------------------------------------------------------------------------------
 if [[ -e /dev/nvidiactl ]]; then   # an NVIDIA GPU: the CUDA build (the detector still falls back to the CPU itself)
   lock="${release}/tools/den-detect/requirements-cuda.lock"
-  torch_index=https://download.pytorch.org/whl/cu128
+  torch_index=""   # torch and torchvision come from the lock's url lines
   build_words="about 4.6 GB from PyPI and PyTorch's CUDA 12.8 index, ten minutes or so"
   build_free_kb=$((12 * 1024 * 1024))
 else
@@ -205,7 +205,13 @@ if [[ ! -f "${venv}/.complete" ]]; then
   grep -E '^(torch|torchvision)==' "${work}/all.txt" >"${work}/torch.txt"
   pip_step "pip itself" "$(grep -E '^pip==' "${work}/all.txt")"
   pip_step "the lock's packages from PyPI" --only-binary=:all: --index-url https://pypi.org/simple -r "${work}/pypi.txt"
-  pip_step "torch" --only-binary=:all: --index-url "${torch_index}" -r "${work}/torch.txt"
+  if [[ "${lock##*/}" == requirements-cuda.lock ]]; then   # PyTorch's exact wheels, each held to its sha256 by pip
+    grep -E '^# url (torch|torchvision) https://' "${lock}" | cut -d' ' -f4 >"${work}/torch-urls.txt"
+    [[ "$(wc -l <"${work}/torch-urls.txt")" -eq 2 ]] || refuse "requirements-cuda.lock doesn't name torch's two wheels"
+    pip_step "CUDA torch" --only-binary=:all: -r "${work}/torch-urls.txt"
+  else
+    pip_step "CPU torch" --only-binary=:all: --index-url "${torch_index}" -r "${work}/torch.txt"
+  fi
   pip_step "rtmlib from its wheel" --no-index "${release}/wheels/${wheel}"
 fi
 if ! "${venv}/bin/python" -B -c 'import sys; sys.path.insert(0, sys.argv[1]); import detect

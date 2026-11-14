@@ -705,7 +705,8 @@ inPart(2, 'the real coordinator trace, virtual spot and Stop agree through Full 
   }
 });
 
-test('the pipeline runs through the room: camera to perception to Qwen to the light, and back onto the person', { timeout: 120000, skip: !PIPELINE_SUITE && 'set HOME_DEN_PIPELINE_SUITE=1' }, async () => {
+// Part 1 holds it (the lighter part), so with HOME_DEN_PIPELINE_SUITE=1 it runs once, not once per part.
+inPart(1, 'the pipeline runs through the room: camera to perception to Qwen to the light, and back onto the person', { timeout: 120000, skip: !PIPELINE_SUITE && 'set HOME_DEN_PIPELINE_SUITE=1' }, async () => {
   const initial = { ...fake.control };
   try {
     for (const mobile of [false, true]) {

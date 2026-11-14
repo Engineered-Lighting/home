@@ -795,10 +795,13 @@ test('the coordinator spot eases between level steps, glides on its S-curve, dim
   const row = (id, patch = {}) => ({ fixture_id: id, on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
     target_m: null, reason: 'waiting_for_task', motion_phase: 'settled', ...patch });
   const rows = patch => ids.map(id => row(id, id === spot ? patch : {}));
-  // A rise: the level train's first steps are eased toward, not jumped to.
+  // A rise: the first step from dark shows at once, as the board shows it; the next steps are eased toward.
+  assert.equal(preview.applyCoordinatorSpots(rows({ on: true, level: .2, reason: 'task' }), generation,
+    { ambient: { level: .3, cct_k: 2700 } }), true);
+  assert.equal(state(spot).spotlight.brightness, .2, 'first light is never delayed');
   assert.equal(preview.applyCoordinatorSpots(rows({ on: true, level: .5, reason: 'task' }), generation,
     { ambient: { level: .3, cct_k: 2700 } }), true);
-  assert.ok(state(spot).spotlight.brightness < .5, 'eased toward the step');
+  assert.ok(state(spot).spotlight.brightness < .5, 'a later step is eased toward');
   assert.equal(preview.presentationActive(), true);
   preview.advancePresentation(performance.now() + 1000);
   assert.equal(state(spot).spotlight.brightness, .5);

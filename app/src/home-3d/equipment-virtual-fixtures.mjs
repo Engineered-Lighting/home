@@ -648,7 +648,9 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         } else play.glide = null;
         const elapsed = nowMs - play.at;
         play.at = nowMs;
-        if (snap) play.shown = play.target;
+        // A spot coming on from dark shows its first step at once, as the board does: the ease only smooths between
+        // the steps of a light already on, so it never delays first light (the paint stamp's light-on).
+        if (snap || (play.shown <= 0 && play.target > 0)) play.shown = play.target;
         else if (elapsed > 0) {
             const next = play.shown + (play.target - play.shown) * -Math.expm1(-elapsed / SPOT_EASE_MS);
             play.shown = Math.abs(play.target - next) <= SPOT_SETTLED_LEVEL ? play.target : next;
@@ -673,10 +675,12 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             houseRoom = null;
             return;
         }
-        houseRoom ??= new Map([...states].map(([id, state]) => [id, { radials: state.radials.map(({ azimuth_deg, ...zone }) => zone),
+        // Only fixtures with a glow of their own: a spot-only fixture has no glow zones or downlight to dim.
+        const glowing = [...states].filter(([id]) => !fixtures.find(item => item.id === id)?.spotOnly);
+        houseRoom ??= new Map(glowing.map(([id, state]) => [id, { radials: state.radials.map(({ azimuth_deg, ...zone }) => zone),
             downward: copy(state.downward) }]));
         const patch = roomPatch(ambient);
-        for (const [id, state] of states) states.set(id, nextState(state, patch));
+        for (const [id, state] of glowing) states.set(id, nextState(state, patch));
     }
     const snapPresentation = nowMs => {
         for (const id of coordinatorPlays.keys()) coordinatorFrame(id, nowMs, true);

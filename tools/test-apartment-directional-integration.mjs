@@ -354,7 +354,7 @@ function fixture({ mode = 'zones' } = {}) {
     get presentationGroup() { return presentationGroup; },
     mountRadial: () => mount('const current = owner =>'), mountTimer: () => mount('virtualFixturePreviewDirtyRef.current &&'),
     mountPresentation: () => { values.directionalViewRef.current?.dispose(); values.directionalView = null; mount('let closed = false, lease = null'); },
-    mountPreview: () => mount('overlay.setVirtualFixtures(document)'),
+    mountPreview: () => mount('overlay.setVirtualFixtures(document, { coordinator })'),
     mountKeyboard: () => mount('const semanticCycleFromCard'), mountSpot: () => mount('overlay.createVirtualFixtureAimGesture'),
     point(relative = [0, 0], projection = values.directionalProjectionRef.current) {
       const point = projection.frame.project(relative), rect = host.getBoundingClientRect();

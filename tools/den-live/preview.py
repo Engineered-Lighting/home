@@ -18,6 +18,14 @@ from preview_trace import PreviewTrace
 POSE_AGE_S = PERCEPTION_S
 FRAME_S = .1
 LEASE_S = 1.0
+# The entry rule (spine decision 4, the owner's ruling): one confident yes lights. A later answer confirms it, starts
+# the patience that ends it (phone, screen, closed book), or ends it at once (none or several people in the stills).
+ENTRY_ANSWERS = 1
+# The keep rule's time hysteresis (contract 10, "For 04"): both sofa sockets sit within 3 degrees of side-on, so a
+# fixture lit for someone stays theirs through a facing refusal that hasn't lasted this long.
+KEEP_HOLD_S = 1.0
+FACING_REFUSALS = ("in_front_of_reader", "no_facing")
+CONTROL_KEYS = ("on", "stopped", "stop_counter")
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
 
 
@@ -39,6 +47,8 @@ class Preview:
         self.stop_counter = controls.get("stop_counter", 0)
         if type(self.stop_counter) is not int or self.stop_counter < 0:
             raise ValueError("invalid persisted Stop counter")
+        revision = controls.get("control_revision", 0)
+        self.control_revision = revision if type(revision) is int and revision >= 0 else 0
         self.control_lock, self.settings_lock, self.lock = threading.Lock(), threading.Lock(), threading.RLock()
         self.epoch = uuid.uuid4().hex
         self.seq = self.decision_seq = 0
@@ -63,7 +73,8 @@ class Preview:
                 raise ValueError("invalid initial fixture aim")
             self.rows[name] = dict(row, profile=profile, ranges=ranges, current=current, level=0.0,
                                    pending=None, motion=None, move=None, token=None, keep_at=0.0,
-                                   target=None, basis=None, job=None, reason="waiting_for_tracking", pre_at=None)
+                                   target=None, basis=None, job=None, reason="waiting_for_tracking", pre_at=None,
+                                   eye_hold=None)
         self.trace = PreviewTrace(self.epoch, append or self._append, binding=self.binding,
                                   profiles={name: row["profile"] for name, row in self.rows.items()})
         self.scope = None
@@ -76,7 +87,6 @@ class Preview:
         self.shift = None
         self.target_basis = None
         self.latest_decision = self.latest = self.problem = None
-        self.control_revision = 0
         self.context_signature, self.context_since = None, self.clock()
         self.counts = {"snapshots": 0, "refused": 0, "trace_errors": 0}
         self.trace_committed = 0
@@ -142,10 +152,17 @@ class Preview:
             self._evaluate(self.clock())
 
     def _drop_track(self):
+        """The person binding changed (any of its four keys), or a control reset it: the episode, its onset, the need
+        state and its requests all go."""
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
         self.eligible_track = None
         self.captured = self.since = None
         self.shift = self.target_basis = None
+
+    def _darken(self):
+        """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens. No light until a current, posed,
+        seated frame of the same person; the episode, its onset, the need state and the requests stay."""
+        self.track = self.track_until = None
 
     def tracking(self, snapshot):
         with self.lock:
@@ -174,7 +191,7 @@ class Preview:
             if (field(snapshot, "status") != "fresh" or field(snapshot, "presence") != "present"
                     or not finite(captured) or not captured <= now < deadline or len(tracks) != 1
                     or any(field(frame, k) != self.binding[k] for k in ("transform_id", "scan_revision"))):
-                self._drop_track()
+                self._darken()
             else:
                 eligibility = field(snapshot, "eligibility_revision")
                 if self.eligibility is not None and eligibility != self.eligibility:
@@ -188,14 +205,17 @@ class Preview:
 
     def _track(self, track, captured, deadline, now):
         key = (*self.scope, field(track, "track_id"), field(track, "association_revision"))
-        joints = pose(track)
-        if (None in key or field(track, "state") != "confirmed" or field(track, "association_status") != "confident"
-                or field(track, "position_basis") != "stereo" or not field(track, "current_obs_ids") or not joints):
-            self._drop_track()
+        if None in key:
+            self._darken()
             return
         if key != self.track_binding:
             self._drop_track()
             self.track_binding = key
+        joints = pose(track)
+        if (field(track, "state") != "confirmed" or field(track, "association_status") != "confident"
+                or field(track, "position_basis") != "stereo" or not field(track, "current_obs_ids") or not joints):
+            self._darken()
+            return
         if self.captured is not None and captured <= self.captured:
             return
         body = self.core.body
@@ -209,7 +229,8 @@ class Preview:
         # a none or multiple reply moves started on to the negative, and the episode must keep that.
         seated, since = published_seated(track, captured)
         if seated and (self.episode is None or since != self.since):
-            policy = self.core.need_v1.make_policy({"phone_patience_s": self.settings["phone_patience_s"]})
+            policy = self.core.need_v1.make_policy({"phone_patience_s": self.settings["phone_patience_s"],
+                                                    "dwell": {"entry_samples": ENTRY_ANSWERS}})
             self.episode = Episode(policy, key, since, (self.binding["transform_id"], self.binding["scan_revision"]))
             self.since = since
             self.shift = body.ShiftFilter(self.settings["shift_m"], self.settings["shift_hold_s"])
@@ -225,7 +246,7 @@ class Preview:
                     self.target_basis = basis
                 target, basis = self.shift.aim, self.target_basis
         self.track = {"track_id": key[2], "head": head, "shoulder_mid": shoulders, "facing": facing,
-                      "target": target, "basis": basis}
+                      "target": target, "basis": basis, "seated": seated}
 
     def inference(self, reply):
         with self.lock:
@@ -242,7 +263,7 @@ class Preview:
 
     def _expire(self, now):
         if self.track_until is not None and now >= self.track_until:
-            self._drop_track()
+            self._darken()
         if self.episode is not None:
             self.episode.expire(now, self.settings["phone_patience_s"])
 
@@ -251,13 +272,23 @@ class Preview:
             return None
         return self.episode.deadline(self.settings["phone_patience_s"])
 
-    def _candidate(self, person):
+    def _candidate(self, person, now=None):
         core = self.core
+        now = self.clock() if now is None else now
         candidates, reasons, joints = {}, {}, {}
         incumbent = None
         for name, row in self.rows.items():
             kept = row["token"] is not None and row["job"] == person["track_id"]
             result = core.eye.evaluate(name, row, person, person["target"], kept)
+            if not kept:
+                row["eye_hold"] = None
+            elif result.ok:
+                row["eye_hold"] = (now, person["facing"])
+            elif result.reason in FACING_REFUSALS and row["eye_hold"] and now - row["eye_hold"][0] < KEEP_HOLD_S:
+                # Facing jitter: judge the lit fixture by the last facing that kept it, until the refusal has lasted
+                # KEEP_HOLD_S.
+                held = core.eye.evaluate(name, row, dict(person, facing=row["eye_hold"][1]), person["target"], kept)
+                result = held if held.ok else result
             if not result.ok:
                 reasons[name] = result.reason
                 continue
@@ -282,18 +313,23 @@ class Preview:
     def _evaluate(self, now):
         self._expire(now)
         self._context(now)
-        person, task = self.track, self.task_until() is not None
+        person = self.track
+        # A light needs a current, posed, seated frame: a reply that lands while the frames are stale, poseless or
+        # unsafe (say, an ask sent as the person stood up) is taken into the episode but lights nothing.
+        task = self.task_until() is not None and bool(person and person["seated"])
         for row in self.rows.values():
             self._advance(row, now, task and self.on and not self.stopped)
         chosen, target, reasons = None, None, {}
         if person and person["target"] is not None and (task or self.settings["pre_aim"]):
-            chosen, target, reasons = self._candidate(person)
+            chosen, target, reasons = self._candidate(person, now)
         diagnostic = {"kind": "task" if task else "pre_aim", "fixture": chosen, "refused": reasons,
                       "target_basis": person and person["basis"], "joints_cdeg": list(target) if target else None}
-        if diagnostic != (self.latest_decision or {}).get("proposal"):
+        subject = self._subject()
+        previous = self.latest_decision or {}
+        if diagnostic != previous.get("proposal") or subject != previous.get("subject"):
             self.decision_seq += 1
             self.latest_decision = {"version": "decision/v3", "decision_id": f"{self.epoch}-{self.decision_seq}",
-                                    "actuation": "shadow", "proposal": diagnostic}
+                                    "actuation": "shadow", "subject": subject, "proposal": diagnostic}
         for name, row in self.rows.items():
             if self.stopped or not self.on:
                 continue
@@ -375,7 +411,7 @@ class Preview:
         if travel == "dim":
             details["dim_level"] = self.settings["move_dim_level"]
         ticket = {"level": level, "deadline": end, "episode": self.episode, "person": person, "reason": reason,
-                  "details": details}
+                  "details": details, "subject": self.latest_decision["subject"]}
         row["pending"] = ticket
         self._submit(name, "aim_move", self.latest_decision["decision_id"], ticket=ticket)
 
@@ -495,10 +531,20 @@ class Preview:
         else:
             until = now + POSE_AGE_S
         self.latest = {"schema": "den-virtual-spots-1", "home": "den", "site": self.site, "epoch": self.epoch, "seq": self.seq,
-                       "binding": self.binding, "sampled_mono": now, "valid_until_mono": until,
+                       "binding": self.binding, "subject": self._subject(), "sampled_mono": now, "valid_until_mono": until,
                        "on": self.on, "stopped": self.stopped, "stop_counter": self.stop_counter, "fixtures": fixtures}
         self.counts["snapshots"] += 1
         self.publish(self.latest)
+
+    def _subject(self):
+        """Contract 4's subject: who the light decision is for. The person binding's track, camera epoch and
+        association revision, and the newest reply the episode took while it supports a task (else None)."""
+        if self.track_binding is None:
+            return None
+        support = self.episode.need.support if self.episode is not None else None
+        request = support.get("request_id") if isinstance(support, dict) and self.task_until() is not None else None
+        _run, epoch, track_id, revision = self.track_binding
+        return {"track_id": track_id, "camera_epoch": epoch, "association_revision": revision, "request_id": request}
 
     def lighting_context(self):
         with self.lock:
@@ -518,6 +564,9 @@ class Preview:
 
     def _controls(self):
         return {"on": self.on, "stopped": self.stopped, "stop_counter": self.stop_counter}
+
+    def _persisted(self):
+        return {**self._controls(), "control_revision": self.control_revision}
 
     def routes(self):
         routes = {("GET", "/coordinator"): self.state, ("POST", "/coordinator/switch"): self.switch,
@@ -575,29 +624,29 @@ class Preview:
                     if not self._submit(name, "resume", None, receipt=receipt):
                         receipt["event"].set()
                     receipts.append(receipt)
-            state = {**self._controls(), **({"stopped": False} if action == "resume" else {})}
             self._publish(now)
         deadline = time.monotonic() + 2.0
         if any(not (receipt["event"].wait(max(0, deadline - time.monotonic())) and receipt["ok"]) for receipt in receipts):
             return 503, {"ok": False, "error": "Resume trace did not commit"}
-        with self.control_lock:
-            with self.lock:
-                if revision != self.control_revision:
-                    return 409, {"ok": False, **self._controls()}
+        # Every control writes the controls as they are at the write, under both locks, so the file never trails
+        # memory once a control has answered. On, Off and Stop always apply: a newer control isn't a conflict for
+        # them (no spurious 409). Resume alone must still be the newest control: its check, the write of
+        # stopped: false and the un-stop are one step, so no Stop can fall between them, and a failed write leaves
+        # it stopped.
+        with self.control_lock, self.lock:
+            if action == "resume" and revision != self.control_revision:
+                return 409, {"ok": False, **self._controls()}
+            state = {**self._persisted(), **({"stopped": False} if action == "resume" else {})}
             try:
                 self._save("preview-control.json", state)
             except OSError:
-                with self.lock:
-                    self.problem = "control state write failed"
+                self.problem = "control state write failed"
                 return 503, {"ok": False, "error": self.problem}
             if action == "resume":
-                with self.lock:
-                    if revision != self.control_revision:
-                        return 409, {"ok": False, **self._controls()}
-                    self.stopped = False
-                    self._drop_track()
-                    self._publish(self.clock())
-            return 200, {"ok": True, **state}
+                self.stopped = False
+                self._drop_track()
+                self._publish(self.clock())
+            return 200, {"ok": True, **{key: state[key] for key in CONTROL_KEYS}}
 
     def configure(self, data):
         if not isinstance(data, dict):

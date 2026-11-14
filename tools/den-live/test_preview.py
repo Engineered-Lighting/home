@@ -28,10 +28,10 @@ BINDING = GOLDEN["snapshot"]["binding"]
 FIXTURES = {"F3": {"aim_origin_m": [1.8, .2, 2.5], "horizontal_world_reference": [0, 1, 0]}}
 
 
-def joints(seated):
+def joints(seated, turned=False):
     height = 0 if seated else .5
     xyz = {"left_shoulder": [1, 1, .95], "right_shoulder": [1.4, 1, .95], "left_hip": [1, 1, .45],
-           "right_hip": [1.4, 1, .45], "nose": [1.2, 1.1, 1.18], "left_wrist": [1.1, 1.3, .65],
+           "right_hip": [1.4, 1, .45], "nose": [1.2, .9 if turned else 1.1, 1.18], "left_wrist": [1.1, 1.3, .65],
            "right_wrist": [1.3, 1.3, .65]}
     return {key: [(x, y, z + height), "supported"] for key, (x, y, z) in xyz.items()}
 
@@ -58,15 +58,16 @@ class PreviewTest(unittest.TestCase):
         return preview.Preview(self.core, binding=BINDING, fixtures=FIXTURES, state=self.path,
                                clock=lambda: self.now, **{"threaded": False, "append": self.encoded.append, **overrides})
 
-    def track(self, *, seated=True, epoch=1, more=False):
+    def track(self, *, seated=True, epoch=1, more=False, turned=False, posed=True, association="confident", revision=2,
+              age=0.0):
         self.seq += 1
         if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
             self.rule, self.rule_epoch = seated_rule.Published(), epoch
-        pose = joints(seated)
-        track = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": "confident",
-                 "association_revision": 2, "current_obs_ids": ("pose",), "supported_pose": pose,
-                 "seated": self.rule.update("t1", 2, self.now, pose)}   # perception's one answer
-        frame = {**BINDING, "capture_mono": self.now}
+        pose = joints(seated, turned) if posed else {}
+        track = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": association,
+                 "association_revision": revision, "current_obs_ids": ("pose",), "supported_pose": pose,
+                 "seated": self.rule.update("t1", revision, self.now, pose)}   # perception's one answer
+        frame = {**BINDING, "capture_mono": self.now - age}
         self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": epoch, "seq": self.seq, "frame": frame,
                                      "status": "fresh", "presence": "present", "eligibility_revision": 1,
                                      "eligible_track_id": "t1" if seated and not more else None,
@@ -127,15 +128,11 @@ class PreviewTest(unittest.TestCase):
         self.assertFalse(self.row()["on"])
         self.seat()
         self.read(start=old)
-        self.assertFalse(self.preview.episode.need.engaged)
+        self.assertFalse(self.preview.episode.need.engaged, "stills from before this seated episode are refused")
         self.now += .5
         self.track()
         self.read()
-        self.assertFalse(self.preview.episode.need.engaged)
-        self.now += .5
-        self.track()
-        self.read()
-        self.assertTrue(self.preview.episode.need.engaged)
+        self.assertTrue(self.preview.episode.need.engaged, "one confident yes inside the episode")
 
     def test_second_person_and_new_epoch_clear(self):
         self.light()
@@ -161,13 +158,30 @@ class PreviewTest(unittest.TestCase):
         self.assertEqual(chosen, "F4")
         self.assertEqual(reasons["F3"], "route_over_180")
 
-    def test_conflicting_and_unclear_do_not_qualify(self):
+    def test_one_confident_yes_lights(self):
+        """Spine decision 4: a single valid, bound yes lights, with no second answer. With pre-aim on (its default), the
+        fixture is already on the task point, so the reply itself lights it."""
+        self.preview.configure({"pre_aim": True})
         self.seat()
-        for i, kind in enumerate(("reading", "unclear", "reading", "reading")):
-            self.now += .5
+        for _ in range(30):   # the dark pre-aim move settles
+            self.now += .25
             self.track()
-            self.read(kind=kind, **({"book_state": "closed"} if i == 3 else {}))
-        self.assertFalse(self.preview.episode.need.engaged)
+        self.assertFalse(self.row()["on"])
+        self.read()
+        self.assertTrue(self.preview.episode.need.engaged)
+        self.assertTrue(self.row()["on"], "lit by the reply itself")
+        self.assertEqual(len(self.preview.episode.requests), 1)
+
+    def test_unclear_and_contradictions_alone_never_light(self):
+        self.seat()
+        for answer in ({"kind": "unclear"}, {"book_state": "closed"}, {"visible_basis": ["phone_screen_toward_face"]},
+                       {"visible_basis": ["hands_on_keyboard"]}, {"people_visible": "multiple"}):
+            with self.subTest(answer=answer):
+                self.now += .5
+                self.track()
+                self.read(**answer)
+                self.assertFalse(self.preview.episode.need.engaged)
+                self.assertFalse(self.row()["on"])
 
     def test_reply_checks_its_attached_stills_and_association(self):
         self.seat()
@@ -219,16 +233,28 @@ class PreviewTest(unittest.TestCase):
         said_seated = captures[next(i for i, state in enumerate(published) if state.state)]
         self.assertLess(replies[0].frames[0].capture_mono, said_seated, "the first stills include the hold")
 
-    def test_visible_contradictions_break_the_reading_streak(self):
-        self.seat()
+    def test_a_second_answer_confirms_it_or_ends_it(self):
+        """After the one yes that lit it, a yes confirms it; a contradiction starts the patience and ends it there."""
+        self.preview.configure({"phone_patience_s": 2})
         for cue in ("book_closed", "phone_screen_toward_face", "hands_on_keyboard"):
-            self.now += .5
-            self.track()
-            self.read()
-            self.now += .5
-            self.track()
-            self.read(visible_basis=[cue])
-            self.assertFalse(self.preview.episode.need.engaged)
+            with self.subTest(cue=cue):
+                self.light()
+                self.read()
+                self.assertTrue(self.row()["on"], "confirmed")
+                self.assertIsNone(self.preview.episode.need.idle_since)
+                self.now += .5
+                self.track()
+                self.read(visible_basis=[cue])
+                self.assertIsNotNone(self.preview.episode.need.idle_since, "the patience starts")
+                for _ in range(3):
+                    self.now += .5
+                    self.track()
+                self.assertTrue(self.row()["on"], "still inside the patience")
+                self.now += .75
+                self.track()
+                self.assertFalse(self.row()["on"], "ended once the patience ran out")
+                self.now += .25
+                self.track(seated=False)   # stand up, so the next cue starts a new episode
 
     def test_multiple_people_in_the_stills_revokes_current_support(self):
         self.light()
@@ -257,6 +283,144 @@ class PreviewTest(unittest.TestCase):
         self.track()
         self.read(start=negative + .25)
         self.assertEqual(episode.last_observed, self.now, "the control: stills after the negative are taken")
+
+    def test_one_bad_snapshot_darkens_but_keeps_the_episode(self):
+        """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens, and the episode, its onset, the need
+        state and its requests survive it; the next good frame lights again with no new answer."""
+        for bad in ({"age": preview.POSE_AGE_S + .5}, {"association": "ambiguous"}, {"posed": False}, {"more": True}):
+            with self.subTest(bad=bad):
+                self.light()
+                episode, requests = self.preview.episode, list(self.preview.episode.requests)
+                onset = episode.need.onset_ts
+                self.now += .25
+                self.track(**bad)
+                self.assertFalse(self.row()["on"], "a bad frame darkens")
+                self.assertIs(self.preview.episode, episode)
+                self.assertEqual((list(episode.requests), episode.need.onset_ts), (requests, onset))
+                self.assertTrue(episode.need.engaged)
+                self.now += .25
+                self.track()
+                self.assertTrue(self.row()["on"], "the next good frame lights again, with no new answer")
+                self.now += .25
+                self.track(seated=False)
+
+    def test_a_stale_tick_darkens_but_keeps_the_episode(self):
+        self.light()
+        episode = self.preview.episode
+        self.now += preview.POSE_AGE_S + .1
+        self.preview.tick()
+        self.assertFalse(self.row()["on"])
+        self.assertIs(self.preview.episode, episode)
+        self.now += .1
+        self.track()
+        self.assertTrue(self.row()["on"])
+
+    def test_a_new_association_revision_drops_the_episode(self):
+        self.light()
+        episode = self.preview.episode
+        self.now += .25
+        self.track(revision=3)
+        self.assertFalse(self.row()["on"])
+        self.assertIsNot(self.preview.episode, episode, "a new person binding starts over")
+        self.read()   # bound to the old revision
+        self.assertFalse(self.row()["on"])
+
+    def test_an_answer_after_standing_never_lights(self):
+        """The published seated holds through poseless frames, so an ask can go out as the person stands. Its yes is
+        taken into the episode but lights nothing without a current, posed, seated frame."""
+        self.seat()
+        asked = self.now   # the ask's stills end on the last posed frame
+        self.now += .25
+        self.track(posed=False)
+        self.read(at=asked)
+        self.assertTrue(self.preview.episode.need.engaged, "the reply was taken")
+        self.assertFalse(self.row()["on"], "but no posed frame: no light")
+        self.now += .25
+        self.track(seated=False)
+        self.assertIsNone(self.preview.episode, "the posed frame shows standing: the episode ends")
+        self.assertFalse(self.row()["on"])
+
+    def test_facing_jitter_under_a_second_keeps_the_lit_fixture(self):
+        """Contract 10, for 04: a facing refusal of the lit fixture holds it for KEEP_HOLD_S before releasing it."""
+        self.light()
+        for _ in range(3):   # 0.75 s turned the other way
+            self.now += .25
+            self.track(turned=True)
+            self.assertTrue(self.row()["on"], "jitter under a second doesn't flicker it")
+        self.now += .25
+        self.track()
+        self.assertTrue(self.row()["on"])
+        for _ in range(5):   # 1.25 s turned
+            self.now += .25
+            self.track(turned=True)
+        self.assertFalse(self.row()["on"], "a refusal that lasts past the hold releases it")
+        self.assertEqual(self.row()["reason"], "in_front_of_reader")
+
+    def test_the_subject_names_the_person_and_the_reply(self):
+        self.seat()
+        subject = {"track_id": "t1", "camera_epoch": 1, "association_revision": 2, "request_id": None}
+        self.assertEqual(self.preview.latest["subject"], subject)
+        self.read()
+        lit = {**subject, "request_id": str(self.now)}
+        self.assertEqual(self.preview.latest["subject"], lit)
+        self.assertEqual(self.preview.latest_decision["subject"], lit, "the Decision carries the same fields")
+        move = next(row for row in reversed(self.encoded) if row["action"] == "aim_move")
+        self.assertEqual(move["decision_id"], self.preview.latest_decision["decision_id"])
+
+    def test_controls_write_what_memory_holds_and_on_off_stop_never_conflict(self):
+        """Contract 6's fixes: the file matches memory after every control, control_revision persists, and a Stop
+        arriving inside an On leaves both answered 200 (the old spurious 409)."""
+        def saved():
+            return json.loads((Path(self.path) / "coordinator" / "preview-control.json").read_text(encoding="utf-8"))
+
+        for action in ("off", "on", "stop"):
+            status, _ = self.preview._control(action)
+            self.assertEqual(status, 200)
+            self.assertEqual(saved(), self.preview._persisted())
+        counter = self.preview.stop_counter
+        self.assertEqual(self.preview.resume({"stop_counter": counter})[0], 200)
+        self.assertEqual(saved(), self.preview._persisted())
+        self.assertFalse(saved()["stopped"])
+        self.preview.switch({"on": False})
+        fired = []
+
+        def publish(snapshot):
+            if snapshot["on"] and not snapshot["stopped"] and not fired:
+                fired.append(True)
+                self.assertEqual(self.preview.stop({})[0], 200)
+        self.preview.connect(publish)
+        self.assertEqual(self.preview.switch({"on": True})[0], 200, "a Stop arriving inside an On is no conflict")
+        self.assertTrue(fired)
+        self.assertEqual(saved(), {**self.preview._persisted(), "on": True, "stopped": True})
+        revision = self.preview.control_revision
+        self.preview = self.make_preview()
+        self.assertEqual(self.preview.control_revision, revision, "control_revision survives a restart")
+
+    def test_a_stop_during_resume_wins(self):
+        self.light()
+        _, stopped = self.preview.stop({})
+        fired = []
+
+        def during(row):
+            self.encoded.append(row)
+            if row["action"] == "resume" and not fired:
+                fired.append(True)
+                self.preview.stop({})   # a Stop while Resume waits for its trace row
+        self.preview = self.make_preview(append=during)
+        self.assertTrue(self.preview.stopped)
+        status, body = self.preview.resume({"stop_counter": stopped["stop_counter"]})
+        self.assertEqual(status, 409)
+        self.assertTrue(self.preview.stopped)
+        saved = json.loads((Path(self.path) / "coordinator" / "preview-control.json").read_text(encoding="utf-8"))
+        self.assertTrue(saved["stopped"])
+        self.assertEqual(saved["stop_counter"], stopped["stop_counter"] + 1)
+
+    def test_a_failed_resume_write_stays_stopped(self):
+        self.light()
+        _, stopped = self.preview.stop({})
+        with patch.object(self.preview, "_save", side_effect=OSError("disk")):
+            self.assertEqual(self.preview.resume({"stop_counter": stopped["stop_counter"]})[0], 503)
+        self.assertTrue(self.preview.stopped, "memory never runs ahead of the file on Resume")
 
     def test_dim_travel_records_the_requested_level_before_dark_fallback(self):
         self.light()

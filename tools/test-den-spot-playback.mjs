@@ -297,6 +297,13 @@ test('a declined change, an older den-live and another run never hand the fixtur
     assert.equal(older.posts.length, 1, 'a 4xx is never retried');
     assert.equal(older.player.handHolds()[0].learning, 'unsupported');
     assert.deepEqual(older.released, []);
+    // den-live 1354fb95 answers the route it lacks with 501 (not_served): also unsupported at once, never retried, so
+    // the chip never says the coordinator will learn.
+    const unserved = handSetup({ answer: () => ({ status: 501, answer: { ok: false, error: 'not_served' } }) });
+    unserved.snap(1, null); unserved.change(); await unserved.flush();
+    assert.equal(unserved.posts.length, 1);
+    assert.equal(unserved.queued.length, 1, 'only the snapshot check is queued: no retry');
+    assert.equal(unserved.player.handHolds()[0].learning, 'unsupported');
     // Another run (den-live restarted) can't end a hold taken in the last one.
     const restarted = handSetup();
     restarted.snap(1, null); restarted.change(); await restarted.flush();

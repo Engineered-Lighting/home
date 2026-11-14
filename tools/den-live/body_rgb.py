@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from body import FAR_MM, MIN_TORSO_SEEDS, NEAR_MM
 from stream import BODY_LEASE_S
 from body_clock import capture_bounds, lease_clock
-from body_head import HeadProfile, head_evidence
+from body_head import HeadProfile, head_evidence, torso_cut
 from body_input import BodyInput
 
 
@@ -91,9 +91,14 @@ class RgbBodyInput:
         if len({j["j"] for j in joints} & TORSO) < MIN_TORSO_SEEDS:
             return BodyInput(*common, "unknown")
         value = BodyInput(*common, "person", {**track, "association": status}, {**pose, "joints_room": joints})
-        head = head_evidence(pose, self.camera, frame_key=frame_key, binding=value.binding(),
-                             profile=profile.head, separation_s=bounds.separation_s)
-        return replace(value, head_evidence=head) if head is not None else BodyInput(*common, "unknown")
+        evidence = dict(frame_key=frame_key, binding=value.binding(), profile=profile.head,
+                        separation_s=bounds.separation_s)
+        head = head_evidence(pose, self.camera, **evidence)
+        cut = torso_cut(pose, self.camera, **evidence)
+        if head is None and cut is None:
+            return BodyInput(*common, "unknown")
+        # The envelope and the cut, whichever this frame supports: the figure loses the union of both.
+        return replace(value, head_evidence={**(cut or {}), **(head or {})})
 
     def _depth_qualified(self, bundle, meta, depth):
         profile = self.profile

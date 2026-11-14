@@ -84,6 +84,57 @@ class ScoringTests(unittest.TestCase):
         self.frames[1] = replace(self.frames[1], pose=None, status="unsupported_pose")
         self.assertEqual(self.score()["counts_by_cue"]["turn-left"]["unobservable_withheld"], 1)
 
+    def cut_session(self, hips):
+        """Frames with depth: an empty room at 4 m, then the same head and neck points the regions were drawn from,
+        nearer than the room, on each pose cue. The face is gone from every pose, so only the cut can cover."""
+        geom, camera = self.heads.geom, self.camera
+        to_depth = geom.inverse(*camera.room_from_left)
+        background = np.full((400, 640), 4000, np.uint16)
+        person = background.copy()
+        centres = [(0.0, 2.0, 1.47), (-0.11, 2.06, 1.24)]
+        for centre, radius in zip(centres, (0.13, 0.07)):
+            for dx in np.linspace(-radius, radius, 15):
+                for dy in np.linspace(-radius, radius, 15):
+                    for dz in np.linspace(-radius, radius, 15):
+                        x, y, z = geom.apply(*to_depth, (centre[0] + dx, centre[1] + dy, centre[2] + dz))
+                        col, row = geom.project((x, y, z), camera.rig.left_k)
+                        if 0 <= row < 400 and 0 <= col < 640:
+                            person[int(row), int(col)] = min(person[int(row), int(col)], round(z * 1000))
+        frames = []
+        for frame in self.frames:
+            pose = self.heads.with_hips(self.heads.pose(), hips)
+            for joint in pose["joints_room"]:
+                if joint["j"] < 5:
+                    joint.update(status="unsupported", lift="none")
+            frames.append(replace(frame, pose=pose, depth_mm=person))
+        frames.append(mask.PreparedFrame(mask.EMPTY_CUE, ("test-session", 99, 99), f"{99:064x}", None, "no_detection",
+                                         background))
+        self.annotations["frames"].append(dict(key=["test-session", 99, 99], sha256=f"{99:064x}", status="empty",
+                                               head_bounds_px=None, neck_bounds_px=None))
+        return frames
+
+    def test_the_shoulder_line_cut_covers_a_faceless_head_and_a_wrong_cut_leaks(self):
+        profile = replace(heads.PROFILE, torso_cut_m=0.08)
+        frames = self.cut_session(((-0.15, 2.1, 0.70), (0.05, 2.1, 0.70)))
+        result = mask.score(frames, self.annotations, self.camera, profile=profile, separations=self.separations)
+        self.assertEqual(result["verdict"], "pass")
+        self.assertTrue(all(tally.get("by_cut") == tally.get("covered") == 1
+                            for cue, tally in result["counts_by_cue"].items() if cue != mask.EMPTY_CUE))
+        self.assertEqual(result["counts_by_cue"][mask.EMPTY_CUE], {"empty_withheld": 1})
+        # Hips placed above the head flip the axis: the head lies "below" the line and every head pixel survives.
+        self.setUp()
+        frames = self.cut_session(((-0.15, 2.1, 1.90), (0.05, 2.1, 1.90)))
+        result = mask.score(frames, self.annotations, self.camera, profile=profile, separations=self.separations)
+        self.assertEqual(result["verdict"], "fail")
+        self.assertTrue(all(tally.get("undercovered") == 1
+                            for cue, tally in result["counts_by_cue"].items() if cue != mask.EMPTY_CUE))
+        # Without an empty room to compare with, the cut is never counted as covering.
+        self.setUp()
+        frames = self.cut_session(((-0.15, 2.1, 0.70), (0.05, 2.1, 0.70)))[:-1]
+        self.annotations["frames"].pop()
+        result = mask.score(frames, self.annotations, self.camera, profile=profile, separations=self.separations)
+        self.assertEqual(result["verdict"], "incomplete")
+
     def test_wrong_bundle_missing_duplicate_and_bad_regions_are_rejected(self):
         original = self.annotations["frames"][0]
         for bad in (dict(original, sha256="other"), dict(original, key=["restarted", 0, 0]),

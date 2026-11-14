@@ -15,8 +15,9 @@ from dataclasses import dataclass
 from itertools import chain
 from pathlib import Path
 
-from body import HEIGHT, WIDTH, MIN_TORSO_SEEDS, head_exclusion
-from body_head import head_evidence
+from body import (FAR_MM, HEIGHT, NEAR_LIMB_MM, NEAR_MM, WIDTH, MIN_TORSO_SEEDS, cut_pixels, cut_side, head_exclusion,
+                  torso_cut as cut_of)
+from body_head import head_evidence, torso_cut
 from body_rgb import RgbBodyInput, TORSO
 from contracts import DEPTH_SCALE_RANGE
 from perceive import DARK_LUMA, FRESH_S, Tools
@@ -94,6 +95,7 @@ class PreparedFrame:
     sha256: str
     pose: dict | None
     status: str
+    depth_mm: object = None   # the scaled depth plane (millimetres, numpy), for scoring the shoulder-line cut
 
 
 def pose_for_mask(bundle, meta, depth, detector, tools, camera, settings, provider):
@@ -210,7 +212,8 @@ def prepare_session(session, rows, *, tools_root, profile, room_model=None, regi
                 pose, status = pose_for_mask(bundle, meta, depth, detector, tools, camera, settings, provider)
             except tools.roommodel.RegistrationRefused as exc:
                 raise ValueError("camera bundle does not match the room registration") from exc
-            frames.append(PreparedFrame(cue, key, digest, pose, status))
+            plane = detector.np.frombuffer(depth.mm, "<u2").reshape(depth.height, depth.width).copy()
+            frames.append(PreparedFrame(cue, key, digest, pose, status, plane))
     except (detect.Refused, tools.takes.BundleError) as exc:
         raise ValueError("detector or saved bundle could not be read") from exc
     finally:
@@ -258,9 +261,46 @@ def contains(outer, inner):
     return (outer[0] <= inner[0] and outer[1] <= inner[1] and outer[2] >= inner[2] and outer[3] >= inner[3])
 
 
+def empty_background(frames):
+    """The empty cue's median depth where at least half its frames measure it, as body.py learns it; else None."""
+    import numpy as np
+
+    planes = [frame.depth_mm for frame in frames if frame.cue == EMPTY_CUE and frame.depth_mm is not None]
+    if not planes:
+        return None
+    stack = np.stack(planes).astype(np.float32)
+    valid = (stack >= NEAR_MM) & (stack <= FAR_MM)
+    seen = valid.sum(axis=0) >= max(1, len(planes) // 2)
+    background = np.zeros(stack.shape[1:], np.float32)
+    background[seen] = np.nanmedian(np.where(valid[:, seen], stack[:, seen], np.nan), axis=0)
+    return background
+
+
+def cut_leaks(frame, region, rect, cut_px, background):
+    """Foreground depth pixels in a marked region that neither the envelope nor the cut removes: the pixels the
+    figure could still draw there (40 mm nearer than the empty room, body.py's least foreground step)."""
+    import numpy as np
+
+    left, top, right, bottom = region
+    depth = frame.depth_mm[top:bottom, left:right].astype(np.float32)
+    bg = background[top:bottom, left:right]
+    rows, cols = np.mgrid[top:bottom, left:right]
+    candidate = (depth >= NEAR_MM) & (depth <= FAR_MM) & (bg > 0) & (bg - depth >= NEAR_LIMB_MM)
+    if rect is not None:
+        l, t, r, b = rect
+        candidate &= ~((cols >= l) & (cols < r) & (rows >= t) & (rows < b))
+    if cut_px is not None:
+        candidate &= ~cut_side(cols, rows, cut_px)
+    return int(candidate.sum())
+
+
 def score(frames, annotations, camera, *, profile, separations=None):
-    """Score the body lane's actual exclusion. Report counts only, by cue."""
+    """Score the body lane's actual exclusion. Report counts only, by cue.
+
+    The envelope covers a frame when its rectangle holds both marked regions. With the shoulder-line cut, a frame is
+    covered when no foreground depth pixel inside either region survives the envelope and the cut together."""
     truth = truth_by_frame(frames, annotations, *camera.rig.depth_size)
+    background = empty_background(frames)
     counts = defaultdict(Counter)
     timing_missing = 0
     binding = {"transform_id": camera.transform_id}
@@ -273,15 +313,26 @@ def score(frames, annotations, camera, *, profile, separations=None):
         key = list(frame.key)
         evidence = head_evidence(frame.pose, camera, frame_key=key, binding=binding,
                                  profile=profile, separation_s=timing) if frame.pose is not None else None
+        plane = torso_cut(frame.pose, camera, frame_key=key, binding=binding,
+                          profile=profile, separation_s=timing) if frame.pose is not None else None
         mask = head_exclusion(evidence, frame_key=key, binding=binding)
+        cut = None
+        if background is not None and frame.depth_mm is not None:   # else nothing to score it against: withheld
+            cut = cut_pixels(cut_of(plane, frame_key=key, binding=binding), frame.depth_mm,
+                             float(camera.rig.left_k[0]))
         status, regions = truth[frame.key]
         if status != "visible":
-            tally["unsafe_mask" if mask else f"{status}_withheld"] += 1
-        elif mask is None:
+            tally["unsafe_mask" if mask or cut else f"{status}_withheld"] += 1
+        elif mask is None and cut is None:
             tally["visible_withheld"] += 1
             tally[frame.status if frame.pose is None else "head_evidence_withheld"] += 1
         else:
-            covers_head, covers_neck = (contains(mask, region) for region in regions)
+            if cut is None:
+                covers_head, covers_neck = (contains(mask, region) for region in regions)
+            else:
+                covers_head, covers_neck = (cut_leaks(frame, region, mask, cut, background) == 0
+                                            for region in regions)
+                tally["by_cut"] += 1
             tally["covered" if covers_head and covers_neck else "undercovered"] += 1
             if not covers_head:
                 tally["head_undercovered"] += 1

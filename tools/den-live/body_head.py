@@ -1,13 +1,17 @@
 """Private RGB head and upper-neck evidence in rectified-left depth pixels."""
 import math
 from dataclasses import dataclass, fields
+from typing import Optional
 from itertools import product
 
 
 # den-observe's COCO-17 order: nose, eyes, ears, then shoulders.
 FACE = (0, 1, 2, 3, 4)
 SHOULDERS = (5, 6)
+HIPS = (11, 12)
 ANCHORS = FACE + SHOULDERS
+# The shortest 2D torso, hips to shoulders in depth pixels, whose direction the shoulder-line cut trusts.
+TORSO_AXIS_PX = 20
 
 
 def _finite(value):
@@ -28,6 +32,8 @@ class HeadProfile:
     mean to the shoulder midpoint. Localization bounds anchor error in metres.
     Alignment bounds remaining projection error directly in depth pixels.
     Motion bounds movement over the qualified exposure separation.
+    torso_cut_m, when set, turns on the shoulder-line cut: the qualified depth below the line through the shoulders,
+    across the hip-to-shoulder axis, within which the head and upper neck can reach (a bowed head's chin).
     """
 
     head_radius_m: float
@@ -37,14 +43,64 @@ class HeadProfile:
     localization_m: float
     max_motion_m_s: float
     max_separation_s: float
+    torso_cut_m: Optional[float] = None
 
     def __post_init__(self):
-        if any(not _finite(getattr(self, item.name)) or getattr(self, item.name) <= 0 for item in fields(self)):
+        if any(not _finite(getattr(self, item.name)) or getattr(self, item.name) <= 0 for item in fields(self)
+               if item.name != "torso_cut_m"):
             raise ValueError("head profile limits must be positive and finite")
+        if self.torso_cut_m is not None and (not _finite(self.torso_cut_m) or not 0 < self.torso_cut_m <= 0.5):
+            raise ValueError("the shoulder-line cut must be positive, finite and at most 0.5 m")
 
 
 def _mean(points):
     return tuple(sum(axis) / len(points) for axis in zip(*points))
+
+
+def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
+    """Private evidence for the shoulder-line cut on the caller's same-frame observation, or None.
+
+    It needs both shoulders and both hips with this frame's lifts. Each is placed in the rectified-left depth image
+    through its lifted point; a lift that slipped onto the surface behind moves it there by only the RGB-to-left
+    parallax, a few pixels, which the margin covers. The line runs through the shoulder midpoint across the 2D torso
+    axis. The margin is the qualified cut plus the localization and motion bounds, as the envelope's. No face landmark
+    is needed, so it holds for a turned-away, bowed or reclined head, and for one the RGB view cuts off."""
+    from camgeom import apply, inverse, project
+
+    if (not isinstance(profile, HeadProfile) or profile.torso_cut_m is None or frame_key is None
+            or not isinstance(binding, dict) or binding.get("transform_id") != camera.transform_id
+            or not isinstance(pose, dict) or pose.get("transform_id") != camera.transform_id
+            or pose.get("kind") != "keypoints" or pose.get("joint_set") != "coco17" or pose.get("validity") != "valid"
+            or pose.get("visibility") not in ("visible", "partial")
+            or not _finite(separation_s) or not 0 <= separation_s <= profile.max_separation_s):
+        return None
+    lifted = {}
+    for joint in pose.get("joints_room") or ():
+        if isinstance(joint, dict) and joint.get("j") in SHOULDERS + HIPS:
+            xyz = joint.get("xyz")
+            if (joint["j"] in lifted or joint.get("status") != "supported"
+                    or not isinstance(xyz, (tuple, list)) or len(xyz) != 3 or not all(map(_finite, xyz))):
+                return None
+            lifted[joint["j"]] = xyz
+    if len(lifted) != 4:
+        return None
+    to_depth = inverse(*camera.room_from_left)
+    pixels = {}
+    for index, xyz in lifted.items():
+        point = apply(*to_depth, xyz)
+        if point[2] <= 0.1:
+            return None
+        pixels[index] = project(point, camera.rig.left_k)
+    shoulder = _mean([pixels[index] for index in SHOULDERS])
+    hips = _mean([pixels[index] for index in HIPS])
+    axis = (shoulder[0] - hips[0], shoulder[1] - hips[1])
+    length = math.hypot(*axis)
+    if not all(map(_finite, shoulder)) or not TORSO_AXIS_PX <= length:
+        return None
+    margin = profile.torso_cut_m + profile.localization_m + profile.max_motion_m_s * separation_s
+    return {"frame_key": frame_key, "binding": binding,
+            "cut": {"shoulder_px": [float(shoulder[0]), float(shoulder[1])],
+                    "axis_px": [axis[0] / length, axis[1] / length], "margin_m": margin}}
 
 
 def _measured_points(pose):

@@ -64,6 +64,26 @@ def subject(fixture, frame_key="fixture-7"):
                               "alignment_px": 2, "localization_px": 2, "motion_px": 1}}
 
 
+def pixel(xyz):
+    camera = (np.asarray(xyz, float) - T) @ np.asarray(R, float)
+    return np.array([FX * camera[0] / camera[2] + CX, FY * camera[1] / camera[2] + CY])
+
+
+def cut_subject(fixture, margin=0.05, frame_key="fixture-7"):
+    """Evidence with the shoulder-line cut only: no depth-pixel envelope."""
+    _, _, _, _, joints = fixture
+    sh = (pixel(joints["left_shoulder"][0]) + pixel(joints["right_shoulder"][0])) / 2
+    hip = (pixel(joints["left_hip"][0]) + pixel(joints["right_hip"][0])) / 2
+    axis = (sh - hip) / np.linalg.norm(sh - hip)
+    return {"track_id": "fixture-track", "joints": joints, "facing_deg": 0,
+            "head_evidence": {"frame_key": frame_key, "binding": BINDING,
+                              "cut": {"shoulder_px": sh.tolist(), "axis_px": axis.tolist(), "margin_m": margin}}}
+
+
+def cut_px(fixture, person, frame_key="fixture-7"):
+    return B.cut_pixels(B.torso_cut(person["head_evidence"], frame_key=frame_key, binding=BINDING), fixture[1], FX)
+
+
 def decode(frame):
     p = frame["points"]
     return {key: np.frombuffer(base64.b64decode(p[key]), dtype).reshape(-1, stride)
@@ -152,6 +172,100 @@ class BodyTest(unittest.TestCase):
         self.assertLessEqual(left, bounds[0] - 5)
         self.assertGreaterEqual(right, bounds[2] + 5)
         self.assertLess(top, bottom)
+
+    def test_the_shoulder_line_cut_alone_removes_everything_above_it(self):
+        for pose in ("standing", "seated", "reclined"):
+            with self.subTest(pose=pose):
+                fixture = scene(pose)
+                maker = self.learned(fixture)
+                person = cut_subject(fixture)
+                frame, why = self.render(maker, fixture, person)
+                self.assertIsNone(why)
+                actual = decode(frame)
+                rows, cols = np.divmod(actual["key"].ravel(), B.WIDTH)
+                self.assertGreater(len(rows), 300)
+                self.assertFalse(fixture[2][rows, cols].any(), "independently labelled head rays are absent")
+                self.assertFalse(B.cut_side(cols, rows, cut_px(fixture, person)).any(),
+                                 "no point on the head's side or within the margin of the line")
+                self.assertTrue(np.all(actual["kind"] == 0))
+
+    def test_shoulders_the_cut_removes_still_give_heading_and_midpoint_never_points(self):
+        fixture = scene()
+        maker = self.learned(fixture)
+        frame, why = self.render(maker, fixture, cut_subject(fixture, margin=0.06))
+        self.assertIsNone(why)
+        self.assertEqual(frame["facing_deg"], 0)
+        joints = fixture[4]
+        expected = (np.asarray(joints["left_shoulder"][0]) + np.asarray(joints["right_shoulder"][0])) / 2
+        np.testing.assert_allclose(frame["shoulder_midpoint_m"], expected, atol=1e-9)
+        self.assertIsNotNone(frame["pelvis_z_m"])
+        person = cut_subject(fixture, margin=0.06)
+        person["joints"]["left_hip"][1] = "uncertain"
+        frame, why = self.render(maker, fixture, person)
+        self.assertIsNone(frame["facing_deg"] if frame else None, why)
+
+    def test_cut_and_envelope_together_remove_the_union(self):
+        fixture = scene("reclined")
+        maker = self.learned(fixture)
+        person = subject(fixture)
+        person["head_evidence"]["cut"] = cut_subject(fixture)["head_evidence"]["cut"]
+        both, why = self.render(maker, fixture, person)
+        self.assertIsNone(why)
+        alone, _ = self.render(maker, fixture, cut_subject(fixture))
+        self.assertLessEqual(both["points"]["count"], alone["points"]["count"])
+        rows, cols = np.divmod(decode(both)["key"].ravel(), B.WIDTH)
+        self.assertFalse(fixture[2][rows, cols].any())
+
+    def test_a_malformed_or_unbound_cut_clears(self):
+        fixture = scene()
+        maker = self.learned(fixture)
+        for label, change in {
+            "axis not unit": lambda cut: cut.update(axis_px=[0, 2]),
+            "no margin": lambda cut: cut.update(margin_m=0),
+            "huge margin": lambda cut: cut.update(margin_m=5),
+            "nan shoulder": lambda cut: cut.update(shoulder_px=[float("nan"), 100]),
+            "far shoulder": lambda cut: cut.update(shoulder_px=[5000, 100]),
+            "short shoulder": lambda cut: cut.update(shoulder_px=[100]),
+        }.items():
+            with self.subTest(label=label):
+                person = cut_subject(fixture)
+                change(person["head_evidence"]["cut"])
+                self.assertEqual(self.render(maker, fixture, person), (None, "head_mask_unavailable"))
+        person = cut_subject(fixture)
+        person["head_evidence"]["binding"] = "wrong"
+        self.assertEqual(self.render(maker, fixture, person), (None, "head_mask_unavailable"))
+        self.assertTrue(B.head_mask_available(cut_subject(fixture)["head_evidence"], frame_key="fixture-7", binding=BINDING))
+        self.assertFalse(B.head_mask_available({"frame_key": "fixture-7", "binding": BINDING},
+                                               frame_key="fixture-7", binding=BINDING))
+
+    def test_a_cut_without_measured_depth_at_the_shoulders_clears(self):
+        fixture = scene()
+        maker = self.learned(fixture)
+        person = cut_subject(fixture)
+        person["head_evidence"]["cut"]["shoulder_px"] = [5, 5]   # a corner with nothing measured nearer than the room
+        hole = fixture[1].copy()
+        hole[:20, :20] = 0
+        self.assertEqual(maker.step(hole, observation="person", person=person, now=20, frame_key="fixture-7",
+                                    binding=BINDING), (None, "head_mask_unavailable"))
+
+    def test_with_the_shoulders_cut_the_figure_may_anchor_on_other_measured_joints(self):
+        fixture = scene("seated")
+        maker = self.learned(fixture)
+        person = cut_subject(fixture, margin=0.06)
+        joints = person["joints"]
+        _, depth, *_ = fixture
+        # A seated reader: the hips sink into the sofa's depth, but an arm and a knee stand out.
+        joints["left_hip"][1] = joints["right_hip"][1] = "uncertain"
+        joints["left_elbow"] = [world(366, 197, 2030).tolist(), "supported"]
+        joints["left_knee"] = [world(345, 255, 1995).tolist(), "supported"]
+        frame, why = self.render(maker, fixture, person)
+        self.assertIsNone(why)
+        rows, cols = np.divmod(decode(frame)["key"].ravel(), B.WIDTH)
+        self.assertFalse(B.cut_side(cols, rows, cut_px(fixture, person)).any())
+        self.assertFalse(fixture[2][rows, cols].any())
+        self.assertIsNone(frame["facing_deg"], "no heading without the hips in the cloud")
+        joints.pop("left_knee")   # one joint can't anchor a part on its own
+        self.assertEqual(self.render(maker, fixture, person)[1], "pose_unavailable")
 
     def test_missing_uncertain_or_unbound_head_evidence_clears(self):
         fixture = scene("reclined")

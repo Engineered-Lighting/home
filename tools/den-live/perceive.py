@@ -70,7 +70,7 @@ from pathlib import Path
 
 import room_labels
 import seated as seated_rule
-from body import head_exclusion
+from body import head_mask_available
 from body_clock import receipt_arrival
 from body_input import bundle_frame_key, qualified as qualified_body_input
 from contracts import (DEPTH_SCALE_RANGE, FIGURE_S, PERCEPTION_S, RGB_PAIR_S, FrameRef, PlaneRef, TrackEvidence,
@@ -590,7 +590,7 @@ class Perceiver:
             if person is None:
                 self.body.clear("pose_unavailable", scope=scope)
                 return None
-            if head_exclusion(value.head_evidence, frame_key=value.frame_key, binding=binding) is None:
+            if not head_mask_available(value.head_evidence, frame_key=value.frame_key, binding=binding):
                 self.body.clear("head_mask_unavailable", scope=scope)
                 return None
             person["head_evidence"] = value.head_evidence

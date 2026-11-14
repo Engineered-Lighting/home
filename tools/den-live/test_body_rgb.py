@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from body import BodyChannel, head_exclusion
+from body import BodyChannel, head_exclusion, torso_cut
 from body_clock import AGE_HEADER, AGE_SCHEMA
 from body_head import HeadProfile
 from body_link import BodyLink
@@ -162,6 +162,28 @@ class RgbBodyTests(unittest.TestCase):
         keys = decode(cloud)["key"].reshape(-1)
         ys, xs = np.divmod(keys, 640)
         self.assertFalse(((left <= xs) & (xs < right) & (top <= ys) & (ys < bottom)).any())
+
+    def test_with_the_shoulder_line_cut_a_hidden_ear_still_gives_a_head_free_figure(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        for n in range(55, 70):
+            f.frame(n, missing_ear=True)
+        self.assertEqual(f.last.observation, "person")
+        self.assertIn("cut", f.last.head_evidence)
+        self.assertNotIn("bounds_px", f.last.head_evidence, "no face envelope without the ear")
+        _, output = next(((scope, fields) for scope, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+        self.assertIsNotNone(output, f.link.why)
+        import numpy as np
+        from body import cut_pixels, cut_side
+        from test_body import decode
+        cut = cut_pixels(torso_cut(f.last.head_evidence, frame_key=f.last.frame_key, binding=f.last.binding()),
+                         np.frombuffer(f.depth, "<u2").reshape(400, 640), f.perceiver.camera.rig.left_k[0])
+        rows, cols = np.divmod(decode(output["frame"])["key"].ravel(), 640)
+        self.assertGreater(len(rows), 0)
+        self.assertFalse(cut_side(cols, rows, cut).any())
 
     def test_stale_unqualified_and_dark_empty_frames_do_not_feed_learning(self):
         f = self.f

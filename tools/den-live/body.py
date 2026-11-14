@@ -74,6 +74,62 @@ def head_exclusion(evidence, *, frame_key, binding):
             min(WIDTH, max(0, math.floor(right) + 1)), min(HEIGHT, max(0, math.floor(bottom) + 1)))
 
 
+def torso_cut(evidence, *, frame_key, binding):
+    """(shoulder_px, axis_px, margin_m) of the private shoulder-line cut, or None.
+
+    In the rectified-left depth image, the line through the shoulder midpoint across the torso's own axis (hips to
+    shoulders) splits the person: the head and upper neck are always on the far side from the hips, upright, bowed,
+    reclined or turned away. Everything on that side, and within margin_m of the line on the hips' side, is cut. It is
+    drawn from 2D keypoints, which stay right where their depth lifts slip onto the sofa or the wall behind."""
+    if (not isinstance(evidence, dict) or frame_key is None or binding is None
+            or evidence.get("frame_key") != frame_key or evidence.get("binding") != binding):
+        return None
+    cut = evidence.get("cut")
+    if not isinstance(cut, dict):
+        return None
+    shoulder, axis, margin = cut.get("shoulder_px"), cut.get("axis_px"), cut.get("margin_m")
+    if (not isinstance(shoulder, (list, tuple)) or len(shoulder) != 2 or not all(_finite(x) for x in shoulder)
+            or not -WIDTH <= shoulder[0] <= 2 * WIDTH or not -HEIGHT <= shoulder[1] <= 2 * HEIGHT
+            or not isinstance(axis, (list, tuple)) or len(axis) != 2 or not all(_finite(x) for x in axis)
+            or not _finite(margin) or not 0 < margin <= 1.0):
+        return None
+    length = math.hypot(*axis)
+    if not 0.999 <= length <= 1.001:
+        return None
+    return (float(shoulder[0]), float(shoulder[1])), (axis[0] / length, axis[1] / length), float(margin)
+
+
+CUT_PATCH_PX, CUT_MIN_DEPTH_PX, CUT_MAX_PX = 6, 8, 200
+
+
+def cut_pixels(cut, depth_mm, fx):
+    """(shoulder_px, axis_px, margin_px) on this frame, or None: the margin in pixels at the nearest tenth of the
+    measured depth around the shoulder midpoint (nearer means more pixels: the conservative side)."""
+    if cut is None:
+        return None
+    (u, v), axis, margin_m = cut
+    row, col = int(round(v)), int(round(u))
+    patch = depth_mm[max(0, row - CUT_PATCH_PX):max(0, row + CUT_PATCH_PX + 1),
+                     max(0, col - CUT_PATCH_PX):max(0, col + CUT_PATCH_PX + 1)]
+    measured = sorted(int(x) for x in patch.ravel() if NEAR_MM <= x <= FAR_MM)
+    if len(measured) < CUT_MIN_DEPTH_PX:
+        return None
+    z = measured[len(measured) // 10] / 1000
+    return (u, v), axis, min(CUT_MAX_PX, margin_m * fx / z)
+
+
+def cut_side(cols, rows, cut_px, extra_px=0.0):
+    """Which pixels the cut removes: on the head's side of the line, or within its margin (plus extra_px) of it."""
+    (u, v), (ax, ay), margin_px = cut_px
+    return (cols - u) * ax + (rows - v) * ay > -(margin_px + extra_px)
+
+
+def head_mask_available(evidence, *, frame_key, binding):
+    """True when this frame's evidence bounds the head: the depth-pixel envelope, the shoulder-line cut, or both."""
+    return (head_exclusion(evidence, frame_key=frame_key, binding=binding) is not None
+            or torso_cut(evidence, frame_key=frame_key, binding=binding) is not None)
+
+
 class BodyMaker:
     """One registered rectified-left depth camera. State lives only in the worker."""
 
@@ -157,13 +213,14 @@ class BodyMaker:
         if not isinstance(track_id, str) or not 0 < len(track_id) <= 64:
             return None, "pose_unavailable"
 
-        exclusion = head_exclusion(person.get("head_evidence"), frame_key=frame_key, binding=binding)
-        if exclusion is None:
+        evidence = person.get("head_evidence")
+        exclusion = head_exclusion(evidence, frame_key=frame_key, binding=binding)
+        cut = cut_pixels(torso_cut(evidence, frame_key=frame_key, binding=binding), raw, self.fx)
+        if exclusion is None and cut is None:
             return None, "head_mask_unavailable"
         if self.background is None:
             return None, "warming_background"
-        joints = {}
-        left, top, right, bottom = exclusion
+        joints, masked = {}, {}
         for name, joint in (person.get("joints") or {}).items():
             if name not in BODY_JOINTS or not isinstance(joint, (tuple, list)) or len(joint) != 2:
                 continue
@@ -173,22 +230,35 @@ class BodyMaker:
                 if not NEAR_MM <= point[2] * 1000 <= FAR_MM:
                     continue
                 u, v = self._project(point[None, :])[0]
-                if left - TORSO_SEED_PX <= u < right + TORSO_SEED_PX and top - TORSO_SEED_PX <= v < bottom + TORSO_SEED_PX:
+                if exclusion is not None:
+                    left, top, right, bottom = exclusion
+                    if left - TORSO_SEED_PX <= u < right + TORSO_SEED_PX and top - TORSO_SEED_PX <= v < bottom + TORSO_SEED_PX:
+                        masked[name] = point
+                        continue
+                # A seed this close to the cut would grow into cut pixels: it counts as masked.
+                if cut is not None and cut_side(u, v, cut, TORSO_SEED_PX):
+                    masked[name] = point
                     continue
                 joints[name] = point
         torso = {name: joints[name] for name in TORSO if name in joints}
-        if len(torso) < MIN_TORSO_SEEDS:
+        if len(torso) < MIN_TORSO_SEEDS and not (masked and len(joints) >= MIN_TORSO_SEEDS):
             return None, "pose_unavailable"
 
-        centre = (np.mean(list(torso.values()), axis=0) @ self.R.T + self.t)[:2]
+        anchors = torso if len(torso) >= MIN_TORSO_SEEDS else joints
+        centre = (np.mean(list(anchors.values()), axis=0) @ self.R.T + self.t)[:2]
         v0, v1, u0, u1 = self._window(centre)
         depth = raw[v0:v1, u0:u1].astype(np.float32)
         bg = self.background[v0:v1, u0:u1]
-        if left < u1 and right > u0 and top < v1 and bottom > v0:
-            depth[max(0, top - v0):bottom - v0, max(0, left - u0):right - u0] = 0
-        return self._person(depth, bg, v0, u0, joints, torso, centre, person)
+        if exclusion is not None:
+            left, top, right, bottom = exclusion
+            if left < u1 and right > u0 and top < v1 and bottom > v0:
+                depth[max(0, top - v0):bottom - v0, max(0, left - u0):right - u0] = 0
+        if cut is not None:
+            rows, cols = np.mgrid[v0:v1, u0:u1]
+            depth[cut_side(cols, rows, cut)] = 0
+        return self._person(depth, bg, v0, u0, joints, torso, centre, person, masked=masked)
 
-    def _person(self, depth, bg, v0, u0, joints, torso, centre, person):
+    def _person(self, depth, bg, v0, u0, joints, torso, centre, person, *, masked=None):
         np, cv2 = self.np, self.cv2
         valid = (depth >= NEAR_MM) & (depth <= FAR_MM) & (bg > 0)
         delta = bg - depth
@@ -209,7 +279,12 @@ class BodyMaker:
         eligible = np.zeros(depth.shape, bool)
         eligible[rows[inside], cols[inside]] = True
 
-        component, seeds = self._torso_component(depth, eligible, torso, v0, u0)
+        component, seeds = (self._torso_component(depth, eligible, torso, v0, u0)
+                             if len(torso) >= MIN_TORSO_SEEDS else (None, {}))
+        if component is None and masked:
+            # The head mask took the shoulders: on a sofa the hips alone sit too close to the cushion to stand out.
+            # Any of this person's measured joints may anchor the figure then, each part held by two of them.
+            component, seeds = self._torso_component(depth, eligible, joints, v0, u0, union=True)
         if component is None or int(component.sum()) < MIN_BODY_PX:
             return None, "insufficient_depth"
         rows, cols = np.nonzero(component)
@@ -238,7 +313,15 @@ class BodyMaker:
         normals = self._normals(depth, component, rows, cols, camera, v0, u0)
         keys = (rows + v0) * WIDTH + cols + u0
         heading = person.get("facing_deg")
-        shoulders = self._midpoint(joints, supported, SHOULDERS)
+        # Shoulders the head mask removed are still this frame's measured joints: with the hips supported in the
+        # cloud they give the heading and the shoulder midpoint, never points.
+        masked = masked or {}
+        if all(name in supported for name in SHOULDERS):
+            shoulders = self._midpoint(joints, supported, SHOULDERS)
+        elif all(name in masked for name in SHOULDERS):
+            shoulders = self._midpoint(masked, dict.fromkeys(SHOULDERS), SHOULDERS)
+        else:
+            shoulders = None
         pelvis = self._midpoint(joints, supported, HIPS)
         self.stats = {"measured": len(keys), "eligible": int(component.sum())}
         return {"track_id": person["track_id"],
@@ -246,7 +329,7 @@ class BodyMaker:
                            "position_mm": _b64(xyz_mm.astype("<i2")),
                            "normal": _b64(np.clip(np.rint(normals * 127), -127, 127).astype("i1")),
                            "kind": _b64(np.zeros(len(keys), np.uint8))},
-                "facing_deg": heading if all(name in supported for name in TORSO)
+                "facing_deg": heading if shoulders is not None and pelvis is not None
                 and _finite(heading) and 0 <= heading < 360 else None,
                 "shoulder_midpoint_m": shoulders.tolist() if shoulders is not None else None,
                 "pelvis_z_m": float(pelvis[2]) if pelvis is not None else None}, None
@@ -256,7 +339,7 @@ class BodyMaker:
             return ((joints[pair[0]] + joints[pair[1]]) / 2) @ self.R.T + self.t
         return None
 
-    def _torso_component(self, depth, eligible, torso, v0, u0):
+    def _torso_component(self, depth, eligible, torso, v0, u0, *, union=False):
         np, cv2 = self.np, self.cv2
         h, w = depth.shape
         seeds = {}
@@ -287,6 +370,9 @@ class BodyMaker:
             groups.setdefault(int(labels[row, col]), {})[name] = (row, col)
         candidates = [(label, points) for label, points in groups.items()
                       if len(set(points.values())) >= MIN_TORSO_SEEDS]
+        if union and candidates:
+            return np.isin(labels, [label for label, _ in candidates]), {
+                name: point for _, points in candidates for name, point in points.items()}
         if len(candidates) != 1:
             return None, {}
         label, points = candidates[0]

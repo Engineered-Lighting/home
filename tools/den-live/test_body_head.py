@@ -5,8 +5,10 @@ import tempfile
 import unittest
 import unittest.mock
 
-from body import head_exclusion
-from body_head import HeadProfile, head_evidence
+import math
+
+from body import head_exclusion, torso_cut as cut_of
+from body_head import HeadProfile, head_evidence, torso_cut
 from perceive import Tools
 from sofa_check import archive
 
@@ -119,6 +121,60 @@ class HeadEvidenceTests(unittest.TestCase):
         self.assertIsNone(self.evidence(separation_s=float("nan")))
         self.assertIsNone(self.evidence(self.pose(centre_x=-1.9)))
         self.assertIsNone(self.evidence(profile=replace(PROFILE, max_motion_m_s=100)))
+
+    def with_hips(self, pose, hips=((-0.15, 2.1, 0.70), (0.05, 2.1, 0.70))):
+        for index, xyz in zip((11, 12), hips):
+            pose["joints_room"].append(dict(j=index, status="supported", lift="stereo", xyz=list(xyz)))
+        return pose
+
+    def cut(self, pose=None, *, profile=replace(PROFILE, torso_cut_m=0.08), separation_s=0.055):
+        return torso_cut(self.with_hips(self.pose()) if pose is None else pose, self.camera, frame_key=FRAME_KEY,
+                         binding=self.binding, profile=profile, separation_s=separation_s)
+
+    def test_the_shoulder_line_cut_takes_every_head_and_neck_point_without_a_face(self):
+        evidence = self.cut()
+        self.assertIsNotNone(evidence)
+        shoulder, axis, margin = cut_of(evidence, frame_key=FRAME_KEY, binding=self.binding)
+        self.assertAlmostEqual(math.hypot(*axis), 1.0)
+        self.assertAlmostEqual(margin, 0.08 + PROFILE.localization_m + PROFILE.max_motion_m_s * 0.055)
+        to_depth = self.geom.inverse(*self.camera.room_from_left)
+        depth_m = self.geom.apply(*to_depth, (-0.13, 2.08, 1.175))[2]   # at the shoulders
+        margin_px = margin * self.camera.rig.left_k[0] / depth_m
+        head_samples = [(0.02, 1.96, 1.58), (-0.13, 1.97, 1.48), (0.13, 2.01, 1.48), (0.01, 2.12, 1.47),
+                        (-0.035, 1.94, 1.35)]
+        neck_samples = [(-0.10, 2.03, 1.22), (-0.19, 2.06, 1.22), (-0.08, 2.14, 1.25)]
+        for sample in head_samples + neck_samples:
+            col, row = self.geom.project(self.geom.apply(*to_depth, sample), self.camera.rig.left_k)
+            along = (col - shoulder[0]) * axis[0] + (row - shoulder[1]) * axis[1]
+            self.assertGreater(along, -margin_px, sample)
+        pose = self.with_hips(self.pose())
+        for joint in pose["joints_room"]:
+            if joint["j"] < 5:
+                joint.update(status="unsupported", lift="none")   # turned away: no face at all
+        self.assertIsNone(self.evidence(pose))
+        self.assertEqual(self.cut(pose)["cut"], evidence["cut"])
+
+    def test_the_cut_needs_a_measured_plausible_torso_and_a_qualified_setting(self):
+        self.assertIsNone(self.cut(profile=PROFILE), "off unless the profile qualifies a cut")
+        mutations = {
+            "missing hip": lambda pose: pose["joints_room"].pop(),
+            "uncertain hip": lambda pose: pose["joints_room"][-1].update(status="uncertain"),
+            "hips on the shoulders": lambda pose: [j.update(xyz=[x, 2.08, 1.17]) for j, x in
+                                                   zip(pose["joints_room"][-2:], (-0.30, 0.04))],
+            "a second hip": lambda pose: pose["joints_room"].append(dict(pose["joints_room"][-1])),
+            "occluded": lambda pose: pose.update(visibility="occluded"),
+            "wrong transform": lambda pose: pose.update(transform_id="other"),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                pose = self.with_hips(self.pose())
+                mutate(pose)
+                self.assertIsNone(self.cut(pose))
+        self.assertIsNone(self.cut(separation_s=PROFILE.max_separation_s + 0.001))
+        with self.assertRaises(ValueError):
+            replace(PROFILE, torso_cut_m=0.0)
+        with self.assertRaises(ValueError):
+            replace(PROFILE, torso_cut_m=float("nan"))
 
     def test_profile_is_explicit_and_finite(self):
         for bad in (0, -1, float("nan"), float("inf"), True):

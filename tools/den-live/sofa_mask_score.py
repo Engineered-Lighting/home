@@ -347,6 +347,31 @@ def union(a, b):
     return a if b is None else [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
 
 
+NEEDED_STEP_M, NEEDED_MAX_M = 0.005, 0.5
+
+
+def needed_torso_cut(frame, regions, camera, profile, background):
+    """The smallest torso_cut_m (to NEEDED_STEP_M) whose cut, with no motion term, leaves no foreground pixel in
+    either region; "clears" when the cut never forms (the frame shows nothing at any setting); None past
+    NEEDED_MAX_M. Counts only: what a held-out frame needs, against what a candidate gives."""
+    from dataclasses import replace
+
+    key, binding = list(frame.key), {"transform_id": camera.transform_id}
+    fx = float(camera.rig.left_k[0])
+    formed = False
+    for step in range(int(round(NEEDED_MAX_M / NEEDED_STEP_M)) + 1):
+        value = step * NEEDED_STEP_M
+        trial = replace(profile, torso_cut_m=max(value, 1e-6), max_motion_m_s=1e-9)
+        evidence = torso_cut(frame.pose, camera, frame_key=key, binding=binding, profile=trial, separation_s=0.0)
+        if evidence is None:
+            continue
+        formed = True
+        cut = cut_pixels(cut_of(evidence, frame_key=key, binding=binding), frame.depth_mm, fx)
+        if cut is None or all(cut_leaks(frame, region, None, cut, background, camera) == 0 for region in regions):
+            return round(value, 3)
+    return None if formed else "clears"
+
+
 def score(frames, annotations, camera, *, profile, separations=None):
     """Score the body lane's actual exclusion. Report counts only, by cue.
 
@@ -358,6 +383,7 @@ def score(frames, annotations, camera, *, profile, separations=None):
     truth = truth_by_frame(frames, annotations, *camera.rig.depth_size)
     background = empty_background(frames)
     counts = defaultdict(Counter)
+    needed = {}
     timing_missing = 0
     binding = {"transform_id": camera.transform_id}
     for frame in frames:
@@ -377,6 +403,10 @@ def score(frames, annotations, camera, *, profile, separations=None):
             cut = cut_pixels(cut_of(plane, frame_key=key, binding=binding), frame.depth_mm,
                              float(camera.rig.left_k[0]))
         status, regions = truth[frame.key]
+        if (status == "visible" and profile.torso_cut_m is not None and frame.pose is not None
+                and background is not None and frame.depth_mm is not None):
+            grown = [union(regions[0], head_keypoint_box(frame.pose, camera)), regions[1]]
+            needed.setdefault(frame.cue, []).append(needed_torso_cut(frame, grown, camera, profile, background))
         if status != "visible":
             tally["unsafe_mask" if mask or cut else f"{status}_withheld"] += 1
         elif mask is None and cut is None:
@@ -398,13 +428,17 @@ def score(frames, annotations, camera, *, profile, separations=None):
             if not covers_neck:
                 tally["upper_neck_undercovered"] += 1
     unsafe = any(tally["unsafe_mask"] or tally["undercovered"] for tally in counts.values())
-    covered = all(counts.get(cue, {}).get("covered", 0) for cue in POSE_CUES)
+    pose_cues = {frame.cue for frame in frames if frame.cue != EMPTY_CUE}   # the session's own cue set
+    covered = bool(pose_cues) and all(counts.get(cue, {}).get("covered", 0) for cue in pose_cues)
     verdict = "pass" if covered else "incomplete"
     if unsafe:
         verdict = "fail"
     return {"verdict": verdict, "basis": "zero_separation" if timing_missing else "measured_separation",
             "timing_unavailable_frames": timing_missing, "sampled_frames": len(frames),
-            "counts_by_cue": {cue: dict(tally) for cue, tally in counts.items()}}
+            "counts_by_cue": {cue: dict(tally) for cue, tally in counts.items()},
+            **({"needed_torso_cut_m": needed,
+                "largest_needed_torso_cut_m": max((v for vs in needed.values() for v in vs if isinstance(v, float)),
+                                                  default=None)} if needed else {})}
 
 
 ANNOTATOR = """<!doctype html>

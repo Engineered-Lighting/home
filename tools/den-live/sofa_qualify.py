@@ -30,6 +30,16 @@ CUES = {
     "walk": "Walk slowly across the room and back, at your normal pace. Repeat until the next cue.",
     "empty": "Please leave the room now, and stay out until you hear that capture is complete.",
 }
+# A held-out session: postures the cut wasn't tuned on. Scored at a fixed candidate, frame by frame.
+HOLDOUT_CUES = {
+    "side-on": "Sit on the sofa sideways to the camera and read. Keep turning pages.",
+    "lie": "Lie down along the sofa with your head on the arm, as if for a nap. Turn your head now and then.",
+    "turned": "Sit with your back to the camera and look down at a book or your phone.",
+    "lean": "Lean toward the camera, as if to look at something on the table in front of you. Repeat slowly.",
+    "close": "Stand up and walk toward the camera, to the nearest place you'd usually be, then back. Repeat once.",
+    "empty": "Please leave the room now, and stay out until you hear that capture is complete.",
+}
+CUE_SETS = {"sofa": CUES, "holdout": HOLDOUT_CUES}
 PER_CUE = 3
 POLL_S = 0.5
 SAMPLE_SPACING_S = 1.5
@@ -90,7 +100,8 @@ def camera_trial_profile(calibration):
 
 
 def capture(session, camera, profile, *, cue, sleep=time.sleep, clock=time.monotonic,
-            now_ns=time.time_ns):
+            now_ns=time.time_ns, cues=None):
+    cues = CUES if cues is None else cues
     status, calibration = camera.get("/calibration", timeout=2.0)
     if status != 200:
         raise sofa_check.Stop("camera calibration returned HTTP %d" % status)
@@ -103,15 +114,16 @@ def capture(session, camera, profile, *, cue, sleep=time.sleep, clock=time.monot
         raise sofa_check.Stop("camera calibration does not match the candidate's registration")
     (session / "camera-calibration.json").write_bytes(calibration)
     rows = []
-    manifest = {"schema": SCHEMA, "scope": scope, "complete": False, "frames": rows,
+    manifest = {"schema": SCHEMA, "scope": scope, "complete": False, "frames": rows, "cues": list(cues),
                 "inputs": {name: hashlib.sha256((session / name).read_bytes()).hexdigest()
                            for name in (CAMERA_INPUTS if scope == CAMERA_SCOPE else SESSION_INPUTS)}}
     write_json(session / "manifest.json", manifest)
     expected_session = camera_calibration["session"]
     prior = None
-    cue("Capture starts in ten seconds. Get on the sofa with your book.")
+    cue("Capture starts in ten seconds. Get on the sofa with your book." if cues is CUES
+        else "Capture starts in ten seconds. Get ready for the first position.")
     sleep(10.0)
-    for label, instruction in CUES.items():
+    for label, instruction in cues.items():
         cue(instruction)
         sleep(SETTLE_EMPTY_S if label == "empty" else SETTLE_S)
         deadline = clock() + WINDOW_S
@@ -161,7 +173,7 @@ def load_session(session):
         if hashlib.sha256((session / name).read_bytes()).hexdigest() != manifest["inputs"][name]:
             raise sofa_check.Stop("a frozen session input changed: %s" % name)
     rows = manifest["frames"]
-    if [row["cue"] for row in rows] != [cue for cue in CUES for _ in range(PER_CUE)]:
+    if [row["cue"] for row in rows] != [cue for cue in manifest.get("cues", list(CUES)) for _ in range(PER_CUE)]:
         raise sofa_check.Stop("the session is missing capture cues")
     samples = []
     for i, row in enumerate(rows, 1):
@@ -282,6 +294,8 @@ def parser():
     mode.add_argument("--camera-relative", action="store_true", help="local mask trial with camera calibration")
     record.add_argument("--camera", help="override the existing den-take camera address")
     record.add_argument("--token-file", type=Path, help="override the existing den-take token file")
+    record.add_argument("--cues", choices=sorted(CUE_SETS), default="sofa",
+                        help="sofa: the qualification's cues; holdout: postures the cut wasn't tuned on")
     prepare = sub.add_parser("prepare", help="write the blind marking page and timing witness template")
     prepare.add_argument("session", type=Path)
     analyse = sub.add_parser("score", help="score the saved session offline using the detector venv")
@@ -331,7 +345,7 @@ def main(argv=None):
             write_json(session / "body-rgb-candidate.json", block)
             write_json(session / "registration.json", registration)
             (session / "room-model.jsonl").write_bytes(room_model)
-        capture(session, camera, profile, cue=take.say)
+        capture(session, camera, profile, cue=take.say, cues=CUE_SETS[args.cues])
         return 0
 
     rows, samples, scope = load_session(session)

@@ -65,6 +65,17 @@ class SofaQualificationTests(unittest.TestCase):
         self.capture(bundle(i) for i in range(count))
         return qualify.load_session(self.folder)
 
+    def test_a_holdout_session_keeps_its_own_cues(self):
+        cues = qualify.HOLDOUT_CUES
+        rows = qualify.capture(self.folder, FakeCamera(bundle(i) for i in range(len(cues) * qualify.PER_CUE)), PROFILE,
+                               cue=lambda _: None, sleep=self.sleep, clock=lambda: self.now,
+                               now_ns=lambda: int(self.now * 1e9), cues=cues)
+        self.assertEqual([row["cue"] for row in rows], [cue for cue in cues for _ in range(qualify.PER_CUE)])
+        self.assertEqual(qualify.read_json(self.folder / "manifest.json")["cues"], list(cues))
+        self.assertEqual(qualify.load_session(self.folder)[0], rows)
+        self.assertEqual(list(cues)[-1], qualify.sofa_mask_score.EMPTY_CUE, "the empty room comes last, for the background")
+        self.assertEqual(qualify.CUE_SETS["holdout"], cues)
+
     def test_original_capture_and_deduplication(self):
         self.assertEqual(tuple(qualify.CUES), (*qualify.sofa_mask_score.POSE_CUES, qualify.sofa_mask_score.EMPTY_CUE))
         captured = [bundle(i) for i in range(len(qualify.CUES) * qualify.PER_CUE)]

@@ -121,6 +121,10 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(all(tally.get("by_cut") == tally.get("covered") == 1
                             for cue, tally in result["counts_by_cue"].items() if cue != mask.EMPTY_CUE))
         self.assertEqual(result["counts_by_cue"][mask.EMPTY_CUE], {"empty_withheld": 1})
+        needed = [v for vs in result["needed_torso_cut_m"].values() for v in vs]
+        self.assertEqual(len(needed), len(mask.POSE_CUES), "one needed setting per scored frame")
+        self.assertTrue(all(isinstance(v, float) and 0 <= v <= 0.08 for v in needed), needed)
+        self.assertEqual(result["largest_needed_torso_cut_m"], max(needed))
         # Hips placed above the head would flip the axis: the face is then on the hips' side, so the cut is refused
         # and every frame is withheld, never covered.
         self.setUp()
@@ -128,6 +132,9 @@ class ScoringTests(unittest.TestCase):
         result = mask.score(frames, self.annotations, self.camera, profile=profile, separations=self.separations)
         self.assertEqual(result["verdict"], "incomplete")
         self.assertFalse(any(tally.get("covered") for cue, tally in result["counts_by_cue"].items()))
+        self.assertTrue(all(v == "clears" for vs in result["needed_torso_cut_m"].values() for v in vs),
+                        "a flipped torso never forms a cut at any setting: it clears")
+        self.assertIsNone(result["largest_needed_torso_cut_m"])
         # A cut that keeps the marked region is counted as a leak.
         frame = frames[0]
         region = self.annotations["frames"][0]["head_bounds_px"]

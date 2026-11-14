@@ -6,14 +6,20 @@ When it asks (the owner, 2026-11-12: Qwen only once Frigate has noticed someone)
   on TrackEvidence.seated); the ask reads it and never works it out again, so it and the preview have one answer.
 - One ask in flight at a time; the next no sooner than min_interval_s after the last was sent (2 s; at least 4 s at the
   monitor's step 1); at most max_per_minute in any 60 s; BACKOFF_S after a failure.
-What it sends: 3 stills from the last 3 s, none from before the seated episode's since_mono or the association's since,
-picked by spread() (perception-lab qwen_live.spread at den-core-live's pin, copied), made into JPEGs in the detector's
-process (stills.py), in den_live_scene's den-live-scene-2 body. The context is the local time, Qwen's last valid
-answer when it's under 10 s old, and near_person: the labeling plan's line, only while its switch is on and exactly one
-person is tracked.
+What it sends: up to 3 stills, newest first, spanning at most STILLS_SPAN_S (1 s) back from the newest frame (contract 3,
+decision 4: the first ask after a cue shows the cue, not the seconds before it), none from before the seated episode's
+since_mono or the association's since, picked by spread(), made into JPEGs in the detector's process (stills.py), in
+den_live_scene's den-live-scene-2 body, oldest first. The context is the local time, Qwen's last valid answer when it's
+under 10 s old, and near_person: the labeling plan's line, only while its switch is on and exactly one person is
+tracked.
+One bad frame (contract 2's consumer rule, settled 2026-11-13): a stale snapshot or an unsafe frame means no new ask on
+that frame, and nothing more. The pool, eligibility_revision, the prior, a pending stills request and an in-flight or
+completed reply are kept. They reset only when the person binding (service_run_id, camera_epoch, track_id,
+association_revision) changes, or the gate does. A gap of PERCEPTION_S or more still clears the pool, so a stale still is
+never reused.
 What it keeps: one words-only line per ask in <state>/days/<UTC date>/asks.jsonl (no image, no reply text), for
-RETENTION_DAYS, under the day's DAY_CAP_BYTES with person-state.jsonl. Every time the chain has is in it: each still's
-capture and arrival, decided, sent and answered.
+RETENTION_DAYS, under AskLog's own cap for that file. Every time the chain has is in it: each still's capture and
+arrival, decided, sent and answered.
 observe() updates the current TrackingSnapshot and pop_reply() returns a bound InferenceReply after the snapshot.
 The people stream shows Qwen health and the eligible track's current activity.
 """
@@ -43,17 +49,41 @@ POST_TIMEOUT_S = 20.0
 POOL_S = 5.0              # frames the pool keeps; the detector's process keeps about as many (stills.RING)
 UNAVAILABLE_AFTER = 3     # failed asks in a row before the health line says Qwen isn't answering
 RETENTION_DAYS = 14
-DAY_CAP_BYTES = 300 * 1024 * 1024   # a UTC day's DAY_FILES together; a line past it is skipped and counted
-DAY_FILES = ("asks.jsonl", "person-state.jsonl")   # this log's and person_state.py's, in one day folder
 BACKOFF_STALE_S = 600.0   # the monitor writes its status each minute: older than this, it isn't running
+STILLS_SPAN_S = 1.0       # the stills reach back at most this far from the newest frame (contract 3, decision 4)
+MIN_STILL_GAP_S = 0.2     # two stills of one ask are at least this far apart
 
 
 class FramesUnavailable(Exception):
     pass
 
 
-def spread(pool, now, *, count=3, span=3.0):
-    """Select oldest-first stills from a continuous supported window using LA monotonic time."""
+def track_binding(snapshot, track, current):
+    """The person binding after this snapshot: (service_run_id, camera_epoch, track_id, association_revision).
+
+    A good frame (track: Asker._track's one supported, confident subject) sets it. A bad frame, stale, unsafe or with
+    no subject seen, keeps current: contract 2's consumer rule. But some frames end the person whatever their quality:
+    - another service run or camera epoch;
+    - on a fresh frame, more than one person, since there's no single subject;
+    - on a fresh frame, one person under another track id or association revision."""
+    frame = snapshot.frame
+    if track is not None:
+        return (*frame.key[:2], track.track_id, track.association_revision)
+    if current is None:
+        return None
+    if frame is not None and tuple(frame.key[:2]) != tuple(current[:2]):
+        return None
+    if snapshot.status == "fresh" and frame is not None:
+        seen = [t for t in snapshot.tracks if t.current_obs_ids]
+        if len(seen) > 1 or (len(seen) == 1 and (seen[0].track_id, seen[0].association_revision) != tuple(current[2:])):
+            return None
+    return current
+
+
+def spread(pool, now, *, count=3, span=STILLS_SPAN_S):
+    """The stills, chosen newest first on LA's monotonic clock and returned oldest first: the newest frame, then for each
+    earlier slot the frame nearest latest - k*span/(count-1), within half a step, at least MIN_STILL_GAP_S before the
+    one chosen after it, and never more than span before the newest. Fewer than scene.MIN_IMAGES is FramesUnavailable."""
     if not pool:
         raise FramesUnavailable("frames_unavailable")
     latest = pool[-1]
@@ -62,8 +92,8 @@ def spread(pool, now, *, count=3, span=3.0):
     chosen, step = [latest], span / (count - 1)
     for index in range(1, count):
         target = latest.capture_mono - step * index
-        options = [f for f in pool if f.capture_mono < chosen[-1].capture_mono - .2
-                   and abs(f.capture_mono - target) <= step / 2]
+        options = [f for f in pool if f.capture_mono < chosen[-1].capture_mono - MIN_STILL_GAP_S
+                   and latest.capture_mono - f.capture_mono <= span + 1e-9 and abs(f.capture_mono - target) <= step / 2]
         if options:
             chosen.append(min(options, key=lambda f: (abs(f.capture_mono - target), f.key)))
         else:
@@ -232,7 +262,9 @@ class Asker:
         self.log = AskLog(state)
         self.lock = threading.Lock()
         self.pool = deque()
-        self.support = self.eligibility = self.gate_signature = None
+        self.binding = None      # (service_run_id, camera_epoch, track_id, association_revision), from good frames
+        self.pool_gate = None    # the gate revision the pool's frames were kept under
+        self.eligibility = self.gate_signature = None
         self.eligibility_revision = self.gate_revision = 0
         self.snapshot = self.reply = self.activity = self.prior = None
         self.inflight = self.completed = None
@@ -298,17 +330,19 @@ class Asker:
         frame, track = snapshot.frame, self._track(snapshot, now)
         with self.lock:
             values, level, occupancy, why = self._gate()
-            scope = None if track is None else (frame.key[:2], track.track_id, track.association_revision,
-                                                self.gate_revision)
-            if (scope != self.support or
-                    self.pool and frame is not None and frame.capture_mono - self.pool[-1].capture_mono >= PERCEPTION_S):
+            gate_why = why
+            binding = track_binding(snapshot, track, self.binding)
+            if binding != self.binding or self.gate_revision != self.pool_gate:
+                # A new person, or a gate that closed or reopened: stills come only from the new window.
                 self.pool.clear()
-            self.support = scope
-            seated = False
+                self.binding, self.pool_gate = binding, self.gate_revision
+            seated_since = None
             if track is not None:
                 # Contract 2's seated, as perception published it for this track on this frame. The pool keeps
                 # the supported frames; _prepare takes stills only from the seated episode, since_mono on.
-                seated = self._seated_since(track, frame) is not None
+                seated_since = self._seated_since(track, frame)
+                if self.pool and frame.capture_mono - self.pool[-1].capture_mono >= PERCEPTION_S:
+                    self.pool.clear()   # a gap this long: those stills are stale and never reused
                 if not self.pool or frame.key != self.pool[-1].key:
                     self.pool.append(frame)
                     while frame.capture_mono - self.pool[0].capture_mono > POOL_S:
@@ -318,13 +352,21 @@ class Asker:
                     why = snapshot.reason or "no fresh RGB frame"
                 elif not 0 <= now - frame.capture_mono < PERCEPTION_S:
                     why = "no fresh RGB frame"
-                elif track is None or not seated:
+                elif track is None or seated_since is None:
                     why = "nobody seated" if track is not None or not snapshot.tracks else "no single supported subject"
-            eligible = None if why or not seated else scope
-            if eligible != self.eligibility:
-                self.eligibility = eligible
+            # The episode: the binding, the seated episode and the gate. A good frame sets it; a bad one keeps it (no
+            # new ask on that frame, nothing dropped), unless the gate closed or changed, or the binding ended.
+            if gate_why is not None or binding is None:
+                episode = None
+            elif track is not None:
+                episode = None if seated_since is None else (binding, seated_since, self.gate_revision)
+            else:
+                episode = self.eligibility if self.eligibility and self.eligibility[2] == self.gate_revision else None
+            if episode != self.eligibility:
+                self.eligibility = episode
                 self.eligibility_revision += 1
                 self.reply = self.activity = self.prior = None
+            eligible = episode if track is not None and why is None else None   # this frame may start an ask
             self.snapshot = replace(snapshot, eligible_track_id=None if eligible is None else track.track_id,
                                     eligibility_revision=self.eligibility_revision)
             if self.completed is not None:
@@ -333,7 +375,7 @@ class Asker:
             if pending is not None and pending["stage"] == "stills":
                 if now - pending["decided_mono"] >= STILLS_TIMEOUT_S:
                     self._fail_stills(now, pending, "stills_timeout")
-                elif not self._usable(now, pending):
+                elif not self._bound(now, pending):
                     self._done(now, pending)
                     self._record(pending, outcome="not_sent", why="the evidence changed")
             may = (eligible is not None and self.inflight is None and now >= self.next_at and now >= self.backoff_until
@@ -378,7 +420,7 @@ class Asker:
         request = {
             "ask_id": self.ask_seq, "stage": "stills", "decided_mono": now, "decided_at": self.wall(),
             "request_id": hashlib.sha256(f"{self.session_id}:{self.ask_seq}".encode()).hexdigest(),
-            "frames": frames, "keys": [list(frame.key) for frame in frames], "track": track,
+            "frames": frames, "keys": [list(frame.key) for frame in frames], "track": track, "binding": self.binding,
             "association": evidence, "seated_since_mono": seated_since,
             "eligibility_revision": self.eligibility_revision, "gate_revision": self.gate_revision,
             "occupancy": occupancy, "backoff_level": level, "valid_until_mono": latest.capture_mono + INFERENCE_S,
@@ -395,14 +437,13 @@ class Asker:
             with self.lock:
                 self._fail_stills(self.clock(), request, "stills_worker_busy")
 
-    def _usable(self, now, ask):
-        snap = self.snapshot
-        return (not self.halt.is_set() and snap is not None and snap.frame is not None
-                and snap.eligible_track_id == ask["track"].track_id
-                and snap.eligibility_revision == ask["eligibility_revision"]
-                and snap.frame.key[:2] == ask["frames"][-1].key[:2]
+    def _bound(self, now, ask):
+        """With the lock held: whether the ask still belongs to the current episode. It's judged on the person binding,
+        eligibility_revision and the gate, never on this one frame's quality, so one bad frame keeps a pending request
+        and a reply (contract 2's consumer rule). Its own evidence expiry still holds."""
+        return (not self.halt.is_set() and ask.get("binding") is not None and ask["binding"] == self.binding
+                and ask["eligibility_revision"] == self.eligibility_revision
                 and ask["gate_revision"] == self.gate_revision
-                and 0 <= now - snap.frame.capture_mono < PERCEPTION_S
                 and now < ask["valid_until_mono"])
 
     def _decorate(self, event, now, open_, why, level):
@@ -478,7 +519,7 @@ class Asker:
         with self.lock:
             values, _, _, _ = self._gate()
             prior = (self.prior[0] if self.prior is not None and self.clock() < self.prior[1]
-                     and self._usable(self.clock(), ask) else None)
+                     and self._bound(self.clock(), ask) else None)
         near, revision = None, None
         if values["labels_to_qwen"] and self.near_line is not None:
             try:
@@ -504,7 +545,7 @@ class Asker:
             now = self.clock()
             if self.inflight is not ask:
                 return
-            if why is not None or not self._usable(now, ask) or not self._paced(now, values, level):
+            if why is not None or not self._bound(now, ask) or not self._paced(now, values, level):
                 self._done(now, ask)
                 self._record(ask, outcome="not_sent", why="the gate or evidence changed before sending")
                 return
@@ -550,7 +591,7 @@ class Asker:
         self.reply_s.append(answered_mono - ask["sent_mono"])
         self.last_reply_at = round(answered_at, 3)
         outcome = "completed"
-        if not self._usable(now, ask):
+        if not self._bound(now, ask):
             self.counts["unbound"] += 1
             outcome = "unbound"
             reason = "evidence_expired" if now >= ask["valid_until_mono"] else "evidence_changed"

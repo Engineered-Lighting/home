@@ -30,7 +30,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import run_local as rl  # noqa: E402
 import sofa_check as sc  # noqa: E402  say, Stop, the data root, the speech
-import walk_test as wt  # noqa: E402  the stream's subscriber, its address and its refusals
+import cue_light  # noqa: E402  the cue-to-light instrument: the subscriber that keeps the spot snapshots too
+import walk_test as wt  # noqa: E402  the stream's address and its refusals
 
 say, Stop = sc.say, sc.Stop
 CUES = (("read", "Sit down in your usual seat and read your book. Stay until the next cue."),
@@ -133,8 +134,9 @@ def lines(read, phone, leave_stopped, reply_s, frigate_before, now, counts=None)
     return out
 
 
-def check(*, home, timing, speak, wait, opener=None, clock=time.time):
-    sub = wt.connect(home, wt.Timing(first_event_s=timing.first_event_s), opener or wt.urllib.request.urlopen)
+def check(*, home, timing, speak, wait, opener=None, clock=time.time, numbers=None):
+    """numbers: a folder for the cue-to-light instrument's numbers (cues.json, spots.jsonl), or None."""
+    sub = cue_light.connect(home, timing.first_event_s, opener)
     try:
         speak("The ask check starts in %d seconds. Have your book and phone with you." % timing.lead_s)
         wait(timing.lead_s)
@@ -157,8 +159,15 @@ def check(*, home, timing, speak, wait, opener=None, clock=time.time):
     replies = [qwen(e).get("reply_s_median") for _, e in sub.between(marks["read"], end) if qwen(e).get("reply_s_median") is not None]
     frigate_before = bool(before) and frigate_on(before[-1][1])
     counts = {"read": len(read_samples), "phone": len(phone_samples), "leave": len(leave_samples), "reconnects": sub.reconnects}
-    return lines(read, phone, stopped_s(leave_samples, marks["leave"]), replies[-1] if replies else None, frigate_before, end,
-                 counts)
+    out = lines(read, phone, stopped_s(leave_samples, marks["leave"]), replies[-1] if replies else None, frigate_before, end,
+                counts)
+    spots = sub.spot_rows()
+    cues = [(name, marks[name]) for name, _ in CUES]
+    out += cue_light.report_lines(cues, spots)[1:]
+    if numbers is not None:
+        folder = cue_light.save(numbers, cues, spots)
+        out.append("Light numbers: %s (cue_light.py report it, with --paint for Home's stamps)" % folder)
+    return out
 
 
 def main(argv=None, *, root=None, console=sc.has_console, timing=Timing(), speak=None, wait=time.sleep, opener=None):
@@ -174,7 +183,9 @@ def main(argv=None, *, root=None, console=sc.has_console, timing=Timing(), speak
         if speak is None:
             root = Path(root) if root else sc.data_root()
             speak = sc.speaker(rl.den_take(sc.archive(root / "tools", "observe")))
-        out = check(home=args.home, timing=timing, speak=speak, wait=wait, opener=opener)
+        root = Path(root) if root else sc.data_root()
+        numbers = root / "cue-light" / time.strftime("%Y%m%d-%H%M%S")   # numbers only: outside private, agents may read it
+        out = check(home=args.home, timing=timing, speak=speak, wait=wait, opener=opener, numbers=numbers)
         say("")
         for line in out:
             say(line)

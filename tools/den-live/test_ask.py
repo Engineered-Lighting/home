@@ -27,7 +27,7 @@ import perceive  # noqa: E402
 import run_service  # noqa: E402
 import seated  # noqa: E402
 import stills  # noqa: E402
-from contracts import FrameRef, PlaneRef, TrackEvidence, TrackingSnapshot  # noqa: E402
+from contracts import PERCEPTION_S, FrameRef, PlaneRef, TrackEvidence, TrackingSnapshot  # noqa: E402
 
 PIN = "f9d63320"
 LAB = "stack/services/perception-lab/"
@@ -347,7 +347,7 @@ class AskTest(unittest.TestCase):
         self.asker = ask.Asker(detector=self.detector, occupancy=self.occupancy, post=post, state=self.folder,
                                site_id="site", camera_id="den-oak", clock=self.clock, wall=self.clock, start=False)
         self.frame_id = 0
-        self.status, self.since = "confident", self.clock.t - 60.0
+        self.status, self.since, self.revision = "confident", self.clock.t - 60.0, 0
         self.accepted = []
         self.rule, self.rule_epoch = seated.Published(), 1   # perception's seated, as perceive.py publishes it
 
@@ -364,7 +364,8 @@ class AskTest(unittest.TestCase):
         if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
             self.rule, self.rule_epoch = seated.Published(), epoch
         evidence = tuple(TrackEvidence(t["track_id"], "confirmed", xy, 0.1, "stereo", ("obs",), self.status,
-                                       0, self.since, pose, seated=self.rule.update(t["track_id"], 0, captured, pose))
+                                       self.revision, self.since, pose,
+                                       seated=self.rule.update(t["track_id"], self.revision, captured, pose))
                          for t in tracks)
         snapshot = TrackingSnapshot("run", epoch, self.frame_id, frame if usable else None,
                                     "fresh" if usable else "stale", None, "present", evidence)
@@ -531,14 +532,62 @@ class AskTest(unittest.TestCase):
         self.assertEqual(self.log_lines()[-1]["outcome"], "not_sent")
         self.assertIsNone(self.asker.inflight)
 
-    def test_queued_ask_after_link_loss_never_posts(self):
+    def test_one_stale_snapshot_keeps_a_queued_ask_and_its_reply(self):
+        """Contract 2's consumer rule: a stale snapshot is no new ask, and drops nothing. The queued request posts,
+        and its reply stays bound to the same person."""
         for _ in range(12):
             self.tick(drain=False)
+        revision = self.asker.eligibility_revision
         self.tick(usable=False, drain=False)
+        self.assertEqual(self.asker.eligibility_revision, revision)
         self.drain()
-        self.assertEqual(self.asks_sent(), 0)
-        self.assertEqual(self.log_lines()[-1]["outcome"], "not_sent")
-        self.assertEqual(self.accepted, [])
+        self.assertEqual(self.asks_sent(), 1)
+        self.tick()
+        self.assertEqual(len(self.accepted), 1)
+        self.assertEqual(self.accepted[0].eligibility_revision, revision)
+
+    def test_one_unsafe_frame_is_no_new_ask_and_keeps_the_episode(self):
+        self.run_for(6)
+        revision, prior, sent = self.asker.eligibility_revision, self.asker.prior, self.asks_sent()
+        self.assertIsNotNone(prior)
+        while self.clock.t + 0.25 < self.asker.next_at:   # good frames up to where the pace allows the next ask
+            self.tick()
+        revision, prior, sent = self.asker.eligibility_revision, self.asker.prior, self.asks_sent()
+        self.status = "ambiguous"
+        event = self.tick()
+        self.assertEqual(self.asks_sent(), sent, "no new ask on an unsafe frame")
+        self.assertEqual((self.asker.eligibility_revision, self.asker.prior), (revision, prior))
+        self.assertEqual(event["tracks"][0]["activity"]["word"], "reading", "the answer still shows")
+        self.status = "confident"
+        self.tick()
+        self.assertEqual(self.asker.eligibility_revision, revision)
+        self.assertEqual(self.asks_sent(), sent + 1, "the next good frame asks again")
+
+    def test_a_new_association_revision_resets_the_episode(self):
+        self.run_for(6)
+        revision = self.asker.eligibility_revision
+        self.assertIsNotNone(self.asker.prior)
+        self.revision = 1
+        self.tick()
+        self.assertGreater(self.asker.eligibility_revision, revision)
+        self.assertIsNone(self.asker.prior)
+
+    def test_a_gap_of_perception_s_clears_the_stills(self):
+        self.run_for(6)
+        for _ in range(int(PERCEPTION_S / 0.25) + 1):
+            self.tick(usable=False)
+        self.tick()
+        self.assertEqual(len(self.asker.pool), 1, "only frames after the gap")
+
+    def test_the_stills_are_the_newest_frames_within_one_second(self):
+        self.run_for(8)
+        for line in self.log_lines():
+            if line["outcome"] != "completed":
+                continue
+            times = [still["captured_at"] for still in line["stills"]]
+            self.assertGreaterEqual(len(times), 2)
+            self.assertLessEqual(times[-1] - times[0], ask.STILLS_SPAN_S + 1e-6)
+            self.assertTrue(all(b - a >= ask.MIN_STILL_GAP_S - 1e-6 for a, b in zip(times, times[1:])))
 
     def test_a_late_completion_cannot_cross_a_swap(self):
         self.run_for(1.5)
@@ -761,3 +810,30 @@ class ServiceSettingsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SpreadTest(unittest.TestCase):
+    """The stills, newest first over at most STILLS_SPAN_S (contract 3, decision 4), at the den's real frame rates."""
+
+    @staticmethod
+    def pool(fps, seconds=4.0, end=100.0):
+        from types import SimpleNamespace
+        n = int(seconds * fps)
+        return [SimpleNamespace(capture_mono=end - (n - 1 - i) / fps, key=("run", 1, i)) for i in range(n)]
+
+    def test_at_the_dens_frame_rates(self):
+        for fps in (2.2, 4.5, 5.0):
+            pool = self.pool(fps)
+            chosen = ask.spread(pool, 100.1)
+            times = [f.capture_mono for f in chosen]
+            self.assertIs(chosen[-1], pool[-1], "the newest frame is always one")
+            self.assertGreaterEqual(len(chosen), 2)
+            self.assertLessEqual(times[-1] - times[0], ask.STILLS_SPAN_S + 1e-9, fps)
+            self.assertTrue(all(b - a >= ask.MIN_STILL_GAP_S for a, b in zip(times, times[1:])), fps)
+
+    def test_never_from_more_than_a_second_back_and_never_stale(self):
+        pool = self.pool(1.0)   # a frame a second: only one within the span, so not enough
+        with self.assertRaises(ask.FramesUnavailable):
+            ask.spread(pool, 100.1)
+        with self.assertRaises(ask.FramesUnavailable):
+            ask.spread(self.pool(5.0), 100.0 + PERCEPTION_S)

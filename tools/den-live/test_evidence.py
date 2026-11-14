@@ -299,7 +299,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertTrue(track.seated.state, "seated already: perception's answer doesn't wait for Frigate")
             for seq in range(25, 80):
                 feed(seq)
-                if seq < 29:   # the stills: frames since Frigate read on, the oldest about 1.5 s before the newest
+                if seq < 27:   # the stills: two frames since Frigate read on, newest first within STILLS_SPAN_S (1 s)
                     self.assertFalse(posts, "Frigate on still needs stills from its own window")
             self.assertTrue(handed_off)
             self.assertEqual({reply.gate["seated_since_mono"] for reply in handed_off}, {coordinator.episode.started})

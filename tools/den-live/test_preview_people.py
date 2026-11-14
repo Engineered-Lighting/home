@@ -144,6 +144,10 @@ class PreviewPeopleTest(unittest.TestCase):
         self.now += .25
         self.track()
         self.read(people_visible="none")
+        self.assertIsNone(episode.valid_until)   # "none" still ends the task; the direction fades it out
+        for _ in range(int((self.preview.settings["fade_out_s"] + .5) / .25)):
+            self.now += .25
+            self.track()
         self.assertFalse(self.row()["on"])
 
 

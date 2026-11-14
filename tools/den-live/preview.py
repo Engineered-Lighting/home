@@ -49,7 +49,7 @@ STANDBY_M = .1
 RECOVERABLE = ("task_released", "task_ending")
 # Several people (plan 04, step 3): the person the light is for keeps it while others are in the room, and every other
 # person's head is kept out of every beam by the same clearance as the reader's own (den-core eye.HEAD_CLEARANCE_M).
-THROUGH_ANOTHER_HEAD = "beam_through_head"
+THROUGH_ANOTHER_HEAD = "beam_through_another_head"   # den-core eye's own is beam_through_head
 CONTROL_KEYS = ("on", "stopped", "stop_counter")
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
 
@@ -490,9 +490,11 @@ class Preview:
             if not directing:
                 continue
             if name != chosen or not task:
-                if self._lighting(row) and (person is None or row["job"] != person["track_id"]):
+                if self._lighting(row) and (person is None or row["job"] != person["track_id"]
+                                            or reasons.get(name) == THROUGH_ANOTHER_HEAD):
                     # Contract 2's consumer rule, unchanged: a stale or unsafe snapshot, or another person binding,
-                    # darkens at once. Only the normal exits below fade.
+                    # darkens at once. So does a lit beam someone else's head has walked into (plan 04): never a
+                    # fade in their eyes. Only the normal exits below fade.
                     self._release(name, row, now, reasons.get(name, "task_released"))
                 elif self._lighting(row) and not row["exiting"]:
                     # Standing up, seen on a fresh frame: the quick exit; a task that ended with the person still

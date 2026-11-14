@@ -822,7 +822,8 @@ class DirectionTest(PreviewTest):
 
     def test_a_stale_or_unsafe_frame_still_darkens_at_once(self):
         """Contract 2's consumer rule is the rules', unchanged: only the normal exits fade."""
-        for bad in ({"posed": False}, {"more": True}, {"association": "ambiguous"}):
+        # A second person isn't an unsafe frame any more (plan 04, step 3): test_preview_people.py.
+        for bad in ({"posed": False}, {"association": "ambiguous"}):
             with self.subTest(bad=bad):
                 self.lit_by_direction()
                 goal = self.row()["level"]

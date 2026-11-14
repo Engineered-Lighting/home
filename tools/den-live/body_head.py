@@ -12,6 +12,13 @@ HIPS = (11, 12)
 ANCHORS = FACE + SHOULDERS
 # The shortest 2D torso, hips to shoulders in depth pixels, whose direction the shoulder-line cut trusts.
 TORSO_AXIS_PX = 20
+# A hip without a lift is placed from its 2D keypoint at the shoulders' depth when the detector gives it this score,
+# even a little outside the RGB image (a desk or the frame's edge hides it; the detector extrapolates), up to this
+# fraction of the image beyond each edge.
+HIP_MIN_SCORE, HIP_OUTSIDE = 0.3, 0.25
+# Seen from the front or back the torso axis crosses the shoulder line square: it may lean this far off square
+# (cosine 0.57, 35 degrees) once the shoulder line is long enough in the image to say.
+AXIS_MAX_COS, SHOULDER_LINE_MIN = 0.57, 0.4
 
 
 def _finite(value):
@@ -60,11 +67,14 @@ def _mean(points):
 def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
     """Private evidence for the shoulder-line cut on the caller's same-frame observation, or None.
 
-    It needs both shoulders and both hips with this frame's lifts. Each is placed in the rectified-left depth image
-    through its lifted point; a lift that slipped onto the surface behind moves it there by only the RGB-to-left
-    parallax, a few pixels, which the margin covers. The line runs through the shoulder midpoint across the 2D torso
-    axis. The margin is the qualified cut plus the localization and motion bounds, as the envelope's. No face landmark
-    is needed, so it holds for a turned-away, bowed or reclined head, and for one the RGB view cuts off."""
+    It needs both shoulders with this frame's lifts, and a hip: lifted, or else its 2D keypoint, scored at least
+    HIP_MIN_SCORE, placed at the shoulders' depth (at a desk or behind a book a hip often has no depth). Each joint is
+    placed in the rectified-left depth image; a lift that slipped onto the surface behind, or a hip at the shoulders'
+    depth, moves it there by only the RGB-to-left parallax, a pixel or two, which the margin covers. The hips set only
+    the line's direction, and that direction must cross the shoulder line nearly square when the shoulder line is long
+    enough to judge. The line runs through the shoulder midpoint across the 2D torso axis. The margin is the qualified
+    cut plus the localization and motion bounds, as the envelope's. No face landmark is needed, so it holds for a
+    turned-away, bowed or reclined head, and for one the RGB view cuts off."""
     from camgeom import apply, inverse, project
 
     if (not isinstance(profile, HeadProfile) or profile.torso_cut_m is None or frame_key is None
@@ -74,28 +84,52 @@ def torso_cut(pose, camera, *, frame_key, binding, profile, separation_s):
             or pose.get("visibility") not in ("visible", "partial")
             or not _finite(separation_s) or not 0 <= separation_s <= profile.max_separation_s):
         return None
-    lifted = {}
+    lifted, seen = {}, set()
     for joint in pose.get("joints_room") or ():
         if isinstance(joint, dict) and joint.get("j") in SHOULDERS + HIPS:
-            xyz = joint.get("xyz")
-            if (joint["j"] in lifted or joint.get("status") != "supported"
-                    or not isinstance(xyz, (tuple, list)) or len(xyz) != 3 or not all(map(_finite, xyz))):
+            if joint["j"] in seen:
                 return None
-            lifted[joint["j"]] = xyz
-    if len(lifted) != 4:
+            seen.add(joint["j"])
+            xyz = joint.get("xyz")
+            if (joint.get("status") == "supported" and isinstance(xyz, (tuple, list)) and len(xyz) == 3
+                    and all(map(_finite, xyz))):
+                lifted[joint["j"]] = xyz
+    if not all(index in lifted for index in SHOULDERS):
         return None
+    rig = camera.rig
     to_depth = inverse(*camera.room_from_left)
-    pixels = {}
+    pixels, rgb_depths = {}, []
     for index, xyz in lifted.items():
         point = apply(*to_depth, xyz)
         if point[2] <= 0.1:
             return None
-        pixels[index] = project(point, camera.rig.left_k)
+        pixels[index] = project(point, rig.left_k)
+        if index in SHOULDERS:
+            rgb_depths.append(apply(rig.rotation, rig.translation, point)[2])
+    keypoints = pose.get("keypoints")
+    width, height = rig.rgb_size
+    for index in HIPS:
+        if index in lifted or not isinstance(keypoints, (tuple, list)) or len(keypoints) != 17:
+            continue
+        pixel = keypoints[index]
+        if (isinstance(pixel, (tuple, list)) and len(pixel) == 3 and all(map(_finite, pixel))
+                and HIP_MIN_SCORE <= pixel[2] <= 1 and -HIP_OUTSIDE * width <= pixel[0] < (1 + HIP_OUTSIDE) * width
+                and -HIP_OUTSIDE * height <= pixel[1] < (1 + HIP_OUTSIDE) * height):
+            placed = rig.left_pixel(rig.rgb_ray(pixel[0], pixel[1]), _mean([[z] for z in rgb_depths])[0])
+            if placed is not None and all(map(_finite, placed)):
+                pixels[index] = placed
+    hip_pixels = [pixels[index] for index in HIPS if index in pixels]
+    if not hip_pixels:
+        return None
     shoulder = _mean([pixels[index] for index in SHOULDERS])
-    hips = _mean([pixels[index] for index in HIPS])
+    hips = _mean(hip_pixels)
     axis = (shoulder[0] - hips[0], shoulder[1] - hips[1])
     length = math.hypot(*axis)
     if not all(map(_finite, shoulder)) or not TORSO_AXIS_PX <= length:
+        return None
+    across = (pixels[SHOULDERS[0]][0] - pixels[SHOULDERS[1]][0], pixels[SHOULDERS[0]][1] - pixels[SHOULDERS[1]][1])
+    span = math.hypot(*across)
+    if span >= SHOULDER_LINE_MIN * length and abs(axis[0] * across[0] + axis[1] * across[1]) > AXIS_MAX_COS * span * length:
         return None
     margin = profile.torso_cut_m + profile.localization_m + profile.max_motion_m_s * separation_s
     return {"frame_key": frame_key, "binding": binding,

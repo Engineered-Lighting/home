@@ -157,11 +157,14 @@ class HeadEvidenceTests(unittest.TestCase):
     def test_the_cut_needs_a_measured_plausible_torso_and_a_qualified_setting(self):
         self.assertIsNone(self.cut(profile=PROFILE), "off unless the profile qualifies a cut")
         mutations = {
-            "missing hip": lambda pose: pose["joints_room"].pop(),
-            "uncertain hip": lambda pose: pose["joints_room"][-1].update(status="uncertain"),
+            "no hips at all": lambda pose: [pose["joints_room"].pop(), pose["joints_room"].pop()],
+            "uncertain hips, no keypoints": lambda pose: [j.update(status="uncertain") for j in pose["joints_room"][-2:]],
             "hips on the shoulders": lambda pose: [j.update(xyz=[x, 2.08, 1.17]) for j, x in
                                                    zip(pose["joints_room"][-2:], (-0.30, 0.04))],
             "a second hip": lambda pose: pose["joints_room"].append(dict(pose["joints_room"][-1])),
+            "hips beside the shoulders": lambda pose: [j.update(xyz=[x, 2.08, 1.10]) for j, x in
+                                                       zip(pose["joints_room"][-2:], (0.45, 0.65))],
+            "a missing shoulder lift": lambda pose: pose["joints_room"][5].update(status="unsupported", xyz=None),
             "occluded": lambda pose: pose.update(visibility="occluded"),
             "wrong transform": lambda pose: pose.update(transform_id="other"),
         }
@@ -175,6 +178,32 @@ class HeadEvidenceTests(unittest.TestCase):
             replace(PROFILE, torso_cut_m=0.0)
         with self.assertRaises(ValueError):
             replace(PROFILE, torso_cut_m=float("nan"))
+
+    def test_hips_without_depth_come_from_their_keypoints_at_the_shoulders_depth(self):
+        lifted = self.cut()
+        pose = self.with_hips(self.pose())
+        to_depth = self.geom.inverse(*self.camera.room_from_left)
+        for joint in pose["joints_room"][-2:]:   # at a desk: the hips have keypoints but no depth
+            pose["keypoints"][joint["j"]] = [*self.camera.rig.to_rgb(self.geom.apply(*to_depth, joint["xyz"])), 0.45]
+            joint.update(status="unsupported", lift="none", xyz=None)
+        from_keypoints = self.cut(pose)
+        self.assertIsNotNone(from_keypoints)
+        (a, b), (c, d) = lifted["cut"]["axis_px"], from_keypoints["cut"]["axis_px"]
+        self.assertGreater(a * c + b * d, math.cos(math.radians(5)), "the same direction, within parallax")
+        self.assertEqual(from_keypoints["cut"]["shoulder_px"], lifted["cut"]["shoulder_px"])
+        one = self.with_hips(self.pose())
+        one["joints_room"].pop()
+        self.assertIsNotNone(self.cut(one), "one hip is enough")
+        for joint in pose["joints_room"][-2:]:
+            pose["keypoints"][joint["j"]][2] = 0.2
+        self.assertIsNone(self.cut(pose), "nor from keypoints the detector barely saw")
+        for joint in pose["joints_room"][-2:]:
+            pose["keypoints"][joint["j"]][2] = 0.45
+            pose["keypoints"][joint["j"]][1] = 360 * 1.2   # extrapolated below the frame's edge: still placed
+        self.assertIsNotNone(self.cut(pose))
+        for joint in pose["joints_room"][-2:]:
+            pose["keypoints"][joint["j"]][1] = 360 * 1.3   # too far out to trust
+        self.assertIsNone(self.cut(pose))
 
     def test_profile_is_explicit_and_finite(self):
         for bad in (0, -1, float("nan"), float("inf"), True):

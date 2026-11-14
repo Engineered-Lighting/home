@@ -19,6 +19,8 @@ FIRMWARE_COMMIT = "cf1c325"
 FIRMWARE_ZIP_SHA256 = "88c5fa3e348ffbcc97ab318eb7c55e045da89c20907254ede4eda1f9967dd2a2"
 FIRMWARE_SOURCE = "c12-firmware-for-codex-20261112/source/c12-lit-tracking-v2/"
 TRACE_SCHEMA = "c12-preview-trace-1"
+TRACE_SCHEMA_2 = "c12-preview-trace-2"   # contract 5: run headers, and each MOVE's binding and subject
+TRACE_SCHEMAS = (TRACE_SCHEMA, TRACE_SCHEMA_2)
 COMMANDS = {"aim_move": 0, "keep_lit": 1, "stop": 2, "resume": 3}
 STATE_ACTIONS = {"expired", "evidence_stale", "arrived", "disabled"}
 FRAME_FIELDS = {"endpoint", "cluster", "command_id", "seq", "payload_hex"}
@@ -206,18 +208,51 @@ def reject_constant(_value):
     raise ReplayError("JSON contains a non-finite constant")
 
 
-def verify_trace(handle, codec, *, collect_sim=False):
+def verify_header(row, headers):
+    """A trace-2 run header: its anchor, the codec and simulator it names, and its binding. A day file a run crosses
+    into repeats it; the repeat must be the same."""
+    run, binding = row.get("run_id"), row.get("binding")
+    if (not nonempty_string(run) or not all(type(row.get(k)) in (int, float) and math.isfinite(row[k]) for k in ("at_mono", "at_ts"))
+            or not all(isinstance(row.get(k), str) and re.fullmatch(r"[0-9a-f]{64}", row[k]) for k in ("codec_sha256", "simulator_sha256"))
+            or not isinstance(binding, dict) or not all(nonempty_string(binding.get(k)) for k in ("scan_revision", "transform_id", "equipment_digest"))
+            or type(binding.get("equipment_revision")) is not int):
+        raise ReplayError("run header is missing its anchor, hashes or binding")
+    if headers.setdefault(run, row) != row:
+        raise ReplayError("a run's header changed between its day files")
+
+
+def verify_binding_2(row, header, effective):
+    """A trace-2 MOVE names its room model and its subject; a lit one, the reply it answers."""
+    binding = header["binding"]
+    if any(row.get(key) != binding[key] for key in ("transform_id", "equipment_revision", "equipment_digest")):
+        raise ReplayError("MOVE binding disagrees with its run header")
+    if row.get("registration_revision") != binding["scan_revision"]:
+        raise ReplayError("MOVE scan revision disagrees with its run header")
+    if not nonempty_string(row.get("track_id")) or type(row.get("camera_epoch")) is not int:
+        raise ReplayError("MOVE is missing its subject")
+    if effective.get("spot_level") and not nonempty_string(row.get("request_id")):
+        raise ReplayError("lit MOVE names no reply")
+
+
+def verify_trace(handle, codec, *, collect_sim=False, headers=None):
     events = {}
     states = {}
     groups = {}
+    headers = {} if headers is None else headers   # trace-2: run_id -> its run header
     counts = {"encoded_only": 0, "refused": 0, "state": 0}
     for line, raw in enumerate(iter(lambda: handle.readline(MAX_LINE_BYTES + 1), b""), 1):
         try:
             if len(raw) > MAX_LINE_BYTES:
                 raise ReplayError("trace row exceeds the replay size limit")
             row = json.loads(raw, object_pairs_hook=json_object, parse_constant=reject_constant)
-            if not isinstance(row, dict) or row.get("schema") != TRACE_SCHEMA:
+            if not isinstance(row, dict) or row.get("schema") not in TRACE_SCHEMAS:
                 raise ReplayError("unrecognized trace schema")
+            version_2 = row["schema"] == TRACE_SCHEMA_2
+            if version_2 and row.get("kind") == "run_header":
+                verify_header(row, headers)
+                continue
+            if version_2 and row.get("run_id") not in headers:
+                raise ReplayError("trace-2 row before its run header")
             run, fixture = row.get("run_id"), row.get("fixture_id")
             if not nonempty_string(run) or not nonempty_string(fixture):
                 raise ReplayError("row is missing its run or fixture identity")
@@ -238,6 +273,8 @@ def verify_trace(handle, codec, *, collect_sim=False):
                 raise ReplayError("fixture registration or profile changed within a run")
             if status == "encoded_only":
                 frame = verify_command(row, state, codec, line)
+                if version_2 and action == "aim_move":
+                    verify_binding_2(row, headers[run], row["effective"])
                 if collect_sim:
                     groups.setdefault((run, fixture), []).append(frame)
             elif row.get("frame") is not None:
@@ -282,9 +319,37 @@ def replay_simulator(executable, sha256, groups):
     return checked
 
 
+class Chained:
+    """The trace files one after another, as one readline handle: a run's day files in order."""
+
+    def __init__(self, paths):
+        self.paths, self.handle = list(paths), None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        if self.handle is not None:
+            self.handle.close()
+
+    def readline(self, size=-1):
+        while True:
+            if self.handle is None:
+                if not self.paths:
+                    return b""
+                self.handle = Path(self.paths.pop(0)).open("rb")
+            line = self.handle.readline(size)
+            if line:
+                return line if line.endswith(b"\n") or not self.paths else line + b"\n"
+            self.handle.close()
+            self.handle = None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("trace", type=Path, help="complete local c12-preview-trace-1 JSONL file")
+    parser.add_argument("trace", type=Path, nargs="+",
+                        help="a run's local c12-preview-trace-1 or -2 JSONL files, in day order (a run that crosses "
+                             "UTC midnight is in two)")
     parser.add_argument("--firmware-zip", required=True, type=Path, help="private pinned firmware ZIP")
     parser.add_argument("--sim", type=Path, help="optional locally built v2-a c12v2_sim executable")
     parser.add_argument("--sim-sha256", help="expected SHA-256 of the supplied simulator executable")
@@ -294,8 +359,11 @@ def main(argv=None):
     try:
         codec, vectors = firmware_codec(args.firmware_zip)
         verified = verify_vectors(codec, vectors)
-        with args.trace.open("rb") as handle:
-            counts, groups = verify_trace(handle, codec, collect_sim=bool(args.sim))
+        headers = {}
+        with Chained(args.trace) as handle:
+            counts, groups = verify_trace(handle, codec, collect_sim=bool(args.sim), headers=headers)
+        if args.sim and any(h["simulator_sha256"] != args.sim_sha256.lower() for h in headers.values()):
+            raise ReplayError("the trace's run header names another simulator build")
         replayed = replay_simulator(args.sim, args.sim_sha256.lower(), groups) if args.sim else 0
     except ReplayError as error:
         print(f"FAIL {error}", file=sys.stderr)

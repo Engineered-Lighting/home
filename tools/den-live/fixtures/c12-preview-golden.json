@@ -1,0 +1,62 @@
+{
+  "fixture_id": "F3",
+  "profile": {
+    "fixture_id": "F3",
+    "frame": "c12-fixture-joints-1",
+    "range_cdeg": {"pan": [-18000, 18000], "tilt": [-9500, 9000]},
+    "host_inset_cdeg": 500,
+    "motion_mode": 1,
+    "lit_motion": true,
+    "retarget_mid_move": false
+  },
+  "start_joints_cdeg": [0, 0],
+  "steps": [
+    {
+      "seq": 7,
+      "intent": {
+        "action": "aim_move", "fixture_id": "F3", "decision_id": "synthetic-reading-1",
+        "source": "coordinator", "pan_cdeg": 4500, "tilt_cdeg": -3000, "level": 0.7874015748031497,
+        "cct_k": 2700, "motion_style": "lit", "lit_during_move": true, "valid_for_ms": 0
+      },
+      "frame": {
+        "endpoint": 18, "cluster": 64531, "command_id": 0, "seq": 7,
+        "payload_hex": "070009941148f4c87201000000000000"
+      },
+      "sim_reply": "800700080000"
+    },
+    {
+      "seq": 8,
+      "intent": {
+        "action": "keep_lit", "fixture_id": "F3", "decision_id": "synthetic-reading-1",
+        "source": "coordinator"
+      },
+      "frame": {"endpoint": 18, "cluster": 64531, "command_id": 1, "seq": 8, "payload_hex": "08000700"},
+      "sim_reply": null
+    },
+    {
+      "seq": 9,
+      "intent": {"action": "stop", "fixture_id": "F3", "source": "hand"},
+      "frame": {"endpoint": 18, "cluster": 64531, "command_id": 2, "seq": 9, "payload_hex": "0900"},
+      "sim_reply": null
+    },
+    {
+      "seq": 10,
+      "intent": {"action": "resume", "fixture_id": "F3", "source": "hand"},
+      "frame": {"endpoint": 18, "cluster": 64531, "command_id": 3, "seq": 10, "payload_hex": "0a00"},
+      "sim_reply": null
+    },
+    {
+      "seq": 11,
+      "intent": {
+        "action": "aim_move", "fixture_id": "F3", "decision_id": "synthetic-reading-ended",
+        "source": "coordinator", "pan_cdeg": 4500, "tilt_cdeg": -3000, "level": 0,
+        "cct_k": 2700, "motion_style": "dark", "lit_during_move": false, "valid_for_ms": 1500
+      },
+      "frame": {
+        "endpoint": 18, "cluster": 64531, "command_id": 0, "seq": 11,
+        "payload_hex": "0b0008941148f400720100000000dc05"
+      },
+      "sim_reply": "800b00080000"
+    }
+  ]
+}

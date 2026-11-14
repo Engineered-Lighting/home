@@ -75,8 +75,11 @@ class Preview:
                                    pending=None, motion=None, move=None, token=None, keep_at=0.0,
                                    target=None, basis=None, job=None, reason="waiting_for_tracking", pre_at=None,
                                    eye_hold=None)
+        self.wall = time.time   # the trace's day files and its run header's wall anchor
+        self.trace_day = None   # the UTC day file this run last wrote to: a new one starts with the run header
         self.trace = PreviewTrace(self.epoch, append or self._append, binding=self.binding,
-                                  profiles={name: row["profile"] for name, row in self.rows.items()})
+                                  profiles={name: row["profile"] for name, row in self.rows.items()},
+                                  clock=self.clock, wall=lambda: self.wall())
         self.scope = None
         self.retired_runs = set()
         self.track_seq = -1
@@ -112,13 +115,18 @@ class Preview:
         os.replace(part, path)
 
     def _append(self, row):
-        day = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        """One fsynced trace row in days/<UTC date>/coordinator-fixture_calls.jsonl. The first row this run writes to a
+        day's file follows the run header, so a run that crosses UTC midnight leaves each file whole on its own."""
+        day = datetime.datetime.fromtimestamp(self.wall(), datetime.timezone.utc).strftime("%Y-%m-%d")
         folder = self.folder.parent / "days" / day
         folder.mkdir(parents=True, exist_ok=True)
         with (folder / "coordinator-fixture_calls.jsonl").open("a", encoding="utf-8") as log:
+            if day != self.trace_day:
+                log.write(json.dumps(self.trace.header, allow_nan=False, separators=(",", ":")) + "\n")
             log.write(json.dumps(row, allow_nan=False, separators=(",", ":")) + "\n")
             log.flush()
             os.fsync(log.fileno())
+        self.trace_day = day
 
     def connect(self, publish):
         with self.lock:
@@ -468,7 +476,7 @@ class Preview:
                 details = {**details, "valid_ms": min(1500, remaining), "remaining_ms": remaining}
         try:
             record = self.trace.emit(name, action, decision_id=decision, move_token=token,
-                                     move=details, at=self.clock())
+                                     move=details, at=self.clock(), subject=ticket and ticket.get("subject"))
         except (OSError, ValueError):
             record = None
         with self.lock:

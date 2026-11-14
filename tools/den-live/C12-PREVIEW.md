@@ -14,13 +14,17 @@ The coordinator GET includes `snapshot`, `trace_event_index`, and `trace_complet
 
 MOVE records carry the requested travel style, dim level when applicable, and fade. FC13 leaves dim level and fade unset and maps dim travel to dark. Preview release darkens immediately while the offline trace retains the requested fade.
 
-The trace is `days/<UTC date>/coordinator-fixture_calls.jsonl` in coordinator state. For a run spanning UTC days, replay its complete ordered rows from both files. For sofa acceptance, compare the last saved event index with the final snapshot and require `trace_complete: true`. Verify the actual sofa trace locally:
+The trace is `days/<UTC date>/coordinator-fixture_calls.jsonl` in coordinator state, schema `c12-preview-trace-2`.
+- **The run header.** Each day file a run writes to starts with the run's header row (`kind: run_header`). It holds the run's mono-and-wall anchor, the codec's and the host simulator's SHA-256, the firmware commit, the room-model binding and the profile hashes.
+- **The binding.** Every row names its room model (`transform_id`, `equipment_revision`, `equipment_digest`, with the scan as `registration_revision`). Every MOVE also names its subject (`track_id`, `camera_epoch`, `association_revision`) and the reply it answers (`request_id`). A lit MOVE must have a reply.
+
+For a run spanning UTC days, pass both day files in order. For sofa acceptance, compare the last saved event index with the final snapshot and require `trace_complete: true`. Verify the actual sofa trace locally:
 
 ```powershell
-python -B tools/den-live/c12_replay.py <trace.jsonl> --firmware-zip <private-zip>
+python -B tools/den-live/c12_replay.py <day-1.jsonl> [<day-2.jsonl>] --firmware-zip <private-zip>
 ```
 
-Add `--sim <native-c12v2_sim>` and `--sim-sha256 <build-digest>` to replay through the compiled P2 application. The pinned firmware ZIP remains private. The shared fixture is `fixtures/preview-f3.json`. Run `python -B -m unittest discover -s tools/den-live -p 'test_preview*.py'` and `node --test tools/test-den-spot-playback.mjs` for synthetic verification.
+Add `--sim <native-c12v2_sim>` and `--sim-sha256 <build-digest>` to replay through the compiled P2 application. The build the trace names is `preview_trace.SIMULATOR_SHA256`, and a header naming another build is refused. `test_trace_v2.py` is the committed check: rows a real Preview wrote, through the pinned codec and, when `C12_TEST_SIM` is set, the simulator. The pinned firmware ZIP remains private. The shared fixture is `fixtures/preview-f3.json`. Run `python -B -m unittest discover -s tools/den-live -p 'test_preview*.py'` and `node --test tools/test-den-spot-playback.mjs` for synthetic verification.
 
 ## Physical handoff
 

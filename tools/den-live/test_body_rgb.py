@@ -225,7 +225,8 @@ class RgbBodyTests(unittest.TestCase):
 
     def test_stale_unqualified_and_dark_empty_frames_do_not_feed_learning(self):
         f = self.f
-        for seq, changes in enumerate(({"receipt": False}, {"age": 1}, {"skew": 0.068},
+        from stream import BODY_LEASE_S
+        for seq, changes in enumerate(({"receipt": False}, {"age": BODY_LEASE_S}, {"skew": 0.068},
                                        {"correction": dict(CORRECTION, calibration_sha256="b" * 64)},
                                        {"depth": bytes(640 * 400 * 2)}, {"timing_evidence": "other-profile"},
                                        {"receipt_depth_seq": 0})):

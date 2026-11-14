@@ -30,7 +30,9 @@ BACKLOG = 8
 BODY_SCHEMA = "den-live-body-2"
 BODY_SCOPE = ("home", "run_id", "track_epoch", "content_revision", "transform_id", "mode")
 BODY_FIELDS = ("track_id", "points", "facing_deg", "shoulder_midpoint_m", "pelvis_z_m")
-BODY_LEASE_S = 1.0
+# How long a body frame may be drawn, from its earliest possible capture. 2 s: on the den camera a pair is about
+# 0.5 s old when published, and about 0.9-1.0 s old when it reaches Home, so 1 s left almost nothing to draw.
+BODY_LEASE_S = 2.0
 BODY_REASONS = frozenset(("empty", "ambiguous", "pose_unavailable", "warming_background", "insufficient_depth",
                           "head_mask_unavailable", "scope_changed", "stale", "unavailable"))
 

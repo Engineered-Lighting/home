@@ -14,7 +14,7 @@ from contracts import TrackingSnapshot
 from perceive import Perceiver, body_person
 from person_fields import Facing, Speed
 from seated import Published
-from stream import BODY_SCHEMA, BASE, PeopleStream
+from stream import BODY_LEASE_S, BODY_SCHEMA, BASE, PeopleStream
 
 
 SCOPE = dict(home="den", run_id="synthetic-run", track_epoch=3, content_revision="synthetic-scan",
@@ -95,10 +95,10 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(self.events[-1][1], dict(reason="unavailable"))
         self.now += 0.5
         self.submit()
-        self.now += 1.0
+        self.now += BODY_LEASE_S
         self.detector.reply()
         self.assertEqual(self.events[-1][1], dict(reason="stale"))
-        self.assertFalse(self.submit(age=1.1))
+        self.assertFalse(self.submit(age=BODY_LEASE_S + 0.1))
 
     def test_ambiguity_invalidates_late_ready_and_scope_rebinds(self):
         self.setup_worker()
@@ -280,13 +280,13 @@ class StreamTests(unittest.TestCase):
             self.assertEqual(read_event(response), ("body_clock", {"server_ts": 1000}))
             name, first = read_event(response)
             self.assertEqual(name, "body")
-            self.assertEqual(first["expires_ts"] - first["capture_ts"], 1)
+            self.assertEqual(first["expires_ts"] - first["capture_ts"], BODY_LEASE_S)
             self.assertNotIn("head", first)
         self.now += 0.2
         with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
             read_event(response)
             self.assertEqual(read_event(response), ("body", first))
-        self.now += 0.4
+        self.now += BODY_LEASE_S - 0.6   # past the lease: captured 0.5 s before, 0.2 s since
         with urllib.request.urlopen(self.base + "body-v2", timeout=3) as response:
             read_event(response)
             name, cleared = read_event(response)

@@ -17,6 +17,13 @@
  * - The look is the Perception Lab's graph (design v8): a dark card per system with a hairline border, its name and a
  *   role badge, one readable value, and a status line in the Lab's own state words (Changed, with a brief highlight;
  *   Current; Stale; Unavailable; Idle).
+ * - On a phone (a room under COMPACT_PX wide) the rail is four joined stations, camera → den-live → Qwen → light, and
+ *   Frigate rides under Qwen as a small gate with its dashed line up into it. A card's values dock along the bottom of
+ *   the room instead of over it. When the person turns the pipeline on, it asks Home's sheet down to peek
+ *   (home-sheet-detent), so the room has the screen; when they turn it off, it puts back the height it found, unless
+ *   they moved the sheet since. Only their toggle moves the sheet: a re-mount (a page load, an app switch, a hidden
+ *   page) with the pipeline left on never does.
+ * - Qwen's card drains a hairline meter over its answer's life, which ends when the answer expires.
  * - Text goes in with textContent. Role names, not host names: the page shows what each system does. */
 import * as THREE from 'three';
 import { FADE, answerOf, identityOf } from './home-den-inference-model.mjs';
@@ -24,6 +31,9 @@ import { FADE, answerOf, identityOf } from './home-den-inference-model.mjs';
 const SVG = 'http://www.w3.org/2000/svg';
 const WIRE_HOT_MS = 1100, STALE_S = 3, MEASURE_MS = 250, COMPACT_PX = 640, FIT_MS = 450, DOT_R = 4.5, COMET_PX = 26;
 const STORE_KEY = 'home.den.pipeline';
+// The sheet's height from before the person turned the pipeline on. It outlives a re-mount (the den view disposes and
+// re-attaches this layer whenever the room leaves the screen), so a later "off" can still put it back.
+let sheetBefore = null;
 const stored = () => { try { return localStorage.getItem(STORE_KEY) === 'on'; } catch (_) { return false; } };
 const store = on => { try { localStorage.setItem(STORE_KEY, on ? 'on' : 'off'); } catch (_) {} };
 const NODES = Object.freeze([
@@ -141,9 +151,12 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
         const subText = doc.createElement('span');
         sub.append(dot, stateWord, subText);
         el.append(top, value, sub);
+        // Qwen's answer lives ANSWER_S at most: a hairline along the card's foot drains with it
+        const life = node.id === 'qwen' ? doc.createElement('i') : null;
+        if (life) { life.className = 'home-den-pipeline-life'; life.setAttribute('aria-hidden', 'true'); el.append(life); }
         el.addEventListener('click', event => { event.stopPropagation(); open = open === node.id ? null : node.id; renderPop(); });
         rail.appendChild(el);
-        cards.set(node.id, { el, value, sub: subText, state: stateWord, node, changedAt: -Infinity });
+        cards.set(node.id, { el, value, sub: subText, state: stateWord, life, node, changedAt: -Infinity });
     }
     const onKey = event => { if (event.key === 'Escape' && open) { open = null; renderPop(); } };
     const onDown = event => { if (open && !layer.contains(event.target)) { open = null; renderPop(); } };
@@ -156,7 +169,25 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
     function insetTarget() {
         if (!on) return 0;
         const c = canvas.getBoundingClientRect(), r = rail.getBoundingClientRect();
-        return r.height > 0 ? Math.max(0, Math.round(r.bottom - c.top + 12)) : 0;
+        // on a phone Frigate's gate hangs under the rail, so the room starts below it
+        const gate = layer.dataset.compact === '1' ? cards.get('occupancy').el.getBoundingClientRect() : null;
+        const bottom = Math.max(r.bottom, gate && gate.height > 0 ? gate.bottom : 0);
+        return r.height > 0 ? Math.max(0, Math.round(bottom - c.top + 12)) : 0;
+    }
+    /* Home's sheet (a phone or tablet) covers the room's lower half. Turning the pipeline on asks the sheet down to peek
+     * and keeps the height it found; turning it off puts that back only if the sheet still sits at peek. */
+    const shell = () => host.closest('.apt-home-shell');
+    const askSheet = detent => doc.defaultView?.dispatchEvent(new CustomEvent('home-sheet-detent', { detail: { detent } }));
+    function lowerSheet() {
+        const s = shell(), panel = s?.querySelector('.apt-home-panel');
+        if (!s || !panel) return;
+        const p = panel.getBoundingClientRect(), r = s.getBoundingClientRect();
+        if (!(p.width >= r.width - 1 && p.top > r.top + 1)) return;   // a side column, not a sheet
+        if (s.dataset.sheet && s.dataset.sheet !== 'peek') { sheetBefore = s.dataset.sheet; askSheet('peek'); }
+    }
+    function restoreSheet() {
+        if (sheetBefore && shell()?.dataset.sheet === 'peek') askSheet(sheetBefore);
+        sheetBefore = null;
     }
     function fitTo(target) {
         if (typeof engine.setViewInsets !== 'function') return;
@@ -176,6 +207,8 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
         toggle.setAttribute('aria-pressed', String(on));
         if (on) rail.dataset.aptViewInset = 'top'; else delete rail.dataset.aptViewInset;
         if (!on) { open = null; renderPop(); }
+        // only the person's toggle moves the sheet: attaching with the stored state (remember false) never does
+        if (remember) { if (on) lowerSheet(); else restoreSheet(); }
         measuredAt = -Infinity;
         if (remember) store(on);
         // the rail's place is set in frame(); give it one frame before measuring where the room should start
@@ -220,6 +253,11 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
             if (c.el.dataset.changed !== String(changed)) c.el.dataset.changed = String(changed);
             const label = `${c.node.role}, ${c.node.system}: ${m.value}${m.sub ? `, ${m.sub}` : ''}`;
             if (c.el.getAttribute('aria-label') !== label) c.el.setAttribute('aria-label', label);
+            if (c.life) {
+                const life = m.state === 'live' && finite(m.life) ? m.life : 0;
+                const width = `${(life * 100).toFixed(1)}%`;
+                if (c.life.style.width !== width) c.life.style.width = width;
+            }
         }
         if (open) renderPop();
     }
@@ -237,7 +275,8 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
             for (const [k, val] of rows) { const dt = doc.createElement('dt'); dt.textContent = k; const dd = doc.createElement('dd'); dd.textContent = val; dl.append(dt, dd); }
             pop.append(h, dl);
         }
-        if (r && box) {
+        if (layer.dataset.compact === '1') { if (pop.style.transform) pop.style.transform = ''; }   // docked along the room's foot (CSS)
+        else if (r && box) {
             const left = Math.max(8, Math.min(box.w - 268, r.left));
             pop.style.transform = `translate(${Math.round(left)}px, ${Math.round(r.bottom + 8)}px)`;
         }
@@ -288,6 +327,12 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
             legend.style.right = '14px'; legend.style.top = `${Math.round(top - 16)}px`;
             if (on && !fit) requestAnimationFrame(() => { if (!disposed && on) fitTo(insetTarget()); });   // the rail moved: refit below it
         }
+        // on a phone Frigate's gate hangs centred under Qwen's station (its top is CSS: just under the rail)
+        const gate = cards.get('occupancy').el, qBox = b.cards.get('qwen'), gBox = b.cards.get('occupancy');
+        if (compact && qBox && gBox) {
+            const gl = `${Math.round(qBox.left + qBox.width / 2 - gBox.width / 2 - left)}px`;
+            if (gate.style.left !== gl) { gate.style.left = gl; measuredAt = -Infinity; }
+        } else if (!compact && gate.style.left) { gate.style.left = ''; measuredAt = -Infinity; }
         stepFit();
         if (!on) { if (wires._key !== 'off') { wires._key = 'off'; wires.textContent = ''; } raf = requestAnimationFrame(frame); return; }
         wires.setAttribute('viewBox', `0 0 ${Math.round(b.w)} ${Math.round(b.h)}`);
@@ -305,7 +350,8 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
             }
         }
         { const A = D('occupancy'), Z = D('qwen');
-          if (A && Z) push('occupancy>qwen', `M${A.x.toFixed(1)} ${A.top.toFixed(1)} C ${A.x.toFixed(1)} ${(A.top - 16).toFixed(1)}, ${Z.x.toFixed(1)} ${(Z.top - 16).toFixed(1)}, ${Z.x.toFixed(1)} ${Z.top.toFixed(1)}`,
+          if (A && Z) push('occupancy>qwen', compact ? `M${A.x.toFixed(1)} ${A.top.toFixed(1)} L${Z.x.toFixed(1)} ${Z.bottom.toFixed(1)}`
+            : `M${A.x.toFixed(1)} ${A.top.toFixed(1)} C ${A.x.toFixed(1)} ${(A.top - 16).toFixed(1)}, ${Z.x.toFixed(1)} ${(Z.top - 16).toFixed(1)}, ${Z.x.toFixed(1)} ${Z.top.toFixed(1)}`,
             'gate', model.occupancy?.state === 'live' ? 0.25 : 0); }
         const live = latest && (now - latestAt) / 1000 <= STALE_S;
         if (live && b.canvas.width > 0) {
@@ -397,6 +443,7 @@ export function attachDenPipeline({ engine, host, markers, names = () => ({}), r
             if (raf != null) cancelAnimationFrame(raf);
             clearInterval(tick); resized?.disconnect();
             if (on && typeof engine.setViewInsets === 'function') engine.setViewInsets({ ...(engine.viewInsets?.() || {}), top: 0 });
+            // the sheet stays where it is: hiding the room is not the person turning the pipeline off
             doc.removeEventListener('keydown', onKey); doc.removeEventListener('pointerdown', onDown, true);
             layer.remove();
         },

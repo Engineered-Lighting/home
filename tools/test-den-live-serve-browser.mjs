@@ -727,6 +727,15 @@ inPart(1, 'the pipeline runs through the room: camera to perception to Qwen to t
         await page.locator('.home-den-live-chip-icon[data-icon="pipeline"]').click();
         await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.on === true);
         await page.waitForFunction(() => (window.__APT_ENGINE?.viewInsets?.()?.top ?? 0) > 40, null, { timeout: 5000 });
+        if (mobile) {
+          // a phone: the sheet steps down to peek so the room has the screen, and Frigate's gate hangs under Qwen
+          await page.waitForFunction(() => document.querySelector('.apt-home-shell')?.dataset.sheet === 'peek', null, { timeout: 5000 });
+          await page.waitForFunction(() => {
+            const box = node => document.querySelector(`.home-den-pipeline-card[data-node="${node}"]`)?.getBoundingClientRect();
+            const gate = box('occupancy'), qwen = box('qwen');
+            return gate && qwen && gate.top > qwen.bottom && Math.abs((gate.left + gate.right) / 2 - (qwen.left + qwen.right) / 2) < 2;
+          }, null, { timeout: 5000 });
+        }
         await page.waitForFunction(() => /%/.test(window.HomeDenLiveView?.status()?.pipeline?.cards?.coordinator?.value ?? ''), null, { timeout: 60000 })
           .catch(async error => { console.log('pipeline status', JSON.stringify(await cards())); throw error; });
         const shown = await cards();
@@ -746,7 +755,29 @@ inPart(1, 'the pipeline runs through the room: camera to perception to Qwen to t
         await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.open === null);
         await page.locator('.home-den-live-chip-icon[data-icon="pipeline"]').click();
         await page.waitForFunction(() => window.__APT_ENGINE?.viewInsets?.()?.top === 0, null, { timeout: 5000 });
+        if (mobile) await page.waitForFunction(() => document.querySelector('.apt-home-shell')?.dataset.sheet === 'half', null, { timeout: 5000 });
         if (shots) await page.screenshot({ path: path.join(shots, `pipeline-${mobile ? 'phone' : 'desktop'}-off.png`) });
+        if (mobile) {
+          // Only the person's toggle moves the sheet. With the pipeline left on, a re-mount (the page hidden and shown, as
+          // on an app switch) keeps the height they chose, and so does a page load.
+          const sheet = () => page.evaluate(() => document.querySelector('.apt-home-shell')?.dataset.sheet);
+          await page.locator('.home-den-live-chip-icon[data-icon="pipeline"]').click();
+          await page.waitForFunction(() => document.querySelector('.apt-home-shell')?.dataset.sheet === 'peek', null, { timeout: 5000 });
+          // the person raises the sheet back to half with the pipeline still on
+          await page.evaluate(() => window.dispatchEvent(new CustomEvent('home-sheet-detent', { detail: { detent: 'half' } })));
+          await page.waitForFunction(() => document.querySelector('.apt-home-shell')?.dataset.sheet === 'half');
+          await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })));
+          await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline === null);
+          assert.equal(await sheet(), 'half', 'hiding the page leaves the sheet where it is');
+          await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })));
+          await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.on === true, null, { timeout: 10000 });
+          await delay(800);
+          assert.equal(await sheet(), 'half', 'the re-mount with the pipeline on leaves the sheet where they put it');
+          await page.reload({ waitUntil: 'domcontentloaded' });
+          await page.waitForFunction(() => window.HomeDenLiveView?.status()?.pipeline?.on === true, null, { timeout: 60000 });
+          await delay(800);
+          assert.equal(await sheet(), 'half', 'a page load with the pipeline on keeps the sheet at its default');
+        }
       } finally { await context.close(); }
     }
   } finally { fake.inference = null; fake.subject = null; Object.assign(fake.control, initial); }

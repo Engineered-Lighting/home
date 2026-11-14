@@ -216,6 +216,13 @@ The owner asked for the Perception Lab's graph (design v8) to live with the 3D h
   - `aptTopOverlayInset` in `home-apartment.jsx`.
   - The browser case is "the pipeline runs through the room" in `tools/test-den-live-serve-browser.mjs`.
 - **Seen on the owner's real den scan (v4) on the workstation's GPU,** with a synthetic seated body, caption and stream. The screenshots stayed on the workstation and weren't committed. Under SwiftShader a frame of the real scan takes longer than the body's 1 s lease, so the body correctly expires before it paints. Judge the real scan on a GPU.
+- **Qwen's life meter:** a hairline along the foot of Qwen's card drains over the answer's life (`life` from `answerOf`) and is gone when the answer expires. It's on every size.
+- **Phone** (a room under 640 px wide, added 2026-11-14 at the owner's ask):
+  - **The sheet steps down.** Turning the pipeline on asks Home's sheet down to peek (`home-sheet-detent`, a window event `home-app.jsx` listens for), so the room has the screen. Turning it off puts back the height the sheet had, unless the person moved the sheet since. Only that toggle moves the sheet: a re-mount with the pipeline left on (a page load, an app switch, a hidden page) never does, and the height from before the toggle outlives a re-mount. Desktop's side column is never asked.
+  - **Four stations across:** camera → den-live → Qwen → light, joined by their ports. Each shows its name, one value (two lines when a fault needs the words, like "Stream stopped") and its status line. The state dot sits in the card's top corner, and the role badges and state words step back. The faults read in the values ("Too dark", "Stale", "Stop"), with the attention diamond.
+  - **Frigate's gate hangs under Qwen** as a small card ("Frigate · Occupied") with its dashed line straight up into Qwen. The room starts below it.
+  - **Details dock along the room's foot,** over the room's toolbar, so the room stays in view. Escape, a second tap or a tap outside closes them.
+  - **The capsule drops Qwen's line while the pipeline is on** (every size), because Qwen's card has it. Its coordinator row stays.
+  - The opt-in browser case checks the step down and back, the gate under Qwen, and that a re-mount and a page load with the pipeline on leave the sheet where it was, on the phone viewport.
 - **Not done:**
-  - Phone. The room there is still the thin strip under the Controls sheet, so the pipeline needs the sheet folded. That's the shell's job.
   - The Layers menu entry.

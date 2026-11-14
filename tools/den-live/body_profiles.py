@@ -9,8 +9,9 @@ It writes, never over an existing file:
 - `den-body-clock.json` (`den-body-clock-profile-1`) for the camera, which the body-clock camera release reads with
   `--body-clock-profile`. Its device, SDK and calibration come from the session's camera calibration; its fps from
   the session's own RGB sequence rate; its acquisition margins are SDK_BOUNDS below.
-- `den-live-body-rgb.json` for install_la.py: the candidate the passing score used (qualification.json names its
-  sha256), unchanged, with its clock evidence id.
+- `den-live-body-rgb.json` for install_la.py: a byte copy of the candidate the passing score used (qualification.json
+  names its sha256), with its clock evidence id; and beside it `den-live-body-rgb.qualification.json`, the counts
+  and provenance install_la.py checks it against.
 
 SDK_BOUNDS are bounds from the camera's own SDK semantics, not an optical measurement (the owner chose this on
 2026-11-14; COMMISSIONING.md's strobe reference needs a rig that doesn't exist). DepthAI 3.10's ImgFrame timestamp is
@@ -73,9 +74,21 @@ def clock_profile(calibration, fps, evidence_id):
             "rgb": dict(SDK_BOUNDS["rgb"]), "depth": dict(SDK_BOUNDS["depth"])}
 
 
+QUALIFICATION_FILE = "den-live-body-rgb.qualification.json"
+PASSING_BASES = ("measured_separation", "zero_separation")   # never the old max-separation basis
+
+
 def passed(qualification):
     mask = (qualification or {}).get("mask") or {}
-    return mask.get("verdict") == "pass"
+    return mask.get("verdict") == "pass" and mask.get("basis") in PASSING_BASES
+
+
+def qualification_record(qualification, candidate_bytes):
+    """What install_la.py checks a profile against: counts and provenance only."""
+    return {"schema": "den-live-body-rgb-qualification-1",
+            "candidate_sha256": hashlib.sha256(candidate_bytes).hexdigest(),
+            "mask": qualification["mask"], "den_live_commit": qualification.get("den_live_commit"),
+            "scope": qualification.get("scope")}
 
 
 def build(session, *, frame_meta, candidate_path=None):
@@ -92,7 +105,8 @@ def build(session, *, frame_meta, candidate_path=None):
         raise Refused("that candidate isn't the one the passing score used")
     fps = session_fps(read_json(session / "manifest.json")["frames"], frame_meta)
     clock = clock_profile(read_json(session / "camera-calibration.json"), fps, candidate["clock_evidence_id"])
-    return clock, candidate
+    candidate_bytes = candidate_path.read_bytes()
+    return clock, candidate, candidate_bytes, qualification_record(qualification, candidate_bytes)
 
 
 def write_new(path, data):
@@ -115,10 +129,13 @@ def main(argv=None):
         with np.load(io.BytesIO((args.session / row["file"]).read_bytes()), allow_pickle=False) as arrays:
             frame_meta.append(json.loads(arrays["metadata_json"].tobytes()))
     try:
-        clock, candidate = build(args.session, frame_meta=frame_meta, candidate_path=args.candidate)
+        clock, candidate, candidate_bytes, record = build(args.session, frame_meta=frame_meta,
+                                                         candidate_path=args.candidate)
         args.out.mkdir(parents=True, exist_ok=True)
         write_new(args.out / CLOCK_FILE, clock)
-        write_new(args.out / RGB_FILE, candidate)
+        with open(args.out / RGB_FILE, "xb") as out:   # byte for byte: its sha256 is the scored candidate's
+            out.write(candidate_bytes)
+        write_new(args.out / QUALIFICATION_FILE, record)
     except (Refused, FileExistsError, KeyError, ValueError) as exc:
         print("No profiles written: %s" % (exc if not isinstance(exc, FileExistsError) else "a profile is already there"),
               file=sys.stderr)

@@ -303,11 +303,58 @@ def cut_leaks(frame, region, rect, cut_px, background, camera=None):
     return int(candidate.sum())
 
 
+HEAD_KEYPOINT_SCORE, HEAD_KEYPOINT_PAD_PX = 0.3, 6
+
+
+def head_keypoint_box(pose, camera):
+    """[left, top, right, bottom] around every face and ear keypoint the detector scores HEAD_KEYPOINT_SCORE or more,
+    in depth pixels (each at its lift, or at the shoulders' depth), padded; None when none. The marked head grows to
+    hold it: a mark that misses an ear the detector sees is a mark too small."""
+    from camgeom import apply, inverse, project
+
+    keypoints = pose.get("keypoints") if isinstance(pose, dict) else None
+    if not isinstance(keypoints, (list, tuple)) or len(keypoints) != 17:
+        return None
+    rig = camera.rig
+    to_depth = inverse(*camera.room_from_left)
+    lifted = {j["j"]: j["xyz"] for j in pose.get("joints_room") or () if isinstance(j, dict)
+              and j.get("status") == "supported" and isinstance(j.get("xyz"), (list, tuple)) and len(j["xyz"]) == 3}
+    depths = [apply(rig.rotation, rig.translation, apply(*to_depth, lifted[i]))[2] for i in (5, 6) if i in lifted]
+    points = []
+    for index in range(5):
+        pixel = keypoints[index]
+        if not (isinstance(pixel, (list, tuple)) and len(pixel) == 3 and all(isinstance(x, (int, float)) for x in pixel)
+                and pixel[2] >= HEAD_KEYPOINT_SCORE):
+            continue
+        if index in lifted:
+            points.append(project(apply(*to_depth, lifted[index]), rig.left_k))
+        elif depths:
+            where = rig.left_pixel(rig.rgb_ray(pixel[0], pixel[1]), sum(depths) / len(depths))
+            if where is not None:
+                points.append(where)
+    points = [p for p in points if p is not None and all(math.isfinite(x) for x in p)]
+    if not points:
+        return None
+    width, height = rig.depth_size
+    xs, ys = zip(*points)
+    box = [math.floor(min(xs)) - HEAD_KEYPOINT_PAD_PX, math.floor(min(ys)) - HEAD_KEYPOINT_PAD_PX,
+           math.ceil(max(xs)) + HEAD_KEYPOINT_PAD_PX + 1, math.ceil(max(ys)) + HEAD_KEYPOINT_PAD_PX + 1]
+    box = [max(0, box[0]), max(0, box[1]), min(width, box[2]), min(height, box[3])]
+    return box if box[0] < box[2] and box[1] < box[3] else None
+
+
+def union(a, b):
+    return a if b is None else [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])]
+
+
 def score(frames, annotations, camera, *, profile, separations=None):
     """Score the body lane's actual exclusion. Report counts only, by cue.
 
-    The envelope covers a frame when its rectangle holds both marked regions. With the shoulder-line cut, a frame is
-    covered when no foreground depth pixel inside either region survives the envelope and the cut together."""
+    A frame is covered when no foreground depth pixel (40 mm nearer than the empty room) inside either marked region
+    survives the envelope and the cut together. The marked head grows to hold every face and ear keypoint the detector
+    sees. A frame with no measured separation is scored at zero, the smallest any receipt can give: the envelope's
+    motion pad is then thinnest (the cut's margin is one constant). Without an empty room nothing counts as covered
+    unless the envelope's rectangle holds both regions whole."""
     truth = truth_by_frame(frames, annotations, *camera.rig.depth_size)
     background = empty_background(frames)
     counts = defaultdict(Counter)
@@ -318,7 +365,7 @@ def score(frames, annotations, camera, *, profile, separations=None):
         timing = None if separations is None else separations.get(frame.key)
         if type(timing) not in (float, int) or not 0 <= timing < math.inf:
             timing_missing += 1
-            timing = profile.max_separation_s
+            timing = 0.0
         key = list(frame.key)
         evidence = head_evidence(frame.pose, camera, frame_key=key, binding=binding,
                                  profile=profile, separation_s=timing) if frame.pose is not None else None
@@ -336,11 +383,14 @@ def score(frames, annotations, camera, *, profile, separations=None):
             tally["visible_withheld"] += 1
             tally[frame.status if frame.pose is None else "head_evidence_withheld"] += 1
         else:
-            if cut is None:
-                covers_head, covers_neck = (contains(mask, region) for region in regions)
+            if frame.pose is not None:
+                regions = [union(regions[0], head_keypoint_box(frame.pose, camera)), regions[1]]
+            if background is None or frame.depth_mm is None:
+                covers_head, covers_neck = (mask is not None and contains(mask, region) for region in regions)
             else:
                 covers_head, covers_neck = (cut_leaks(frame, region, mask, cut, background, camera) == 0
                                             for region in regions)
+            if cut is not None:
                 tally["by_cut"] += 1
             tally["covered" if covers_head and covers_neck else "undercovered"] += 1
             if not covers_head:
@@ -352,7 +402,7 @@ def score(frames, annotations, camera, *, profile, separations=None):
     verdict = "pass" if covered else "incomplete"
     if unsafe:
         verdict = "fail"
-    return {"verdict": verdict, "basis": "candidate_separation" if timing_missing else "measured_separation",
+    return {"verdict": verdict, "basis": "zero_separation" if timing_missing else "measured_separation",
             "timing_unavailable_frames": timing_missing, "sampled_frames": len(frames),
             "counts_by_cue": {cue: dict(tally) for cue, tally in counts.items()}}
 

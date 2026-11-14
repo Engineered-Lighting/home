@@ -436,7 +436,7 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     config = {"schema": CONFIG_SCHEMA, "camera_url": settings["camera_url"], "content_packs": str(packs), "site": site,
               "venv_python": str(venv_python), "models": str(models), "stream_port": int(stream_port),
               **({"asks": block} if block else {})}
-    body_rgb = settings.get("body_rgb", current.get("body_rgb") if isinstance(current, dict) else None)
+    body_rgb = settings.get("body_rgb")   # an install without a profile turns the figure off
     if body_rgb is not None:
         config["body_rgb"] = body_rgb
     if "coordinator" in settings:

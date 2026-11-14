@@ -199,9 +199,21 @@ def clock_for_mask(clock_score, rows, profile):
     return separations, "measured"
 
 
+def den_live_commit():
+    """The commit this scorer ran from, and whether its tools folder had changes: provenance for the profile."""
+    import subprocess
+
+    here = str(Path(__file__).resolve().parent)
+    head = subprocess.run(["git", "-C", here, "rev-parse", "HEAD"], capture_output=True, text=True)
+    dirty = subprocess.run(["git", "-C", here, "status", "--porcelain", "--", "."], capture_output=True, text=True)
+    if head.returncode:
+        return None
+    return head.stdout.strip() + ("+changes" if dirty.stdout.strip() else "")
+
+
 def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE, candidate_sha256=None):
     passed = (clock_check == "measured" and mask_score["verdict"] == "pass"
-              and mask_score["basis"] == "measured_separation")
+              and mask_score["basis"] in ("measured_separation", "zero_separation"))
     pair_delta = clock_score.get("max_rgb_depth_stamp_delta_s")
     pairing = "unavailable" if pair_delta is None else "pass" if pair_delta <= RGB_PAIR_S + 1e-9 else "fail"
     verdict = "sampled_session_pass" if passed else "open"
@@ -209,6 +221,7 @@ def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE, c
         passed = pairing == "pass" and mask_score["verdict"] == "pass"
         verdict = "camera_trial_pass" if passed else "camera_trial_open"
     summary = {"verdict": verdict, "scope": scope, "rgb_pairing": pairing, "candidate_sha256": candidate_sha256,
+               "den_live_commit": den_live_commit(),
                "clock_check": clock_check,
                "clock": {key: value for key, value in clock_score.items() if key != "candidate_separations"},
                "mask": mask_score}

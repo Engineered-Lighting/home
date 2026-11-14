@@ -38,6 +38,10 @@ class PreviewInstallTest(unittest.TestCase):
                        "transform_id": "test-transform", "scan_revision": "test-scan", "min_valid_depth_fraction": 0.2,
                        "head": asdict(HeadProfile(0.13, 0.055, 0.35, 1.0, 0.006, 0.5, 0.085))}
             (root / install.BODY_PROFILE_FILE).write_text(json.dumps(profile), encoding="utf-8")
+            import hashlib
+            (root / install.BODY_QUALIFICATION_FILE).write_text(json.dumps({
+                "candidate_sha256": hashlib.sha256((root / install.BODY_PROFILE_FILE).read_bytes()).hexdigest(),
+                "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
             transport = SimpleNamespace(shell=lambda *args, **kwargs: 0, copied={})
 
             def copy(paths, remote):

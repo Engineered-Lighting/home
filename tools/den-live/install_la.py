@@ -26,6 +26,7 @@ the undo, for this PowerShell. --host is the ssh host, hav-ubuntu as the den sim
 camera as LA reaches it, by default den-take's.
 """
 import argparse
+import hashlib
 import json
 import shutil
 import subprocess
@@ -144,17 +145,32 @@ def labels_seed(root):
     return path, len(doc["labels"])
 
 
+BODY_QUALIFICATION_FILE = "den-live-body-rgb.qualification.json"   # body_profiles.py writes it beside the profile
+
+
 def body_profile(path, receipt):
-    """Read the optional owner-qualified profile before copying any release files."""
+    """Read the optional owner-qualified profile before copying any release files. It must be the very candidate a
+    passing head-cut score used: the qualification record beside it names its sha256 and its pass."""
     path = Path(path)
     if not path.is_file():
         return None
     try:
-        block = json.loads(path.read_text(encoding="utf-8-sig"))
+        data = path.read_bytes()
+        block = json.loads(data.decode("utf-8-sig"))
         registration = json.loads(Path(receipt).read_text(encoding="utf-8"))
         rs.RgbBodyProfile.from_config(block, registration)
     except (OSError, TypeError, KeyError, ValueError, OverflowError):
         raise Stop("the RGB figure profile does not match the camera registration") from None
+    try:
+        record = json.loads((path.parent / BODY_QUALIFICATION_FILE).read_text(encoding="utf-8"))
+        mask = record["mask"]
+        qualified = (record["candidate_sha256"] == hashlib.sha256(data).hexdigest() and mask["verdict"] == "pass"
+                     and mask["basis"] in ("measured_separation", "zero_separation"))
+    except (OSError, TypeError, KeyError, ValueError):
+        qualified = False
+    if not qualified:
+        raise Stop("the RGB figure profile isn't the one a passing head-cut score used (%s beside it)"
+                   % BODY_QUALIFICATION_FILE)
     return block
 
 

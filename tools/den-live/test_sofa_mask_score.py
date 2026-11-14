@@ -61,7 +61,7 @@ class ScoringTests(unittest.TestCase):
         self.assertTrue(all(tally["covered"] == 1 for tally in result["counts_by_cue"].values()))
         self.assertNotIn(self.frames[0].key[0], json.dumps(result))
         result = self.score(separations=False)
-        self.assertEqual(result["basis"], "candidate_separation")
+        self.assertEqual(result["basis"], "zero_separation")
         self.assertEqual(result["timing_unavailable_frames"], len(mask.POSE_CUES))
 
     def test_upper_neck_must_fit_even_when_head_is_covered(self):

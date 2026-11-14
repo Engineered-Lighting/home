@@ -32,15 +32,19 @@ class Profiles(unittest.TestCase):
         self.addCleanup(scratch.cleanup)
         self.session = Path(scratch.name)
         self.write(body_rgb_candidate=CANDIDATE, registration=REGISTRATION, camera_calibration=CALIBRATION,
-                   manifest={"frames": []}, qualification={"mask": {"verdict": "pass"}})
+                   manifest={"frames": []}, qualification={"mask": {"verdict": "pass", "basis": "zero_separation"}})
 
     def write(self, **files):
         for name, data in files.items():
             (self.session / (name.replace("_", "-") + ".json")).write_text(json.dumps(data), encoding="utf-8")
 
     def test_a_passed_session_gives_a_clock_bound_to_its_camera_and_the_candidate_unchanged(self):
-        clock, rgb = bp.build(self.session, frame_meta=frames())
+        clock, rgb, data, record = bp.build(self.session, frame_meta=frames())
         self.assertEqual(rgb, CANDIDATE)
+        self.assertEqual(data, (self.session / "body-rgb-candidate.json").read_bytes(), "byte for byte")
+        import hashlib
+        self.assertEqual(record["candidate_sha256"], hashlib.sha256(data).hexdigest())
+        self.assertEqual(record["mask"]["basis"], "zero_separation")
         self.assertEqual(clock["schema"], "den-body-clock-profile-1")
         self.assertEqual((clock["evidence_id"], clock["device_id"], clock["calibration_sha256"], clock["fps"]),
                          ("clock-test", "fictional-device", DIGEST, 30))
@@ -56,6 +60,8 @@ class Profiles(unittest.TestCase):
         for label, files in {
             "open score": {"qualification": {"mask": {"verdict": "incomplete"}}},
             "failed score": {"qualification": {"mask": {"verdict": "fail"}}},
+            "a pass at the old max separation": {"qualification": {"mask": {"verdict": "pass",
+                                                                            "basis": "candidate_separation"}}},
             "other sdk": {"camera_calibration": dict(CALIBRATION, depthai="3.9.0")},
             "correction off": {"camera_calibration": dict(CALIBRATION, depth_correction={"applied": False})},
         }.items():
@@ -74,7 +80,7 @@ class Profiles(unittest.TestCase):
         newer = self.session / "candidate-2.json"
         block = dict(CANDIDATE, head=dict(CANDIDATE["head"], torso_cut_m=0.1))
         newer.write_text(json.dumps(block), encoding="utf-8")
-        self.write(qualification={"mask": {"verdict": "pass"},
+        self.write(qualification={"mask": {"verdict": "pass", "basis": "zero_separation"},
                                   "candidate_sha256": hashlib.sha256(newer.read_bytes()).hexdigest()})
         self.assertEqual(bp.build(self.session, frame_meta=frames(), candidate_path=newer)[1], block)
         with self.assertRaises(bp.Refused):

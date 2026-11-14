@@ -296,7 +296,27 @@ class RgbBodyTests(unittest.TestCase):
         receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
         self.assertIsNone(install_la.body_profile(profile, receipt))
         profile.write_text(json.dumps(f.block), encoding="utf-8-sig")
-        self.assertEqual(install_la.body_profile(profile, receipt), f.block)
+        record = self.scratch / install_la.BODY_QUALIFICATION_FILE
+        import hashlib
+        digest = hashlib.sha256(profile.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+            install_la.body_profile(profile, receipt)   # no qualification record beside it
+        for mask, ok in (({"verdict": "pass", "basis": "zero_separation"}, True),
+                         ({"verdict": "pass", "basis": "measured_separation"}, True),
+                         ({"verdict": "pass", "basis": "candidate_separation"}, False),
+                         ({"verdict": "fail", "basis": "zero_separation"}, False)):
+            with self.subTest(mask=mask):
+                record.write_text(json.dumps({"candidate_sha256": digest, "mask": mask}), encoding="utf-8")
+                if ok:
+                    self.assertEqual(install_la.body_profile(profile, receipt), f.block)
+                else:
+                    with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+                        install_la.body_profile(profile, receipt)
+        record.write_text(json.dumps({"candidate_sha256": "0" * 64,
+                                      "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
+        with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+            install_la.body_profile(profile, receipt)   # another candidate's pass
+        record.unlink()
         profile.write_text(json.dumps(dict(f.block, transform_id="other")), encoding="utf-8")
         with self.assertRaisesRegex(install_la.Stop, "does not match"):
             install_la.body_profile(profile, receipt)

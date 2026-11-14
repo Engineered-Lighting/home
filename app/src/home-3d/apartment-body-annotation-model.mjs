@@ -2,12 +2,17 @@
  * and draws what this decides. The rules (owner-approved, 2026-11-11):
  * - Name, never face. An unknown person is "Someone". The house's response is said; facts about the person aren't.
  * - Say less zoomed out: name at the overview, name and what they're doing at room zoom, everything up close.
- * - Nothing flickers: activity changes and clears only after 2 s (a new one shows at once when none is shown), the
+ * - Nothing flickers: one activity changes to another only after 2 s (a new one shows at once when none is shown), the
  *   held-object tag stays 1.5 s past its last sighting, and the caption changes side only past 42% / 66% of the width.
+ * - Never longer than the answer: the caller passes an activity only while its answer is valid (Qwen's 10 s, or its
+ *   valid_for_s), and nothing the moment it expires. Then the word clears at once: the debounce never extends it.
  * - Facing is the skeleton's: the shoulder and hip lines (facingOf below), steadied by a quick 0.12 s average, then
  *   followed with a 0.9 s time constant while the gap is noise-sized and 0.1 s once it passes about 20 degrees, so a
  *   real turn still lands within a second. The sight line's origin (the head) is smoothed over 0.25 s and the ring
- *   height over 0.5 s. */
+ *   height over 0.5 s.
+ * - The measured figure (den-live-body-2) has no head: it's cut out on every frame. Its bearing goes through the same
+ *   filter, which forgets it the moment a frame has none, so no old direction outlives the producer's. Its sight line
+ *   starts at the measured shoulder midpoint, never at a guessed head. */
 
 export const DEBOUNCE_ACTIVITY_S = 2, OBJECT_HOLD_S = 1.5, SIDE_FLIP = Object.freeze([0.42, 0.66]);
 export const SEATED_PELVIS_M = 0.72, WALKING_MPS = 0.25;
@@ -96,7 +101,8 @@ export function createBodyAnnotationState() {
 
             const wanted = typeof incoming === 'string' ? incoming.slice(0, 40) : '';
             if (wanted !== candidate) { candidate = wanted; candidateAt = now; }
-            if (candidate !== activity && (!activity && candidate || now - candidateAt >= DEBOUNCE_ACTIVITY_S)) { activity = candidate; since = activity ? now : null; }
+            if (!wanted) { activity = ''; since = null; }   // expired: gone at once
+            else if (candidate !== activity && (!activity || now - candidateAt >= DEBOUNCE_ACTIVITY_S)) { activity = candidate; since = now; }
 
             if (object) { objectUntil = now + OBJECT_HOLD_S; objectLabel = object.label ?? null; objectConfidence = object.confidence ?? null; }
             const holding = now < objectUntil;
@@ -113,8 +119,11 @@ export function createBodyAnnotationState() {
             if (torso) {
                 if (Number.isFinite(torso.facingDeg)) {
                     const azimuth = torso.facingDeg * DEG; // Producer bearings are clockwise from apartment +Y.
-                    dir = [Math.sin(azimuth), Math.cos(azimuth), 0];
-                }
+                    dir = facing.step([Math.sin(azimuth), Math.cos(azimuth), 0], dt);
+                } else facing.reset();
+                const shoulder = Array.isArray(torso.shoulder) && torso.shoulder.length === 3 && torso.shoulder.every(Number.isFinite)
+                    ? torso.shoulder : null;
+                eye = shoulder ? (eye ? eye.map((x, k) => x + (shoulder[k] - x) * ease(dt, 0.25)) : shoulder.slice()) : null;
             } else {
                 const raw = facingOf(joints);
                 if (raw) dir = facing.step(raw, dt);
@@ -126,24 +135,26 @@ export function createBodyAnnotationState() {
             }
             return { detail: detailFor(zoomT), right, posture, seated, walking, speed, activity, since: activity && since != null ? now - since : 0,
                 object: holding ? { label: objectLabel, confidence: objectConfidence } : null,
-                ringZ, ringRadius: seated ? 0.42 : 0.45, head, eye: torso ? null : eye, facing: dir, facingAz: dir ? Math.atan2(dir[1], dir[0]) : null };
+                ringZ, ringRadius: seated ? 0.42 : 0.45, head, eye: torso && !dir ? null : eye, facing: dir, facingAz: dir ? Math.atan2(dir[1], dir[0]) : null };
         },
         reset() { facing.reset(); activity = ''; candidate = ''; since = null; objectUntil = -Infinity; right = true; ringZ = null; eye = null; speed = 0; lastCentroid = null; },
     };
 }
 
 /* The caption's lines for a detail level. person: {name, known, source, confidence} from Home's identity store (or
- * null); house: what the house did, e.g. "Reading light · 70%" (or null). */
-export function captionLines(person, state, house = null) {
+ * null); house: what the house did, e.g. "Reading light · 70%" (or null); evidence: what Qwen saw that made its
+ * word, e.g. "book in hands · pages open" (or null), shown up close only, under the same expiry as the word. */
+export function captionLines(person, state, house = null, evidence = null) {
     const known = !!(person && person.known !== false && typeof person.name === 'string' && person.name.trim());
     const name = known ? person.name.trim().slice(0, 40) : 'Someone';
     const doing = [state.posture, state.activity].filter(Boolean).join(' · ');
-    const lines = { name, doing: '', provenance: '', house: '' };
+    const lines = { name, doing: '', provenance: '', house: '', evidence: '' };
     if (state.detail >= 1) lines.doing = state.detail === 1 ? (state.activity || state.posture) : doing + (state.since ? ' · ' + formatDuration(state.since) : '');
     if (state.detail >= 2) {
         const pct = Number.isFinite(person?.confidence) ? ` · ${Math.round(person.confidence * 100)}%` : '';
         lines.provenance = known ? `${person.source || 'identity'}${pct}` : 'not recognised';
         lines.house = typeof house === 'string' ? house.slice(0, 60) : '';
+        lines.evidence = state.activity && typeof evidence === 'string' ? evidence.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
     }
     return lines;
 }

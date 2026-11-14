@@ -29,19 +29,20 @@ test('detail by zoom: everything up close, name and activity in the room, name a
     assert.deepEqual([0, 0.34, 0.35, 0.79, 0.8, 1].map(detailFor), [2, 2, 1, 1, 0, 0]);
 });
 
-test('an activity shows at once, but changing or clearing it takes 2 s (it stays through detection gaps)', () => {
+test('an activity shows at once and changes only after 2 s, but an expired one clears at once', () => {
     const s = createBodyAnnotationState();
     let r = run(s, 0.2, () => ({ activity: 'Reading' }), 0);
     assert.equal(r.out.activity, 'Reading', 'shown at once when nothing is shown');
-    r = run(s, 1.5, () => ({ activity: null }), r.t);
-    assert.equal(r.out.activity, 'Reading', 'a 1.5 s gap does not clear it');
+    r = run(s, 0.1, () => ({ activity: null }), r.t);
+    assert.equal(r.out.activity, '', 'the answer expired: the label never outlives it');
     r = run(s, 0.3, () => ({ activity: 'Reading' }), r.t);
+    assert.equal(r.out.activity, 'Reading');
     r = run(s, 1.9, () => ({ activity: 'Phone' }), r.t);
     assert.equal(r.out.activity, 'Reading', 'a change under 2 s is not shown');
     r = run(s, 0.3, () => ({ activity: 'Phone' }), r.t);
     assert.equal(r.out.activity, 'Phone');
     assert.ok(r.out.since < 0.5, 'its duration starts when it is shown');
-    r = run(s, 2.2, () => ({ activity: null }), r.t);
+    r = run(s, 0.1, () => ({ activity: null }), r.t);
     assert.equal(r.out.activity, '');
 });
 
@@ -119,32 +120,69 @@ test('facing from the pose: the skeleton direction, with the sight-line origin s
     assert.ok(r.out.eye && r.out.head);
 });
 
-test('the measured figure uses the current clockwise torso bearing and has no sight line', () => {
+test('the measured figure takes the clockwise torso bearing through the facing filter, and forgets it at once', () => {
     const s = createBodyAnnotationState();
-    const update = facingDeg => s.step({ now: 1, dt: 0.016, joints: joints(), torso: { facingDeg, pelvisZ: 0.5 },
+    const update = (facingDeg, dt = 0.016) => s.step({ now: 1, dt, joints: {}, torso: { facingDeg, pelvisZ: 0.5 },
         centroid: [0, 0, 1], zoomT: 0 });
-    const north = update(0), east = update(90);
-    assert.equal(north.facingAz, Math.PI / 2);
-    assert.ok(Math.abs(east.facingAz) < 1e-10);
-    assert.equal(east.eye, null);
-    assert.equal(east.head, null);
-    assert.equal(east.posture, 'Seated');
-    assert.equal(update(null).facingAz, null);
+    assert.equal(update(0).facingAz, Math.PI / 2, 'the first bearing shows as it is');
+    assert.ok(Math.abs(update(90).facingAz - Math.PI / 2) < 5 * DEG, 'one frame later it has barely moved');
+    let az = null;
+    for (let i = 0; i < 30; i++) az = update(90, 1 / 30).facingAz;
+    assert.ok(Math.abs(az) < 10 * DEG, 'a real 90 degree turn lands within a second');
+    assert.equal(update(null).facingAz, null, 'no bearing, no pointer');
+    assert.equal(update(180).facingAz, -Math.PI / 2, 'after a gap the new bearing shows as it is, not blended with the old');
+    assert.equal(update(180).posture, 'Seated');
+});
+
+test('the measured figure: seated bearing noise of a few degrees moves the pointer under a degree a frame', () => {
+    const s = createBodyAnnotationState();
+    let seed = 11; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    let prev = null, worst = 0;
+    for (let i = 0; i < 90; i++) {   // 30 s at den-live's 3 frames a second
+        const out = s.step({ now: i / 3, dt: 1 / 3, joints: {}, torso: { facingDeg: 90 + (rnd() - 0.5) * 2 * 6, pelvisZ: 0.5 },
+            centroid: [0, 0, 1], zoomT: 0 });
+        if (i > 15 && prev != null) worst = Math.max(worst, Math.abs(out.facingAz - prev));
+        prev = out.facingAz;
+    }
+    assert.ok(worst < 3 * DEG, `steadied: ${(worst / DEG).toFixed(2)} deg per update`);
+});
+
+test('the measured figure has no head; its sight line starts at the measured shoulders', () => {
+    const s = createBodyAnnotationState();
+    const out = s.step({ now: 1, dt: 0.016, joints: {}, torso: { facingDeg: 90, pelvisZ: 0.5, shoulder: [1, 2, 1.1] },
+        centroid: [0, 0, 1], zoomT: 0 });
+    assert.equal(out.head, null);
+    assert.deepEqual(out.eye, [1, 2, 1.1]);
+    const none = s.step({ now: 1.1, dt: 0.1, joints: {}, torso: { facingDeg: null, pelvisZ: 0.5, shoulder: [1, 2, 1.1] },
+        centroid: [0, 0, 1], zoomT: 0 });
+    assert.equal(none.eye, null, 'no facing, no sight line');
+    const noShoulder = createBodyAnnotationState().step({ now: 1, dt: 0.016, joints: {}, torso: { facingDeg: 90, pelvisZ: 0.5 },
+        centroid: [0, 0, 1], zoomT: 0 });
+    assert.equal(noShoulder.eye, null, 'never a guessed origin');
 });
 
 test('captions say less zoomed out, and name an unknown person "Someone"', () => {
     const st = { detail: 0, posture: 'Seated', activity: 'Reading', since: 754 };
     const resident = { name: 'Resident', known: true, source: 'face', confidence: 0.94 };
-    assert.deepEqual(captionLines(resident, st, 'Reading light · 70%'), { name: 'Resident', doing: '', provenance: '', house: '' });
+    assert.deepEqual(captionLines(resident, st, 'Reading light · 70%'), { name: 'Resident', doing: '', provenance: '', house: '', evidence: '' });
     assert.equal(captionLines(resident, { ...st, detail: 1 }).doing, 'Reading');
     assert.equal(captionLines(resident, { ...st, detail: 1, activity: '' }).doing, 'Seated');
     assert.deepEqual(captionLines(resident, { ...st, detail: 2 }, 'Reading light · 70%'),
-        { name: 'Resident', doing: 'Seated · Reading · 13 min', provenance: 'face · 94%', house: 'Reading light · 70%' });
+        { name: 'Resident', doing: 'Seated · Reading · 13 min', provenance: 'face · 94%', house: 'Reading light · 70%', evidence: '' });
     assert.equal(captionLines(null, st).name, 'Someone');
     assert.equal(captionLines({ name: 'Resident', known: false }, { ...st, detail: 2 }).provenance, 'not recognised');
     assert.equal(captionLines({ name: '   ' }, st).name, 'Someone');
     const card = cardRows(resident, st, 'Reading light · 70%');
     assert.deepEqual(card, { name: 'Resident', confidence: '94%', posture: 'Seated', activity: 'Reading · 13 min', house: 'Reading light · 70%', known: true });
+});
+
+test('what Qwen saw shows up close only, and only beside a live activity word', () => {
+    const st = { detail: 2, posture: 'Seated', activity: 'Reading', since: 30 };
+    assert.equal(captionLines(null, st, null, '  book in hands ·\n pages open ').evidence, 'book in hands · pages open');
+    assert.equal(captionLines(null, { ...st, detail: 1 }, null, 'book in hands').evidence, '', 'not at room zoom');
+    assert.equal(captionLines(null, { ...st, activity: '' }, null, 'book in hands').evidence, '', 'gone with the expired word');
+    assert.equal(captionLines(null, st, null, null).evidence, '');
+    assert.equal(captionLines(null, st, null, 'x'.repeat(90)).evidence.length, 60);
 });
 
 test('durations read the way people say them', () => {

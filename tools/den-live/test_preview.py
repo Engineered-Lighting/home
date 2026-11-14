@@ -182,11 +182,12 @@ class PreviewTest(unittest.TestCase):
         self.read()
         self.assertTrue(self.preview.episode.need.engaged, "one confident yes inside the episode")
 
-    def test_second_person_and_new_epoch_clear(self):
+    def test_a_repeated_track_is_one_person_and_new_epoch_clears(self):
+        # A second person no longer darkens the reader (plan 04, step 3: test_preview_people.py has those cases).
         self.light()
         self.now += .25
         self.track(more=True)
-        self.assertFalse(self.row()["on"])
+        self.assertTrue(self.row()["on"])
         self.now += .25
         self.track(epoch=2)
         self.read()
@@ -335,7 +336,8 @@ class PreviewTest(unittest.TestCase):
     def test_one_bad_snapshot_darkens_but_keeps_the_episode(self):
         """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens, and the episode, its onset, the need
         state and its requests survive it; the next good frame lights again with no new answer."""
-        for bad in ({"association": "ambiguous"}, {"posed": False}, {"more": True}):
+        # A second person isn't a bad frame any more (plan 04, step 3): test_preview_people.py.
+        for bad in ({"association": "ambiguous"}, {"posed": False}):
             with self.subTest(bad=bad):
                 self.light()
                 episode, requests = self.preview.episode, list(self.preview.episode.requests)

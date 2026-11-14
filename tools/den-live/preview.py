@@ -47,6 +47,9 @@ PRE_AIM_STANDING_M = .3
 STANDBY_M = .1
 # Exits a fixture can come back from (its job wasn't refused): it's still the incumbent while it fades.
 RECOVERABLE = ("task_released", "task_ending")
+# Several people (plan 04, step 3): the person the light is for keeps it while others are in the room, and every other
+# person's head is kept out of every beam by the same clearance as the reader's own (den-core eye.HEAD_CLEARANCE_M).
+THROUGH_ANOTHER_HEAD = "beam_through_head"
 CONTROL_KEYS = ("on", "stopped", "stop_counter")
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
 
@@ -117,6 +120,7 @@ class Preview:
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
         self.hold_until = None   # while lit, the track holds to here through a camera gap (GAP_HOLD_S)
         self.eligible_track = None
+        self.others = ()       # everyone else on the newest fresh frame: {track_id, head}, kept out of every beam
         self.captured = None   # the newest frame taken for the track
         self.since = None      # the published seated since_mono the episode was built at
         self.shift = None
@@ -206,6 +210,7 @@ class Preview:
         state and its requests all go."""
         self.track_binding = self.track = self.track_until = self.hold_until = self.episode = self.eligibility = None
         self.eligible_track = None
+        self.others = ()
         self.captured = self.since = None
         self.shift = self.target_basis = None
         self.facing = direction.FacingFilter()
@@ -214,6 +219,32 @@ class Preview:
         """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens. No light until a current, posed,
         seated frame of the same person; the episode, its onset, the need state and the requests stay."""
         self.track = self.track_until = self.hold_until = None
+        self.others = ()
+
+    def _subject_of(self, tracks):
+        """(the track the light is for, everyone else). One track is the subject, as it always was. Among several, the
+        subject is the one the current binding names (track id and association revision), and only that one: a person
+        who walks in never becomes the subject while others are there, and with no binding nobody is lit."""
+        if len(tracks) == 1:
+            return tracks[0], ()
+        bound = self.track_binding and tuple(self.track_binding[2:])
+        for track in tracks:
+            if bound and (field(track, "track_id"), field(track, "association_revision")) == bound:
+                return track, tuple(other for other in tracks if field(other, "track_id") != bound[0])
+        return None, tuple(tracks)
+
+    def _other(self, track):
+        joints = pose(track)
+        head = field(track, "coarse_head_room_m") or self.core.body.head(joints)
+        if not (isinstance(head, (list, tuple)) and len(head) == 3 and all(map(finite, head))):
+            return None
+        return {"track_id": field(track, "track_id"), "head": tuple(head)}
+
+    def _clear_of_others(self, origin, point, kept=False):
+        """Whether the beam from `origin` to `point` keeps every other person's head out by the reader's clearance: den-core's
+        to be admitted, direction's keep clearance for a fixture already lit (the same hysteresis as the reader's glare)."""
+        clearance = direction.GLARE_KEEP_M if kept else self.core.eye.HEAD_CLEARANCE_M
+        return all(self.core.eye.centre_clear(origin, point, other["head"]) >= clearance for other in self.others)
 
     def tracking(self, snapshot):
         with self.lock:
@@ -241,14 +272,18 @@ class Preview:
                 # No new frame (a camera gap: perception's stale snapshots) or a late one: nothing to learn here.
                 # _expire darkens at the light's deadline, or, while a spot is lit, at the gap hold's.
                 pass
-            elif (field(snapshot, "presence") != "present" or len(tracks) != 1
+            elif (field(snapshot, "presence") != "present" or not tracks
                     or any(field(frame, k) != self.binding[k] for k in ("transform_id", "scan_revision"))):
                 self._darken()
+            elif self._subject_of(tracks)[0] is None:
+                self._darken()   # several people and none of them the one the light is for
             else:
+                subject, others = self._subject_of(tracks)
                 eligibility = field(snapshot, "eligibility_revision")
                 if self.eligibility is not None and eligibility != self.eligibility:
                     self.episode = self.shift = self.target_basis = None
-                self._track(tracks[0], captured, deadline, captured + GAP_HOLD_S, now)
+                self._track(subject, captured, deadline, captured + GAP_HOLD_S, now)
+                self.others = tuple(row for row in map(self._other, others) if row is not None)
                 # The ask names the eligible track only on a frame that may start an ask. A bad frame publishes None
                 # with the same eligibility revision, and the person stays eligible for the reply already in flight.
                 eligible = field(snapshot, "eligible_track_id")
@@ -390,6 +425,9 @@ class Preview:
                     person["target"], row["aim_origin_m"], row["horizontal_world_reference"])))
             except ValueError:
                 reasons[name] = "ambiguous_aim"
+                continue
+            if not self._clear_of_others(row["aim_origin_m"], person["target"], kept):
+                reasons[name] = THROUGH_ANOTHER_HEAD
                 continue
             if any(not lo <= a <= hi for a, (lo, hi) in zip(target, row["ranges"])):
                 reasons[name] = "out_of_range"
@@ -580,6 +618,15 @@ class Preview:
                     math.radians(row["profile"].get("path_margin_cdeg", 0) / 100))
                 if closest < direction.GLARE_KEEP_M + margin:
                     travel = "dark"
+                # Everyone else's head too (plan 04, step 3), at the admission clearance plus the same margin.
+                for other in self.others:
+                    _, near = self.core.eye.path_clear(row["aim_origin_m"], row["horizontal_world_reference"],
+                        tuple(x / 100 for x in row["current"]), tuple(x / 100 for x in target),
+                        math.dist(row["aim_origin_m"], person["target"]), other["head"])
+                    other_margin = math.dist(row["aim_origin_m"], other["head"]) * math.tan(
+                        math.radians(row["profile"].get("path_margin_cdeg", 0) / 100))
+                    if near < self.core.eye.HEAD_CLEARANCE_M + other_margin:
+                        travel = "dark"
             if travel == "lit":
                 # One movement, one command: the glide carries the level the train has reached, and a rise in progress
                 # waits for it to land.
@@ -999,7 +1046,7 @@ class Preview:
         signature = self.track_binding, episode, task, known
         if signature != self.context_signature:
             self.context_signature, self.context_since = signature, now
-        return {"people": int(self.track is not None), "task": task, "seated": episode is not None,
+        return {"people": int(self.track is not None) + len(self.others), "task": task, "seated": episode is not None,
                 "activity_known": known, "since_mono": self.context_since}
 
     def _controls(self):

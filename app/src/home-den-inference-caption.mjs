@@ -34,12 +34,17 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
     const captions = new Map(), v = new THREE.Vector3(), eye = new THREE.Vector3();
     let latest = null, latestAt = 0, spot = null, disposed = false, raf = null, last = null;
 
+    /* The canvas's box in the host, read once a frame before anything is written, so placing never forces a layout. */
+    let box = { x: 0, y: 0, width: 0, height: 0 };
+    function measure() {
+        const c = canvas.getBoundingClientRect(), h = host.getBoundingClientRect();
+        box = { x: c.left - h.left, y: c.top - h.top, width: c.width, height: c.height, host: h };
+    }
     function project(p) {
         v.set(p[0], p[1], p[2]); parent.localToWorld(v);
         const distance = v.distanceTo(camera.getWorldPosition(eye));
         v.project(camera);
-        const c = canvas.getBoundingClientRect(), h = host.getBoundingClientRect();
-        return { x: c.left - h.left + (v.x + 1) / 2 * c.width, y: c.top - h.top + (1 - v.y) / 2 * c.height, visible: v.z < 1 && v.z > -1, distance };
+        return { x: box.x + (v.x + 1) / 2 * box.width, y: box.y + (1 - v.y) / 2 * box.height, visible: v.z < 1 && v.z > -1, distance };
     }
 
     function make(id) {
@@ -68,6 +73,7 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
         return c;
     }
     const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+    const setData = (node, key, value) => { if (node.dataset[key] !== value) node.dataset[key] = value; };   // no style churn when unchanged
     const show = (node, on) => { if (node.hidden === on) node.hidden = !on; };
 
     function anchorFor(track, marker, bodySnap) {
@@ -84,14 +90,16 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
         const w = host.clientWidth, h = host.clientHeight, dpr = Math.min(2, doc.defaultView?.devicePixelRatio || 1);
         if (leaders.width !== Math.round(w * dpr) || leaders.height !== Math.round(h * dpr)) { leaders.width = Math.round(w * dpr); leaders.height = Math.round(h * dpr); }
         lctx.setTransform(dpr, 0, 0, dpr, 0, 0); lctx.clearRect(0, 0, w, h);
-        layer.dataset.compact = w < 520 ? '1' : '0';
+        const compactFlag = w < 520 ? '1' : '0';
+        if (layer.dataset.compact !== compactFlag) layer.dataset.compact = compactFlag;
         const since = latest ? (clock() - latestAt) / 1000 : Infinity;
         const seen = new Set();
         if (latest && since <= STALE_S + 2 && w > 0 && h > 0) {
             parent.updateWorldMatrix(true, false); camera.updateMatrixWorld();
+            measure();
             const byId = new Map(markers().map(m => [m.track_id, m]));
             const bodySnap = body(), current = spot, fixtureNames = names() || {}, reduce = reducedMotion();
-            const chipRect = host.querySelector('[data-den-live-chip]')?.getBoundingClientRect(), hostRect = host.getBoundingClientRect();
+            const chipRect = host.querySelector('[data-den-live-chip]')?.getBoundingClientRect(), hostRect = box.host;
             const chipBox = chipRect && chipRect.width > 0 ? { left: chipRect.left - hostRect.left, right: chipRect.right - hostRect.left,
                 top: chipRect.top - hostRect.top, bottom: chipRect.bottom - hostRect.top } : null;
             for (const track of latest.tracks) {
@@ -111,7 +119,7 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
                 const gap = onBody ? (compact ? 22 : 34) : (compact ? 18 : 26), ew = c.el.offsetWidth, eh = c.el.offsetHeight;
                 if (c.side === 'right' && at.x + gap + ew > w - 8 && at.x - gap - ew > 8) c.side = 'left';
                 if (c.side === 'left' && at.x - gap - ew < 8 && at.x + gap + ew < w - 8) c.side = 'right';
-                c.el.dataset.side = c.side;
+                setData(c.el, 'side', c.side);
                 const tx = c.side === 'right' ? at.x + gap : at.x - gap - ew, ty = at.y - (onBody ? eh * 0.35 : eh + 10);
                 const k = reduce || c.x == null ? 1 : 1 - Math.exp(-Math.max(0, dt) / TAU_S);
                 c.x = c.x == null ? tx : c.x + (tx - c.x) * k; c.y = c.y == null ? ty : c.y + (ty - c.y) * k;
@@ -148,8 +156,8 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
 
     function render(c, model, detail, compact, stale) {
         const el = c.el;
-        el.dataset.kind = model.identity.kind; el.dataset.strength = model.identity.strength; el.dataset.detail = String(detail);
-        el.dataset.line = model.line.kind; el.dataset.stale = stale ? '1' : '0'; el.dataset.asking = model.line.asking ? '1' : '0';
+        setData(el, 'kind', model.identity.kind); setData(el, 'strength', model.identity.strength); setData(el, 'detail', String(detail));
+        setData(el, 'line', model.line.kind); setData(el, 'stale', stale ? '1' : '0'); setData(el, 'asking', model.line.asking ? '1' : '0');
         setText(c.name, model.identity.name);
         const id = model.identity;
         setText(c.prov, detail >= 2 ? (id.kind === 'household' ? `face ${id.score.toFixed(2)}${id.age_s != null ? ` · ${Math.round(id.age_s)} s ago` : ''}`
@@ -173,7 +181,7 @@ export function attachDenCaption({ engine, host, markers, body = () => null, nam
         show(c.house, !!house && (detail >= 1 || compact));
         setText(c.houseWords, house ? house.words : '');
         setText(c.houseLevel, house && !house.dark && house.level != null ? `${Math.round(house.level * 100)}%${house.cct_k ? ` · ${house.cct_k} K` : ''}` : '');
-        if (house) c.house.dataset.dark = house.dark ? '1' : '0';
+        if (house) setData(c.house, 'dark', house.dark ? '1' : '0');
         show(c.near, detail === 1 && !compact && !!model.near);
         setText(c.near, model.near || '');
     }

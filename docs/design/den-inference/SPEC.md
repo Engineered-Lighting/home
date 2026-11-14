@@ -198,7 +198,7 @@ The owner asked for the Perception Lab's graph (design v8) to live with the 3D h
   - The coordinator drops a warm line onto where the beam lands (`target_m`), with a soft bloom.
   - A wire brightens, and a short comet runs it, only when a record has just gone through: a people event, a new Qwen answer, or a change in the spot.
 - **Minimal while on:** the room's fixture pills step back, because the coordinator card names the lit fixture in its sheet. With the caption on, its house line still shows up close.
-- **Occupancy:** den-live doesn't send Frigate's occupancy yet. The card shows Qwen's gate, and its sheet says so. A `health.occupancy {effective, why}` field would make it Frigate's own word.
+- **Occupancy:** the card reads den-live's `health.occupancy {effective, why}` (accepted for den-live on 2026-11-14) and says "Not reported" until it's sent. It's never inferred from Qwen's gate.
 - **The capsule:** with the caption or the pipeline on, the den's chip becomes one Lab-style row: status, then three icons (pipeline, the coordinator's controls in a sheet, and labels). It replaces the separate Labels button and the chip's drawer.
 - **Code:**
   - `app/src/home-den-pipeline-layer.mjs`: the layer, and `pipelineCards()`, which is pure and tested by `tools/test-den-pipeline-cards.mjs`.

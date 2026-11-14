@@ -201,7 +201,8 @@ before(async () => {
   assert.ok(fs.existsSync(chromium.executablePath()), 'install the pinned Playwright Chromium');
   folder = fs.mkdtempSync(path.join(os.tmpdir(), 'home-serve-browser-'));
   const packs = path.join(folder, 'packs'), registration = path.join(folder, 'registration');
-  fs.mkdirSync(packs); fs.mkdirSync(registration);
+  // The equipment store refuses a folder others can read (POSIX only), as on LA.
+  fs.mkdirSync(packs); fs.mkdirSync(registration, { mode: 0o700 });
   den = installPack(packs, 'victoria');
   const other = installPack(packs, 'echo');
   fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1,

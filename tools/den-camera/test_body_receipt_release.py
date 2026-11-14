@@ -1,5 +1,6 @@
-"""The den camera's body-clock release (pilot-20261114-body): the slim release plus the measured figure's
-capture-age receipt, on the slim answers den-live reads.
+"""The den camera's body-clock release (pilot-20261114-body2): the slim release plus the measured figure's
+capture-age receipt, on the slim answers den-live reads. body2 is pilot-20261114-body with each frame anchored on the
+newest clock sample taken before its exposure began.
 
     python -B tools/den-camera/test_body_receipt_release.py
 
@@ -21,7 +22,8 @@ sys.path.insert(0, str(HERE))
 import test_slim_release as slim_test  # noqa: E402  fictional frames, metadata, loaders and wire helpers
 
 ROOT = slim_test.ROOT
-RELEASE = ROOT / 'tools/fixtures/installed-oak-capture-20261114-body.py'
+RELEASE = ROOT / 'tools/fixtures/installed-oak-capture-20261114-body2.py'
+BODY = ROOT / 'tools/fixtures/installed-oak-capture-20261114-body.py'   # pilot-20261114-body, as installed
 SLIM = slim_test.RELEASE
 TOKEN = slim_test.TOKEN
 AGE = 'X-Den-Body-Capture-Age'
@@ -52,6 +54,11 @@ class ReleaseDiff(unittest.TestCase):
         new = [line.replace("metadata['frames']['rgb'],", "metadata['frames']['rgb'])")
                if 'state.publish_slim(' in line else line for line in new]
         self.assertEqual(new, lines(SLIM))
+
+    def test_body2_changed_only_the_anchor_since_pilot_20261114_body(self):
+        old, new = slim_test.module_definitions(BODY), slim_test.module_definitions(RELEASE)
+        self.assertEqual(set(old), set(new))
+        self.assertEqual({key for key in old if ast.dump(old[key]) != ast.dump(new[key])}, {'__doc__', 'BodyClockState'})
 
     def test_without_a_profile_main_builds_a_state_with_no_clock(self):
         source = RELEASE.read_text(encoding='utf-8')
@@ -201,6 +208,38 @@ class Clock(unittest.TestCase):
         self.assertIsNotNone(self.receipt(slim))
         self.mono_ns += 1_000_000_000
         self.assertIsNone(self.receipt(slim))
+
+    def test_a_frame_older_than_the_publish_gap_is_anchored_on_an_older_sample(self):
+        # The den camera: a frame is about 0.45 s old when it's published, more than the gap between publishes (0.2 s
+        # here, 0.4 s there). The previous publish's sample always comes after its exposure began.
+        def run(module):
+            self.m = module
+            profile = module.BodyClockProfile(**{name: getattr(self.profile, name) for name in (
+                'schema', 'evidence_id', 'device_id', 'depthai_version', 'calibration_sha256', 'fps',
+                'clock_drift_ppm', 'receiver_drift_ppm', 'rgb', 'depth')})
+            self.state = module.BodyClockState(15, body_clock=profile, _point=self.point)
+            self.bind()
+            return [self.receipt(self.publish(n, frame_delay_ns=450_000_000)[0]) for n in range(1, 7)]
+
+        new = run(self.m)
+        self.assertEqual([r is not None for r in new], [False, False, False, True, True, True],
+                         "from the fourth frame on, a sample from before each exposure is in the last two seconds")
+        self.assertGreaterEqual(new[3]['rgb_age_upper_s'], .45)
+        self.assertLess(new[3]['rgb_age_upper_s'], .5)
+        self.assertEqual(run(slim_test.load(BODY, '_body_release_as_installed')), [None] * 6,
+                         "pilot-20261114-body anchored only on the previous publish: none")
+
+    def test_a_suspend_since_the_anchor_gives_none(self):
+        for n in range(1, 4):
+            self.publish(n, frame_delay_ns=450_000_000)
+        self.boot_delta_ns += 5_000_000   # a suspend after the anchor's sample
+        self.assertIsNone(self.receipt(self.publish(4, frame_delay_ns=450_000_000)[0]))
+
+    def test_an_anchor_is_never_older_than_the_history(self):
+        self.publish(1)
+        self.mono_ns += self.m.BodyClockState.HISTORY_NS
+        self.assertIsNone(self.receipt(self.publish(2)[0]), "the only earlier sample is more than two seconds old")
+        self.assertIsNotNone(self.receipt(self.publish(3)[0]))
 
     def test_a_new_session_drops_the_receipt(self):
         self.publish(1)

@@ -11,6 +11,8 @@ a pin update and a release switch. Never edit a release in place. The repo copy 
 | `pilot-20260926` | `installed-oak-capture-20261016.py` | Causal JPEG timing pilot |
 | `pilot-20261111-depth` | `installed-oak-capture-20261111.py` | Measured depth correction (`DEPTH_CORRECTION`) |
 | `pilot-20261114-slim` | `installed-oak-capture-20261114.py` | `/frame-slim.npz` (`den-camera-slim-1`) for den-live across the link |
+| `pilot-20261114-body` | `installed-oak-capture-20261114-body.py` | The body clock's receipt (gave almost none on the den camera: see below) |
+| `pilot-20261114-body2` | `installed-oak-capture-20261114-body2.py` | The body clock, anchored on a sample from before each exposure |
 
 Keep earlier release directories in place: perception-lab releases already on the Jetson read their own
 pinned `capture.py` by path.
@@ -34,7 +36,13 @@ same (`If-None-Match`). Its metadata is the full bundle's, plus `bundle_schema: 
   `python -I -B tools/den-camera/slim_bundle_bench.py <bundle.npz>`.
 - **Ship it** with "Ship a release" below, which is written for this release.
 
-## The body clock (`pilot-20261114-body`)
+## The body clock (`pilot-20261114-body2`)
+
+`pilot-20261114-body` anchored each frame's receipt on the clock sample taken at the previous publish. On the den
+camera a frame is about 0.45 s old when it's published (the stereo outputs trail RGB on the device by about 0.3 s) and
+publishes are about 0.4 s apart, so that sample always came after the frame's exposure began, and the no-suspend proof
+couldn't cover it: about 1 frame in 25 had a receipt. `pilot-20261114-body2` keeps the last two seconds of samples
+and anchors each frame on the newest one taken before its exposure began. Everything else is the same.
 
 den-live's measured figure (`den-live-body-2`) only uses a frame whose capture age the camera vouches for. Without
 that it shows nothing: it can't tell a fresh pair from a stale one across hosts whose clocks aren't synchronized. This

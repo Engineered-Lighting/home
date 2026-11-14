@@ -4,8 +4,11 @@ target: backend
 type: added
 ---
 
-A new den camera release, `pilot-20261114-body`, is the slim release plus the
-measured figure's capture-age receipt. With a commissioned clock profile, each
+A new den camera release, `pilot-20261114-body2`, is the slim release plus the
+measured figure's capture-age receipt. It replaces `pilot-20261114-body`, which
+anchored each receipt only on the previous publish's clock sample and so gave
+almost none on the den camera, where a frame is older when it's published than
+the gap between publishes. With a commissioned clock profile, each
 slim and full bundle answer carries `X-Den-Body-Capture-Age`: upper bounds on
 how old that exact frame's colour and depth exposures are, and how far apart.
 den-live's live figure needs the receipt and shows nothing without it; earlier,

@@ -71,7 +71,8 @@ class Queue:
 
 
 class Anything:
-    """Every node, output and config the pipeline builder touches."""
+    """Every node, output and config the pipeline builder touches. Like depthai 3.10, it remembers each requested
+    camera output, and a node's build() with an output as an argument consumes it (StereoDepth links its two)."""
 
     def __init__(self, fake):
         self.fake = fake
@@ -79,10 +80,16 @@ class Anything:
         self.initialConfig = mock.MagicMock()
 
     def build(self, *a, **k):
+        for value in a:
+            if value in self.fake.requested:
+                value.consumed_by_build = True
         return self
 
     def requestOutput(self, *a, **k):
-        return mock.MagicMock()
+        output = mock.MagicMock()
+        output.consumed_by_build = False
+        self.fake.requested.append(output)
+        return output
 
     @property
     def inputControl(self):
@@ -104,8 +111,13 @@ class Control:
         return lambda *a: self.calls.append((name, a))
 
 
+def unconsumed(requested):
+    """depthai 3.10's start() rule: every Camera.requestOutput() needs a link or an output queue."""
+    return [o for o in requested if not (o.consumed_by_build or o.link.called or o.createOutputQueue.called)]
+
+
 def fake_depthai():
-    fake = types.SimpleNamespace(groups=Queue(), controls=Queue(), drivers=[])
+    fake = types.SimpleNamespace(groups=Queue(), controls=Queue(), drivers=[], requested=[], built=0)
 
     class Device:
         def readCalibration(self):
@@ -122,6 +134,9 @@ def fake_depthai():
     class Pipeline:
         AutoCalibrationMode = types.SimpleNamespace(OFF="off")
 
+        def __init__(self, create_implicit_device=True):
+            self.device = create_implicit_device
+
         def __enter__(self):
             return self
 
@@ -137,13 +152,24 @@ def fake_depthai():
         def create(self, node):
             return Anything(fake)
 
+        def build(self):
+            missing = unconsumed(fake.requested)
+            if missing:
+                raise RuntimeError("Always call output->createOutputQueue() or output->link(*) after calling "
+                                   "dai::node::Camera::requestOutput(). There is(are) %d requested Camera output(s) "
+                                   "with no connected inputs or created output queues." % len(missing))
+            fake.built += 1
+
         def start(self):
-            pass
+            if not self.device:
+                raise RuntimeError("no device")
+            self.build()
 
     module = types.SimpleNamespace(
         __version__="3.10.0", Pipeline=Pipeline, CameraControl=Control,
         node=types.SimpleNamespace(Camera="camera", StereoDepth=types.SimpleNamespace(PresetMode=mock.MagicMock()),
-                                   Sync="sync"),
+                                   Sync="sync", VideoEncoder="encoder"),
+        VideoEncoderProperties=mock.MagicMock(),
         CameraBoardSocket=mock.MagicMock(), ImgFrame=mock.MagicMock(), ImgResizeMode=mock.MagicMock())
     return module, fake
 
@@ -199,6 +225,16 @@ class NightProbeTest(unittest.TestCase):
         self.assertEqual([c for calls in manual for c in calls if c[0] == "setLumaDenoise"],
                          [("setLumaDenoise", (1,)), ("setLumaDenoise", (4,))])
 
+    def test_every_requested_camera_output_is_consumed_as_depthai_requires(self):
+        """The owner's first run stopped at start(): the 1080p RGB output had no link. depthai checks it, so does
+        the fake, and the 1080p output now feeds an encoder, as in the release."""
+        module, fake = fake_depthai()
+        with mock.patch.dict(sys.modules, {"depthai": module}):
+            night_probe.build(module, module.Pipeline(), 30)
+        self.assertEqual(len(fake.requested), 4)   # RGB 1080p and 640x360, left and right
+        self.assertEqual(unconsumed(fake.requested), [])
+        self.assertTrue(fake.requested[0].link.called, "the 1080p output feeds the encoder")
+
     def test_main_refuses_while_oak_den_runs_and_unknown_lights(self):
         with mock.patch.object(night_probe, "service_active", return_value=True), \
                 mock.patch("sys.stderr", io.StringIO()) as err:
@@ -206,6 +242,8 @@ class NightProbeTest(unittest.TestCase):
         self.assertIn("oak-den is running", err.getvalue())
         with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
             night_probe.main(["--release", "r", "--out", "o", "--lights", "low,dusk"])
+        with mock.patch.object(night_probe, "service_active", return_value=False),                 mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            night_probe.main(["--out", "o"])
 
 
 if __name__ == "__main__":

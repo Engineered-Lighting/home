@@ -4,9 +4,7 @@
 It needs the camera to itself, so it runs only while oak-den is stopped, as the service account, with the camera's
 venv. The owner pastes one line that stops oak-den, runs this, and starts oak-den again however it ends:
 
-    ssh -t <account>@<camera host> "sudo bash -c 'systemctl stop oak-den; trap \\"systemctl start oak-den\\" EXIT;
-        sudo -u <account> /home/<account>/victoria-camera/venv/bin/python -I
-        /home/<account>/victoria-camera-pilot/night_probe.py --release <release dir> --out <private folder>'"
+    ssh -t <account>@<camera host> "sudo bash ~/victoria-camera-pilot/night-probe-run.sh <release>"
 
 It loads the release's own capture.py by path and builds that release's pipeline (the same cameras, sizes, rates,
 stereo settings and sync), and keeps every bundle as the release builds /frame.npz (encode_bundle: the depth
@@ -96,6 +94,46 @@ def service_active():
         return False
 
 
+def build(dai, pipeline, fps):
+    """The release's pipeline (capture_session), without the RTSP publisher and the causal script: (synced groups,
+    RGB control). As in the release, the 1080p RGB output feeds an on-device H.264 encoder, so the sensor and the ISP
+    run as they do under oak-den; here its bitstream is dropped. depthai refuses to start with a requested camera
+    output that nothing links or queues, so every one is consumed."""
+    rgb_cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A, sensorResolution=(1920, 1080),
+                                                     sensorFps=fps)
+    rgb_video = rgb_cam.requestOutput((1920, 1080), type=dai.ImgFrame.Type.NV12, resizeMode=dai.ImgResizeMode.CROP,
+                                      fps=fps)
+    rgb_preview = rgb_cam.requestOutput((640, 360), type=dai.ImgFrame.Type.NV12, resizeMode=dai.ImgResizeMode.CROP,
+                                        fps=fps)
+    depth_fps = min(15, fps)
+    left = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_B, sensorFps=depth_fps)
+    right = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C, sensorFps=depth_fps)
+    left_out = left.requestOutput((640, 400), type=dai.ImgFrame.Type.GRAY8, fps=depth_fps)
+    right_out = right.requestOutput((640, 400), type=dai.ImgFrame.Type.GRAY8, fps=depth_fps)
+    stereo = pipeline.create(dai.node.StereoDepth)
+    stereo.build(left_out, right_out, dai.node.StereoDepth.PresetMode.DEFAULT)
+    stereo.setDepthAlign(dai.CameraBoardSocket.CAM_B)
+    stereo.setLeftRightCheck(True)
+    stereo.initialConfig.postProcessing.temporalFilter.enable = False
+    stereo.initialConfig.postProcessing.decimationFilter.decimationFactor = 1
+    sync = pipeline.create(dai.node.Sync)
+    sync.setSyncThreshold(timedelta(milliseconds=20))
+    sync.setSyncAttempts(-1)
+    for name, output in [("rgb", rgb_preview), ("depth", stereo.depth),
+                         ("left", stereo.rectifiedLeft), ("right", stereo.rectifiedRight)]:
+        sync.inputs[name].setBlocking(False)
+        sync.inputs[name].setMaxSize(2)
+        output.link(sync.inputs[name])
+    encoder = pipeline.create(dai.node.VideoEncoder)
+    encoder.setDefaultProfilePreset(fps, dai.VideoEncoderProperties.Profile.H264_MAIN)
+    encoder.setBitrateKbps(4000)
+    encoder.setKeyframeFrequency(fps)
+    encoder.setNumBFrames(0)
+    rgb_video.link(encoder.input)
+    encoder.bitstream.createOutputQueue(maxSize=4, blocking=False)   # dropped: nothing reads it
+    return sync.out.createOutputQueue(maxSize=1, blocking=False), rgb_cam.inputControl.createInputQueue()
+
+
 def run(args, ask=input, say=print):
     import depthai as dai
     capture = load_release(args.release)
@@ -111,33 +149,7 @@ def run(args, ask=input, say=print):
         correction = capture.depth_correction_for(eeprom)
         (out / "calibration.json").write_text(json.dumps({"eeprom": eeprom, "depth_correction": correction,
                                                           "depthai": dai.__version__}), encoding="utf-8")
-        # The release's pipeline (capture_session), without the RTSP encoder and the causal script.
-        rgb_cam = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_A, sensorResolution=(1920, 1080),
-                                                         sensorFps=args.fps)
-        rgb_cam.requestOutput((1920, 1080), type=dai.ImgFrame.Type.NV12, resizeMode=dai.ImgResizeMode.CROP, fps=args.fps)
-        rgb_preview = rgb_cam.requestOutput((640, 360), type=dai.ImgFrame.Type.NV12, resizeMode=dai.ImgResizeMode.CROP,
-                                            fps=args.fps)
-        depth_fps = min(15, args.fps)
-        left = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_B, sensorFps=depth_fps)
-        right = pipeline.create(dai.node.Camera).build(dai.CameraBoardSocket.CAM_C, sensorFps=depth_fps)
-        left_out = left.requestOutput((640, 400), type=dai.ImgFrame.Type.GRAY8, fps=depth_fps)
-        right_out = right.requestOutput((640, 400), type=dai.ImgFrame.Type.GRAY8, fps=depth_fps)
-        stereo = pipeline.create(dai.node.StereoDepth)
-        stereo.build(left_out, right_out, dai.node.StereoDepth.PresetMode.DEFAULT)
-        stereo.setDepthAlign(dai.CameraBoardSocket.CAM_B)
-        stereo.setLeftRightCheck(True)
-        stereo.initialConfig.postProcessing.temporalFilter.enable = False
-        stereo.initialConfig.postProcessing.decimationFilter.decimationFactor = 1
-        sync = pipeline.create(dai.node.Sync)
-        sync.setSyncThreshold(timedelta(milliseconds=20))
-        sync.setSyncAttempts(-1)
-        for name, output in [("rgb", rgb_preview), ("depth", stereo.depth),
-                             ("left", stereo.rectifiedLeft), ("right", stereo.rectifiedRight)]:
-            sync.inputs[name].setBlocking(False)
-            sync.inputs[name].setMaxSize(2)
-            output.link(sync.inputs[name])
-        groups = sync.out.createOutputQueue(maxSize=1, blocking=False)
-        controls = rgb_cam.inputControl.createInputQueue()
+        groups, controls = build(dai, pipeline, args.fps)
         pipeline.start()
         try:
             for lighting, settings in steps:
@@ -188,11 +200,13 @@ def run(args, ask=input, say=print):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--release", required=True, help="the running release's folder, whose capture.py it loads")
-    parser.add_argument("--out", required=True, help="a private folder for the takes")
+    parser.add_argument("--release", help="the running release's folder, whose capture.py it loads")
+    parser.add_argument("--out", help="a private folder for the takes")
     parser.add_argument("--lights", default="low,off,reading,on", help="lighting states, in the order asked")
     parser.add_argument("--fps", type=int, default=30)
     args = parser.parse_args(argv)
+    if not args.release or not args.out:
+        parser.error("--release and --out are required")
     unknown = [light for light in args.lights.split(",") if light not in LIGHTS]
     if unknown:
         parser.error("unknown lighting state(s): %s" % ", ".join(unknown))

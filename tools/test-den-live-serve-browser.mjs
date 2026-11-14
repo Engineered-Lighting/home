@@ -567,7 +567,9 @@ test('the real coordinator trace, virtual spot and Stop agree through Full Home 
   const traceRows = () => {
     const days = path.join(traceRoot, 'days');
     return fs.existsSync(days) ? fs.readdirSync(days).flatMap(day =>
-      fs.readFileSync(path.join(days, day, 'coordinator-fixture_calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)) : [];
+      fs.readFileSync(path.join(days, day, 'coordinator-fixture_calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+        // Trace v2 opens each day file a run writes to with a run header; the receipt counts events only.
+        .filter(row => row.kind !== 'run_header')) : [];
   };
   const button = name => page.locator(`[data-den-coordinator-${name}]`);
   async function waitForDark() {

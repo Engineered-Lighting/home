@@ -138,6 +138,7 @@ export function fixtureWorldLights(fixtureRoot, { spotFwhmDeg = 20 } = {}) {
     return Model.fixtureLights(input, { spotFwhmDeg }).map(light => ({
         ...light, fixtureId: input.fixtureId,
         shadowSize: fixtureRoot.userData?.spot_only === true ? ECHO_SPOT_SHADOW_MAP_SIZE : LIT_SHADOW_MAP_SIZES[light.shadow],
+        coordinatorSpot: light.kind === 'spot' && fixtureRoot.userData.coordinator_spot === true,
         origin: parent.localToWorld(new THREE.Vector3(...light.origin)),
         direction: new THREE.Vector3(...light.direction).transformDirection(parent.matrixWorld),
     }));
@@ -461,7 +462,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         bounce = { ...bounce, status: 'error', error: message.message };
         changed();
     }
-    const bakeKey = source => `${source.fixtureId ?? ''}:${source.kind}:${source.number ?? 0}`;
+    const bakeKey = source => `${source.fixtureId ?? ''}:${source.kind}:${source.number ?? 0}${source.coordinatorSpot ? ':direct' : ''}`;
     const round = values => values.map(value => (typeof value === 'number' ? +value.toFixed(5) : value));
     function namedAims() {
         return (getNamedAims() || []).slice(0, MAX_LUX_AIMS).map(aim => {
@@ -475,8 +476,9 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
      * still drawing (the 650 ms Set sweep) waits for it to land. */
     function syncBake(exact) {
         if (!baker || !bakeScene || bounce.status === 'building' || bounce.status === 'error') return;
-        const allLights = exact.map(source => ({
+        const allLights = exact.filter(source => receivers || !source.coordinatorSpot).map(source => ({
             key: bakeKey(source), mode: source.kind === 'spot' ? 'vpl' : 'sky',
+            directOnly: source.coordinatorSpot,
             origin: round(source.origin.toArray()), direction: round(source.direction.toArray()),
             cosOuter: Math.cos(source.halfAngle), cosInner: Math.cos(source.halfAngle * (1 - source.penumbra)),
             candela: quality === 'reduced' && source.kind === 'zone' ? 0 : source.candela, color: round(Model.cctToLinearRgb(source.kelvin)) }));
@@ -496,7 +498,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         }
         deferredSince = null; bakeSignature = next; bakePlacement = placement;
         baker.update({ lights: bakeLights.map(({ candela, color, ...light }) => light), weights, exposure: LIT_EXPOSURE, quality: bakeQuality, aims,
-            luxLights: allLights.filter(light => light.candela > 0) });
+            luxLights: allLights.filter(light => !light.directOnly && light.candela > 0) });
         if (bounce.status === 'ready') bounce = { ...bounce, status: 'baking' };
     }
 

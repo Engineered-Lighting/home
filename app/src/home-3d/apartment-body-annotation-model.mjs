@@ -84,13 +84,13 @@ export function createBodyAnnotationState() {
         /* now (s), dt (s), joints {name: [x,y,z]} in the apartment frame, centroid [x,y,z], activity (the house's
          * word for what they're doing, or null), object: {label, confidence} | null when this frame shows none,
          * headScreenX and width (px) for the caption's side, zoomT (0 closest .. 1 overview). */
-        step({ now, dt, joints, centroid, activity: incoming = null, object = null, headScreenX = null, width = null, zoomT = 1 }) {
+        step({ now, dt, joints, centroid, torso = null, activity: incoming = null, object = null, headScreenX = null, width = null, zoomT = 1 }) {
             if (centroid && lastCentroid && dt > 0) {
                 const v = Math.hypot(centroid[0] - lastCentroid[0], centroid[1] - lastCentroid[1]) / dt;
                 speed += (v - speed) * Math.min(1, dt / 0.4);
             }
             if (centroid) lastCentroid = centroid.slice();
-            const pelvisZ = has(joints, 'left_hip', 'right_hip') ? (joints.left_hip[2] + joints.right_hip[2]) / 2 : null;
+            const pelvisZ = torso ? torso.pelvisZ : has(joints, 'left_hip', 'right_hip') ? (joints.left_hip[2] + joints.right_hip[2]) / 2 : null;
             const seated = pelvisZ != null && pelvisZ < SEATED_PELVIS_M, walking = !seated && speed > WALKING_MPS;
             const posture = pelvisZ == null ? '' : seated ? 'Seated' : walking ? 'Walking' : 'Standing';
 
@@ -110,18 +110,25 @@ export function createBodyAnnotationState() {
             ringZ = ringZ == null ? ringTarget : ringZ + (ringTarget - ringZ) * ease(dt, 0.5);
 
             let dir = null, head = null;
-            const raw = facingOf(joints);
-            if (raw) dir = facing.step(raw, dt);
-            if (has(joints, 'nose', 'left_ear', 'right_ear')) {
+            if (torso) {
+                if (Number.isFinite(torso.facingDeg)) {
+                    const azimuth = torso.facingDeg * DEG; // Producer bearings are clockwise from apartment +Y.
+                    dir = [Math.sin(azimuth), Math.cos(azimuth), 0];
+                }
+            } else {
+                const raw = facingOf(joints);
+                if (raw) dir = facing.step(raw, dt);
+            }
+            if (!torso && has(joints, 'nose', 'left_ear', 'right_ear')) {
                 const ears = mid(joints.left_ear, joints.right_ear);
                 head = ears.map((x, k) => x + (joints.nose[k] - x) * 0.3);
                 eye = eye ? eye.map((x, k) => x + (head[k] - x) * ease(dt, 0.25)) : head.slice();
             }
             return { detail: detailFor(zoomT), right, posture, seated, walking, speed, activity, since: activity && since != null ? now - since : 0,
                 object: holding ? { label: objectLabel, confidence: objectConfidence } : null,
-                ringZ, ringRadius: seated ? 0.42 : 0.45, head, eye, facing: dir, facingAz: dir ? Math.atan2(dir[1], dir[0]) : null };
+                ringZ, ringRadius: seated ? 0.42 : 0.45, head, eye: torso ? null : eye, facing: dir, facingAz: dir ? Math.atan2(dir[1], dir[0]) : null };
         },
-        reset() { facing.reset(); activity = ''; candidate = ''; since = null; objectUntil = -Infinity; ringZ = null; eye = null; speed = 0; lastCentroid = null; },
+        reset() { facing.reset(); activity = ''; candidate = ''; since = null; objectUntil = -Infinity; right = true; ringZ = null; eye = null; speed = 0; lastCentroid = null; },
     };
 }
 

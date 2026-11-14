@@ -119,6 +119,19 @@ test('facing from the pose: the skeleton direction, with the sight-line origin s
     assert.ok(r.out.eye && r.out.head);
 });
 
+test('the measured figure uses the current clockwise torso bearing and has no sight line', () => {
+    const s = createBodyAnnotationState();
+    const update = facingDeg => s.step({ now: 1, dt: 0.016, joints: joints(), torso: { facingDeg, pelvisZ: 0.5 },
+        centroid: [0, 0, 1], zoomT: 0 });
+    const north = update(0), east = update(90);
+    assert.equal(north.facingAz, Math.PI / 2);
+    assert.ok(Math.abs(east.facingAz) < 1e-10);
+    assert.equal(east.eye, null);
+    assert.equal(east.head, null);
+    assert.equal(east.posture, 'Seated');
+    assert.equal(update(null).facingAz, null);
+});
+
 test('captions say less zoomed out, and name an unknown person "Someone"', () => {
     const st = { detail: 0, posture: 'Seated', activity: 'Reading', since: 754 };
     const resident = { name: 'Resident', known: true, source: 'face', confidence: 0.94 };

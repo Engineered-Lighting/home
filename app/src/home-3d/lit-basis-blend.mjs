@@ -150,7 +150,7 @@ into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
     for (const light of lights) {
         const key = lightKey(light);
         if (light.kind === 'spot') {
-            const slot = spotSlots.get(key);
+            const slot = spotSlots.get(light.coordinatorSpot ? `${key}:direct` : key);
             if (!Number.isInteger(slot) || slot < 0 || slot >= LIT_ECHO_SPOT_SLOTS) { unbaked.push(key); continue; }
             const rgb = Model.cctToLinearRgb(light.kelvin), candela = Number.isFinite(light.candela) ? light.candela : 0;
             for (let c = 0; c < 3; c++) into[(LIT_BASIS_SLOTS + slot) * 4 + c] = candela * rgb[c] * exposure;

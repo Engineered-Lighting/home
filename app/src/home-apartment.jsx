@@ -2938,13 +2938,14 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     && modelScopeRef.current?.authorityKey === workspaceAuthorityRef.current.key
     && modelSiteRef.current === selectedSiteId
     && (selectedSiteId === "echo" || selectedSiteId === "victoria" && !!model._equipment_registration);
-  const apartmentPlacementControlsEnabled = apartmentPlacementDisplayEnabled
+  // Look-only (window.HomeLookOnly): the den's room to look at, with no selection, aim, Setup, writes or ops poll.
+  const apartmentPlacementControlsEnabled = !window.HomeLookOnly?.active && apartmentPlacementDisplayEnabled
     && (selectedSiteId === "echo" || model.source_detail?.read_only === false);
   // Setup opens wherever its tools can at least be shown. A read-only
   // registration opens it read-only with the reason, instead of a Setup
   // button that silently does nothing. Placement writes stay gated above.
   const apartmentSetupReadOnly = apartmentPlacementDisplayEnabled && !apartmentPlacementControlsEnabled;
-  const apartmentSetupAvailable = apartmentSceneControlsEnabled
+  const apartmentSetupAvailable = !window.HomeLookOnly?.active && apartmentSceneControlsEnabled
     && (apartmentDeviceControlsEnabled || apartmentPlacementControlsEnabled || apartmentSetupReadOnly);
   const apartmentSetupUnavailableReason = apartmentSetupAvailable ? ""
     : !apartmentSceneControlsEnabled ? `Setup opens once ${selectedSiteEntry?.shortName || "this home"} has finished loading.`
@@ -5407,7 +5408,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       && identity.registrationVersion === binding.registration_version
       && identity.frameDigest === binding.frame_digest;
     const document = open && phase === "ready" && matchesScene ? virtualFixtureDocument : null;
-    const installed = overlay.setVirtualFixtures(document);
+    const coordinator = window.HomeDenLive?.virtual === true && identity?.siteId === window.HomeDenLive.site;
+    const installed = overlay.setVirtualFixtures(document, { coordinator });
     if (document) {
       if (virtualFixtureStatesRef.current.key !== virtualFixtureBindingKey) {
         const previous = virtualFixtureStatesRef.current;
@@ -5423,7 +5425,10 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         setFixtureInteractionMode("spot");
       }
       const preview = denDeskAimPreviewRef.current?.readback?.();
-      reapplyVirtualFixtureMemory(overlay, preview?.active ? preview.fixtureId : null);
+      if (coordinator) {
+        for (const [id, state] of virtualFixtureStatesRef.current.states)
+          overlay.setVirtualFixtureState?.(id, { radials: state.radials, downward: state.downward });
+      } else reapplyVirtualFixtureMemory(overlay, preview?.active ? preview.fixtureId : null);
     }
     overlay.setVirtualFixturesVisible(virtualSpotlightsVisible && !editing && !calibCam
       && !liveOn && spatialScale === "apartment");
@@ -5455,8 +5460,8 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       annotate: annotation => following.follower.annotateActivity(annotation),
     }) : null;
     if (diagnosticApi) window.HomeDenLightingEvidence = diagnosticApi;
-    // AL-5 monitor banner: polled while visible; a failed read shows nothing.
-    const ops = Client.createOpsStatusPoller({ fetch: window.fetch.bind(window),
+    // AL-5 monitor banner: polled while visible; a failed read shows nothing. Never look-only: it isn't on its list.
+    const ops = window.HomeLookOnly?.active ? { wake() {}, start() {}, stop() {} } : Client.createOpsStatusPoller({ fetch: window.fetch.bind(window),
       setTimeout: (fn, ms) => window.setTimeout(fn, ms), clearTimeout: (id) => window.clearTimeout(id),
       isHidden: () => document.hidden === true, onChange: setDenOpsBanner });
     const visible = () => ops.wake();
@@ -5544,7 +5549,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   const getVirtualFixtureSelectionContext = useCallback(() => {
     try {
       const engine = selectionEngine, document = virtualFixtureDocument, binding = document?.binding, site = document?.scope?.site_id;
-      if (!open || phase !== "ready" || !viewOpenRef.current || !apartmentSceneControlsEnabledRef.current
+      if (window.HomeLookOnly?.active || !open || phase !== "ready" || !viewOpenRef.current || !apartmentSceneControlsEnabledRef.current
           || !engine || engineRef.current !== engine || spatialLifecycleRevisionRef.current !== selectionLifecycle
           || workspaceAuthorityRef.current.key !== apartmentAuthorityKey || !binding
           || (site === "victoria" && (modelSiteRef.current !== site || modelScopeRef.current?.authorityKey !== apartmentAuthorityKey
@@ -6220,7 +6225,7 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
   // capability. Selection never grants device, camera or command authority.
   useEffect(() => {
     const engine = engineRef.current, overlay = engine?.overlay, host = hostRef.current;
-    if (!open || phase !== "ready" || !virtualFixtureDocument || editing || calibCam || liveOn
+    if (window.HomeLookOnly?.active || !open || phase !== "ready" || !virtualFixtureDocument || editing || calibCam || liveOn
         || !virtualSpotlightsVisible || spatialScale !== "apartment" || rehearsalIsolated
         || !host || !overlay?.createVirtualFixtureAimGesture) return undefined;
     const canvas = engine.renderer.domElement;
@@ -7217,6 +7222,15 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
     setLitState(engine?.litState?.() || null);
     return engine?.on?.("lit", (state) => { if (engineRef.current === engine) setLitState(state); });
   }, [phase, selectedSiteId]);
+  // Look-only opens in Lighting, once per engine; it stays the viewer's to turn off.
+  const lookOnlyLitRef = useRef(null);
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!window.HomeLookOnly?.active || phase !== "ready" || !virtualFixtureDocument || !engine?.setLit
+        || lookOnlyLitRef.current === engine) return;
+    lookOnlyLitRef.current = engine;
+    void toggleLit(true);
+  }, [phase, virtualFixtureDocument, toggleLit]);
 
   /*
    * The +/- controls stay mounted through a handoff, but the already-targeted

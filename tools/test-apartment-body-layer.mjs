@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { register } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fileUrl = relative => pathToFileURL(path.join(ROOT, 'app/src', relative)).href;
@@ -17,7 +18,7 @@ register('data:text/javascript,' + encodeURIComponent(`export async function res
 }`));
 const THREE = await import(threeURL);
 const { attachApartmentBodyLayer } = await import(fileUrl('home-3d/apartment-body-layer.mjs'));
-const { encodeBodyFrame, KIND } = await import(fileUrl('home-3d/apartment-body-frame.mjs'));
+const { decodeLiveBodyEvent, encodeBodyFrame, KIND } = await import(fileUrl('home-3d/apartment-body-frame.mjs'));
 
 function fixture(options = {}) {
     const apartmentRoot = new THREE.Group(), camera = new THREE.PerspectiveCamera(35, 1.5, 0.1, 100), clock = { t: 100 };
@@ -109,4 +110,27 @@ test('zoomed out, points grow at most 1.25x and the glow eases off', () => {
     assert.ok(glow(far) < glow(near) * 0.45);
     near.layer.setPool(false); near.advance(0.1);
     assert.equal(near.group().getObjectByName('body-floor-pool').material.uniforms.uOpacity.value, 0, 'the floor pool can be turned off (Lighting view)');
+});
+
+test('the measured WebGL figure uses only the newest samples and clears in the same turn', () => {
+    const f = fixture({ measuredOnly: true, reducedMotion: true });
+    assert.equal(f.layer.update(f.frame(f.body())), false);
+    const original = decodeLiveBodyEvent(measuredBodyEvent()).decoded;
+    const next = decodeLiveBodyEvent(measuredBodyEvent({ seq: 2, x: 2.2 })).decoded;
+    f.layer.updateMeasured(original);
+    f.advance(0.01);
+    f.layer.updateMeasured(next);
+    f.advance(0.01);
+    const recording = f.group().getObjectByName('body-recording');
+    assert.deepEqual(f.group().children.filter(child => child.visible), [recording]);
+    assert.equal(f.group().userData.excludeFromApartmentCapture, true);
+    assert.equal(recording.material.uniforms.uMeasuredOnly.value, true);
+    assert.equal(recording.material.uniforms.uTime.value, 0);
+    assert.equal(recording.geometry.attributes.position.array[0], next.pos[0]);
+    assert.equal(recording.geometry.drawRange.count, next.n);
+    f.layer.clear();
+    assert.equal(recording.geometry.drawRange.count, 0);
+    assert.equal(f.layer.status().points, 0);
+    assert.equal(f.layer.snapshot().centroid, null);
+    assert.equal(f.layer.snapshot().torso, null);
 });

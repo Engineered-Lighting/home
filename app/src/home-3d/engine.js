@@ -468,6 +468,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         try { layer.dispose(); } catch (_) { /* Other layers and renderer cleanup still run. */ }
         finally { uiLayers.delete(layer); presentationUiLayers.delete(layer); }
     };
+    function captureWithoutLiveBody(draw) {
+        const hidden = apartmentRoot.children.filter(child => child.visible && child.userData.excludeFromApartmentCapture);
+        for (const child of hidden) child.visible = false;
+        try { return draw(); }
+        finally { for (const child of hidden) child.visible = true; }
+    }
     const equipmentCutaway = bindEquipmentCutawayRegistration({
         overlay, sceneIdentity, manifest: pinnedPack,
         enabled: cutawayEligible && !window.HomeLiveSceneShadow?.active,
@@ -1184,7 +1190,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
                 // The same per-frame splat work as frame(): sort for this camera.
                 modes.tickSplat?.(camera, performance.now() / 1000);
-                const frame = await nodeRenderer.capture({ scene, camera, scale, signal });
+                // The node renderer queues its draw before awaiting the readback.
+                const frame = await captureWithoutLiveBody(() => nodeRenderer.capture({ scene, camera, scale, signal }));
                 return disposed || signal?.aborted ? null : frame;
             }
             if (disposed || signal?.aborted || renderer.getContext().isContextLost()) return null;
@@ -1196,8 +1203,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             // Render and copy in one task: the default framebuffer need not be
             // preserved between frames. This does not advance the camera clock.
             modes.tickSpark?.(camera, performance.now() / 1000);
-            xrayLook?.prepass();
-            renderer.render(scene, camera);
+            captureWithoutLiveBody(() => {
+                xrayLook?.prepass();
+                renderer.render(scene, camera);
+            });
             const source = renderer.domElement;
             const width = Math.max(1, Math.round(source.width * Math.min(1, Math.max(0.01, scale))));
             const height = Math.max(1, Math.round(source.height * Math.min(1, Math.max(0.01, scale))));

@@ -1,6 +1,6 @@
 """Write the measured figure's two private profiles from one scored sofa session.
 
-    python -B body_profiles.py <session> --out <private folder>
+    python -B body_profiles.py <session> --candidate <the scored candidate> --out <private folder>
 
 The session is sofa_qualify.py's, captured with a candidate profile and scored with the head and neck marked on the
 exact depth frames. This refuses unless that score passed: every pose cue has a covered frame and no frame leaked.
@@ -9,7 +9,8 @@ It writes, never over an existing file:
 - `den-body-clock.json` (`den-body-clock-profile-1`) for the camera, which the body-clock camera release reads with
   `--body-clock-profile`. Its device, SDK and calibration come from the session's camera calibration; its fps from
   the session's own RGB sequence rate; its acquisition margins are SDK_BOUNDS below.
-- `den-live-body-rgb.json` for install_la.py: the session's candidate, unchanged, with its clock evidence id.
+- `den-live-body-rgb.json` for install_la.py: the candidate the passing score used (qualification.json names its
+  sha256), unchanged, with its clock evidence id.
 
 SDK_BOUNDS are bounds from the camera's own SDK semantics, not an optical measurement (the owner chose this on
 2026-11-14; COMMISSIONING.md's strobe reference needs a rig that doesn't exist). DepthAI 3.10's ImgFrame timestamp is
@@ -21,6 +22,7 @@ The camera refuses a receipt for any frame whose reported exposure is longer tha
 fails closed. The head cut's safety rests on the exact-frame coverage score, which this script requires.
 """
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -76,14 +78,18 @@ def passed(qualification):
     return mask.get("verdict") == "pass"
 
 
-def build(session, *, frame_meta):
+def build(session, *, frame_meta, candidate_path=None):
     session = Path(session)
-    candidate = read_json(session / "body-rgb-candidate.json")
+    candidate_path = Path(candidate_path) if candidate_path is not None else session / "body-rgb-candidate.json"
+    candidate = read_json(candidate_path)
     registration = read_json(session / "registration.json")
     RgbBodyProfile.from_config(candidate, registration)   # the candidate still binds to its registration
     qualification = read_json(session / "qualification.json")
     if not passed(qualification):
         raise Refused("the session's head-cut score didn't pass; no profile is written")
+    scored = qualification.get("candidate_sha256")
+    if scored is not None and scored != hashlib.sha256(candidate_path.read_bytes()).hexdigest():
+        raise Refused("that candidate isn't the one the passing score used")
     fps = session_fps(read_json(session / "manifest.json")["frames"], frame_meta)
     clock = clock_profile(read_json(session / "camera-calibration.json"), fps, candidate["clock_evidence_id"])
     return clock, candidate
@@ -100,6 +106,7 @@ def main(argv=None):
 
     args = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     args.add_argument("session", type=Path)
+    args.add_argument("--candidate", type=Path, help="the candidate the score used, when not the capture's own")
     args.add_argument("--out", type=Path, required=True, help="the private folder for both files")
     args = args.parse_args(argv)
     manifest = read_json(args.session / "manifest.json")
@@ -108,7 +115,7 @@ def main(argv=None):
         with np.load(io.BytesIO((args.session / row["file"]).read_bytes()), allow_pickle=False) as arrays:
             frame_meta.append(json.loads(arrays["metadata_json"].tobytes()))
     try:
-        clock, candidate = build(args.session, frame_meta=frame_meta)
+        clock, candidate = build(args.session, frame_meta=frame_meta, candidate_path=args.candidate)
         args.out.mkdir(parents=True, exist_ok=True)
         write_new(args.out / CLOCK_FILE, clock)
         write_new(args.out / RGB_FILE, candidate)

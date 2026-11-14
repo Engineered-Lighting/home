@@ -176,10 +176,12 @@ def load_session(session):
     return rows, samples, scope
 
 
-def read_candidate(session):
-    block = read_json(session / "body-rgb-candidate.json")
+def read_candidate(session, path=None):
+    """The candidate this capture is scored with: its own, or a newer one named on the command line (recorded)."""
+    path = Path(path) if path is not None else session / "body-rgb-candidate.json"
+    block = read_json(path)
     registration = read_json(session / "registration.json")
-    return RgbBodyProfile.from_config(block, registration), registration
+    return RgbBodyProfile.from_config(block, registration), registration, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def clock_for_mask(clock_score, rows, profile):
@@ -197,7 +199,7 @@ def clock_for_mask(clock_score, rows, profile):
     return separations, "measured"
 
 
-def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE):
+def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE, candidate_sha256=None):
     passed = (clock_check == "measured" and mask_score["verdict"] == "pass"
               and mask_score["basis"] == "measured_separation")
     pair_delta = clock_score.get("max_rgb_depth_stamp_delta_s")
@@ -206,7 +208,7 @@ def report(session, clock_score, clock_check, mask_score, *, scope=ROOM_SCOPE):
     if scope == CAMERA_SCOPE:
         passed = pairing == "pass" and mask_score["verdict"] == "pass"
         verdict = "camera_trial_pass" if passed else "camera_trial_open"
-    summary = {"verdict": verdict, "scope": scope, "rgb_pairing": pairing,
+    summary = {"verdict": verdict, "scope": scope, "rgb_pairing": pairing, "candidate_sha256": candidate_sha256,
                "clock_check": clock_check,
                "clock": {key: value for key, value in clock_score.items() if key != "candidate_separations"},
                "mask": mask_score}
@@ -265,6 +267,8 @@ def parser():
     analyse.add_argument("session", type=Path)
     analyse.add_argument("--annotations", type=Path, required=True)
     analyse.add_argument("--witness", type=Path, help="independent full-exposure timing bounds JSON")
+    analyse.add_argument("--candidate", type=Path, help="score with this candidate instead of the capture's own "
+                         "(it must bind to the same registration; its sha256 goes in qualification.json)")
     return command
 
 
@@ -324,15 +328,17 @@ def main(argv=None):
         print("Open mark-head-and-neck.html and save the annotation JSON inside the session.")
         return 0
 
-    room_model = registration = None
+    room_model = registration = candidate_sha256 = None
     if scope == CAMERA_SCOPE:
         if args.witness is not None:
             raise sofa_check.Stop("the camera-relative trial scores timestamp pairing and the candidate mask")
+        if args.candidate is not None:
+            raise sofa_check.Stop("the camera-relative trial scores its own fixed settings")
         profile = camera_trial_profile(read_json(session / "camera-calibration.json"))
         if asdict(profile) != read_json(session / "body-rgb-candidate.json"):
             raise sofa_check.Stop("the saved trial settings do not match this tool")
     else:
-        profile, registration = read_candidate(session)
+        profile, registration, candidate_sha256 = read_candidate(session, args.candidate)
         room_model = session / "room-model.jsonl"
     witness = read_json(args.witness) if args.witness is not None else None
     annotations = read_json(args.annotations)
@@ -342,7 +348,7 @@ def main(argv=None):
                                                      room_model=room_model,
                                                      registration=registration, profile=profile)
     mask_score = sofa_mask_score.score(frames, annotations, camera, profile=profile.head, separations=separations)
-    return report(session, clock_score, clock_check, mask_score, scope=scope)
+    return report(session, clock_score, clock_check, mask_score, scope=scope, candidate_sha256=candidate_sha256)
 
 
 if __name__ == "__main__":

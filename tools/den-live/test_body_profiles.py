@@ -69,6 +69,17 @@ class Profiles(unittest.TestCase):
         with self.assertRaises(ValueError):
             bp.build(self.session, frame_meta=frames())
 
+    def test_only_the_scored_candidate_is_written(self):
+        import hashlib
+        newer = self.session / "candidate-2.json"
+        block = dict(CANDIDATE, head=dict(CANDIDATE["head"], torso_cut_m=0.1))
+        newer.write_text(json.dumps(block), encoding="utf-8")
+        self.write(qualification={"mask": {"verdict": "pass"},
+                                  "candidate_sha256": hashlib.sha256(newer.read_bytes()).hexdigest()})
+        self.assertEqual(bp.build(self.session, frame_meta=frames(), candidate_path=newer)[1], block)
+        with self.assertRaises(bp.Refused):
+            bp.build(self.session, frame_meta=frames())   # the capture's own candidate wasn't the one scored
+
     def test_never_writes_over_an_existing_profile(self):
         out = self.session / "out"
         out.mkdir()

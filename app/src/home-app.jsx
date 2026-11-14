@@ -12578,5 +12578,36 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
 
 function EmptyHint() { return <BootBanner />; }
 
-function HomeApp(props) { return <HomeNormalApp {...props} />; }
+/* Look-only (window.HomeLookOnly, which the gateway sets for a tailnet device with no session): the den's apartment
+ * view, in Lighting, with its live markers (home-den-live-view.mjs), and nothing that writes. HomeNormalApp never
+ * mounts, so there's no chat, Home Assistant, camera, metric, Lab or other home, and nothing asks the gateway for
+ * what it refuses that device. Panels the view would portal into the Home column have no column here. */
+const HOME_LOOK_ONLY_SIM = Object.freeze({ active: false });
+function HomeLookOnlyApp() {
+  const [ready, setReady] = useState(() => !!window.HomeApartmentView);
+  const [error, setError] = useState(null);
+  // Never connected: Home Assistant isn't among what a look-only device may read (the live mounts above get it).
+  const LookOnlyApartmentView = window.HomeApartmentView;
+  useEffect(() => {
+    document.title = "Den · live · look-only";
+    if (window.HomeApartmentView) return;
+    window.HomeFeatureLoader?.load("apartment", "look-only")
+      .then(() => setReady(!!window.HomeApartmentView), err => setError(err?.message || String(err)));
+  }, []);
+  return <div className="apt-home-shell" data-theme="dark" data-home-layout="unified" data-look-only="1"
+    style={{ position: "relative", width: "100%", height: "100%", minHeight: "100dvh", background: "#000", overflow: "hidden" }}>
+    <header className="apt-home-topbar"><span className="apt-home-wordmark">Home</span>
+      <span className="apt-home-look-only" data-den-live-label="1">Den · live · look-only</span>
+      {/* A device whose session lapsed lands here too: sign-in is one tap away. */}
+      <a className="apt-home-look-only-signin" href="/auth" data-den-live-signin="1">Sign in</a></header>
+    <div className="apt-home-stage" data-theme="dark" style={{ position: "absolute", top: 0, left: 0, bottom: 0, right: 0,
+      zIndex: 0, minWidth: 0, overflow: "hidden", background: "#000" }}>
+      {ready ? <LookOnlyApartmentView open={true} embedded={true} onClose={() => {}} endpoint="" token=""
+        sim={HOME_LOOK_ONLY_SIM} connection="disconnected" unifiedShell={true} />
+        : <p className="apt-home-look-only-status" role={error ? "alert" : "status"}>{error ? `The den view didn't load: ${error}` : "Loading the den…"}</p>}
+    </div>
+  </div>;
+}
+
+function HomeApp(props) { return window.HomeLookOnly?.active ? <HomeLookOnlyApp /> : <HomeNormalApp {...props} />; }
 Object.assign(window, { HomeApp, HomeHeader, MetricsStrip, InputRow, MicButton, VoiceBanner, EventRenderer, fmtTime });

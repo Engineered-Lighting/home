@@ -23,8 +23,21 @@ import { createContentPackHandler } from "./content-pack-route.mjs";
 import { createLightingLayerHandler } from "./lighting-layer.mjs";
 import { createEquipmentRegistrationGateway } from "./equipment-registration.mjs";
 import { createPerceptionLabReadHandler, PERCEPTION_LAB_PREFIX } from "./perception-lab-route.mjs";
+import { DEN_LIVE_BODY_PATH, DEN_LIVE_BODY_SCHEMA, DEN_LIVE_BODY_SCHEMA_HEADER, DEN_LIVE_PREFIX, DEN_SITE, denLabelsRuntime,
+  denLabelsSaveProblem, denLiveEnabled, denLiveHeaders, denLiveRouteKind, denLiveRuntime } from "./den-live-route.mjs";
+import { REDACTED, hasBody, lookOnlyClient, lookOnlyEnabled, lookOnlyKind, lookOnlyPackIndex, lookOnlyRuntime } from "./look-only.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// The live den view (den-live) and its look-only tailnet view. Both are off unless their env line turns them on.
+// Look-only also needs the Serve listener: HOME_WEB_SERVE_PORT, the loopback port Tailscale Serve forwards to with
+// --proxy-protocol=1 (docs/TAILSCALE-WEB.md). Without it there's no look-only.
+const DEN_LIVE_ENABLED = denLiveEnabled(process.env);
+const DEN_LIVE_BODY_ENABLED = DEN_LIVE_ENABLED && /^(1|true|yes|on)$/i.test(String(process.env.HOME_WEB_DEN_LIVE_BODY ?? "1").trim());
+const SERVE_PORT = /^\d{1,5}$/.test(String(process.env.HOME_WEB_SERVE_PORT || "")) ? Number(process.env.HOME_WEB_SERVE_PORT) : 0;
+const LOOK_ONLY_ENABLED = lookOnlyEnabled(process.env) && SERVE_PORT > 0 && SERVE_PORT < 65536;
+// At most this many den-live streams per look-only device, and in all: den-live serves 16, and signed-in Home needs some.
+const LOOK_ONLY_STREAMS_PER_DEVICE = 2;
+const LOOK_ONLY_STREAMS = 8;
 const ROOT = path.resolve(__dirname, "..");
 const APP_DIR = path.join(ROOT, "app", "src");
 const FALLBACK_APARTMENT_DIR = path.join(APP_DIR, "assets", "apartment");
@@ -383,6 +396,16 @@ const routes = [
     target: envTarget("HOME_WEB_LIGHTING_BRAIN_TARGET", "http://127.0.0.1:8101/api/lighting-brain"),
     allow: (suffix, method) => lightingBrainRouteKind(method, suffix) !== null,
     ws: false,
+  },
+  {
+    // The live den view's people stream (den-live-route.mjs) on this host's loopback. Reads only, with no caller
+    // credential passed on. A session reads it after requireAuth; a look-only device through handleLookOnly.
+    prefix: DEN_LIVE_PREFIX,
+    env: "HOME_WEB_DEN_LIVE_TARGET",
+    target: envTarget("HOME_WEB_DEN_LIVE_TARGET", "http://127.0.0.1:8111/api/den-live"),
+    allow: (suffix, method) => denLiveRouteKind(method, suffix) !== null,
+    ws: false,
+    enabled: DEN_LIVE_ENABLED,
   },
   {
     prefix: "/proxy/ha",
@@ -975,12 +998,16 @@ async function handleAuthRoute(req, res, parsed) {
     const authorityTag = authState.enabled && auth.ok
       ? crypto.createHmac("sha256", authCookieValue()).update("home-camera-context-authority:v1").digest("hex")
       : null;
+    // lookOnly: this device may read the den's live view without signing in (look-only.mjs).
+    const lookOnly = !auth.ok && isLookOnlyDevice(req);
     sendJson(res, 200, {
       ok: true,
       authEnabled: authState.enabled,
       authenticated: auth.ok,
       authorityTag,
       username: authState.username || null,
+      lookOnly,
+      ...(lookOnly ? { lookOnlySite: DEN_SITE } : {}),
     });
     return;
   }
@@ -1083,6 +1110,7 @@ function proxyHeaders(reqHeaders, route, suffix, method) {
     }
     return headers;
   }
+  if (route.prefix === DEN_LIVE_PREFIX) return denLiveHeaders(reqHeaders, route.target, method);
   if (route.prefix === LIGHTING_BRAIN_PREFIX) {
     return lightingBrainRouteKind(method, suffix) === "producer"
       ? lightingBrainProducerHeaders(reqHeaders, route.target)
@@ -1208,7 +1236,7 @@ function jsString(value) {
   return JSON.stringify(String(value || ""));
 }
 
-function sendIndex(req, res, filePath) {
+function sendIndex(req, res, filePath, { lookOnly = false } = {}) {
   fs.readFile(filePath, "utf8", (err, html) => {
     if (err) {
       res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -1221,7 +1249,10 @@ function sendIndex(req, res, filePath) {
     const haProxyRuntime = haTokenProxy.enabled
       ? `window.__HOME_WEB_HA_TOKEN_PROXY=true;window.__HOME_WEB_HA_TOKEN=${jsString(HA_TOKEN_PROXY_MARKER)};`
       : "window.__HOME_WEB_HA_TOKEN_PROXY=false;";
-    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}</script>`;
+    const denRuntime = DEN_LIVE_ENABLED
+      ? denLiveRuntime({ body: DEN_LIVE_BODY_ENABLED && lookOnlyClient(req) !== null }) + denLabelsRuntime()
+      : "";
+    const runtime = `<script>window.__HOME_BUILD_VERSION=${jsString(BUILD_VERSION)};window.__HOME_BUILD_COMMIT=${jsString(BUILD_COMMIT)};window.__HOME_ASSET_VERSION=${jsString(BUILD_ASSET_VERSION)};window.HG_AGENT_ORIGIN=${jsString(PRIMARY_AGENT_ORIGIN)};${stackProxyRuntime}${haProxyRuntime}${denRuntime}${lookOnly ? lookOnlyRuntime() : ""}</script>`;
     const body = html.includes("</head>") ? html.replace("</head>", `${runtime}\n</head>`) : `${runtime}\n${html}`;
     const etag = `"index-${Buffer.byteLength(body).toString(16)}-${BUILD_ASSET_VERSION}"`;
     res.writeHead(200, {
@@ -1391,9 +1422,9 @@ function handleResetCache(req, res) {
   res.end(body);
 }
 
-function serveStatic(req, res) {
+function serveStatic(req, res, { lookOnly = false } = {}) {
   const parsed = new URL(req.url, "http://home.local");
-  if (parsed.pathname.startsWith("/assets/apartment/")) {
+  if (!lookOnly && parsed.pathname.startsWith("/assets/apartment/")) {
     const rel = parsed.pathname.slice("/assets/apartment/".length);
     const cache = isApartmentMetadata(parsed.pathname)
       ? APARTMENT_METADATA_CACHE
@@ -1433,7 +1464,7 @@ function serveStatic(req, res) {
       sendLegacyHomeQuarantine(req, res);
       return;
     }
-    sendIndex(req, res, filePath);
+    sendIndex(req, res, filePath, { lookOnly });
     return;
   }
   if (pathname === "/precompiled/manifest.json") {
@@ -1609,6 +1640,7 @@ function proxyHttp(req, res, route) {
     return;
   }
   const client = targetUrl.protocol === "https:" ? https : http;
+  const denBody = route.prefix === DEN_LIVE_PREFIX && req.url === DEN_LIVE_BODY_PATH;
   let receivedResponse = false;
   let responseTimer = null;
   const upstream = client.request(targetUrl, {
@@ -1617,6 +1649,25 @@ function proxyHttp(req, res, route) {
   }, (upstreamRes) => {
     receivedResponse = true;
     if (responseTimer) clearTimeout(responseTimer);
+    if (denBody) {
+      const mime = String(upstreamRes.headers["content-type"] || "").split(";", 1)[0].trim().toLowerCase();
+      if (upstreamRes.statusCode !== 200 || mime !== "text/event-stream"
+          || upstreamRes.headers[DEN_LIVE_BODY_SCHEMA_HEADER] !== DEN_LIVE_BODY_SCHEMA) {
+        upstreamRes.destroy();
+        sendJson(res, 503, { ok: false, error: "den_body_unavailable" });
+        return;
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+        [DEN_LIVE_BODY_SCHEMA_HEADER]: DEN_LIVE_BODY_SCHEMA,
+      });
+      res.flushHeaders();
+      upstreamRes.on("error", () => res.destroy());
+      upstreamRes.pipe(res);
+      return;
+    }
     let headers = { ...upstreamRes.headers };
     delete headers["content-security-policy"];
     if (route.transformResponseHeaders) {
@@ -1880,6 +1931,69 @@ function labReadOriginAllowed(req) {
   } catch { return false; }
 }
 
+// The look-only view (look-only.mjs): a tailnet device with no session, reading the den's live view. Its handlers
+// are the same read-only routes, admitting a request only while it's look-only and on the list.
+// The session check, once per request: a wrong password is a slow hash, and look-only asks more than once.
+const SESSION_OK = Symbol("homeWebSessionOk");
+function sessionOk(req) {
+  if (!(SESSION_OK in req)) req[SESSION_OK] = hasValidAuth(req).ok;
+  return req[SESSION_OK];
+}
+function isLookOnlyDevice(req) {
+  return LOOK_ONLY_ENABLED && lookOnlyClient(req) !== null && !sessionOk(req);
+}
+const lookOnlyAllowed = req => isLookOnlyDevice(req) && lookOnlyKind(req.method, req.url) !== null;
+const lookOnlyStreams = new Map();
+let lookOnlyStreamsOpen = 0;
+// Serves a code file that holds private data through its redaction, or not at all.
+function sendRedacted(req, res, pathname, redact) {
+  const filePath = safeFile(APP_DIR, pathname);
+  fs.readFile(filePath || "", "utf8", (err, text) => {
+    const body = err ? null : redact(text);
+    if (body === null) { sendJson(res, 503, { ok: false, error: "look_only_redaction_unavailable" }); return; }
+    const bytes = Buffer.from(body, "utf8");
+    res.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8", "Content-Length": bytes.length, "Cache-Control": "no-store" });
+    res.end(req.method === "HEAD" ? undefined : bytes);
+  });
+}
+const lookOnlyPackHandler = createContentPackHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: lookOnlyAllowed,
+  indexFilter: lookOnlyPackIndex });
+const lookOnlyLightingHandler = createLightingLayerHandler({ contentPacksDir: CONTENT_PACKS_DIR, authenticate: lookOnlyAllowed });
+const lookOnlyRegistrationHandler = createEquipmentRegistrationGateway({
+  env: { ...process.env, HOME_CONTENT_PACKS_DIR: CONTENT_PACKS_DIR }, authenticate: lookOnlyAllowed, readOnly: true,
+});
+async function handleLookOnly(req, res, kind) {
+  if (hasBody(req)) { req.resume(); sendJson(res, 400, { ok: false, error: "unexpected_body" }); return; }
+  const pathname = new URL(req.url, "http://home.local").pathname;
+  if (kind === "static" && REDACTED.has(pathname)) { sendRedacted(req, res, pathname, REDACTED.get(pathname)); return; }
+  if (kind === "index" || kind === "static") { serveStatic(req, res, { lookOnly: true }); return; }
+  if (kind === "pack-index" || kind === "pack") {
+    if (!lookOnlyLightingHandler(req, res)) lookOnlyPackHandler(req, res);
+    return;
+  }
+  if (kind === "registration") {
+    if (!(await lookOnlyRegistrationHandler(req, res))) sendUnauthorized(req, res);
+    return;
+  }
+  const route = findRoute(pathname);
+  if (route && kind === "den-live" && pathname.endsWith("/stream")) {
+    const device = lookOnlyClient(req), mine = lookOnlyStreams.get(device) || 0;
+    if (mine >= LOOK_ONLY_STREAMS_PER_DEVICE || lookOnlyStreamsOpen >= LOOK_ONLY_STREAMS) {
+      sendJson(res, 429, { ok: false, error: "look_only_stream_limit" }, { "Retry-After": "5" }); return;
+    }
+    lookOnlyStreams.set(device, mine + 1);
+    lookOnlyStreamsOpen += 1;
+    res.once("close", () => {
+      lookOnlyStreamsOpen -= 1;
+      const left = (lookOnlyStreams.get(device) || 1) - 1;
+      if (left > 0) lookOnlyStreams.set(device, left); else lookOnlyStreams.delete(device);
+    });
+  }
+  if (route && (kind === "den-live" || kind === "lighting-brain")) { proxyHttp(req, res, route); return; }
+  if (kind === "den-live") { sendCapabilityDisabled(res, "den_live"); return; }
+  sendUnauthorized(req, res);
+}
+
 if (process.argv.includes("--check")) {
   process.exit(checkConfig() ? 0 : 1);
 }
@@ -1959,6 +2073,27 @@ const server = http.createServer({
     await handleAuthRoute(req, res, parsed);
     return;
   }
+  if (parsed.pathname === DEN_LIVE_BODY_PATH) {
+    if (req.method !== "GET" || req.url !== DEN_LIVE_BODY_PATH) {
+      sendJson(res, 404, { ok: false, error: "route_not_found" });
+    } else if (lookOnlyClient(req) === null) {
+      sendJson(res, 403, { ok: false, error: "tailnet_required" });
+    } else if (!DEN_LIVE_BODY_ENABLED) {
+      sendCapabilityDisabled(res, "den_live_body");
+    } else if (hasBody(req)) {
+      req.resume();
+      sendJson(res, 400, { ok: false, error: "unexpected_body" });
+    } else {
+      proxyHttp(req, res, route);
+    }
+    return;
+  }
+  // A look-only device reading a listed path. Anything else it asks falls through to the rules below, unchanged.
+  const lookOnlyRead = isLookOnlyDevice(req) ? lookOnlyKind(req.method, req.url) : null;
+  if (lookOnlyRead) {
+    await handleLookOnly(req, res, lookOnlyRead);
+    return;
+  }
 
   if (parsed.pathname === DEN_OPS_PREFIX || parsed.pathname.startsWith(DEN_OPS_PREFIX + "/")) {
     await handleDenOps(req, res, {
@@ -1988,8 +2123,17 @@ const server = http.createServer({
     return;
   }
   const disabledRoute = findDisabledRoute(parsed.pathname);
-  if (disabledRoute) {
+  if (route?.prefix === DEN_LIVE_PREFIX && req.method === "GET" && hasBody(req)) {
+    // den-live gets no body: its headers carry no framing for one.
+    req.resume();
+    sendJson(res, 400, { ok: false, error: "unexpected_body" });
+  } else if (disabledRoute) {
     sendCapabilityDisabled(res, `legacy_proxy:${disabledRoute.prefix.slice("/proxy/".length)}`);
+  } else if (route?.prefix === DEN_LIVE_PREFIX && req.method === "PUT") {
+    // The den's labels save (den-live-route.mjs): signed in (requireAuth above), its own header, a framed JSON body.
+    const problem = denLabelsSaveProblem(req.headers);
+    if (problem) { req.resume(); sendJson(res, problem[0], { ok: false, error: problem[1] }); }
+    else proxyHttp(req, res, route);
   } else if (route) proxyHttp(req, res, route);
   else serveStatic(req, res);
 });
@@ -2026,6 +2170,16 @@ server.on("upgrade", (req, socket, head) => {
   }
   proxyUpgrade(req, socket, head, route);
 });
+
+// The Serve listener (HOME_WEB_SERVE_PORT): loopback connections that start with a PROXY line only. Tailscale Serve
+// forwards here with --proxy-protocol=1; the look-only view is served on this listener alone.
+if (SERVE_PORT) {
+  proxyProtocolListener(server, { required: true }).listen(SERVE_PORT, HOST, () => {
+    console.log(`Serve listener (PROXY line required) on ${HOST}:${SERVE_PORT}${LOOK_ONLY_ENABLED ? "; look-only on" : ""}`);
+  });
+} else if (lookOnlyEnabled(process.env)) {
+  console.warn("Look-only stays off: it needs HOME_WEB_SERVE_PORT, the port Tailscale Serve forwards to with --proxy-protocol=1.");
+}
 
 // Tailscale Serve may prepend a PROXY protocol line naming the tailnet client.
 proxyProtocolListener(server).listen(PORT, HOST, () => {

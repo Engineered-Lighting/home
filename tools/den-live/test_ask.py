@@ -236,6 +236,9 @@ class SeatedTest(unittest.TestCase):
         self.assertFalse(evidence(hip=0.9), "no head: hips under 0.95 m aren't clear")
         self.assertTrue(evidence(hip=0.8, knee=0.4), "the hips well above a knee")
         self.assertFalse(evidence(hip=0.8, knee=0.6, head=1.3), "a seated lap: the hips just above the knee")
+        self.assertFalse(evidence(hip=0.55, knee=0.12, head=1.23),
+                         "a knee point at the feet under a seated head (test_evidence's reader) is no evidence")
+        self.assertTrue(evidence(hip=0.8, knee=0.4, head=1.45), "the head part way up: the knees count")
         self.assertFalse(evidence(), "nothing seen is no evidence")
         stood = lambda **kw: seated.stood_up(seated.body_joints(joints(**kw)))
         self.assertTrue(stood(hip=0.95, head=1.68), "head and hips both up: standing at once")

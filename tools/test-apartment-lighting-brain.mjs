@@ -782,3 +782,53 @@ test('Victoria view wires the brain, the hand-change seam and the sofa mark; the
   for (const name of ['home-lighting-brain-client.js', 'home-lighting-brain-follower.js', 'home-lighting-sofa-target.js', 'home-lighting-brain-panel.jsx'])
     assert.ok(at(name) > 0 && at(name) < at('home-apartment.jsx'), name);
 });
+
+test('the coordinator spot eases between level steps, glides on its S-curve, dims the room and blanks at once on Stop', async () => {
+  const { localGlide } = await import('../app/src/home-den-spot-playback.mjs');
+  const registration = registrationFor();
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding });
+  preview.setDocument(registration, { coordinator: true });
+  const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
+  const state = id => preview.readback().fixtures.find(row => row.fixture_id === id).state;
+  const [spot] = ids;
+  const house = copy(state(spot).radials.map(zone => zone.brightness));
+  const row = (id, patch = {}) => ({ fixture_id: id, on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
+    target_m: null, reason: 'waiting_for_task', motion_phase: 'settled', ...patch });
+  const rows = patch => ids.map(id => row(id, id === spot ? patch : {}));
+  // A rise: the first step from dark shows at once, as the board shows it; the next steps are eased toward.
+  assert.equal(preview.applyCoordinatorSpots(rows({ on: true, level: .2, reason: 'task' }), generation,
+    { ambient: { level: .3, cct_k: 2700 } }), true);
+  assert.equal(state(spot).spotlight.brightness, .2, 'first light is never delayed');
+  assert.equal(preview.applyCoordinatorSpots(rows({ on: true, level: .5, reason: 'task' }), generation,
+    { ambient: { level: .3, cct_k: 2700 } }), true);
+  assert.ok(state(spot).spotlight.brightness < .5, 'a later step is eased toward');
+  assert.equal(preview.presentationActive(), true);
+  preview.advancePresentation(performance.now() + 1000);
+  assert.equal(state(spot).spotlight.brightness, .5);
+  // The room's glow follows the coordinator's ambient on every fixture.
+  for (const id of ids) {
+    assert.ok(state(id).radials.every(zone => zone.brightness === .3 && zone.color_temp_kelvin === 2700));
+    assert.equal(state(id).downward.brightness, .3);
+  }
+  // A glide is drawn on its curve, frame by frame, and lands where the MOVE goes.
+  const start = performance.now();
+  const glide = localGlide({ from_deg: [0, 30], to_deg: [-8, 34], start_mono: 0, duration_s: 1, limits: [1.5, 6, 40],
+    shape: 'scurve-7' }, start);
+  preview.applyCoordinatorSpots(rows({ on: true, level: .5, reason: 'task', motion_phase: 'moving', glide_local: glide }), generation);
+  const half = (glide.startMs + glide.endMs) / 2;
+  preview.advancePresentation(half);
+  near(state(spot).pan_deg, -4, 1e-6); near(state(spot).tilt_deg, 32, 1e-6);
+  preview.advancePresentation(glide.endMs + 1);
+  assert.deepEqual([state(spot).pan_deg, state(spot).tilt_deg], [-8, 34]);
+  // Stop blanks at once, and the room's own glow comes back when the coordinator directs none.
+  preview.applyCoordinatorSpots(rows({ on: false, level: 0, reason: 'stopped', pan_deg: -8, tilt_deg: 34 }), generation,
+    { ambient: null });
+  assert.equal(state(spot).spotlight.brightness, 0, 'no ease on Stop');
+  assert.deepEqual(state(spot).radials.map(zone => zone.brightness), house);
+  // Expiry (rows null) also blanks at once.
+  preview.applyCoordinatorSpots(rows({ on: true, level: .5, reason: 'task' }), generation);
+  preview.advancePresentation(performance.now() + 1000);
+  preview.applyCoordinatorSpots(null, generation);
+  assert.equal(state(spot).spotlight.brightness, 0);
+  preview.dispose();
+});

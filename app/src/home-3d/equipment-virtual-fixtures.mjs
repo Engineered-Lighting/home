@@ -40,6 +40,9 @@ export function orbHaloRadius(spot, down, radialLevels) {
     return ORB_HALO_MIN_RADIUS + ORB_HALO_GROWTH * Math.min(1, (level(spot) + level(down) + radial) / ORB_HALO_FULL_SUM);
 }
 const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = .0005, RADIAL_SETTLED_KELVIN = 2;
+// The coordinator's spot (den-live's light direction): its level arrives as the level train's committed steps, about
+// one a 0.1 s tick, and is eased between them over this time; its glide is drawn on the board's S-curve every frame.
+const SPOT_EASE_MS = 120, SPOT_SETTLED_LEVEL = .002;
 const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
 // SPEC Aim lifecycle: Set aim moves the warm beam to its new target with a
 // 650 ms sweep (ease-out cubic, as in the prototype), instant under reduced
@@ -631,7 +634,56 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
     let disposed = false, signature = null, scopeIdentity = null, status = 'empty', reason = null, omitted = [], revision = null, digest = null;
     let fixtures = [], views = new Map(), states = new Map(), targets = new Map(), generation = 0, selectedId = null;
     let presentationActive = false, coordinatorOwned = false;
+    // The coordinator's spots as drawn: {pan, tilt, glide, target, shown, cct, at} per fixture; and each fixture's own
+    // glow and downlight before the coordinator's ambient, to put back when it stops directing the room.
+    const coordinatorPlays = new Map();
+    let houseRoom = null;
+    function coordinatorFrame(id, nowMs, snap) {
+        const play = coordinatorPlays.get(id), state = states.get(id), view = views.get(id);
+        if (!play || !state || !view) return false;
+        let pan = play.pan, tilt = play.tilt;
+        if (play.glide && !snap) {
+            [pan, tilt] = play.glide.at(nowMs);
+            if (nowMs >= play.glide.endMs) { [play.pan, play.tilt] = play.glide.to; play.glide = null; }
+        } else play.glide = null;
+        const elapsed = nowMs - play.at;
+        play.at = nowMs;
+        // A spot coming on from dark shows its first step at once, as the board does: the ease only smooths between
+        // the steps of a light already on, so it never delays first light (the paint stamp's light-on).
+        if (snap || (play.shown <= 0 && play.target > 0)) play.shown = play.target;
+        else if (elapsed > 0) {
+            const next = play.shown + (play.target - play.shown) * -Math.expm1(-elapsed / SPOT_EASE_MS);
+            play.shown = Math.abs(play.target - next) <= SPOT_SETTLED_LEVEL ? play.target : next;
+        }
+        const next = nextState(state, { pan_deg: clamp(pan, VIRTUAL_LIMITS.pan_min_deg, VIRTUAL_LIMITS.pan_max_deg),
+            tilt_deg: clamp(tilt, VIRTUAL_LIMITS.tilt_min_deg, VIRTUAL_LIMITS.tilt_max_deg),
+            spotlight: { on: play.shown > 0, brightness: play.shown, color_temp_kelvin: play.cct } });
+        view.update(next);
+        states.set(id, next);
+        return !!play.glide || play.shown !== play.target;
+    }
+    function roomPatch(ambient) {
+        const channel = cctRange => ({ on: ambient.level > 0, brightness: ambient.level,
+            color_temp_kelvin: clamp(ambient.cct_k, cctRange[0], cctRange[1]) });
+        return { radials: PROFILE.radials.zones.map(zone => ({ number: zone.number, ...channel(PROFILE.radials.cct_range_k) })),
+            downward: channel(PROFILE.downlight_ring.cct_range_k) };
+    }
+    function directRoom(ambient) {
+        if (ambient === undefined) return;
+        if (ambient === null) {
+            if (houseRoom) for (const [id, room] of houseRoom) if (states.has(id)) states.set(id, nextState(states.get(id), room));
+            houseRoom = null;
+            return;
+        }
+        // Only fixtures with a glow of their own: a spot-only fixture has no glow zones or downlight to dim.
+        const glowing = [...states].filter(([id]) => !fixtures.find(item => item.id === id)?.spotOnly);
+        houseRoom ??= new Map(glowing.map(([id, state]) => [id, { radials: state.radials.map(({ azimuth_deg, ...zone }) => zone),
+            downward: copy(state.downward) }]));
+        const patch = roomPatch(ambient);
+        for (const [id, state] of glowing) states.set(id, nextState(state, patch));
+    }
     const snapPresentation = nowMs => {
+        for (const id of coordinatorPlays.keys()) coordinatorFrame(id, nowMs, true);
         for (const view of views.values()) view.snapPresentation(nowMs);
         presentationActive = false;
     };
@@ -651,7 +703,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             color_temp_ranges: { radials: [...PROFILE.radials.cct_range_k], downward: [...PROFILE.downlight_ring.cct_range_k], spotlight: [...PROFILE.spot.cct_range_k] },
             profile_status: 'display_model', geometry_status: 'symbolic', optical_origin_m: null,
         })), omitted: omitted.map(item => ({ ...item })), physical_commands: false });
-    const clear = () => { presentationActive = false; disposeChildren(root); depth.reset(); views.clear(); fixtures = []; signature = null; revision = null; digest = null; omitted = []; generation++; };
+    const clear = () => { presentationActive = false; coordinatorPlays.clear(); houseRoom = null; disposeChildren(root); depth.reset(); views.clear(); fixtures = []; signature = null; revision = null; digest = null; omitted = []; generation++; };
     const interactionDescriptor = fixtureId => {
         const item = fixtures.find(candidate => candidate.id === fixtureId);
         if (disposed || !item) return null;
@@ -703,18 +755,42 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         return { generation, binding: JSON.parse(scopeIdentity), equipment_revision: revision, equipment_digest: digest,
             fixture_ids: fixtures.map(item => item.id) };
     }
-    function applyCoordinatorSpots(rows, expectedGeneration = generation) {
+    /* rows: den-virtual-spots-1's fixtures (null blanks every spot at once: Stop, expiry, a lost stream). A row's level
+     * is eased toward over SPOT_EASE_MS and a row's glide_local is drawn every frame, except that Stop and Off blank at
+     * once. ambient: the coordinator's room glow, on every fixture's glow zones and downlight ({level, cct_k}); null puts
+     * each fixture's own back; undefined leaves them. */
+    function applyCoordinatorSpots(rows, expectedGeneration = generation, { ambient } = {}) {
         if (!coordinatorOwned || disposed || status !== 'ready' || expectedGeneration !== generation) return false;
         try {
             if (rows && (rows.length !== states.size || new Set(rows.map(row => row.fixture_id)).size !== states.size)) return false;
-            const next = rows ? rows.map(row => [row.fixture_id, nextState(states.get(row.fixture_id), {
+            if (!rows) {
+                coordinatorPlays.clear();
+                directRoom(null);
+                const next = [...states].map(([id, state]) => [id, nextState(state, { spotlight: { on: false, brightness: 0 } })]);
+                for (const [id, state] of next) {
+                    views.get(id).update(state);
+                    states.set(id, state);
+                }
+                return true;
+            }
+            for (const row of rows) nextState(states.get(row.fixture_id), {   // every row checked before any is drawn
                 pan_deg: row.pan_deg, tilt_deg: row.tilt_deg,
                 spotlight: { on: row.on, brightness: row.on ? row.level : 0, color_temp_kelvin: row.cct_k },
-            })]) : [...states].map(([id, state]) => [id, nextState(state, { spotlight: { on: false, brightness: 0 } })]);
-            for (const [id, state] of next) {
-                views.get(id).update(state);
-                states.set(id, state);
+            });
+            directRoom(ambient);
+            const nowMs = performance.now(), still = reducedMotion?.matches || !root.visible || visibilityDocument?.hidden;
+            let moving = false;
+            for (const row of rows) {
+                const play = coordinatorPlays.get(row.fixture_id) || { shown: 0, at: nowMs, cct: row.cct_k };
+                play.pan = row.pan_deg; play.tilt = row.tilt_deg;
+                play.target = row.on ? row.level : 0;
+                if (row.on) play.cct = row.cct_k;
+                play.glide = row.glide_local || null;   // a glide Home has seen end draws its end, never the older sample
+                coordinatorPlays.set(row.fixture_id, play);
+                const blank = !row.on && (row.reason === 'stopped' || row.reason === 'off');
+                if (coordinatorFrame(row.fixture_id, nowMs, still || blank)) moving = true;
             }
+            if (moving) presentationActive = true;
             return true;
         } catch (_) {
             if (rows) applyCoordinatorSpots(null);
@@ -730,7 +806,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             if (disposed || !presentationActive || !finite(nowMs)) return false;
             if (!root.visible || visibilityDocument?.hidden) { snapPresentation(nowMs); return false; }
             let changed = false; presentationActive = false;
-            for (const view of views.values()) {
+            for (const [id, view] of views) {
+                if (coordinatorPlays.has(id) && coordinatorFrame(id, nowMs, false)) { changed = true; presentationActive = true; }
                 if (view.advancePresentation(nowMs)) changed = true;
                 if (view.presentationActive()) presentationActive = true;
             }

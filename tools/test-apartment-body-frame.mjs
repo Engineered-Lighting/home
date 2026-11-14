@@ -66,6 +66,17 @@ test('the live decoder admits measured geometry and clear events only', () => {
     assert.equal(decoded.n, live.points.count);
     assert.deepEqual(decoded.torso, { facingDeg: 90, shoulder: [1.2, 1.46, 1.51], pelvisZ: 0.78 });
     assert.deepEqual(F.decodeLiveBodyEvent(clear), { event: clear });
+    // What the person holds: kind heldObject points and the detector's label, or object null; nothing looser.
+    const held = F.decodeLiveBodyEvent(measuredBodyEvent({ held: true }));
+    assert.ok(held, 'a held book');
+    assert.deepEqual(held.decoded.object, { label: 'book', confidence: 0.91 });
+    assert.ok(held.decoded.objects > 0);
+    assert.ok(F.decodeLiveBodyEvent({ ...measuredBodyEvent(), object: null }), 'the pass on, nothing held');
+    for (const object of [{ label: 'book', confidence: 0.91 }, { label: 'book', confidence: 0.91, source: 'qwen' },
+        { label: '', confidence: 0.91, source: 'detector' }, { label: 'b'.repeat(33), confidence: 0.91, source: 'detector' },
+        { label: 'book', confidence: 1.5, source: 'detector' }, { label: 'book', confidence: 0.9, source: 'detector', extra: 1 }, 'book']) {
+        assert.equal(F.decodeLiveBodyEvent({ ...measuredBodyEvent({ held: true }), object }), null, JSON.stringify(object));
+    }
     // den-live's lease: 1 s, or 2 s; never another span.
     assert.ok(F.decodeLiveBodyEvent({ ...live, expires_ts: live.capture_ts + 2 }), 'a 2 s lease');
     for (const lease of [0, 0.5, 1.5, 3, -1]) {

@@ -151,7 +151,8 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         fragmentShader: POOL_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
         uniforms: { uTint: { value: new THREE.Vector3(1, 0.55, 0.2) }, uOpacity: { value: 0 } } });
     const pool = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), poolMat); pool.name = 'body-floor-pool'; pool.position.z = 0.012; pool.renderOrder = 3; root.add(pool);
-    if (measuredOnly) for (const child of root.children) child.visible = child.name === 'body-recording';
+    // The measured figure: the person's points, and what they hold in the accent blue (steady, no glow), nothing else.
+    if (measuredOnly) for (const child of root.children) child.visible = child.name === 'body-recording' || child.name === 'body-held-object';
 
     // The WebGPU path (?renderer=webgpu) can't run the GLSL above: there the layer hides it and draws through the TSL
     // twin in apartment-body-webgpu.mjs, from the same buffers and uniforms (the particles and the held object).
@@ -161,7 +162,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         const cb = new URL(import.meta.url).search;
         import(`./apartment-body-webgpu.mjs${cb}`).then(({ createBodySprites }) => {
             if (disposed) return;
-            twin = createBodySprites({ B: now0.B, shared, body: holo.uniforms, held: measuredOnly ? null : objectMat.uniforms });
+            twin = createBodySprites({ B: now0.B, shared, body: holo.uniforms, held: objectMat.uniforms });
             for (const o of twin.objects) root.add(o);
             twin.update(now0.B.n);
         }).catch(error => console.warn('[home-3d] body layer: WebGPU twin unavailable', error));
@@ -205,6 +206,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         seen = now();
         centroid = frame.centroid;
         torso = frame.torso;
+        object = frame.object ?? null;
         presence = 1;
         return true;
     }
@@ -263,7 +265,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         if (measuredOnly) {
             shared.uSizeMul.value = 1 + 0.25 * currentZoom();
             shared.uFlicker.value = still ? 1 : 0.93 + 0.05 * Math.sin(at * 31) + 0.03 * Math.sin(at * 77);
-            holo.uniforms.uOpacity.value = presence;
+            holo.uniforms.uOpacity.value = presence; objectMat.uniforms.uOpacity.value = presence;
             return;
         }
         const fresh = seen != null && at - seen < GONE_S;
@@ -320,10 +322,11 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         /* What the labels need, in the apartment frame: the interpolated joints, the smoothed centroid, ground speed,
          * the held object's points (every 3rd) and this frame's object label. */
         snapshot() {
-            if (measuredOnly) return { trackId, presence, centroid: centroid && centroid.slice(), torso, joints: {} };
             const B = now0.B, objectPoints = [];
             for (let i = 0; i < B.n; i += 3) if (B.kind[i] === KIND.heldObject && B.alpha[i] > 0.3) objectPoints.push([B.pos[i * 3], B.pos[i * 3 + 1], B.pos[i * 3 + 2]]);
-            return { trackId, presence, centroid: centroid && centroid.slice(), joints: { ...joints }, speed, objectPoints, object: objectPoints.length > 8 ? object : null };
+            const held = objectPoints.length > 8 ? object : null;
+            if (measuredOnly) return { trackId, presence, centroid: centroid && centroid.slice(), torso, joints: {}, objectPoints, object: held };
+            return { trackId, presence, centroid: centroid && centroid.slice(), joints: { ...joints }, speed, objectPoints, object: held };
         },
         status: () => ({ trackId, frames: measuredOnly ? Number(seen != null) : frames.length, points: now0.B.n, presence, period_s: period, since_s: seen == null ? null : now() - seen,
             webgpu: !!twin }),

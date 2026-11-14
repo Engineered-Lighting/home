@@ -121,8 +121,8 @@ test('the measured WebGL figure uses only the newest samples and clears in the s
     f.advance(0.01);
     f.layer.updateMeasured(next);
     f.advance(0.01);
-    const recording = f.group().getObjectByName('body-recording');
-    assert.deepEqual(f.group().children.filter(child => child.visible), [recording]);
+    const recording = f.group().getObjectByName('body-recording'), held = f.group().getObjectByName('body-held-object');
+    assert.deepEqual(f.group().children.filter(child => child.visible), [recording, held], 'the person, and what they hold');
     assert.equal(f.group().userData.excludeFromApartmentCapture, true);
     assert.equal(recording.material.uniforms.uMeasuredOnly.value, true);
     assert.equal(recording.material.uniforms.uTime.value, 0);
@@ -133,4 +133,25 @@ test('the measured WebGL figure uses only the newest samples and clears in the s
     assert.equal(f.layer.status().points, 0);
     assert.equal(f.layer.snapshot().centroid, null);
     assert.equal(f.layer.snapshot().torso, null);
+});
+
+test('the measured figure shows what the person holds in the accent blue, with its label for the tag', () => {
+    const f = fixture({ measuredOnly: true, reducedMotion: true });
+    const frame = decodeLiveBodyEvent(measuredBodyEvent({ held: true })).decoded;
+    f.layer.updateMeasured(frame);
+    f.advance(0.01);
+    const held = f.group().getObjectByName('body-held-object');
+    assert.equal(held.visible, true);
+    assert.equal(held.material.uniforms.uOpacity.value, 1, 'steady, at the figure presence');
+    assert.deepEqual([...held.material.uniforms.uTint.value.toArray()].map(v => +v.toFixed(3)), [0x4d / 255, 0x9c / 255, 0xff / 255].map(v => +v.toFixed(3)));
+    const snap = f.layer.snapshot();
+    assert.deepEqual(snap.object, { label: 'book', confidence: 0.91 });
+    assert.ok(snap.objectPoints.length > 8);
+    const plain = fixture({ measuredOnly: true, reducedMotion: true });
+    plain.layer.updateMeasured(decodeLiveBodyEvent(measuredBodyEvent()).decoded);
+    plain.advance(0.01);
+    assert.equal(plain.layer.snapshot().object, null, 'no held object: no tag');
+    assert.deepEqual(plain.layer.snapshot().objectPoints, []);
+    f.layer.clear();
+    assert.equal(f.layer.snapshot().object, null);
 });

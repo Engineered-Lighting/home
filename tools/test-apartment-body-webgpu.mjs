@@ -83,9 +83,9 @@ test('measured WebGPU instance count clears immediately even if the twin loads l
     layer.updateMeasured(decoded);
     layer.clear();
     for (let i = 0; i < 50 && !layer.status().webgpu; i++) await new Promise(resolve => setTimeout(resolve, 20));
-    const recording = group.getObjectByName('body-recording-webgpu');
+    const recording = group.getObjectByName('body-recording-webgpu'), held = group.getObjectByName('body-held-object-webgpu');
     assert.equal(recording.count, 0);
-    assert.deepEqual(group.children.filter(child => child.visible), [recording]);
+    assert.deepEqual(group.children.filter(child => child.visible), [recording, held], 'the person, and what they hold');
     layer.updateMeasured(decoded);
     layer.tick(0.016);
     assert.equal(recording.count, decoded.n);

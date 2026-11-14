@@ -1,5 +1,9 @@
 const SCHEMA = 'den-virtual-spots-1';
 const finite = Number.isFinite;
+const AMBIENT_KELVIN = [2200, 6500];
+// The render clock's creep: Home maps the coordinator's monotonic clock to its own by the lowest transit seen, and lets
+// that floor rise this much per snapshot so a slow drift between the two clocks can't strand it.
+const RENDER_CREEP_MS = .5;
 const revision = value => Number.isSafeInteger(value) && value >= 0;
 const text = value => typeof value === 'string' && value.length > 0;
 const object = value => value != null && typeof value === 'object' && !Array.isArray(value);
@@ -43,10 +47,107 @@ function stampPaint(epoch, seq, lit) {
     });
 }
 
+/* The den spot's motion, drawn the way the fixture makes it (den-live's direction.py; the lighting-direction note).
+ *
+ * The coordinator sends one MOVE per glide, and the board's planner flies both axes along one jerk-limited S-curve on
+ * a shared path parameter s, from rest to rest. Each den-virtual-spots-1 row that is moving carries that move as
+ * `glide {from_deg, to_deg, start_mono, duration_s, limits: [v, a, j, d], shape: "scurve-7"}`. Home evaluates the same
+ * curve every frame instead of stepping between 10 Hz snapshots. The curve is the firmware's own (tools/c12v2/
+ * duration.py at 62ea043): an acceleration ramp and a deceleration ramp on one jerk, with the same 100-step bisection.
+ * A timed MOVE's min_duration stretch arrives already in the limits (speed / k, acceleration and deceleration / k^2,
+ * jerk / k^3), so the duration Home computes is the stretched predicted_ms the board reports. A row's level comes as
+ * the coordinator's committed steps, or as its samples of the board's own fade; Home eases between them over
+ * SPOT_EASE_MS, about one coordinator tick.
+ *
+ * Shared vectors: tools/den-live/fixtures/direction-scurve-vectors.json (den-live's test_direction.py writes them). */
+export const SPOT_EASE_MS = 120;
+const SHAPE = 'scurve-7';
+
+function ramp(vp, A, J) {
+    if (vp <= 0) return { vp, A, J, tj: 0, T: 0 };
+    if (vp * J >= A * A) return { vp, A, J, tj: A / J, T: vp / A + A / J };
+    const tj = Math.sqrt(vp / J);
+    return { vp, A, J, tj, T: 2 * tj };
+}
+const rampDistance = r => r.vp * r.T / 2;
+function rampAt(r, t) {
+    if (r.T <= 0 || t <= 0) return [0, 0];
+    if (t >= r.T) return [rampDistance(r), r.vp];
+    const { J, tj, T, vp } = r, alim = J * tj;
+    if (t < tj) return [J * t ** 3 / 6, J * t * t / 2];
+    if (t < T - tj) return [alim / 6 * (3 * t * t - 3 * t * tj + tj * tj), alim * (t - tj / 2)];
+    const rest = T - t;
+    return [rampDistance(r) - vp * rest + J * rest ** 3 / 6, vp - J * rest * rest / 2];
+}
+
+/* A rest-to-rest move of s from 0 to 1 under speed v, acceleration a, jerk j and deceleration d (per second,
+ * squared, cubed and squared; d defaults to a), as the board plans it. */
+export function scurve(v, a, j, d = a) {
+    if (!(v > 0 && a > 0 && j > 0 && d > 0)) throw RangeError('scurve_limits');
+    let up = ramp(v, a, j), down = ramp(v, d, j), peak = v, cruise;
+    if (rampDistance(up) + rampDistance(down) <= 1) cruise = (1 - rampDistance(up) - rampDistance(down)) / v;
+    else {
+        let low = 0, high = v;
+        for (let i = 0; i < 100; i++) {
+            const middle = (low + high) / 2;
+            if (rampDistance(ramp(middle, a, j)) + rampDistance(ramp(middle, d, j)) > 1) high = middle; else low = middle;
+        }
+        peak = low; cruise = 0; up = ramp(low, a, j); down = ramp(low, d, j);
+    }
+    const duration = up.T + cruise + down.T;
+    function at(t) {
+        if (t <= 0) return [0, 0];
+        if (t >= duration) return [1, 0];
+        if (t < up.T) return rampAt(up, t);
+        if (t < up.T + cruise) return [rampDistance(up) + peak * (t - up.T), peak];
+        const [gone, speed] = rampAt(down, duration - t);
+        return [1 - gone, speed];
+    }
+    return { duration, s: t => Math.min(1, Math.max(0, at(t)[0])), speed: t => at(t)[1] };
+}
+
+/* A snapshot row's glide, checked, on Home's clock: startMs is the glide's start as Home's performance clock reads
+ * it, and at(nowMs) the [pan_deg, tilt_deg] it has reached. Null when the row has no glide Home can draw. */
+function localGlideCurve(glide, startMs) {
+    if (!glide || glide.shape !== SHAPE || !Array.isArray(glide.limits) || ![3, 4].includes(glide.limits.length)
+        || !glide.limits.every(value => finite(value) && value > 0) || !finite(startMs)
+        || ![glide.from_deg, glide.to_deg].every(pair => Array.isArray(pair) && pair.length === 2 && pair.every(finite))) return null;
+    try {
+        const curve = scurve(...glide.limits);
+        const from = glide.from_deg.slice(), to = glide.to_deg.slice(), endMs = startMs + curve.duration * 1000;
+        const at = nowMs => glideAt({ from, to, startMs, curve }, nowMs);
+        return { from, to, startMs, endMs, curve, at };
+    } catch (_) { return null; }
+}
+
+/* [pan_deg, tilt_deg] of a local glide at nowMs: the board's straight line in joint space, along s(t). */
+export function glideAt(glide, nowMs) {
+    const s = glide.curve.s((nowMs - glide.startMs) / 1000);
+    return [glide.from[0] + (glide.to[0] - glide.from[0]) * s, glide.from[1] + (glide.to[1] - glide.from[1]) * s];
+}
+
+/* One frame of the level's ease toward its committed step: a first-order lag of SPOT_EASE_MS. */
+export function easeLevel(shown, target, elapsedMs) {
+    if (!(elapsedMs > 0)) return shown;
+    const next = shown + (target - shown) * -Math.expm1(-elapsedMs / SPOT_EASE_MS);
+    return Math.abs(target - next) <= .002 ? target : next;
+}
+
+export { localGlideCurve as localGlide };
+
+/* The snapshot's room glow (den-live's direction: dimmed under a task light), checked: {level, cct_k}, null for "the
+ * coordinator directs none" (Off), undefined when the producer sends none. */
+export function ambientOf(value) {
+    if (value === undefined) return undefined;
+    if (!object(value) || !finite(value.level) || value.level < 0 || value.level > 1 || !finite(value.cct_k)) return null;
+    return { level: value.level, cct_k: Math.min(AMBIENT_KELVIN[1], Math.max(AMBIENT_KELVIN[0], value.cct_k)) };
+}
+
 export function createSpotPlayback({ home, site, clock = () => performance.now(), onChange = () => {},
     later = setTimeout, cancel = clearTimeout }) {
     let overlay = null, applied = null, candidate = null, control = null, controlVersion = 0;
     let anchor = null, openedAt = null, transform = null, scan = null, highestSeq = -1, stopCounter = -1, timer = null;
+    let renderOffset = null;   // Home's clock minus the coordinator's, in ms: the lowest transit seen, creeping up
     const hold = { off: null, stop: null };
 
     function clear() {
@@ -64,7 +165,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         overlay = nextOverlay;
     }
     function disconnect() {
-        openedAt = null; anchor = null; transform = null; scan = null; highestSeq = -1;
+        openedAt = null; anchor = null; transform = null; scan = null; highestSeq = -1; renderOffset = null;
         clear();
     }
     function observeControl(value, version = controlVersion) {
@@ -116,8 +217,13 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         if (stop && !value.stopped && stop.observed != null && value.stop_counter >= stop.observed) hold.stop = null;
         observeControl(value);
         if ((hold.off || hold.stop) && value.on && !value.stopped) { clear(); return; }
-        const fixtures = scope.fixture_ids.map(id => ({ fixture_id: id, ...value.fixtures[id] }));
-        if (!overlay.applyCoordinatorSpots(fixtures, scope.generation)) {
+        // A moving row's glide goes to the overlay on Home's own clock, so each frame draws the board's S-curve.
+        const fixtures = scope.fixture_ids.map(id => {
+            const row = { fixture_id: id, ...value.fixtures[id] };
+            const glide = row.glide && renderOffset !== null && localGlideCurve(row.glide, row.glide.start_mono * 1000 + renderOffset);
+            return glide ? { ...row, glide_local: glide } : row;
+        });
+        if (!overlay.applyCoordinatorSpots(fixtures, scope.generation, { ambient: ambientOf(value.ambient) })) {
             overlay.applyCoordinatorSpots(null); clear(); return;
         }
         stampPaint(value.epoch, value.seq, fixtures.some(fixture => fixture.on === true));
@@ -134,6 +240,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             if (openedAt === null || !text(value?.epoch) || !finite(value.server_mono) || value.epoch === anchor?.epoch) return;
             if (anchor) { clear(); highestSeq = -1; }
             anchor = { epoch: value.epoch, server: value.server_mono };
+            renderOffset = null;
         },
         receive(value) {
             if (!anchor) return;
@@ -142,6 +249,8 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             if (revision(value.seq)) highestSeq = value.seq;
             if (!validSnapshot(value, home, site)) { clear(); return; }
             if (value.stop_counter < stopCounter) return;
+            const transit = clock() - value.sampled_mono * 1000;
+            renderOffset = renderOffset === null ? transit : Math.min(transit, renderOffset + RENDER_CREEP_MS);
             candidate = value;
             applyCandidate();
         },

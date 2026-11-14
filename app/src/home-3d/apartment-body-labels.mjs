@@ -5,7 +5,7 @@
  * detail, #EDEDED / #A1A1A1, ice #B8D8FF, accent #4D9CFF. The rules live in apartment-body-annotation-model.mjs.
  * Drawn on a 2D canvas over the viewport (crisp type); the card is a DOM element (frosted with backdrop-filter). It
  * never covers the body and takes no pointer events: a tap is read from the viewport without stopping the orbit.
- * Presentation only: the identity, activity and house lines are supplied by the caller. */
+ * Presentation only: the identity, activity, house and evidence ("Qwen saw") lines are supplied by the caller. */
 import * as THREE from 'three';
 import { createBodyAnnotationState, captionLines, cardRows } from './apartment-body-annotation-model.mjs';
 import { zoomRatio } from './apartment-body-frame.mjs';
@@ -32,7 +32,7 @@ function corners(ctx, x0, y0, x1, y1, len, color, width) {
 }
 
 export function attachApartmentBodyLabels({ engine, host, layer, person = () => null, activity = () => null, house = () => null,
-    now = () => performance.now() / 1000, animate = true } = {}) {
+    evidence = () => null, now = () => performance.now() / 1000, animate = true } = {}) {
     const parent = engine?.apartmentRoot, camera = engine?.camera, doc = host?.ownerDocument;
     if (!parent || !camera || !doc || typeof host.appendChild !== 'function' || typeof layer?.snapshot !== 'function') throw Error('apartment_body_labels_dependencies_required');
     const canvas = doc.createElement('canvas');
@@ -70,7 +70,7 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
         const a = smooth('anchor', head[0], head[1] - 6, dt), L = 60 + 30 * (1 - zoomT), dir = st.right ? 1 : -1;
         const by = Math.max(46, Math.min(h - 90, a.y - L)), bx = a.x + dir * Math.max(L * 0.55, L - (a.y - by));
         const b = smooth('block', Math.max(40, Math.min(w - 40, bx)), by, dt, 0.22), tx = st.right ? b.x + 24 : b.x - 24;
-        const bw = st.detail === 0 ? 120 : 250, bh = st.detail === 0 ? 34 : st.detail === 1 ? 56 : 92;
+        const bw = st.detail === 0 ? 120 : 250, bh = st.detail === 0 ? 34 : st.detail === 1 ? 56 : lines.evidence ? 110 : 92;
         const cx = st.right ? tx + bw * 0.42 : tx - bw * 0.42, cy = b.y + bh * 0.4 - 8;
         ctx.save(); ctx.translate(cx, cy); ctx.scale(1, bh / bw * 1.5); ctx.translate(-cx, -cy);
         const scrim = ctx.createRadialGradient(cx, cy, 4, cx, cy, bw * 0.75); scrim.addColorStop(0, 'rgba(0,0,0,0.46)'); scrim.addColorStop(1, 'rgba(0,0,0,0)');
@@ -84,6 +84,7 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
         if (lines.doing) { ctx.font = `500 12px ${S.mono}`; ctx.fillStyle = '#D4D4D4'; const t = lines.doing.toUpperCase(), tw = spacedWidth(ctx, t, 1.8); spaced(ctx, t, st.right ? tx : tx - tw, b.y + 28, 1.8); }
         if (lines.provenance) { ctx.font = `500 10.5px ${S.mono}`; ctx.fillStyle = S.dim; const t = lines.provenance.toUpperCase(), tw = spacedWidth(ctx, t, 1.8); spaced(ctx, t, st.right ? tx : tx - tw, b.y + 46, 1.8); }
         if (lines.house) { ctx.font = `500 14px ${S.sans}`; ctx.fillStyle = S.ice; const hw = ctx.measureText(lines.house).width; ctx.fillText(lines.house, st.right ? tx : tx - hw, b.y + 70); }
+        if (lines.evidence) { ctx.font = `500 10.5px ${S.mono}`; ctx.fillStyle = S.dim; const t = ('Qwen saw · ' + lines.evidence).toUpperCase(), tw = spacedWidth(ctx, t, 1.4); spaced(ctx, t, st.right ? tx : tx - tw, b.y + (lines.house ? 88 : 70), 1.4); }
         ctx.restore();
         return [[a.x, a.y], [tx + dir * 60, b.y]];
     }
@@ -172,7 +173,7 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
         const st = state.step({ now: now(), dt, joints: J, centroid: snap.centroid, torso: snap.torso,
             activity: activity(), object: snap.object, headScreenX: screenAnchor[0], width: w, zoomT });
         shown = st;
-        const who = person(), houseLine = house(), lines = captionLines(who, st, houseLine);
+        const who = person(), houseLine = house(), lines = captionLines(who, st, houseLine, evidence());
         ctx.globalAlpha = Math.min(1, snap.presence * 1.2);
         ring(st, snap.centroid, dt);
         hit = screenAnchor[2] ? caption(st, lines, screenAnchor, w, h, dt, zoomT) : null;

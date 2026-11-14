@@ -1055,6 +1055,145 @@ button.hg-no-press:active {
 .home-den-live-chip-qwen { color: var(--hg-fg-1, #d4d4d4); overflow-wrap: anywhere; }
 .home-den-live-chip-facts:empty, .home-den-live-chip-qwen:empty, .home-den-live-chip-banner:empty { display: none; }
 .home-den-live-chip-banner { margin-top: 4px!important; color: var(--hg-warn, #ffb224); overflow-wrap: anywhere; }
+/* The den's live caption (home-den-inference-caption.mjs; docs/design/den-inference/SPEC.md). It sits on the room canvas,
+ * which stays dark in both themes, so it uses the canvas's own colours: Home's dark text, ice for Qwen's word, the
+ * accent pill for a held object, warm for the light. A soft dark scrim, not a card, keeps it readable over the points. */
+.home-den-caption-layer { position: absolute; inset: 0; z-index: 14; pointer-events: none; overflow: hidden;   /* over the room's label pills (13) */
+  --den-cap-fg: #ffffff; --den-cap-fg-1: #ededed; --den-cap-fg-2: #a1a1a1; --den-cap-fg-3: #8f8f8f;
+  --den-cap-ice: #b8d8ff; --den-cap-ice-glow: rgba(184,216,255,.32); --den-cap-accent: #4d9cff; --den-cap-warm: #ffddb0; }
+.home-den-caption-leaders { position: absolute; inset: 0; width: 100%; height: 100%; }
+.home-den-caption { position: absolute; left: 0; top: 0; display: grid; gap: 3px; margin: 0; will-change: transform;
+  font: 400 12.5px/1.3 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-cap-fg-1); }
+.home-den-caption::before { content: ""; position: absolute; inset: -20px -30px; z-index: -1; border-radius: 48px;
+  background: radial-gradient(closest-side, rgba(0,0,0,.78), rgba(0,0,0,.5) 60%, rgba(0,0,0,0)); }
+.home-den-caption p { margin: 0; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.home-den-caption[data-side="left"] { justify-items: end; text-align: right; }
+.home-den-caption[data-side="left"] p { flex-direction: row-reverse; }
+.home-den-caption [hidden] { display: none !important; }
+.home-den-caption-name { align-items: baseline !important; }
+.home-den-caption-who { font: 600 20px/1.1 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-cap-fg); letter-spacing: -.01em; }
+.home-den-caption[data-kind="unknown"] .home-den-caption-who, .home-den-caption[data-kind="guest"] .home-den-caption-who { color: var(--den-cap-fg-1); font-weight: 560; }
+.home-den-caption[data-strength="weak"] .home-den-caption-who { text-decoration: underline dashed rgba(255,255,255,.45); text-underline-offset: 4px; }
+.home-den-caption-prov, .home-den-caption-age, .home-den-caption-house-level { font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; color: var(--den-cap-fg-3); font-variant-numeric: tabular-nums; }
+.home-den-caption-prov:empty, .home-den-caption-age:empty, .home-den-caption-house-level:empty { display: none; }
+.home-den-caption-life { width: 16px; height: 16px; flex: 0 0 auto; transform: rotate(-90deg); overflow: visible; }
+.home-den-caption-life circle { fill: none; stroke-width: 2; }
+.home-den-caption-life .bg { stroke: rgba(255,255,255,.14); }
+.home-den-caption-life .arc { stroke: var(--den-cap-ice); stroke-linecap: round; }
+.home-den-caption-word { font: 500 15px/1.2 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-cap-ice); }
+.home-den-caption[data-line="status"] .home-den-caption-word, .home-den-caption[data-line="posture"] .home-den-caption-word { color: var(--den-cap-fg-2); font-size: 13.5px; font-weight: 450; }
+.home-den-caption-word.is-new { animation: home-den-caption-new .9s cubic-bezier(.2,.7,.2,1); }
+@keyframes home-den-caption-new { from { color: #fff; text-shadow: 0 0 14px var(--den-cap-ice-glow); } to { text-shadow: none; } }
+.home-den-caption-object { font: 600 11px/1 'Geist Mono', ui-monospace, monospace !important; letter-spacing: .06em; text-transform: uppercase;
+  color: #000; background: var(--den-cap-accent); padding: 4px 6px 3px; border-radius: 4px; justify-self: start; }
+.home-den-caption[data-side="left"] .home-den-caption-object { justify-self: end; }
+.home-den-caption-basis { font: 500 11.5px/1.35 'Geist Mono', ui-monospace, monospace; color: var(--den-cap-fg-2); white-space: normal !important; max-width: 260px; }
+.home-den-caption-house { font: 500 13.5px/1.25 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-cap-warm); }
+.home-den-caption-house-level { color: rgba(255,221,176,.72); }
+.home-den-caption-house[data-dark="1"] { color: var(--den-cap-fg-2); }
+.home-den-caption-near { display: none !important; }   /* the labels view already draws the near phrase under the marker */
+.home-den-caption[data-stale="1"] { filter: saturate(0); }
+.home-den-caption-layer[data-compact="1"] .home-den-caption-who { font-size: 17px; }
+.home-den-caption-layer[data-compact="1"] .home-den-caption-word { font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .home-den-caption-word.is-new { animation: none; } }
+/* The den's capsule (home-den-live-view.mjs, with the caption or the pipeline on): the chip, made one row, in the
+ * Perception Lab's card language: near-black, a hairline border, small corners, mono detail; three icons hold what
+ * used to be separate buttons and drawers. */
+.home-den-live-chip.home-den-live-chip--capsule { top: 12px; left: 12px; z-index: 15; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; max-width: min(560px, calc(100% - 24px));
+  min-height: 36px; padding: 3px 4px 3px 12px; border: 1px solid rgba(255,255,255,.14); border-radius: 6px; background: rgba(10,10,10,.92);
+  pointer-events: none; font: 400 12.5px/1 'Geist', ui-sans-serif, system-ui, sans-serif; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.home-den-live-chip-actions { pointer-events: auto; }   /* like the old chip: only the controls take the pointer */
+.home-den-live-chip--capsule p { white-space: nowrap; }
+.home-den-live-chip--capsule .home-den-live-chip-title { font-weight: 560; }
+.home-den-live-chip--capsule .home-den-live-chip-facts { font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; color: var(--hg-fg-2, #a1a1a1); }
+.home-den-live-chip--capsule .home-den-live-chip-qwen { max-width: 240px; overflow: hidden; text-overflow: ellipsis; font-size: 12px; color: var(--hg-fg-1, #ededed); }
+.home-den-live-chip--capsule .home-den-live-chip-qwen:not(:empty)::before { content: "· "; color: var(--hg-fg-3, #8f8f8f); }
+.home-den-live-chip--capsule .home-den-live-chip-banner { margin: 0 !important; font: 500 11.5px/1 'Geist Mono', ui-monospace, monospace; }
+.home-den-live-chip-actions { display: flex; gap: 2px; margin-left: 2px; padding-left: 6px; border-left: 1px solid rgba(255,255,255,.12); }
+.home-den-live-chip-icon { width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 4px; background: transparent;
+  color: var(--hg-fg-2, #a1a1a1); cursor: pointer; }
+.home-den-live-chip-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.home-den-live-chip-icon:hover { color: #fff; border-color: rgba(255,255,255,.18); }
+.home-den-live-chip-icon[aria-pressed="true"] { color: #fff; border-color: rgba(255,255,255,.4); background: rgba(255,255,255,.08); }
+.home-den-live-chip-icon:focus-visible { outline: 1px solid #0072f5; outline-offset: 2px; }
+.home-den-live-chip-icon[hidden] { display: none; }
+/* The coordinator's drawer keeps its own row under the capsule's status row. */
+.home-den-live-chip--capsule .home-den-live-coordinator { flex: 1 0 100%; margin: 1px 0 5px; padding-top: 6px; }
+.apt-home-stage:has(.home-den-live-chip--capsule) .home-den-labels-toggle { display: none; }
+/* The den's pipeline through the room (home-den-pipeline-layer.mjs). Stations on one hairline along the canvas's top:
+ * a lit dot per system with its words below, no boxes, so the room stays the picture. Wires are light, a record runs
+ * them as a short comet, and the light's path back into the room is warm. On the always-dark canvas it uses the
+ * canvas's own colours (Home's dark text, the apartment's state shapes), like the caption. */
+.home-den-pipeline { position: absolute; inset: 0; z-index: 13; pointer-events: none; overflow: hidden;
+  --den-pl-fg: #ffffff; --den-pl-fg-1: #ededed; --den-pl-fg-2: #a1a1a1; --den-pl-fg-3: #8f8f8f;
+  --den-pl-ok: #91e6bd; --den-pl-attn: #ffb45f; --den-pl-warm: #ffddb0; --den-pl-glass: rgba(8,9,11,.78); }
+.home-den-pipeline-wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; transition: opacity .35s cubic-bezier(.2,.7,.2,1); }
+.home-den-pipeline-wire { fill: none; stroke: rgba(237,237,237, calc(.34 + var(--heat, 0) * .5)); stroke-width: calc(1px + var(--heat, 0) * 1px); stroke-linecap: round; }
+.home-den-pipeline-wire.is-gate { stroke: rgba(237,237,237,.3); stroke-dasharray: 2 4; }
+.home-den-pipeline-wire.is-room { stroke: rgba(237,237,237, calc(.2 + var(--heat, 0) * .25)); }
+.home-den-pipeline-wire.is-light { stroke: rgba(255,221,176, calc(.42 + var(--heat, 0) * .3)); stroke-width: 1.2px; }
+.home-den-pipeline-comet { fill: none; stroke: rgba(255,255,255, calc(.35 + var(--heat, 0) * .65)); stroke-width: 2px; stroke-linecap: round; }
+.home-den-pipeline-comet.is-light { stroke: rgba(255,226,190, calc(.4 + var(--heat, 0) * .6)); stroke-width: 2.4px; }
+.home-den-pipeline-anchor { fill: none; stroke: rgba(237,237,237,.6); stroke-width: 1.2; }
+.home-den-pipeline-anchor.is-light { fill: #ffddb0; stroke: none; }
+.home-den-pipeline-halo { fill: url(#home-den-pipeline-bloom); opacity: calc(.75 + var(--heat, 0) * .25); }
+.home-den-pipeline-rail { position: absolute; display: flex; justify-content: flex-start; gap: 30px; pointer-events: none;
+  transition: opacity .35s cubic-bezier(.2,.7,.2,1), transform .35s cubic-bezier(.2,.7,.2,1); }
+.home-den-pipeline[data-on="0"] .home-den-pipeline-rail { opacity: 0; transform: translateY(-8px); visibility: hidden; transition: opacity .2s, transform .2s, visibility 0s .2s; }
+.home-den-pipeline[data-on="0"] .home-den-pipeline-wires { opacity: 0; }
+.home-den-pipeline-card { pointer-events: auto; position: relative; flex: 1 1 0; max-width: 214px; min-width: 0; display: grid; gap: 3px; padding: 8px 10px 8px;
+  text-align: left; border: 1px solid rgba(255,255,255,.14); border-radius: 4px; background: rgba(10,10,10,.94); color: var(--den-pl-fg-1); cursor: pointer;
+  font: 400 12px/1.25 'Geist', ui-sans-serif, system-ui, sans-serif; }
+.home-den-pipeline-card:hover, .home-den-pipeline-card[aria-expanded="true"] { border-color: rgba(255,255,255,.34); }
+.home-den-pipeline-card:focus-visible { outline: 1px solid #0072f5; outline-offset: 2px; }
+.home-den-pipeline-role { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.home-den-pipeline-system { font: 500 11.5px/1.2 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-pl-fg-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-den-pipeline-badge { flex: 0 0 auto; font: 500 9.5px/1 'Geist Mono', ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; color: var(--den-pl-fg-3);
+  padding: 2px 5px; border: 1px solid rgba(255,255,255,.2); border-radius: 3px; }
+.home-den-pipeline-value { font: 600 14.5px/1.3 'Geist', ui-sans-serif, system-ui, sans-serif; color: var(--den-pl-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin: 0 -4px; padding: 0 4px; border-radius: 2px; transition: background .6s; font-variant-numeric: tabular-nums; }
+.home-den-pipeline-card[data-changed="true"] .home-den-pipeline-value { background: rgba(255,255,255,.1); transition: none; }
+.home-den-pipeline-card[data-node="coordinator"][data-state="live"] .home-den-pipeline-value { color: var(--den-pl-warm); }
+.home-den-pipeline-card[data-state="attention"] .home-den-pipeline-value { color: var(--den-pl-attn); }
+.home-den-pipeline-card[data-state="idle"] .home-den-pipeline-value, .home-den-pipeline-card[data-state="off"] .home-den-pipeline-value { color: var(--den-pl-fg-2); }
+.home-den-pipeline-sub { display: flex; align-items: center; gap: 5px; min-width: 0; font: 500 10.5px/1.3 'Geist Mono', ui-monospace, monospace; color: var(--den-pl-fg-3);
+  white-space: nowrap; overflow: hidden; }
+.home-den-pipeline-sub > span { overflow: hidden; text-overflow: ellipsis; }
+.home-den-pipeline-sub > span:not(:empty)::before { content: "· "; }
+.home-den-pipeline-state { font-weight: 500; color: var(--den-pl-fg-1); }
+.home-den-pipeline-dot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: transparent; box-shadow: inset 0 0 0 1.2px var(--den-pl-fg-2); }
+.home-den-pipeline-card[data-state="live"][data-changed="true"] .home-den-pipeline-dot { background: var(--den-pl-fg-1); box-shadow: none; }
+.home-den-pipeline-card[data-state="attention"] .home-den-pipeline-dot { background: var(--den-pl-attn); box-shadow: none; border-radius: 1px; transform: rotate(45deg); }
+.home-den-pipeline-card[data-state="off"] .home-den-pipeline-dot { background: #404040; box-shadow: none; }
+.home-den-pipeline-legend { position: absolute; margin: 0; pointer-events: none; font: 500 10px/1 'Geist Mono', ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase;
+  color: var(--den-pl-fg-3); transition: opacity .3s; }
+.home-den-pipeline[data-on="0"] .home-den-pipeline-legend { opacity: 0; }
+.home-den-pipeline-anchor.is-port { fill: #0a0a0a; stroke: rgba(237,237,237,.55); stroke-width: 1; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-rail { gap: 6px; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-card { padding: 6px 7px; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-sub { display: none; }
+.home-den-pipeline[data-compact="1"] .home-den-pipeline-value { font-size: 12px; }
+.home-den-pipeline-toggle { position: absolute; pointer-events: auto; display: inline-flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px;
+  border: 1px solid rgba(255,255,255,.14); border-radius: 8px; background: var(--den-pl-glass); color: var(--den-pl-fg-2); cursor: pointer;
+  font: 500 12px/1 'Geist', ui-sans-serif, system-ui, sans-serif; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+.home-den-pipeline-toggle::before { content: ""; width: 14px; height: 6px; background: radial-gradient(circle, currentColor 2.2px, transparent 2.6px) 0 50% / 7px 6px repeat-x;
+  border-top: 1px solid transparent; box-shadow: inset 0 -2.5px 0 -2px currentColor; }
+.home-den-pipeline-toggle:hover { color: var(--den-pl-fg); border-color: rgba(255,255,255,.3); }
+.home-den-pipeline-toggle[aria-pressed="true"] { color: var(--den-pl-fg); border-color: rgba(184,216,255,.55); background: rgba(184,216,255,.12); }
+.home-den-pipeline-toggle:focus-visible { outline: 2px solid #b8d8ff; outline-offset: 2px; }
+.home-den-pipeline-toggle[hidden] { display: none; }
+/* While the pipeline is on, the coordinator card names the lit fixture, so the room's fixture pills step back. */
+.apt-home-stage .apt-room-label { transition: opacity .3s cubic-bezier(.2,.7,.2,1), visibility 0s; }
+.apt-home-stage:has(.home-den-pipeline[data-on="1"]) .apt-room-label { opacity: 0; visibility: hidden; transition: opacity .3s cubic-bezier(.2,.7,.2,1), visibility 0s .3s; }
+.home-den-pipeline-pop { position: absolute; left: 0; top: 0; width: 264px; pointer-events: auto; padding: 10px 12px; border: 1px solid rgba(255,255,255,.18);
+  border-radius: 4px; background: rgba(10,10,10,.96); color: var(--den-pl-fg-1); font: 400 12px/1.4 'Geist', ui-sans-serif, system-ui, sans-serif; }
+.home-den-pipeline-pop[hidden] { display: none; }
+.home-den-pipeline-pop-title { margin: 0 0 6px; font-weight: 560; color: var(--den-pl-fg); }
+.home-den-pipeline-pop dl { display: grid; grid-template-columns: 82px minmax(0, 1fr); gap: 3px 10px; margin: 0; }
+.home-den-pipeline-pop dt { font: 500 11px/1.5 'Geist Mono', ui-monospace, monospace; color: var(--den-pl-fg-3); }
+.home-den-pipeline-pop dd { margin: 0; overflow-wrap: anywhere; }
+.home-den-pipeline-pop-note { margin: 8px 0 0; color: var(--den-pl-fg-2); font-size: 11.5px; }
+@media (prefers-reduced-motion: reduce) { .home-den-pipeline-rail, .home-den-pipeline-wires { transition: none; } }
 /* The lighting coordinator's section (home-den-coordinator-panel.mjs): the one part of the chip that takes the pointer. */
 .home-den-live-coordinator { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--hg-border, rgba(255,255,255,.1)); pointer-events: auto; }
 .home-den-live-coordinator[hidden] { display: none; }

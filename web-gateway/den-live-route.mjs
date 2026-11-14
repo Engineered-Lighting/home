@@ -82,12 +82,14 @@ export function denLiveHeaders(reqHeaders, target, method = "GET") {
 }
 
 const base = `${DEN_LIVE_PREFIX}/v1/homes/${DEN_LIVE_HOME}/`;
-export function denLiveRuntime({ bodyV2 = false, virtual = false, coordinator = true } = {}) {
+export function denLiveRuntime({ bodyV2 = false, virtual = false, coordinator = true, caption = false, pipeline = false } = {}) {
   return "window.HomeDenLive=Object.freeze(" + JSON.stringify({
     home: DEN_LIVE_HOME, site: DEN_SITE, state: base + "state", stream: base + "stream",
     ...(bodyV2 ? { body: DEN_LIVE_BODY_PATH, bodySchema: DEN_LIVE_BODY_SCHEMA } : {}),
     ...(coordinator ? { coordinator: base + "coordinator" } : {}),
     ...(virtual ? { virtual: true } : {}),
+    ...(caption ? { caption: true } : {}),
+    ...(pipeline ? { pipeline: true } : {}),
   }) + ");";
 }
 

@@ -64,7 +64,7 @@ class EvidenceTests(unittest.TestCase):
         self.assertGreater(after.association_revision, track.association_revision)
         self.assertEqual(after.association_status, "ambiguous")
         self.assertIsNone(self.p.body_input)
-        self.advance(103.8, 19, luma=10)
+        self.advance(103.8, 19, luma=3)
         self.assertEqual((self.p.snapshot.status, self.p.snapshot.presence), ("degraded", "unknown"))
 
     # ---- the grace (plan 02-3): identity survives one late frame or one unsafe frame ----

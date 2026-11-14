@@ -299,7 +299,8 @@ The owner qualification uses one short tailnet phone run in room light and one w
 - **The replay check (plan 02-3):** `replay_person_state_check.py "<your sofa replays folder>"` replays each take, in den-sim's prepared format, through the Perceiver, the ask and the lighting preview on this PC, and prints three lines: the seated since's difference between the ask and the preview (should be 0), seated latency per trial from its begin cue (2.5 s or less) and revision bumps while sitting (0). Never a coordinate. Its docstring says what it assumes about the replays.
 - **The scan revision:** it must be the one step 2 picked on. If the active scan changed since, it stops and asks you to register again.
 - **The camera's correction:** every frame must say the correction step 2's take was made on, the receipt's factor and calibration hash. After a camera release that changes either, every frame is refused, and the status says to paste `register_now.py` without `--again`, which records a new take. On LA it adds: then paste `install_la.py` again.
-- **Too dark:** the picture's mean brightness under 40 (of 255) for 3 s gives "too dark" until step 6's infrared.
+- **Too dark:** the picture's mean brightness under 6 (of 255) for 3 s gives "too dark"; over 9 for 3 s ends it. A
+  lamp-lit den at night (about 11-22) is tracked and asked about as by day.
 
 **Every 10 s it prints one line**, for example `camera ok | 4.0 frames a second | 1 people | 0.25 s behind | 0 dropped a minute | 160 frames`. Anything dropped is named at the end, such as `, 3 out of order`. That's words and counts, never a position. Tell an agent those lines if something looks wrong.
 

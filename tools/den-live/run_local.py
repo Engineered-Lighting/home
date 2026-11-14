@@ -521,7 +521,7 @@ def occupancy_health(asker):
     reads no Frigate, and says so."""
     reader = getattr(asker, "occupancy", None)
     try:
-        return reader.health() if reader is not None else dict(NOT_READ)
+        return reader.frigate_word() if reader is not None else dict(NOT_READ)
     except Exception as exc:  # a type name only; the read never stops the loop
         return {"effective": "unknown", "why": "Frigate's word couldn't be read (%s)" % type(exc).__name__}
 

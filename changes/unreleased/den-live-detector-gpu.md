@@ -17,3 +17,5 @@ den-live's detector (YOLO26s and RTMPose-m) runs on LA's GPU when CUDA can, with
   `DeviceAllow=` the nvidia nodes), and its memory limit goes from 3 GB to 4 GB: the detector's process holds about
   1.7 GB on the GPU.
 - den-detect compares distribution names as PEP 503 normalises them, so pip's and uv's spellings agree.
+- The release's private-string scan no longer reads a pip pin's dotted version (cuRAND's) or a wheel file name's
+  version as a private address; an address anywhere else in a lock file still refuses the release.

@@ -102,9 +102,10 @@ class Occupancy(threading.Thread):
         with self.lock:
             return self._evidence(self.clock())
 
-    def health(self):
+    def frigate_word(self):
         """{effective, why}: the word the ask's gate sees now, for the people stream's health.occupancy (Home's Frigate
-        card). It reads without moving the gate's revision, which only the ask's own evidence() does."""
+        card). It reads without moving the gate's revision, which only the ask's own evidence() does. (Not named
+        health(): that's den-take's camera check, which no den-live tool may call.)"""
         with self.lock:
             word, why, _age = self._word(self.clock())
             return {"effective": word, "why": why}

@@ -365,7 +365,7 @@ class PersonStateLog(unittest.TestCase):
         self.assertEqual(event['health']['occupancy'], {'effective': 'on', 'why': None})
 
         class Broken:
-            def health(self):
+            def frigate_word(self):
                 raise OSError('no')
         event = {'tracks': []}
         rl.evidence_observer(Asker(Broken()), None)(event, self.snapshot())

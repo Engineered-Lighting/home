@@ -15,7 +15,9 @@ Its inputs, all from systemd:
   register-receipt.json (the step 2 receipt that registered and qualified it, den-live-register-now-2, which says
   the scan revision its picks were made on and the camera's depth correction its take was made on: a frame with
   another factor or calibration hash is refused, and the status line says to paste register_now.py without --again,
-  which records a new take, then install_la.py again).
+  which records a new take, then install_la.py again). Optionally desk.json (desk.py, den-c12-desk-1): one fixture's
+  commands then go to its board through the den home's Home Assistant. Without it, the coordinator is virtual only.
+  install_la.py doesn't bring it yet: that comes with the desk stage's first run (plan 05, step D-1).
 - $STATE_DIRECTORY (StateDirectory=den-live): live/ holds the tracker's method copy and the detector's log, detector/
   its caches and TEMP. days/<UTC date>/ holds person-state.jsonl, contract 2's den-person-state-1 (each snapshot with
   someone in view, about one a second with nobody, numbers only, with a mono-and-wall anchor; person_state.py), beside
@@ -53,6 +55,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import ask  # noqa: E402  the Qwen ask (inference plan, step 2)
 import coordinator_live  # noqa: E402  the den lighting coordinator (coordinator plan, step 3)
+import desk  # noqa: E402  the desk switch: one fixture's commands to its board (plan 05, step 05-4)
 import ha_link  # noqa: E402  its Home Assistant link
 import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
@@ -303,20 +306,49 @@ def coordinator_settings(config, fixed, *, credentials=None):
             "switch_entity": block.get("switch_entity") or coordinator_live.SWITCH_ENTITY}, None
 
 
-def coordinator_starter(settings, fixed, *, state, tree):
-    """serve()'s coordinator: (service, stop), or None when it can't start. Its failure never stops the markers."""
+def coordinator_starter(settings, fixed, *, state, tree, credentials=None):
+    """serve()'s coordinator: (service, stop), or None when it can't start. Its failure never stops the markers.
+
+    With the desk.json credential (desk.py, plan 05 §3.6), one fixture's commands also go to its board through the den
+    home's Home Assistant, on the asks block's link. Without it, virtual only: no Home Assistant write client."""
     def start():
         if settings.get("preview") is not True:
             return None
+        fixtures = settings["fixtures"]
+        try:
+            mapping = desk.load(credentials, fixtures)
+        except desk.DeskError as exc:
+            say("The lighting coordinator is off: %s. The markers go on." % exc)
+            return None
+        if mapping is not None:
+            if fixed is None or not fixed.get("token"):
+                say("The lighting coordinator is off: the desk needs the asks block's Home Assistant link (ha_url, and "
+                    "the ha-token.txt credential). The markers go on.")
+                return None
+            fid = mapping["fixture_id"]
+            fixtures = {**fixtures, fid: dict(fixtures[fid], profile=mapping["profile"])}
+        attached = None
         try:
             core, _learn = coordinator_live.load_core(tree)
-            service = preview.Preview(core, state=state, fixtures=settings["fixtures"],
+            service = preview.Preview(core, state=state, fixtures=fixtures,
                                       binding=settings["binding"], seat_mark=settings["seat_mark"])
+            if mapping is not None:
+                attached = desk.attach(service, mapping, fixed)
             service.start()
         except Exception as exc:   # a type name only: its text could hold the URL
+            if attached is not None:
+                attached.close()
             say("The lighting coordinator is off: it didn't start (%s). The markers go on." % type(exc).__name__)
             return None
-        return service, service.close
+        if attached is None:
+            return service, service.close
+        say("The desk: %s's commands go to its board through Home Assistant%s." % (
+            mapping["fixture_id"], "" if mapping["light"] else ", dark (light false: the spot stays at level 0)"))
+
+        def stop():
+            service.close()
+            attached.close()
+        return service, stop
     return start
 
 
@@ -550,10 +582,11 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
     if fixed is None:
         say("The Qwen ask is off: %s." % why)
     starter = None if fixed is None else asks_starter(fixed, config_path, site=config["site"], state=state, camera_id=camera_id)
-    lighting, why = coordinator_settings(config, fixed, credentials=Path(env["CREDENTIALS_DIRECTORY"]) if env.get("CREDENTIALS_DIRECTORY") else None)
+    held = Path(env["CREDENTIALS_DIRECTORY"]) if env.get("CREDENTIALS_DIRECTORY") else None
+    lighting, why = coordinator_settings(config, fixed, credentials=held)
     if lighting is None:
         say("The lighting coordinator is off: %s." % why)
-    coordinator = (coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"])
+    coordinator = (coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"], credentials=held)
                    if lighting and lighting.get("preview") else None)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,

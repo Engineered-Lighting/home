@@ -1,9 +1,9 @@
 """A fake of the den home's Home Assistant with the `c12` integration, for the FC13 sender's offline tests (plan 05,
 step 05-2). Never a transport: it listens on 127.0.0.1 only, and its boards are a host simulator or a model.
 
-- FakeHa: the REST API for the `c12` services only. It checks the bearer token, answers `?return_response`, and keeps
-  HTTP/1.1 connections alive, as Home Assistant does. Knobs: `down` (drop each call unanswered) and `delay_s` (per
-  service, before the integration runs).
+- FakeHa: the REST API for the `c12` services, and entity states (`states`) for the desk's readback. It checks the
+  bearer token, answers `?return_response`, and keeps HTTP/1.1 connections alive, as Home Assistant does. Knobs:
+  `down` (drop each call unanswered) and `delay_s` (per service, before the integration runs).
 - Integration: the `c12` integration as plan 05 §3.2 states it (firmware P5, not built). It's the only sender of
   0xFC13 and owns the wire `seq`: it reads the board's `last_seq` when it starts, and again after `stale_seq`. Until it
   can read it, only STOP goes, which the board takes at any `seq`. It resends a MOVE once with the same `seq` when no
@@ -340,6 +340,7 @@ class FakeHa:
     def __init__(self, integration, token):
         self.integration, self.token = integration, token
         self.down, self.delay_s, self.redirect = False, {}, False
+        self.states = {}   # entity -> state text, for GET /api/states/<entity> (the desk's readback)
         self.calls, self.connections = [], 0
         fake = self
 
@@ -395,6 +396,10 @@ class FakeHa:
             return self._answer(handler, 302, {}, (("Location", "http://127.0.0.1:9/elsewhere"),))
         parts = urllib.parse.urlsplit(handler.path)
         prefix, _, service = parts.path.rpartition("/")
+        if handler.command == "GET" and prefix == "/api/states":
+            if service not in self.states:
+                return self._answer(handler, 404, {"message": "Entity not found."})
+            return self._answer(handler, 200, {"entity_id": service, "state": self.states[service], "attributes": {}})
         if handler.command != "POST" or prefix != "/api/services/c12" or service not in self.SERVICES:
             return self._answer(handler, 404, {"message": "no such service"})
         if parts.query != "return_response":

@@ -23,6 +23,8 @@ The rules:
 - A keep-lit's `lit_seq` is the wire seq of the latest accepted lit move, from that move's answer.
 - on_release(fixture_id, move_trace_id, reason): a move not accepted, a move dropped as expired, or KEEP_LIT_FAILURES
   keep-lits in a row that failed. The preview should release that row if its move is still the current one.
+- light=False is the desk's dark rehearsal (§3.6): every move goes with its spot at level 0 and no lit travel, and no
+  keep-lit goes (`dropped_dark`). The replay knows the run is dark from its header's desk mapping.
 - on_board_stop(fixture_id, reason), the Stop copy (§3.4): a move refused `stopped`, or `observe()` reading the latch
   more than RESUME_GUARD_S after den-live's own last Resume answer, with none unanswered and no Stop of den-live's
   holding. copy_stop_into() turns it into Home's Stop.
@@ -48,7 +50,7 @@ STOP_CALLS = 3
 KEEP_LIT_FAILURES = 2
 RESUME_GUARD_S = 2.0
 CONTROL = "control"   # the Stop and Resume lane
-OUTCOMES = ("acked", "refused", "no_answer", "dropped_expired", "dropped_superseded")
+OUTCOMES = ("acked", "refused", "no_answer", "dropped_expired", "dropped_superseded", "dropped_dark")
 
 
 class _Job:
@@ -62,6 +64,14 @@ class _Job:
             valid_ms = effective.get("effective_valid_ms") or effective["valid_ms"] or 1000
             start = at if type(at) in (int, float) and math.isfinite(at) and at <= taken else taken
             self.deadline = start + valid_ms / 1000
+
+
+def dark_payload(payload):
+    """A MOVE as the dark rehearsal sends it: its spot at level 0 and no lit travel (payload byte 7, and flag bit 0)."""
+    dark = bytearray(payload)
+    dark[2] &= ~0x01
+    dark[7] = 0
+    return bytes(dark)
 
 
 def _wire(entry):
@@ -79,7 +89,7 @@ def _entry(answer, device):
 
 class Sender:
     def __init__(self, fixtures, client_factory, *, record, on_release=None, on_board_stop=None,
-                 clock=time.monotonic, threaded=True):
+                 clock=time.monotonic, threaded=True, light=True):
         """fixtures: {fixture_id: the board's HA device reference}. client_factory() gives each lane its own client
         (ha_link.HaSession). record(row) stores a send row. clock must be the preview's own: a move's deadline counts
         from its row's `at`."""
@@ -90,7 +100,7 @@ class Sender:
         self.client_factory, self.record_sink = client_factory, record
         self.on_release = on_release or (lambda *_: None)
         self.on_board_stop = on_board_stop or (lambda *_: None)
-        self.clock, self.threaded = clock, threaded
+        self.clock, self.threaded, self.light = clock, threaded, light is not False
         self.lock = threading.Lock()
         self.changed = threading.Condition(self.lock)
         self.record_lock = threading.Lock()
@@ -248,8 +258,10 @@ class Sender:
             return
         e = row["effective"]
         data = {"fixture": self.devices[fid], "pan_cdeg": e["pan_cdeg"], "tilt_cdeg": e["tilt_cdeg"],
-                "spot_level": e["spot_level"], "spot_mired": e["spot_mired"], "lit_during_move": e["lit_during_move"],
+                "spot_level": e["spot_level"] if self.light else 0, "spot_mired": e["spot_mired"],
+                "lit_during_move": e["lit_during_move"] and self.light,
                 "source": e["source"], "velocity_cdeg_s": list(e["velocity_cdeg_s"]), "valid_ms": e["valid_ms"]}
+        expected = row["payload_hex"] if self.light else dark_payload(bytes.fromhex(row["payload_hex"])).hex()
         answer, called, answered, problem = self._call(client, "move", data, CALL_TIMEOUT_S)
         result = answer.get("result") if isinstance(answer, dict) else None
         wire = _wire(answer)
@@ -258,11 +270,11 @@ class Sender:
         self._log(job, called=called, answered=answered, sent=None if answer is None else wire is not None,
                   outcome=outcome, wire=wire,
                   answer=answer and {"result": result, "predicted_ms": answer.get("predicted_ms")},
-                  matches=wire and wire["payload_hex"][4:] == row["payload_hex"][4:], reason=problem)
+                  matches=wire and wire["payload_hex"][4:] == expected[4:], reason=problem)
         if outcome == "acked":
             with self.lock:
                 self.keep_failures[fid] = 0
-                lit = e["spot_level"] > 0 and e["source"] == "coordinator"
+                lit = self.light and e["spot_level"] > 0 and e["source"] == "coordinator"
                 self.lit[fid] = (row["sequence"], wire["seq"], row["trace_id"]) if lit else None
             return
         self._release(fid, row["trace_id"], "c12_" + result if isinstance(result, str) else "no_answer")
@@ -271,6 +283,9 @@ class Sender:
 
     def _keep(self, client, job):
         fid, row = job.fixture_id, job.row
+        if not self.light:
+            self._log(job, outcome="dropped_dark", reason="dark_rehearsal")
+            return
         with self.lock:
             lit = self.lit[fid]
         if lit is None or lit[0] != row.get("move_token"):

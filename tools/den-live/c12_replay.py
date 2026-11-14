@@ -7,7 +7,9 @@ Trace v3 (plan 05, step 05-3) adds the FC13 sender's send rows, and five checks 
 4. per board, across runs in time order, each wire seq is new to the board (STOP is taken at any seq; a repeat is only
    a retry of the same row);
 5. with --sim, those frames through the simulator give the answers the board gave (replay_wire).
-A run whose header maps no desk fixture may send nothing, and a desk run only to its one fixture.
+A run whose header maps no desk fixture may send nothing, and a desk run only to its one fixture. A desk run with
+light false is the dark rehearsal: each MOVE goes with its spot at level 0 and no lit travel, and no keep-lit goes.
+Device rows hold the board's readback (joint angles and states only) when it changes.
 """
 
 from __future__ import annotations
@@ -35,7 +37,9 @@ TRACE_SCHEMA_3 = "c12-fixture-trace-3"   # plan 05: send rows, and the run heade
 TRACE_SCHEMAS = (TRACE_SCHEMA, TRACE_SCHEMA_2, TRACE_SCHEMA_3)
 SEND_FIELDS = {"schema", "kind", "run_id", "trace_id", "fixture_id", "device", "action", "attempt", "called_mono",
                "answered_mono", "sent", "outcome", "wire", "answer", "matches_trace", "reason"}
-SEND_OUTCOMES = {"acked", "refused", "no_answer", "dropped_expired", "dropped_superseded"}
+SEND_OUTCOMES = {"acked", "refused", "no_answer", "dropped_expired", "dropped_superseded", "dropped_dark"}
+DEVICE_FIELDS = {"schema", "kind", "run_id", "fixture_id", "device", "at_mono", "values"}
+READBACK = {"state", "controller", "stop_latched", "last_seq", "pan_cdeg", "tilt_cdeg", "fault_code"}
 SEQ_WINDOW = 1024
 COMMANDS = {"aim_move": 0, "keep_lit": 1, "stop": 2, "resume": 3}
 STATE_ACTIONS = {"expired", "evidence_stale", "arrived", "disabled"}
@@ -306,6 +310,14 @@ class WireCheck:
         if COMMANDS.get(row["action"]) != cmd:
             raise ReplayError("send row's action differs from its encoded row's")
         outcome, sent, wire, answer = row["outcome"], row["sent"], row["wire"], row["answer"]
+        dark = desk["light"] is False
+        if (outcome == "dropped_dark") != (dark and cmd == codec.CMD_KEEP_LIT):
+            raise ReplayError("only a dark rehearsal drops a keep-lit as dark, and it sends none")
+        if dark and cmd == codec.CMD_MOVE:
+            payload = bytearray(payload)
+            payload[2] &= ~codec.FLAG_LIT_DURING_MOVE
+            payload[7] = 0
+            payload = bytes(payload)
         if (outcome not in SEND_OUTCOMES or sent not in (True, False, None) or type(row["attempt"]) is not int
                 or row["attempt"] < 1):
             raise ReplayError("send row has an unknown outcome, sent value or attempt")
@@ -354,6 +366,16 @@ class WireCheck:
             line, row["trace_id"], cmd, wire["seq"], sent_payload, at_ts + called - at_mono,
             at_ts + answered - at_mono, answer, delivered))
 
+    def take_device(self, row, header):
+        """A device row: the board's readback, joint angles and states only."""
+        desk = header.get("desk")
+        values = row.get("values")
+        if (set(row) != DEVICE_FIELDS or desk is None
+                or (row["fixture_id"], row["device"]) != (desk["fixture_id"], desk["device"])
+                or not finite(row["at_mono"]) or not isinstance(values, dict) or not set(values) <= READBACK
+                or not all(value is None or type(value) in (bool, int, str) for value in values.values())):
+            raise ReplayError("device row isn't its run's desk board's readback")
+
     def order(self):
         """Check 4. Each board's frames in time order; two calls that overlapped went on the air in the integration's
         own count, so the lower seq goes first."""
@@ -386,7 +408,7 @@ def verify_trace(handle, codec, *, collect_sim=False, headers=None, wire=None):
     groups = {}
     headers = {} if headers is None else headers   # trace-2 and -3: run_id -> its run header
     wire = WireCheck(codec) if wire is None else wire
-    counts = {"encoded_only": 0, "refused": 0, "state": 0, "send": 0}
+    counts = {"encoded_only": 0, "refused": 0, "state": 0, "send": 0, "device": 0}
     for line, raw in enumerate(iter(lambda: handle.readline(MAX_LINE_BYTES + 1), b""), 1):
         try:
             if len(raw) > MAX_LINE_BYTES:
@@ -405,6 +427,10 @@ def verify_trace(handle, codec, *, collect_sim=False, headers=None, wire=None):
                     raise ReplayError("send row in a run whose header isn't trace-3")
                 wire.take(row, headers[row["run_id"]], line)
                 counts["send"] += 1
+                continue
+            if row["schema"] == TRACE_SCHEMA_3 and row.get("kind") == "device":
+                wire.take_device(row, headers[row["run_id"]])
+                counts["device"] += 1
                 continue
             if "kind" in row:
                 raise ReplayError("unrecognized trace row kind")

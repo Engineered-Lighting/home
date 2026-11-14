@@ -128,6 +128,16 @@ class HaSession:
         except ValueError:
             raise HaError("Home Assistant's answer wasn't JSON") from None
 
+    def state(self, entity):
+        """As HaClient.state: {"state": ..., "attributes": {...}}, or None when Home Assistant has no such entity."""
+        try:
+            got = self._request("/api/states/" + entity, None, self.timeout_s)
+        except HaError as exc:
+            if str(exc) == "Home Assistant said 404":
+                return None
+            raise
+        return {"state": got.get("state"), "attributes": got.get("attributes") or {}} if isinstance(got, dict) else None
+
     def call(self, domain, service, data, *, response=False, timeout_s=None):
         suffix = "?return_response" if response else ""
         result = self._request("/api/services/%s/%s%s" % (domain, service, suffix), data,

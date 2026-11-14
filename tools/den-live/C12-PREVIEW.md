@@ -45,6 +45,16 @@ For trace-3's send rows, pass every run a board took part in, in time order. The
 
 `fake_c12_ha.py` is a fake of that Home Assistant for the tests. Its integration reads the board's `last_seq` when it starts, sends only Stop while it can't, resends a move once with the same `seq`, and drives the v2-a host simulator (when `C12_TEST_SIM` is set) or a model of the P3 board with its 3 s lease. Run `python -B -m unittest discover -s tools/den-live -p test_c12_send.py` from the repo root.
 
+## The desk switch
+
+`desk.py` turns the sender on for one fixture (plan 05, step 05-4). The service reads `desk.json` (schema `den-c12-desk-1`) from its credentials folder. **Without the file, den-live is virtual only, as before:** no sender, no Home Assistant write client, the preview's own storage unwrapped, and `desk: null` in the run header. The file holds:
+- `fixture_id`, one registered fixture, and `device`, its board's Home Assistant device reference;
+- `light`: `false` is the dark rehearsal. Every move goes with its spot at level 0 and no lit travel, no keep-lit goes (`dropped_dark`), and Home still shows the virtual spot;
+- `profile`, the board's measured profile in den-core's shape (`fictional: false`). It replaces the fictional one for that fixture, so the run header's `profile_sha256` names it;
+- `readback` (optional): the board's Home Assistant entities (`state`, `controller`, `stop_latched`, `last_seq`, `pan_cdeg`, `tilt_cdeg`, `fault_code`), read every second. Their values become the snapshot's `devices` key, and a `kind: device` row in the trace when they change. A latch read feeds the Stop copy.
+
+A desk file that's there but doesn't check, or a desk with no Home Assistant link in the asks block, keeps the coordinator off with the reason on the status line, rather than letting it run virtual by mistake. The room geometry stays `physical_commands: false`. `install_la.py` doesn't bring the file yet; that comes with the desk stage's first run. `test_desk.py` covers all of it with the fake Home Assistant.
+
 ## Physical handoff
 
 Desk and F3 each require their own owner go-ahead. The desk team qualifies Light 1, the measured motion profile, HA-owned sequencing and board receipts, HA-local Stop with LA down, and dark-and-hold with RF down during both dark and lit travel. Preserve ordinary manual lamp behavior. F3 follows the existing firmware recovery checks and the registered mount, aim, moving-beam, and real reading checks. The desk r4 rollback and the F3 Hue mapping rollback remain separate.

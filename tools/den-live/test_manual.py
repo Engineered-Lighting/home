@@ -95,6 +95,20 @@ class LogTest(unittest.TestCase):
                          ["ev-0000000", "ev-0000001", "ev-0000002"])
         self.assertTrue(all(json.loads(raw) for raw in self.log.path.read_text(encoding="utf-8").splitlines()[:3]))
 
+    def test_a_torn_tail_never_swallows_the_next_line(self):
+        """Review L1/L4: a crash or a full disk left half a line; the next append starts on its own line."""
+        self.log.append({"event": {"event_id": "ev-0000000"}})
+        with self.log.path.open("ab") as torn:
+            torn.write(b'{"event": {"event_id": "ev-torn')
+        self.log.append({"event": {"event_id": "ev-0000001"}})
+        self.assertEqual([line["event"]["event_id"] for line in self.log.read()], ["ev-0000000", "ev-0000001"])
+        self.assertEqual(self.log.skipped, 1)
+
+    def test_bad_bytes_are_skipped_never_fatal(self):
+        self.log.path.write_bytes(b'\xff\xfe\x00garbage\n[1, 2]\n{"event": {"event_id": "ev-0000002"}}\n')
+        self.assertEqual([line["event"]["event_id"] for line in self.log.read()], ["ev-0000002"])
+        self.assertEqual(self.log.skipped, 2)
+
     def test_clear_keeps_the_old_log_whole_and_starts_empty(self):
         self.log.append({"event": {"event_id": "ev-0000000"}})
         self.log.archive("20261114T200000Z")

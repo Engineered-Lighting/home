@@ -5,6 +5,7 @@ lighting-direction note): a rise, an exit or a hand-off is a level train of stat
 one MOVE flown on the board's own S-curve, and the room's glow dims under a task light. Published state is always what
 the trace has committed: each level step lights only once its row is written."""
 
+import copy
 import dataclasses
 import datetime
 import json
@@ -167,7 +168,12 @@ class Preview:
         # spot_applied: (episode, what the spot learned) fixed when the task starts; room_cue: the room glow's cue.
         self.ring = deque(maxlen=RING)
         self.hands = {}
-        self.seen_mono = None   # the last fresh frame with anyone on it: the hold's "the den is empty"
+        # A hold's learning, per fixture and group ("spot", or "glow" for its zones and downlight): where the hold
+        # began (the snapshot its first change named) and what its changes add up to, so the hold teaches once.
+        self.hold_learning = {}
+        # Since when fresh frames have shown the den empty (perception's presence "empty"). Only that is evidence:
+        # a camera gap, a dark room or a stale snapshot says nothing about who's there.
+        self.vacant_since = None
         self.spot_applied = self.room_cue = None
         self.ambient_flag = False
         self.manual_log = manual.Log(self.folder)
@@ -306,12 +312,15 @@ class Preview:
                 pass
             elif (field(snapshot, "presence") != "present" or not tracks
                     or any(field(frame, k) != self.binding[k] for k in ("transform_id", "scan_revision"))):
+                if (field(snapshot, "presence") == "empty" and not tracks
+                        and all(field(frame, k) == self.binding[k] for k in ("transform_id", "scan_revision"))):
+                    self.vacant_since = self.vacant_since if self.vacant_since is not None else now
                 self._darken()
             elif self._subject_of(tracks)[0] is None:
-                self.seen_mono = now
+                self.vacant_since = None
                 self._darken()   # several people and none of them the one the light is for
             else:
-                self.seen_mono = now
+                self.vacant_since = None
                 subject, others = self._subject_of(tracks)
                 eligibility = field(snapshot, "eligibility_revision")
                 if self.eligibility is not None and eligibility != self.eligibility:
@@ -669,10 +678,19 @@ class Preview:
             self.spot_applied = None
             return None
         if self.spot_applied is None or self.spot_applied[0] is not self.episode:
-            if not task:
+            kind, key = self._situation(now)
+            if not task or kind != "task":
+                # Not yet: a yes that lands in a camera gap (nobody tracked, so the situation reads unknown) waits for
+                # the next frame, rather than fixing "nothing learned" for the whole session.
                 return None
-            self.spot_applied = (self.episode, self.learning.spot(self._situation(now)[1]))
+            self.spot_applied = (self.episode, self.learning.spot(key))
         return self.spot_applied[1]
+
+    def _unlit(self):
+        """This episode's task is on, unlit: the owner taught "no spot" for its situation."""
+        applied = self.spot_applied
+        return bool(applied is not None and applied[0] is self.episode and (applied[1] or {}).get("off")
+                    and self.task_until() is not None)
 
     def _lux_scale(self):
         applied = self.spot_applied
@@ -703,7 +721,7 @@ class Preview:
                              "learned": learned}
             if previous is not None:
                 for hold in [hold for hold in self.hands if hold[1] != "spot"]:
-                    del self.hands[hold]
+                    self._end_hand(hold)
         self.ambient_flag = flag
         self.ambient.direct(flag, self.settings, now, goal=self.room_cue["goal"], cct_k=self.room_cue["cct_k"])
 
@@ -716,18 +734,19 @@ class Preview:
     def _end_hands(self, now, task):
         """The next reason to act ends a spot's hold (plan 04b, the spine's rulings of 2026-11-14): for the task's own
         light, the task ending, a new episode (standing up, or another subject); for a light the owner put on for
-        themselves, a task starting. Every hold ends when the den has been empty for VACANT_S, on Off or Stop, and on
-        Home's Resume. A reply that only renews the task, or a new part of the day, ends nothing."""
+        themselves, a task starting; for a light they put on while the coordinator, as taught, left the task unlit, a
+        new episode only (it's their reading light through a phone break). Every hold ends when fresh frames have shown
+        the den empty for VACANT_S, on Off or Stop, and on Home's Resume. A reply that only renews the task, a new part
+        of the day, a camera gap or a dark room ends nothing."""
         for hold, hand in list(self.hands.items()):
-            # Empty: nobody tracked, and nobody seen on a fresh frame for VACANT_S since the hold began.
-            seen = max(self.seen_mono if self.seen_mono is not None else -math.inf, hand["since_mono"])
-            if self.track is None and now - seen >= VACANT_S:
+            if (self.track is None and self.vacant_since is not None
+                    and now - max(self.vacant_since, hand["since_mono"]) >= VACANT_S):
                 why = "vacant"
             elif hold[1] != "spot":
                 continue   # the glow's parts end at the next cue (_cue_room)
             elif hand["task_light"]:
-                why = ("new_episode" if self.episode is not hand["episode"] or self.track_binding != hand["binding"]
-                       else None if task else "task_ended")
+                new = self.episode is not hand["episode"] or self.track_binding != hand["binding"]
+                why = "new_episode" if new else None if task or hand["ends"] == "episode_end" else "task_ended"
             else:
                 why = "task_started" if task and not hand["task"] else None
             hand["task"] = task
@@ -738,15 +757,27 @@ class Preview:
         del self.hands[hold]
         if hold[1] == "spot" and self.rows[hold[0]]["reason"] == "hand":
             self.rows[hold[0]]["reason"] = "waiting_for_task"
+        group = self._group(hold[1])
+        if not any(name == hold[0] and self._group(part) == group for name, part in self.hands):
+            self.hold_learning.pop((hold[0], group), None)
 
-    def _hold(self, event, now):
+    @staticmethod
+    def _group(part):
+        return "spot" if part == "spot" else "glow"
+
+    def _hold(self, event, now, plan=None, recorded=True):
         """The owner's change takes the parts it touched from den-live at once, recorded or not: a spot is released with
         no command (den-live stops directing it; nothing is sent), and the glow's parts are Home's until the next cue.
-        Off or Stopped, den-live directs nothing, so there's nothing to hold."""
+        Off or Stopped, den-live directs nothing, so there's nothing to hold.
+
+        A spot is the task's light when it was this person's lit task light at the snapshot the change named, or when
+        the owner lights it during a task the coordinator, as taught, left unlit (their reading light: it lasts the
+        episode). plan: the hold's learning records from _learning_inputs, kept once the change is recorded."""
         if not (self.on and not self.stopped):
             return None
         name, row, person = event["fixture_id"], self.rows[event["fixture_id"]], self.track
         light = event["after"].get("spotlight") or {}
+        plan = plan or {}
         for part in manual.parts(event["after"]):
             previous = self.hands.get((name, part))
             hand = {"event_id": event["event_id"], "since_mono": previous["since_mono"] if previous else now,
@@ -754,16 +785,27 @@ class Preview:
                     "task_light": False, "lit": False, "ends": "next_cue"}
             if part == "spot":
                 lighting = self._lighting(row)
-                task_light = previous["task_light"] if previous else bool(
-                    person is not None and row["job"] == person["track_id"] and lighting and hand["task"])
+                base = plan.get("spot")
+                if previous:
+                    task_light, ends = previous["task_light"], previous["ends"]
+                elif base is not None:
+                    task_light = base["task_light"]
+                    ends = "episode_end" if base["unlit"] else "task_end" if task_light else "task_start"
+                else:
+                    task_light = bool(person is not None and row["job"] == person["track_id"] and lighting
+                                      and hand["task"])
+                    ends = "task_end" if task_light else "task_start"
                 lit = (light["on"] and light.get("brightness", 1) > 0 if "on" in light
                        else light["brightness"] > 0 if "brightness" in light
                        else previous["lit"] if previous else lighting)
-                hand.update(task_light=task_light, lit=lit, ends="task_end" if task_light else "task_start")
+                hand.update(task_light=task_light, lit=lit, ends=ends)
                 if lighting or row["glide"] is not None or row["pending"] is not None:
                     self._release(name, row, now, "hand", trace=False)
                 row["reason"] = "hand"
             self.hands[(name, part)] = hand
+        if recorded:
+            for group, record in plan.items():
+                self.hold_learning[(name, group)] = record
         return self._hand_record(name)
 
     def _adopt_aim(self, name, after):
@@ -820,6 +862,9 @@ class Preview:
         self.ring.append({"seq": self.seq, "mono": now, "directing": self.on and not self.stopped,
                           "people": self._context(now)["people"], "kind": kind, "key": key,
                           "track_id": person and person["track_id"], "task": task,
+                          # The coordinator's own light for the task: unlit as taught, and the scale it lights at (what
+                          # a change of brightness is a correction of; never what a fade happened to show).
+                          "unlit": task and self._unlit(), "lux_applied": self._lux_scale(),
                           "page": person and person["target"] and list(person["target"]),
                           "fixtures": {name: {"level": row["level"], "pan_deg": row["pan_deg"], "tilt_deg": row["tilt_deg"],
                                               "target_m": row["target_m"], "job": self.rows[name]["job"]}
@@ -831,15 +876,67 @@ class Preview:
         modeled = self.core.share.brightness(self.rows[name], target)
         return modeled * self.core.spot_light.dimming_fraction(level) / self.core.SPOT_TARGET
 
+    @staticmethod
+    def _turns_on(light):
+        return (light.get("on") is True and light.get("brightness", 1) != 0) or (
+            light.get("on") is not False and light.get("brightness", 0) > 0)
+
+    def _hold_base(self, group, name, entry, after):
+        """Where a hold begins, from the snapshot its first change named: for the spot, whether it's the task's light
+        (this person's lit task light then, or one the owner lights during a task left unlit as taught), the page,
+        the aim and the scale the coordinator was lighting at; for the glow, the room's glow then."""
+        if group == "glow":
+            return {"ambient": entry["ambient"], "key": entry["key"], "origin": None, "learn": None, "zones": {}}
+        fixture = entry["fixtures"][name]
+        lit_task = bool(entry["task"] and entry["track_id"] is not None and fixture["job"] == entry["track_id"]
+                        and fixture["level"] > 0 and fixture["target_m"] is not None)
+        unlit = bool(not lit_task and entry["task"] and entry.get("unlit") and entry["track_id"] is not None
+                     and self._turns_on(after.get("spotlight") or {}))
+        return {"task_light": lit_task or unlit, "unlit": unlit, "page": entry["page"],
+                "target_m": fixture["target_m"] if lit_task else None, "lux_before": entry.get("lux_applied", 1.0),
+                "key": entry["key"], "origin": None, "learn": None, "last": {}}
+
+    @staticmethod
+    def _carry(group, record, after):
+        """The hold's record follows the hand: its last spot state, or every zone and downlight it has set."""
+        if group == "spot":
+            last = record["last"]
+            for key in ("pan_deg", "tilt_deg", "target"):
+                if key in after:
+                    last[key] = after[key]
+            if after.get("spotlight"):
+                last["spotlight"] = {**(last.get("spotlight") or {}), **after["spotlight"]}
+        else:
+            zones = record["zones"]
+            for zone in after.get("radials") or []:
+                key = "radials:%d" % zone["number"]
+                zones[key] = {**zones.get(key, {}), **zone}
+            if after.get("downward"):
+                zones["downward"] = {**zones.get("downward", {}), **after["downward"]}
+        return record
+
     def _learning_inputs(self, event, now):
-        """(context, learning inputs or None, why not): den-core learn's gates, in its order, on the snapshot the change
-        names; then what the change says about the task spot and the room's glow."""
+        """(context, learning inputs or None, why not, extra): den-core learn's gates, in its order, on the snapshot the
+        change names; then what the change says about the task spot and the room's glow.
+
+        A change to a fixture already held is read against the hold, not den-live's released row: Home's `before` is
+        the hand's own last state, and the hold's changes add up to one correction, learned from where the hold began
+        (extra["supersedes"]: the hold's first learned change, per part). extra["plan"]: the hold's records this
+        change leaves; extra["keys"]: each part's situation key."""
         snapshot = event["snapshot"]
+        name, after = event["fixture_id"], event["after"]
+        extra = {"plan": {}, "keys": {}, "supersedes": {}}
+        groups = sorted({self._group(part) for part in manual.parts(after)})
+        held = {group: self.hold_learning[(name, group)] for group in groups if (name, group) in self.hold_learning}
         entry = None
         if snapshot["epoch"] == self.epoch:
             entry = next((row for row in reversed(self.ring) if row["seq"] == snapshot["seq"]), None)
         if entry is None:
-            return {"seq": snapshot["seq"]}, None, "unknown_snapshot"
+            extra["plan"] = {group: self._carry(group, copy.deepcopy(record), after) for group, record in held.items()}
+            return {"seq": snapshot["seq"]}, None, "unknown_snapshot", extra
+        plan = {group: copy.deepcopy(held[group]) if group in held else self._hold_base(group, name, entry, after)
+                for group in groups}
+        extra["plan"] = plan
         context = {key: entry[key] for key in ("seq", "key", "kind", "people", "track_id", "task", "directing")}
         context["age_s"] = round(now - entry["mono"], 3)
         why = ((None if entry["directing"] else "coordinator_off")
@@ -847,62 +944,98 @@ class Preview:
                or (None if entry["people"] == 1 else "people_%d" % entry["people"])
                or (None if entry["kind"] in self.core.situation.LEARNABLE else "situation_%s" % entry["kind"])
                or (None if now - entry["mono"] <= MANUAL_RECENT_S else "stale_snapshot")
-               or self._mismatch(event, entry))
+               or self._mismatch(event, entry, held))
+        for group, record in plan.items():
+            self._carry(group, record, after)
         if why:
-            return context, None, why
-        name, before, after = event["fixture_id"], event["before"], event["after"]
-        fixture, parts = entry["fixtures"][name], manual.parts(after)
+            return context, None, why, extra
         learn = {}
-        if "spot" in parts:
-            if not (entry["task"] and entry["track_id"] is not None and fixture["job"] == entry["track_id"]
-                    and fixture["level"] > 0 and fixture["target_m"] is not None):
-                context["spot"] = "not_the_task_light"   # a light for the owner's own use teaches the task nothing
-            else:
-                light = after.get("spotlight") or {}
-                spot = {"lux_before": self._lux(name, fixture["target_m"], fixture["level"]), "lux_scale": None,
-                        "offset_m": None, "off": None}
-                if light.get("on") is False or light.get("brightness") == 0:
-                    spot["off"] = True
-                elif "brightness" in light or light.get("on") is True:
-                    spot["off"] = False
-                    if "brightness" in light:
-                        spot["lux_scale"] = self._lux(name, fixture["target_m"], light["brightness"])
-                point = (after.get("target") or {}).get("point")
-                if point is not None:
-                    spot["offset_m"] = fixture_learning.offset(point, entry["page"])
-                    if spot["offset_m"] is None:
-                        context["aim"] = "pointed_elsewhere"
-                if any(spot[key] is not None for key in ("lux_scale", "offset_m", "off")):
-                    learn["spot"] = spot
-        glow = (after.get("radials") or []) + ([after["downward"]] if after.get("downward") else [])
-        if glow and entry["ambient"] is not None:
-            levels = [0.0 if zone.get("on") is False else zone["brightness"] for zone in glow
+        spot = plan.get("spot")
+        if spot is not None and not spot["task_light"]:
+            context["spot"] = "not_the_task_light"   # a light for the owner's own use teaches the task nothing
+        elif spot is not None:
+            light = after.get("spotlight") or {}
+            inputs = {"lux_scale": None, "offset_m": None, "off": None}
+            point, near = (after.get("target") or {}).get("point"), None
+            if point is not None:
+                inputs["offset_m"] = fixture_learning.offset(point, spot["page"])
+                if inputs["offset_m"] is None:
+                    context["aim"] = "pointed_elsewhere"
+                else:
+                    near = point
+            if light.get("on") is False or light.get("brightness") == 0:
+                inputs["off"] = True
+            elif "brightness" in light or light.get("on") is True:
+                inputs["off"] = False
+                where = near or spot["target_m"] or spot["page"]
+                if "brightness" in light and where is not None:
+                    inputs["lux_scale"] = self._lux(name, where, light["brightness"])
+            if any(value is not None for value in inputs.values()):
+                merged = dict(spot["learn"] or {"lux_before": spot["lux_before"], "lux_scale": None, "offset_m": None,
+                                                "off": None})
+                merged.update({key: value for key, value in inputs.items() if value is not None})
+                learn["spot"] = spot["learn"] = merged
+                self._origin(spot, "spot", event, entry, extra)
+        glow = plan.get("glow")
+        if glow is not None and glow["ambient"] is not None and ((after.get("radials") or []) or after.get("downward")):
+            zones = list(glow["zones"].values())
+            levels = [0.0 if zone.get("on") is False else zone["brightness"] for zone in zones
                       if zone.get("on") is False or "brightness" in zone]
-            kelvins = [zone["color_temp_kelvin"] for zone in glow if "color_temp_kelvin" in zone and zone.get("on") is not False]
+            kelvins = [zone["color_temp_kelvin"] for zone in zones
+                       if "color_temp_kelvin" in zone and zone.get("on") is not False]
             if levels or kelvins:
-                learn["room"] = {"level": sum(levels) / len(levels) if levels else None,
-                                 "level_before": entry["ambient"]["level"],
-                                 "cct_k": round(sum(kelvins) / len(kelvins)) if kelvins else None,
-                                 "cct_before": entry["ambient"]["cct_k"]}
+                learn["room"] = glow["learn"] = {
+                    "level": sum(levels) / len(levels) if levels else None, "level_before": glow["ambient"]["level"],
+                    "cct_k": round(sum(kelvins) / len(kelvins)) if kelvins else None,
+                    "cct_before": glow["ambient"]["cct_k"]}
+                self._origin(glow, "room", event, entry, extra)
         if not learn:
-            return context, None, context.get("spot") or context.get("aim") or "nothing_to_learn"
-        return context, learn, None
+            return context, None, context.get("spot") or context.get("aim") or "nothing_to_learn", extra
+        return context, learn, None, extra
 
-    def _mismatch(self, event, entry):
-        """"before_mismatch" when Home's `before` isn't what den-live published at that snapshot (Home was drawing
-        something else), else None."""
+    @staticmethod
+    def _origin(record, part, event, entry, extra):
+        """A hold's first learned change is its origin, in the situation it named; later ones supersede it."""
+        if record["origin"] is None:
+            record["origin"], record["key"] = event["event_id"], entry["key"]
+        else:
+            extra["supersedes"][part] = record["origin"]
+        extra["keys"][part] = record["key"]
+
+    def _mismatch(self, event, entry, held=None):
+        """"before_mismatch" when Home's `before` isn't what it should have been drawing: what den-live published at
+        that snapshot or, for a part already held, the hand's own last state. Else None."""
+        held = held or {}
         before, fixture = event["before"], entry["fixtures"][event["fixture_id"]]
         light = before.get("spotlight") or {}
-        if "brightness" in light and abs(light["brightness"] - fixture["level"]) > BEFORE_LEVEL_SLACK:
-            return "before_mismatch"
-        for key in ("pan_deg", "tilt_deg"):
-            if key in before and abs(before[key] - fixture[key]) > BEFORE_ANGLE_SLACK_DEG:
+        spot = held.get("spot")
+        if spot is None:
+            if "brightness" in light and abs(light["brightness"] - fixture["level"]) > BEFORE_LEVEL_SLACK:
                 return "before_mismatch"
-        glow = (before.get("radials") or []) + ([before["downward"]] if before.get("downward") else [])
-        ambient = entry["ambient"]
-        if ambient is not None and any("brightness" in zone and abs(zone["brightness"] - ambient["level"])
-                                       > BEFORE_LEVEL_SLACK for zone in glow):
-            return "before_mismatch"
+            for key in ("pan_deg", "tilt_deg"):
+                if key in before and abs(before[key] - fixture[key]) > BEFORE_ANGLE_SLACK_DEG:
+                    return "before_mismatch"
+        else:
+            last = spot["last"]
+            last_light = last.get("spotlight") or {}
+            if ("brightness" in light and "brightness" in last_light
+                    and abs(light["brightness"] - last_light["brightness"]) > BEFORE_LEVEL_SLACK):
+                return "before_mismatch"
+            for key in ("pan_deg", "tilt_deg"):
+                if (key in before and last.get(key) is not None
+                        and abs(before[key] - last[key]) > BEFORE_ANGLE_SLACK_DEG):
+                    return "before_mismatch"
+        zones = [("radials:%d" % zone["number"], zone) for zone in before.get("radials") or []] + (
+            [("downward", before["downward"])] if before.get("downward") else [])
+        glow, ambient = held.get("glow"), entry["ambient"]
+        for key, zone in zones:
+            if "brightness" not in zone:
+                continue
+            known = (glow["zones"].get(key) or {}).get("brightness") if glow is not None else None
+            reference = known if glow is not None and known is not None else (
+                ambient["level"] if glow is None and ambient is not None else None)
+            if reference is not None and abs(zone["brightness"] - reference) > BEFORE_LEVEL_SLACK:
+                return "before_mismatch"
         return None
 
     def _replayed(self, line):
@@ -928,18 +1061,20 @@ class Preview:
                 return 400, {"ok": False, "error": "unknown fixture"}
             now = self.clock()
             self._expire(now)
-            context, learn, why = self._learning_inputs(event, now)
+            context, learn, why, extra = self._learning_inputs(event, now)
             line = {"schema": "den-manual-event-1", "event": event, "received_mono": now,
                     "received_wall_ms": round(self.wall() * 1000), "context": context, "key": context.get("key"),
-                    "learn": learn, "why_not": why}
+                    "learn": learn, "why_not": why, "keys": extra["keys"] or None,
+                    "supersedes": extra["supersedes"] or None}
             try:
                 self.manual_log.append(line)
                 recorded = True
             except OSError:
                 self.problem, recorded = "manual log write failed", False
             if recorded and learn:
-                self.learning.apply(context["key"], learn, event["at_ms"])
-            hand = self._hold(event, now)
+                self.learning.apply(context["key"], learn, event["at_ms"], event["event_id"], extra["supersedes"],
+                                    extra["keys"])
+            hand = self._hold(event, now, extra["plan"], recorded)
             self._adopt_aim(event["fixture_id"], event["after"])
             self._evaluate(now)
             reply = {"ok": recorded, "event_id": event["event_id"], "recorded": recorded,
@@ -975,6 +1110,7 @@ class Preview:
                 return 503, {"ok": False, "error": "learned clear failed"}
             self.learning = fixture_learning.Learning()
             self.manual_replies = {}
+            self.hold_learning = {}   # a hold's first change is gone with the log: nothing left for it to supersede
             self.spot_applied = self.room_cue = None
             self._evaluate(self.clock())
         if self.hue is not None:
@@ -1710,7 +1846,9 @@ class Preview:
                        # holds, and how many changes the log holds.
                        "learned_from_you": self.learning.public(),
                        "hands": {name: self._hand_record(name) for name in self.rows if self._hand_record(name)},
-                       "fixture_situation": self._situation(self.clock())[1]}
+                       "fixture_situation": self._situation(self.clock())[1],
+                       # Lines the change log couldn't use at start (torn, corrupt): skipped, never fatal.
+                       "manual_log": {"skipped": self.manual_log.skipped + self.learning.skipped}}
         if self.hue is not None:
             readback = self.hue.readback()
             current.update({**readback, "situation": readback.get("situation") or current["situation"],
@@ -1769,6 +1907,7 @@ class Preview:
             now = self.clock()
             self._drop_track()
             self.hands.clear()   # Off and Stop end every hand hold: den-live directs nothing, so there's nothing to hold
+            self.hold_learning.clear()
             self.room_cue = None
             receipts = []
             for name, row in self.rows.items():

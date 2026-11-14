@@ -47,38 +47,77 @@ def _vote(prior, after_off):
     return off, pending
 
 
+PRIORS_KEPT = 512   # the holds whose first change can still be superseded (a hold lasts minutes, not hundreds of changes)
+
+
+def _scale(value):
+    low, high = LUX_SCALE
+    return min(high, max(low, value))
+
+
 class Learning:
     def __init__(self):
         self.entries = {}   # {key: {"spot": {...}, "room": {...}}}
+        self.priors = {}    # {(event_id, part): (key, the part's row before that event)}: what a hold's later changes redo
+        self.skipped = 0    # replayed lines that couldn't be applied
 
-    def apply(self, key, learn, at_ms):
+    def apply(self, key, learn, at_ms, event_id=None, supersedes=None, keys=None):
         """One event's learning inputs (see Preview._learning_inputs): {"spot": {lux_scale, lux_before, offset_m,
-        off}, "room": {level, level_before, cct_k, cct_before}}, either part optional. Returns what changed."""
-        entry = self.entries.setdefault(key, {})
+        off}, "room": {level, level_before, cct_k, cct_before}}, either part optional. keys: a part's own situation
+        key, where it isn't `key`.
+
+        A hand hold is one correction, however many changes it takes: supersedes {part: the hold's first event_id}
+        puts the part back as it was before that first change and learns the hold's latest inputs (merged by the
+        preview) in one halfway step, so "dim, then dim again, then off" counts once, and replay is the same."""
         changed = {}
-        spot = learn.get("spot")
-        if spot:
-            prior = entry.get("spot") or {"lux_scale": spot.get("lux_before"), "offset_m": None, "off": False,
-                                          "pending": None, "n": 0}
-            off, pending = _vote(prior, spot.get("off"))
-            new = {"off": off, "pending": pending, "n": prior["n"] + 1, "last_ms": at_ms,
-                   "lux_scale": prior.get("lux_scale"), "offset_m": prior.get("offset_m")}
-            if spot.get("lux_scale") is not None:
-                low, high = LUX_SCALE
-                new["lux_scale"] = min(high, max(low, halfway(prior.get("lux_scale") or 1.0, spot["lux_scale"])))
-            if spot.get("offset_m") is not None:
-                was = prior.get("offset_m") or [0.0, 0.0, 0.0]
-                new["offset_m"] = [halfway(a, b) for a, b in zip(was, spot["offset_m"])]
-            entry["spot"] = changed["spot"] = new
-        room = learn.get("room")
-        if room:
-            prior = entry.get("room") or {"level": room.get("level_before"), "cct_k": room.get("cct_before"), "n": 0}
-            new = {"n": prior["n"] + 1, "last_ms": at_ms,
-                   "level": min(1.0, max(0.0, halfway(prior.get("level"), room.get("level"))))
-                   if room.get("level") is not None or prior.get("level") is not None else None,
-                   "cct_k": halfway_kelvin(prior.get("cct_k"), room.get("cct_k"))}
-            entry["room"] = changed["room"] = new
+        for part in ("spot", "room"):
+            values = learn.get(part)
+            if not values:
+                continue
+            part_key = (keys or {}).get(part, key)
+            origin = (supersedes or {}).get(part)
+            if origin is not None and (origin, part) in self.priors:
+                part_key, before = self.priors[(origin, part)]
+                entry = self.entries.setdefault(part_key, {})
+                if before is None:
+                    entry.pop(part, None)
+                else:
+                    entry[part] = dict(before)
+            else:
+                if event_id is not None:
+                    row = self.entries.get(part_key, {}).get(part)
+                    self.priors[(event_id, part)] = (part_key, None if row is None else dict(row))
+                    while len(self.priors) > PRIORS_KEPT:
+                        self.priors.pop(next(iter(self.priors)))
+            entry = self.entries.setdefault(part_key, {})
+            changed[part] = entry[part] = (self._spot if part == "spot" else self._room)(entry.get(part), values, at_ms)
         return changed
+
+    @staticmethod
+    def _spot(prior, spot, at_ms):
+        prior = prior or {"lux_scale": None, "offset_m": None, "off": False, "pending": None, "n": 0}
+        off, pending = _vote(prior, spot.get("off"))
+        new = {"off": off, "pending": pending, "n": prior["n"] + 1, "last_ms": at_ms,
+               "lux_scale": prior.get("lux_scale"), "offset_m": prior.get("offset_m")}
+        if spot.get("lux_scale") is not None:
+            # From what was learned, or else from what the coordinator gave (its own scale, in range). A correction
+            # with no brightness (an aim, or off) teaches no light.
+            start = prior.get("lux_scale")
+            if start is None:
+                start = _scale(spot.get("lux_before") or 1.0)
+            new["lux_scale"] = _scale(halfway(start, spot["lux_scale"]))
+        if spot.get("offset_m") is not None:
+            was = prior.get("offset_m") or [0.0, 0.0, 0.0]
+            new["offset_m"] = [halfway(a, b) for a, b in zip(was, spot["offset_m"])]
+        return new
+
+    @staticmethod
+    def _room(prior, room, at_ms):
+        prior = prior or {"level": room.get("level_before"), "cct_k": room.get("cct_before"), "n": 0}
+        return {"n": prior["n"] + 1, "last_ms": at_ms,
+                "level": min(1.0, max(0.0, halfway(prior.get("level"), room.get("level"))))
+                if room.get("level") is not None or prior.get("level") is not None else None,
+                "cct_k": halfway_kelvin(prior.get("cct_k"), room.get("cct_k"))}
 
     def spot(self, key):
         """The task spot's learned values for this situation, or None."""
@@ -119,7 +158,11 @@ class Learning:
         learning = cls()
         for line in lines:
             if line.get("learn") and isinstance(line.get("key"), str):
-                learning.apply(line["key"], line["learn"], line["event"].get("at_ms"))
+                try:
+                    learning.apply(line["key"], line["learn"], line["event"].get("at_ms"),
+                                   line["event"].get("event_id"), line.get("supersedes"), line.get("keys"))
+                except (AttributeError, KeyError, TypeError, ValueError):
+                    learning.skipped += 1   # a line that parses but can't be applied never stops the coordinator
         return learning
 
 

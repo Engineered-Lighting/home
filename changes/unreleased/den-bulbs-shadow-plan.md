@@ -1,6 +1,6 @@
 ---
 title: The den coordinator plans the room's bulbs and shows the plan, sending nothing until Bulbs is On
-target: deploy
+target: backend
 type: added
 ---
 

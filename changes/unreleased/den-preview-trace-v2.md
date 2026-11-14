@@ -1,6 +1,6 @@
 ---
 title: The den spotlight preview's fixture trace names who each move was for, and replays through the simulator
-target: deploy
+target: backend
 type: changed
 ---
 

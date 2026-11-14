@@ -339,7 +339,10 @@ class PeopleStream:
                 now = self.body_clock()
                 if not capture_mono <= now < capture_mono + BODY_LEASE_S:
                     return False
-                frame = {key: frame[key] for key in BODY_FIELDS}
+                fields = {key: frame[key] for key in BODY_FIELDS}
+                if "object" in frame:   # what the person holds, with the held-object pass on (body.py)
+                    fields["object"] = frame["object"]
+                frame = fields
                 frame["points"] = {key: frame["points"][key] for key in ("count", "key", "position_mm", "normal", "kind")}
             elif reason not in BODY_REASONS:
                 reason = "unavailable"

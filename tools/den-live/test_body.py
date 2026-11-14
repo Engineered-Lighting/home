@@ -411,6 +411,95 @@ class BodyTest(unittest.TestCase):
         self.assertLess(per_frame, 0.12, f"{per_frame * 1000:.0f} ms per frame")
 
 
+RGB = {"k": [FX, FY, CX, CY, 0.0], "d": [], "from_left": [[[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0.0, 0.0, 0.0]],
+       "size": [B.WIDTH, B.HEIGHT]}   # an RGB camera that sees exactly as the depth camera does
+
+
+def holding(pose="standing"):
+    """A person holding a book in front of the chest, near the left wrist, and a phone lying across the room."""
+    bg, depth, head, bounds, joints = scene(pose)
+    depth = depth.copy()
+    c = 292
+    depth[175:200, c + 12:c + 42] = 1850                       # the book, 15 cm in front of the torso
+    depth[300:315, 60:100] = 2500                              # the phone on a table, far from any hand
+    joints = {**joints, "left_wrist": [world(c + 27, 188, 1860).tolist(), "supported"]}
+    book = {"label": "book", "score": 0.91, "polygon": [[c + 10, 173], [c + 44, 173], [c + 44, 202], [c + 10, 202]]}
+    phone = {"label": "cell phone", "score": 0.88, "polygon": [[58, 298], [102, 298], [102, 317], [58, 317]]}
+    return (bg, depth, head, bounds, joints), book, phone
+
+
+class HeldObjectTest(unittest.TestCase):
+    def maker(self):
+        return B.BodyMaker(np, cv2, left_k=(FX, FY, CX, CY), room_from_left=(R, T), rgb=RGB)
+
+    learned = BodyTest.learned
+
+    def held_frame(self, maker, fixture, held, key="fixture-7", track="fixture-track"):
+        person = dict(subject(fixture, frame_key=key), track_id=track)
+        return maker.step(fixture[1], observation="person", person=person, now=20, frame_key=key, binding=BINDING,
+                          held=held)
+
+    def test_a_held_book_becomes_blue_points_with_its_label_from_the_second_frame(self):
+        fixture, book, phone = holding()
+        maker = self.learned(fixture)
+        first, why = self.held_frame(maker, fixture, [book, phone])
+        self.assertIsNone(why)
+        self.assertIsNone(first["object"], "one frame isn't a hold yet")
+        self.assertFalse((decode(first)["kind"] == B.KIND_OBJECT).any())
+        second, _ = self.held_frame(maker, fixture, [book, phone])
+        self.assertEqual(second["object"], {"label": "book", "confidence": 0.91, "source": "detector"})
+        points = decode(second)
+        objects = points["kind"].ravel() == B.KIND_OBJECT
+        self.assertGreater(int(objects.sum()), 10)
+        rows, cols = np.divmod(points["key"].ravel(), B.WIDTH)
+        self.assertTrue(((rows[objects] >= 175) & (rows[objects] < 200)).all(), "only the book's own depth pixels")
+        self.assertFalse(((rows[~objects] >= 175) & (rows[~objects] < 200) & (cols[~objects] >= 304)
+                          & (cols[~objects] < 334)).any(), "the body keeps none of them")
+        self.assertEqual(len(set(points["key"].ravel().tolist())), len(points["key"]), "every key once")
+        self.assertTrue((np.diff(points["key"].ravel().astype(np.int64)) > 0).all(), "row-major order")
+
+    def test_a_phone_on_the_table_is_never_held(self):
+        fixture, _book, phone = holding()
+        maker = self.learned(fixture)
+        for _ in range(3):
+            frame, _ = self.held_frame(maker, fixture, [phone])
+            self.assertIsNone(frame["object"])
+            self.assertFalse((decode(frame)["kind"] == B.KIND_OBJECT).any())
+
+    def test_two_of_the_last_three_frames(self):
+        fixture, book, _phone = holding()
+        maker = self.learned(fixture)
+        labels = [self.held_frame(maker, fixture, held)[0]["object"] for held in ([book], [], [book], [], [], [book])]
+        # A frame without the mask has no object points to show; the label needs this frame's mask and one more.
+        self.assertEqual([None if o is None else o["label"] for o in labels], [None, None, "book", None, None, None])
+        maker = self.learned(fixture)
+        labels = [self.held_frame(maker, fixture, held)[0]["object"] for held in ([book], [book], [], [book])]
+        self.assertEqual([None if o is None else o["label"] for o in labels], [None, "book", None, "book"])
+        maker = self.learned(fixture)
+        self.held_frame(maker, fixture, [book])
+        self.assertIsNone(self.held_frame(maker, fixture, [book], track="someone-else")[0]["object"],
+                          "a new track starts its own count")
+
+    def test_not_holdable_or_malformed_instances_are_ignored(self):
+        fixture, book, _phone = holding()
+        maker = self.learned(fixture)
+        bad = [dict(book, label="couch"), dict(book, score=1.5), dict(book, polygon=[[1, 2], [3, 4]]),
+               dict(book, polygon=[[float("nan"), 1]] * 4), "book", None]
+        for _ in range(3):
+            self.assertIsNone(self.held_frame(maker, fixture, bad)[0]["object"])
+
+    def test_with_the_pass_off_the_frame_is_exactly_as_before(self):
+        fixture, book, _phone = holding()
+        maker = self.learned(fixture)
+        frame, _ = self.held_frame(maker, fixture, None)
+        self.assertNotIn("object", frame)
+        self.assertFalse((decode(frame)["kind"] != 0).any())
+        plain = B.BodyMaker(np, cv2, left_k=(FX, FY, CX, CY), room_from_left=(R, T))
+        self.assertIsNone(plain.rgb, "no RGB camera in the setup: the pass can't run")
+        with self.assertRaises(ValueError):
+            B.BodyMaker(np, cv2, left_k=(FX, FY, CX, CY), room_from_left=(R, T), rgb=dict(RGB, k=[0, 0, 0, 0, 0]))
+
+
 class ChannelTest(unittest.TestCase):
     def test_reply_binds_request_frame_and_calibration_and_rebind_drops_background(self):
         ch = B.BodyChannel()

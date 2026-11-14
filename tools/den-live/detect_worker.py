@@ -153,8 +153,16 @@ def main(argv=None):
         say({"refused": str(exc)[:200]})
         return 2
     np = detector.np
+    # The held-object pass (held_seg.py): YOLO26s-seg beside the tracking detector, on the same frame, only with its
+    # pinned weights in the models folder. Off, every frame and reply is exactly as before.
+    try:
+        import held_seg
+        segmenter, held_why = held_seg.load(models, (detector.devices or {}).get("boxes") or "cpu")
+    except Exception as exc:  # a type name only
+        segmenter, held_why = None, "the held-object pass didn't load (%s)" % type(exc).__name__
     say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms), "devices": detector.devices,
-         **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {})})
+         **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {}),
+         "held": segmenter is not None, **({"held_why": held_why} if held_why else {})})
     stream = sys.stdin.buffer
     kept, bodies, ring, image_module = None, None, stills.Ring(), None
     guards = Guards()
@@ -206,6 +214,12 @@ def main(argv=None):
                                   width=detect.WIDTH, height=detect.HEIGHT, boxes_version="yolo26s-8.4.0",
                                   keypoints_version=detector.pose.manifest["model_version"])
             say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1), **identity})
+            if segmenter is not None:   # after the row is on its way: tracking's timing is its own
+                try:
+                    import cv2
+                    kept = (*kept[:3], segmenter(np.ascontiguousarray(rgb[:, :, ::-1]), row, cv2))
+                except Exception:  # the pass is on, this frame found nothing: never the frame's end
+                    kept = (*kept[:3], [])
         except Exception as exc:  # one bad frame is a reply, not the end; a type name only, never its text
             reply = {"id": header.get("id"), "error": type(exc).__name__, **identity}
             if type(exc).__name__ == "RowError":   # den-observe's schema reasons: fixed words, no frame data

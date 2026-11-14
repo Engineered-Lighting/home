@@ -30,9 +30,6 @@ LEASE_S = 1.0
 # The entry rule (spine decision 4, the owner's ruling): one confident yes lights. A later answer confirms it, starts
 # the patience that ends it (phone, screen, closed book), or ends it at once (none or several people in the stills).
 ENTRY_ANSWERS = 1
-# The keep rule's time hysteresis (contract 10, "For 04"): both sofa sockets sit within 3 degrees of side-on, so a
-# fixture lit for someone stays theirs through a facing refusal that hasn't lasted this long.
-KEEP_HOLD_S = 1.0
 # The gap hold (plan 05 section 3.5, contract 4): the camera's newest frame can go 1.5-2.4 s without changing, about 5
 # times a minute. A spot already lit stays lit while its person's newest fresh frame is at most this old, the same 3.0 s
 # at which contract 2 ends the camera epoch; keep-lit goes on through the gap. Lighting still needs a pose at most
@@ -148,7 +145,7 @@ class Preview:
             self.rows[name] = dict(row, profile=profile, ranges=ranges, current=current, level=0.0,
                                    pending=None, motion=None, move=None, token=None, keep_at=0.0, sends=[], cut_at=None, leased_at=None,
                                    target=None, basis=None, job=None, reason="waiting_for_tracking", pre_at=None,
-                                   eye_hold=None, glide=None, ramp=None, ramp_at=None, goal=0.0, exiting=None,
+                                   glide=None, ramp=None, ramp_at=None, goal=0.0, exiting=None,
                                    lit_until=None, ended_at=None, dip=None, arrive_level=None,
                                    lit_subject=None, step_at=None, step_s=direction.level_step_s(profile),
                                    timed=timed_codec and direction.capabilities(profile)["timed_move"],
@@ -455,7 +452,9 @@ class Preview:
                                   dict(aim.DEFAULT_LIMITS))
             held = aim.evaluate_fixture(fixture, reader, dataclasses.replace(
                 eye._KEEP, head_clearance_m=direction.GLARE_KEEP_M, min_behind_cos=-1.0))
-            result = held if held.ok else result
+            # A facing refusal (in front, or no facing) never stands for a lit fixture: it gives way to what the check
+            # without facing finds, so a beam through the head is still beam_through_head, and cut.
+            result = held if held.ok or result.reason in FACING_REFUSALS else result
         return result
 
     def _candidate(self, person, now=None):
@@ -469,16 +468,7 @@ class Preview:
             # in the middle of the crossfade (that was a hand-off ping-pong).
             kept = row["job"] == person["track_id"] and row["exiting"] in (None, *RECOVERABLE) and (
                 row["token"] is not None or self._lighting(row))
-            result = self._eye(name, row, person, kept)
-            if not kept:
-                row["eye_hold"] = None
-            elif result.ok:
-                row["eye_hold"] = (now, person["facing"])
-            elif result.reason in FACING_REFUSALS and row["eye_hold"] and now - row["eye_hold"][0] < KEEP_HOLD_S:
-                # Facing jitter: judge the lit fixture by the last facing that kept it, until the refusal has lasted
-                # KEEP_HOLD_S.
-                held = self._eye(name, row, dict(person, facing=row["eye_hold"][1]), kept)
-                result = held if held.ok else result
+            result = self._eye(name, row, person, kept)   # a lit fixture is never refused for facing (_eye)
             if row["job"] == person["track_id"] and self._lighting(row):
                 # Any light on this person (rising, lit, holding, crossfading or leaving) is judged by the keep rule's
                 # head and eye margins, and by the head's clearance on the beam as it points now. den-core checks the

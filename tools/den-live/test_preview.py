@@ -1055,6 +1055,34 @@ class DirectionTest(PreviewTest):
         fast = [(t * .4, (1.0 + 3 * t * .4, 1.0, 1.2)) for t in range(4)]
         self.assertAlmostEqual(math.sqrt(sum(c * c for c in preview.fitted_velocity(fast))), preview.HEAD_SPEED_MAX_M_S)
 
+    def test_no_facing_on_a_glide_with_the_head_by_the_line_cuts_at_once(self):
+        """A lit fixture is never refused for facing, but a missing facing mustn't hide a beam through the head: with no
+        facing and the head 5 cm from the line to the page, mid-glide, the light is cut at once, not eased out."""
+        self.lit_by_direction()
+        for _ in range(16):
+            self.now = round(self.now + .25, 6)
+            self.track(shift=-.3)
+            if self.preview.rows["F3"]["glide"] is not None:
+                break
+        row, person = self.preview.rows["F3"], self.preview.track
+        self.assertIsNotNone(row["glide"])
+        origin, page = row["aim_origin_m"], person["target"]
+        along = [origin[i] + .6 * (page[i] - origin[i]) for i in range(3)]
+        line = [page[i] - origin[i] for i in range(3)]
+        side = [line[1], -line[0], 0.0]
+        norm = math.sqrt(sum(c * c for c in side))
+        head = tuple(along[i] + .05 * side[i] / norm for i in range(3))   # 5 cm from the line to the page
+        no_facing = patch.object(direction.FacingFilter, "update", lambda filt, t, facing, seated: None)
+        beam_ok = patch.object(preview.Preview, "_beam_clear", lambda owner, row, person, clearance=None, horizon=None: True)
+        with no_facing, beam_ok:   # the eye rule alone, not the beam-as-it-points check
+            self.assertEqual(self.preview._eye("F3", row, dict(person, head=head, facing=None), True).reason,
+                             "beam_through_head")
+            self.now = round(self.now + .1, 6)
+            self.track(shift=-.3, head=head)
+        self.assertFalse(self.row()["on"], "cut at once")
+        self.assertIsNone(self.row()["fade"], "not eased")
+        self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head")
+
     def test_the_clearance_reaches_along_the_sofa(self):
         """A seated reader can slide along the sofa faster than the camera can follow: a beam must also clear the head
         moved SLIDE_REACH_M to either side, across the facing."""

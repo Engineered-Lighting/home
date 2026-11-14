@@ -1117,11 +1117,14 @@ class DirectionTest(PreviewTest):
         glide = self.preview.rows["F3"]["glide"]
         self.assertIsNotNone(glide)
         self.assertFalse(self.row()["on"], "dark on the way")
+        self.assertAlmostEqual(glide.arrival - (glide.started + glide.duration),
+                               self.preview.rows["F3"]["profile"]["settle_s"], msg="the board settles after its S-curve")
         while self.preview.rows["F3"]["glide"] is not None:
-            self.assertEqual(self.row()["level"], 0.0)
+            self.assertEqual(self.row()["level"], 0.0, "dark through the S-curve and the settle")
             self.now = round(self.now + .1, 6)
             self.preview.tick()
-        self.now = round(self.now + .5, 6)
+        self.assertGreaterEqual(self.now, glide.arrival)
+        self.now = round(self.now + .1, 6)
         self.preview.tick()
         self.assertTrue(self.row()["on"], "it blooms from dark when it lands")
         self.assertEqual(len(self.moves(since)), 1)

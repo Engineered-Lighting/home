@@ -202,10 +202,13 @@ class Glide:
     """One MOVE's motion from start_cdeg to target_cdeg (integer centidegrees, contract 5's joints) begun at `started`
     (the coordinator's monotonic seconds), as the board flies it. min_duration_s is a timed MOVE's floor: the board
     stretches its S-curve to at least that long (k = max(1, min_duration / T)), and the published limits are the
-    stretched ones, so Home draws the move the board makes from the same duration function."""
+    stretched ones, so Home draws the move the board makes from the same duration function. settle_s is the profile's
+    settle: the board arrives once both axes have stayed within 0.2 degrees that long after the S-curve ends (its
+    predicted_ms is the two together), so a dark move relights, and a MOVE waiting on this one starts, no sooner."""
 
-    def __init__(self, start_cdeg, target_cdeg, axes, started, min_duration_s=0.0):
+    def __init__(self, start_cdeg, target_cdeg, axes, started, min_duration_s=0.0, settle_s=0.0):
         self.start, self.target, self.started = tuple(start_cdeg), tuple(target_cdeg), started
+        self.settle = max(0.0, settle_s)
         limits = path_limits(tuple((b - a) / 100 for a, b in zip(self.start, self.target)), axes)
         self.curve = SCurve(*limits) if limits else None
         if self.curve is not None and min_duration_s > self.curve.duration > 0:
@@ -218,7 +221,12 @@ class Glide:
         return tuple(round(a + (b - a) * s) for a, b in zip(self.start, self.target))
 
     def done(self, now):
-        return now - self.started >= self.duration
+        return now >= self.arrival
+
+    @property
+    def arrival(self):
+        """The earliest the board reports it arrived: the S-curve, then the settle."""
+        return self.started + self.duration + self.settle
 
     def published(self):
         """For Home (den-virtual-spots-1's additive `glide`): the move in Home's renderer degrees (the joints negated over

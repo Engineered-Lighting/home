@@ -974,14 +974,16 @@ class Preview:
             glide = row["glide"]
             if glide is None or glide.target != target:   # a MOVE to the target being flown joins that flight
                 floor = timed["min_duration_ms"] / 1000 if timed else 0.0
-                row["glide"] = direction.Glide(start, target, row["profile"]["axes"], now, floor)
+                # A real board arrives after its settle (its predicted_ms counts it); a virtual one has no head to settle.
+                settle = 0.0 if row["profile"].get("fictional") else row["profile"].get("settle_s", 0.0)
+                row["glide"] = direction.Glide(start, target, row["profile"]["axes"], now, floor, settle)
                 row["current"] = start
         row["arrive_level"] = None
         if fading:
             # The board fades from what it shows to the MOVE's level, on the ramp's curve. Dark on the way, it blooms
             # from dark when it lands.
             if moving and effective["travel"] != "lit":
-                ramp.start, ramp.started = 0.0, row["glide"].started + row["glide"].duration
+                ramp.start, ramp.started = 0.0, row["glide"].arrival
                 row["level"] = 0.0
             else:
                 row["level"] = ramp.value(now)

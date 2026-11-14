@@ -58,6 +58,9 @@ class Profiles(unittest.TestCase):
         (out / bp.QUALIFICATION_FILE).write_text(json.dumps(record), encoding="utf-8")
         self.assertTrue(bp.qualified_bytes(data, out / bp.QUALIFICATION_FILE))
         self.assertFalse(bp.qualified_bytes(data + b" ", out / bp.QUALIFICATION_FILE))
+        shown = json.dumps(dict(json.loads(data), head="shown")).encode()
+        self.assertTrue(bp.qualified_bytes(shown, out / "no-record.json"), "the owner shows the head: nothing to score")
+        self.assertFalse(bp.qualified_bytes(bytes([255]) + b" not json", out / bp.QUALIFICATION_FILE))
 
         self.assertEqual(clock["schema"], "den-body-clock-profile-1")
         self.assertEqual((clock["evidence_id"], clock["device_id"], clock["calibration_sha256"], clock["fps"]),

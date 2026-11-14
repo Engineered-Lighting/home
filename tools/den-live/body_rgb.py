@@ -1,8 +1,9 @@
 """Bind current RGB observations to measured-body input for one registered camera."""
 import math
 from dataclasses import dataclass, replace
+from typing import Optional
 
-from body import FAR_MM, MIN_TORSO_SEEDS, NEAR_MM
+from body import FAR_MM, HEAD_SHOWN, MIN_TORSO_SEEDS, NEAR_MM
 from stream import BODY_LEASE_S
 from body_clock import capture_bounds, lease_clock
 from body_head import HeadProfile, head_evidence, torso_cut
@@ -26,7 +27,7 @@ class RgbBodyProfile:
     transform_id: str
     scan_revision: str
     min_valid_depth_fraction: float
-    head: HeadProfile
+    head: Optional[HeadProfile]   # None: the owner's profile shows the head ("head": "shown")
 
     @classmethod
     def from_config(cls, block, registration):
@@ -36,7 +37,8 @@ class RgbBodyProfile:
         digest, = correction["calibrations"]
         factor, = correction["factors"]
         profile = cls(block["qualification_id"], block["clock_evidence_id"], digest, factor, block["transform_id"], block["scan_revision"],
-                      block["min_valid_depth_fraction"], HeadProfile(**block["head"]))
+                      block["min_valid_depth_fraction"],
+                      None if block["head"] == HEAD_SHOWN else HeadProfile(**block["head"]))
         if (not all(isinstance(v, str) and 0 < len(v) <= 128
                     for v in (profile.qualification_id, profile.clock_evidence_id, profile.transform_id, profile.scan_revision))
                 or not isinstance(digest, str) or len(digest) != 64
@@ -91,6 +93,8 @@ class RgbBodyInput:
         if len({j["j"] for j in joints} & TORSO) < MIN_TORSO_SEEDS:
             return BodyInput(*common, "unknown")
         value = BodyInput(*common, "person", {**track, "association": status}, {**pose, "joints_room": joints})
+        if profile.head is None:   # the owner shows the head: the whole measured person, nothing masked
+            return replace(value, head_evidence={"frame_key": frame_key, "binding": value.binding(), "head": HEAD_SHOWN})
         evidence = dict(frame_key=frame_key, binding=value.binding(), profile=profile.head,
                         separation_s=bounds.separation_s)
         head = head_evidence(pose, self.camera, **evidence)

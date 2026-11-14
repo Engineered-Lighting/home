@@ -185,6 +185,34 @@ class RgbBodyTests(unittest.TestCase):
         self.assertGreater(len(rows), 0)
         self.assertFalse(cut_side(cols, rows, cut).any())
 
+    def test_a_profile_that_shows_the_head_publishes_the_whole_measured_person(self):
+        import numpy as np
+        from test_body import decode
+
+        def figure(f):
+            for n in range(55):
+                f.frame(n, empty=True)
+            for n in range(55, 70):
+                f.frame(n)
+            _, output = next(((s, fields) for s, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+            self.assertIsNotNone(output, f.link.why)
+            ys, xs = np.divmod(decode(output["frame"])["key"].reshape(-1), 640)
+            return ys, xs
+
+        masked = self.f
+        ys, xs = figure(masked)
+        left, top, right, bottom = head_exclusion(masked.last.head_evidence, frame_key=masked.last.frame_key,
+                                                  binding=masked.last.binding())
+        f = Fixture(self.scratch)
+        self.addCleanup(f.link.close)
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        shown_ys, shown_xs = figure(f)
+        self.assertEqual(f.last.head_evidence, {"frame_key": f.last.frame_key, "binding": f.last.binding(), "head": "shown"})
+        inside = (left <= shown_xs) & (shown_xs < right) & (top <= shown_ys) & (shown_ys < bottom)
+        self.assertTrue(inside.any(), "the head the qualified profile cuts is in the figure")
+        self.assertGreater(len(shown_ys), len(ys))
+
     def test_a_profile_with_the_cut_never_publishes_on_the_face_envelope_alone(self):
         f = self.f
         f.block["head"]["torso_cut_m"] = 0.08
@@ -323,6 +351,12 @@ class RgbBodyTests(unittest.TestCase):
         with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
             install_la.body_profile(profile, receipt)   # another candidate's pass
         record.unlink()
+        profile.write_text(json.dumps(dict(f.block, head="shown")), encoding="utf-8")
+        self.assertEqual(install_la.body_profile(profile, receipt), dict(f.block, head="shown"),
+                         "the owner shows the head: no head-cut score to tie it to")
+        profile.write_text(json.dumps(dict(f.block, head="shown", transform_id="other")), encoding="utf-8")
+        with self.assertRaisesRegex(install_la.Stop, "does not match"):
+            install_la.body_profile(profile, receipt)   # it still binds to the registration
         profile.write_text(json.dumps(dict(f.block, transform_id="other")), encoding="utf-8")
         with self.assertRaisesRegex(install_la.Stop, "does not match"):
             install_la.body_profile(profile, receipt)

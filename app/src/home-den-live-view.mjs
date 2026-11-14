@@ -64,6 +64,9 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     } : null;
     const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site, post,
         onChange: () => { panel?.refresh(); caption?.setSpot(spots?.current() ?? null); pipeline?.setSpot(spots?.current() ?? null); } });
+    // With the den's live body feature (HomeDenLive.body), the body, its label and the label's ring carry each person, and
+    // the people layer draws no floor marker: a gap between body frames can't flash it back. Without it, the marker shows them.
+    const people = { floorMarker: typeof config.body !== 'string' };
     const scene = current => `${current.contentRevision ?? ''}:${current.sceneIdentity?.registrationVersion ?? ''}:${current.sceneIdentity?.frameDigest ?? ''}`;
 
     /* The den's room view is on screen: the den's engine, its canvas shown at room scale, the page visible. */
@@ -87,7 +90,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         const matched = sameScan(event);
         spots?.tracking(matched ? event.transform_id : null, matched ? event.content_revision : null);
         if (matched) { layer?.update(event); caption?.update(event, lastAt); pipeline?.update(event, lastAt); }
-        else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine); caption?.clear(); pipeline?.clear(); }
+        else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine, people); caption?.clear(); pipeline?.clear(); }
         render();
     }
     const isCurrent = () => engine && engine === denEngine() && scope === scene(engine);
@@ -115,15 +118,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             panel?.pollNow();
         });
     }
-    /* While the live body figure shows a person, their floor dot steps back: the body, its label and the ring under it
-     * carry them (design A). The dot stays the fallback for a track with no body, and comes back the moment the body
-     * clears. */
-    function shareBody(owned) {
-        const track = body === owned && owned.ready && owned.lastPaintAge != null ? bodyTrack(owned) : null;
-        layer?.setBodies?.(track ? [track.track_id] : []);
-    }
     function clearBody(owned, reason) {
-        if (body === owned) layer?.setBodies?.([]);
         owned.ready = null;
         owned.reason = reason;
         owned.lastPaintAge = null;
@@ -142,7 +137,6 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     }
     function disposeBody(owned = body) {
         if (!owned || body !== owned) return;
-        layer?.setBodies?.([]);   // the dot comes back with the body gone
         body = null;
         clearBody(owned, 'unavailable');
         closeBodySource(owned);
@@ -217,7 +211,6 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                     }
                     owned.layer.tick(deltaSeconds);
                     owned.labels.tick(deltaSeconds);
-                    shareBody(owned);
                 }, onPresentationDispose: () => disposeBody(owned) });
             if (!presentation || !admitted()) { presentation?.dispose(); disposeBody(owned); return; }
             owned.layer = bodyKit.attachLayer(current, { measuredOnly: true, animate: false,
@@ -304,7 +297,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             engine = current;
             scope = scene(current);
             spots?.attach(current.overlay);
-            layer = attachApartmentPeopleLayer(current);
+            layer = attachApartmentPeopleLayer(current, people);
             if (captionKit || pipelineKit) mountCaption(current);
         }
         const now = performance.now();

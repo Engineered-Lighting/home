@@ -1,9 +1,10 @@
 ---
-title: The den's blue floor dot steps back under the live body figure
+title: The den's blue floor marker is gone wherever the live body figure is on
 target: web
 type: changed
 ---
 
-While the live body figure shows a person in the den view, the blue floor marker under them (the dot, its ring and
-its facing arrow) isn't drawn: the figure, its label and the label's ring carry the person. The marker comes back the
-moment the body clears, and stays for anyone the body doesn't show.
+With the den's live body figure on, the people layer no longer draws its blue floor marker (the dot, its ring and its
+facing arrow) in the den at all. The figure, its label and the label's ring carry each person, so nothing flickers
+under them when a body frame is late. The faint trail stays. Without the body figure, the marker still shows people
+as before.

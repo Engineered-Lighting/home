@@ -183,11 +183,35 @@ class PreviewManualTest(unittest.TestCase):
         self.change(name, {"spotlight": {"on": True}}, {"spotlight": {"on": False}})
         self.assertIsNone(self.fixtures()[name]["hand"]["warning"])   # off: nothing to warn about
 
-    def test_homes_panel_reads_the_spot_and_the_room_in_the_one_learned_map(self):
+    def test_a_444_shaped_change_is_recorded_learned_and_answered_as_home_reads_it(self):
+        """#444 (eafd0885) treats a change as recorded on 200 with ok true and its own event_id, reads from_seq, and
+        ends its hold once a snapshot at seq >= from_seq has shown the hand and then shows none."""
+        name = self.light()
+        row = self.fixtures()[name]
+        event_id = "home-6f1c2c86-0f3e-4a43-9b56-6c1d0c7e9a10"
+        status, reply = self.change(name, {"spotlight": {"on": True, "brightness": row["level"], "color_temp_kelvin": None},
+                                           "downward": None, "radials": []},
+                                    {"spotlight": {"on": True, "brightness": row["level"] / 2, "color_temp_kelvin": None},
+                                     "downward": {"on": True, "brightness": .3, "color_temp_kelvin": None},
+                                     "radials": [{"number": 1, "on": True, "brightness": .2, "color_temp_kelvin": None}]},
+                                    event_id=event_id)
+        self.assertEqual((status, reply["ok"], reply["event_id"], reply["recorded"]), (200, True, event_id, True))
+        self.assertTrue(reply["learned"])
+        self.assertIsInstance(reply["from_seq"], int)
+        self.assertEqual(self.preview.latest["seq"], reply["from_seq"])
+        self.assertEqual(self.fixtures()[name]["hand"]["parts"], ["downward", "radials", "spot"])
+        self.assertEqual(set(self.learned()["task/evening"]), {"spot", "room"})
+        self.stand()   # the task's light ends with the task; the glow's parts with its cue
+        self.assertIsNone(self.fixtures()[name]["hand"])
+
+    def test_the_spot_and_the_room_are_in_learned_from_you_and_learned_stays_the_bulbs(self):
+        """#444 (2fbc5bd0) lists `learned` as bulbs and reads learned_from_you beside it: nothing of the fixtures'
+        goes into the bulbs' map, or the panel would show it twice."""
         name = self.light()
         self.dim(name)
         state = self.preview.state()[1]
-        self.assertEqual(state["learned"]["task/evening"]["spot"], state["learned_from_you"]["task/evening"]["spot"])
+        self.assertIn("spot", state["learned_from_you"]["task/evening"])
+        self.assertNotIn("learned", state)   # no bulbs overlay here, so no bulbs' learning either
 
     def test_aiming_the_light_somewhere_else_teaches_the_task_nothing(self):
         name = self.light()

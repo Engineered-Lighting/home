@@ -33,6 +33,26 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(manual.parts(parsed["after"]), ["downward", "radials", "spot"])
         self.assertEqual(manual.parts({"radials": []}), ["radials"])
 
+    def test_the_bodies_home_444_sends(self):
+        """#444's handDiff, as built (eafd0885): whole keys with null where it had no value, a target with null
+        surface_id and kind, radials zone by zone with `before` only for zones it had a state for, and an echoed
+        null subject."""
+        aim = event(before={"pan_deg": 3, "tilt_deg": 30, "target": None},
+                    after={"pan_deg": 8, "tilt_deg": 41, "target": {"point": [1, 2, .7], "normal": [0, 0, 1],
+                                                                    "surface_id": None, "kind": None}},
+                    subject=None, event_id="home-6f1c2c86-0f3e-4a43-9b56-6c1d0c7e9a10")
+        self.assertEqual(manual.parse(aim)["after"]["target"]["point"], [1.0, 2.0, .7])
+        paint = event(before={"spotlight": {"on": True, "brightness": .5, "color_temp_kelvin": None},
+                              "downward": None, "radials": []},
+                      after={"spotlight": {"on": True, "brightness": .8, "color_temp_kelvin": None},
+                             "downward": {"on": True, "brightness": .3, "color_temp_kelvin": 2700},
+                             "radials": [{"number": 1, "on": True, "brightness": .9, "color_temp_kelvin": None}]})
+        parsed = manual.parse(paint)
+        self.assertEqual(parsed["before"]["spotlight"], {"on": True, "brightness": .5})
+        self.assertIsNone(parsed["before"]["downward"])
+        self.assertEqual(parsed["before"]["radials"], [])
+        self.assertEqual(parsed["after"]["radials"], [{"number": 1, "on": True, "brightness": .9}])
+
     def test_bad_events_are_refused_with_a_reason(self):
         bad = [
             "not an object",

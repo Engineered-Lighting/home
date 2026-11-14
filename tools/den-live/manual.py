@@ -32,8 +32,12 @@ def _number(value):
 
 
 def _light(value, where):
-    if not isinstance(value, dict) or not value or set(value) - LIGHT_KEYS:
+    """A light channel. Home sends null for what it doesn't know (a channel, or one of its values): that's absent."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) - LIGHT_KEYS:
         raise ValueError(f"{where} must be {{on, brightness, color_temp_kelvin}}")
+    value = {key: item for key, item in value.items() if item is not None}
     if "on" in value and type(value["on"]) is not bool:
         raise ValueError(f"{where}.on must be true or false")
     if "brightness" in value and not (_number(value["brightness"]) and 0 <= value["brightness"] <= 1):
@@ -55,7 +59,7 @@ def _state(value, where):
         raise ValueError(f"{where} must hold only {sorted(STATE_KEYS)}")
     out = {}
     for key in ("pan_deg", "tilt_deg"):
-        if key in value:
+        if value.get(key) is not None:
             if not _number(value[key]):
                 raise ValueError(f"{where}.{key} must be finite degrees")
             out[key] = float(value[key])
@@ -72,7 +76,8 @@ def _state(value, where):
             out[key] = _light(value[key], f"{where}.{key}")
     if "radials" in value:
         radials = value["radials"]
-        if not isinstance(radials, list) or not radials or len(radials) > 32:
+        # Empty is allowed: Home's `before` lists only the changed zones it had a state for.
+        if not isinstance(radials, list) or len(radials) > 64:
             raise ValueError(f"{where}.radials must be a list of zones")
         zones = []
         for zone in radials:
@@ -104,9 +109,10 @@ def parse(data):
     if (not isinstance(snapshot, dict) or not isinstance(snapshot.get("epoch"), str)
             or type(snapshot.get("seq")) is not int or snapshot["seq"] < 0):
         raise ValueError("snapshot must be {epoch, seq} of the den-virtual-spots-1 snapshot Home was drawing")
-    before, after = _state(data.get("before"), "before"), _state(data.get("after"), "after")
-    if set(before) != set(after):
+    if not isinstance(data.get("before"), dict) or not isinstance(data.get("after"), dict) or (
+            set(data["before"]) != set(data["after"])):
         raise ValueError("before and after must name the same keys")
+    before, after = _state(data["before"], "before"), _state(data["after"], "after")
     for key in ("subject", "situation"):
         if data.get(key) is not None and not isinstance(data[key], (dict, str)):
             raise ValueError(f"{key} must be what Home showed, or absent")

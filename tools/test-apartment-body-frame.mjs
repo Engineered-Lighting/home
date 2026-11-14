@@ -66,12 +66,17 @@ test('the live decoder admits measured geometry and clear events only', () => {
     assert.equal(decoded.n, live.points.count);
     assert.deepEqual(decoded.torso, { facingDeg: 90, shoulder: [1.2, 1.46, 1.51], pelvisZ: 0.78 });
     assert.deepEqual(F.decodeLiveBodyEvent(clear), { event: clear });
+    // den-live's lease: 1 s, or 2 s; never another span.
+    assert.ok(F.decodeLiveBodyEvent({ ...live, expires_ts: live.capture_ts + 2 }), 'a 2 s lease');
+    for (const lease of [0, 0.5, 1.5, 3, -1]) {
+        assert.equal(F.decodeLiveBodyEvent({ ...live, expires_ts: live.capture_ts + lease }), null, `a ${lease} s lease`);
+    }
     const legacyPoints = (list) => {
         const { count, key, position_mm, normal, kind } = frame(list).points;
         return { count, key, position_mm, normal, kind };
     };
     for (const invalid of [frame([[1, 0, 0, 1]]), { ...clear, track_id: 'leaked' }, { ...live, head: {} },
-        { ...live, seq: -1 }, { ...live, expires_ts: 102 }, { ...live, mode: 'none' },
+        { ...live, seq: -1 }, { ...live, expires_ts: live.capture_ts + 3 }, { ...live, mode: 'none' },
         { ...live, points: { ...live.points, normal: undefined } }, { ...live, points: { ...live.points, head: '' } },
         { ...live, points: legacyPoints([[1, 0, 0, 1, KIND.backFill]]) }, { ...live, points: legacyPoints([[640 * 400, 0, 0, 1]]) }]) {
         assert.equal(F.decodeLiveBodyEvent(invalid), null);

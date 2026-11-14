@@ -105,7 +105,7 @@ function targetBasis(target) {
     return { normal, right, up };
 }
 
-export function createOverlay(apartmentRoot) {
+export function createOverlay(apartmentRoot, { siteId } = {}) {
     const overlayRoot = new THREE.Group();
     overlayRoot.renderOrder = 10;
     apartmentRoot.add(overlayRoot);
@@ -118,7 +118,7 @@ export function createOverlay(apartmentRoot) {
     const targetsGroup = new THREE.Group();
     const fixtureMeasureGroup = new THREE.Group();
     const equipmentReferenceGroup = new THREE.Group();
-    const virtualFixtures = createEquipmentVirtualFixtures(overlayRoot);
+    const virtualFixtures = createEquipmentVirtualFixtures(overlayRoot, { siteId });
     const aimBeamGroup = new THREE.Group();
     const aimTransitionGroup = new THREE.Group();
     overlayRoot.add(devicesGroup, camerasGroup, personGroup, zonesGroup,
@@ -1182,6 +1182,7 @@ export function createOverlay(apartmentRoot) {
         setVirtualFixturesVisible: virtualFixtures.setVisible,
         virtualFixturesReadback: virtualFixtures.readback,
         virtualFixturePickObjects: virtualFixtures.pickObjects,
+        virtualFixtureAimPickObjects: virtualFixtures.aimPickObjects,
         virtualFixtureInteractionDescriptor: virtualFixtures.interactionDescriptor,
         aimVirtualFixtureAtTarget: virtualFixtures.aimAtTarget,
         virtualFixturesPresentationActive: () => virtualFixtures.presentationActive?.() === true,

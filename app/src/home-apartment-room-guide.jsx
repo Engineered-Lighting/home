@@ -26,11 +26,11 @@
     { id: "zoom", owner: "room", keys: ["+", "=", "-"], label: "+ −", action: "Zoom in or out" },
     { id: "home", owner: "room", keys: ["h", "Home"], label: "H / Home", action: "Return to the starting view" },
     { id: "cycle", owner: "room", keys: ["n", "p"], label: "N / P", action: "Select the next or previous light or device" },
-    { id: "aim-mode", owner: "room", keys: ["a", "z"], label: "A / Z", homes: ["victoria"],
+    { id: "aim-mode", owner: "room", keys: ["a", "z"], label: "A / Z", homes: ["echo", "victoria"],
       action: "Spot aiming or radial zones for the selected light", when: "With a modeled light selected" },
-    { id: "aim-set", owner: "aim", keys: ["Enter"], label: "Enter", homes: ["victoria"],
+    { id: "aim-set", owner: "aim", keys: ["Enter"], label: "Enter", homes: ["echo", "victoria"],
       action: "Set the proposed aim", when: "With a proposal waiting and no control focused" },
-    { id: "aim-history", owner: "aim", keys: ["Z"], label: "⌘Z / Ctrl+Z, with Shift to redo", homes: ["victoria"],
+    { id: "aim-history", owner: "aim", keys: ["Z"], label: "⌘Z / Ctrl+Z, with Shift to redo", homes: ["echo", "victoria"],
       action: "Undo or redo the selected light's aim, or bring back a discarded proposal", when: "With a modeled light selected" },
     { id: "escape", owner: "overlay", keys: ["Escape"], label: "Esc",
       action: "Cancel the current step, then close the open card or clear the selection" },
@@ -45,7 +45,9 @@
     { id: "wheel-zoom", label: "Scroll wheel", action: "Zoom" },
     { id: "pinch-zoom", label: "Pinch with two fingers", action: "Zoom one step at a time" },
     { id: "select", label: "Click a light", action: "Select it and open its controls" },
-    { id: "aim-handle", label: "Drag the aim handle", homes: ["victoria"],
+    { id: "drag-spotlight", label: "Drag a virtual spotlight", homes: ["echo", "victoria"],
+      action: "Grab its housing, label or visible pool. Release over a reachable room surface to set its modeled aim." },
+    { id: "aim-handle", label: "Drag the aim handle", homes: ["echo", "victoria"],
       action: "Propose where the selected modeled light points; nothing physical moves" },
   ].map(Object.freeze));
 
@@ -115,7 +117,7 @@
         : { id, ...row, available: false, reason };
     };
     const victoria = homeId === "victoria";
-    const fixtures = victoria
+    const fixtures = victoria || seams.fixtures
       ? bound("fixtures", { label: "Virtual spotlights", ariaLabel: "Show virtual spotlights layer", detail: "modeled" },
         "The modeled fixtures are not loaded for this scene")
       : { id: "fixtures", label: "Light markers", available: false, reason: "Mapped lights follow the current scene" };
@@ -266,7 +268,7 @@
         : source.live ? "Read from this home's live source" : source.writable === false ? "Read-only here" : null);
     add("recorded", "scene", "Scene imagery", "Cloud, Photo and Mesh use this home's existing scene assets.");
     if (simActive) add("modeled", "simulation", "Simulation", "Device states are simulated; nothing is sent to hardware.");
-    if (homeId === "victoria" && hasVirtualFixtures) {
+    if (hasVirtualFixtures) {
       add("modeled", "fixtures", `${fixtureCount || "Virtual"} modeled fixture${fixtureCount === 1 ? "" : "s"} · not commissioned`,
         "Modeled channels · nothing is sent to hardware.");
       add("modeled", "pools", "Light pools and beams", "Modeled from fixture geometry, not measured illumination.");

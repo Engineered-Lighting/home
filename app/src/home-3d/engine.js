@@ -324,7 +324,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         photoFloorSupport: cutawayEligible,
         ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
-    const overlay = markersM.createOverlay(apartmentRoot);
+    const overlay = markersM.createOverlay(apartmentRoot, { siteId });
     /* The collision proxy's scanned floor and ceiling heights (not its
      * bounding box, which stray triangles stretch), once per collision
      * object, for the cut-away pick filters. */
@@ -996,6 +996,17 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         siteId,
         contentRevision,
         sceneIdentity,
+        async loadEchoVirtualLighting() {
+            if (siteId !== 'echo' || sim || !pinnedPack?.sceneAvailable || disposed) return null;
+            const [source, frame, seed] = await Promise.all([
+                sib('echo-virtual-lighting.mjs'), readSceneFrame(),
+                window.HomeApartmentData?.getSeedModel?.('echo', { contentRevision }),
+            ]);
+            if (disposed) return null;
+            return source.createEchoVirtualLightingDocument({
+                pack: pinnedPack, frame, devices: seed?.devices, digest: window.HomeEquipmentRegistration?.digest,
+            });
+        },
         getEquipmentCutawayRegistrationStatus: () => equipmentCutaway.status(),
         async prepareDeskTargetSurface(binding) {
             await modes.preload(['mesh']);

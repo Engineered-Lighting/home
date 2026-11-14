@@ -11,6 +11,7 @@ import struct
 from pathlib import Path
 
 import numpy as np
+from . import binding as binding_module
 
 SH_C0 = 0.28209479177387814
 _CT = {5120: np.int8, 5121: np.uint8, 5122: np.int16, 5123: np.uint16, 5125: np.uint32, 5126: np.float32}
@@ -143,12 +144,17 @@ def mesh_normals(pos, faces):
 
 
 # ------------------------------------------------------------------ equipment / emitters
-def read_equipment(path, binding):
+def read_equipment(path, binding, site_id="victoria"):
     """Equipment registration bound to the same pack. Returns (mounts, fixture ids, walls)."""
     with open(path, "rb") as f:
         doc = json.loads(f.read().decode("utf-8"))
-    if doc.get("schema") != "home-equipment-registration-1":
+    expected_schema = {"victoria": "home-equipment-registration-1", "echo": "home-echo-virtual-lighting-1"}.get(site_id)
+    if not expected_schema or doc.get("schema") != expected_schema:
         raise ValueError("not an equipment registration document")
+    if site_id == "echo" and (doc.get("scope", {}).get("site_id") != site_id
+                             or doc.get("digest") != binding_module.canonical_digest(
+                                 {key: value for key, value in doc.items() if key != "digest"})):
+        raise ValueError("invalid modeled Echo equipment")
     b = doc.get("binding") or {}
     if any(b.get(k) != v for k, v in binding.items()):
         raise ValueError("equipment registration is bound to a different pack")

@@ -89,6 +89,14 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
     const packed = Blend.packReceiverSet(monochrome ? { ...layer, albedo: Blend.greyAlbedo(layer.albedo) } : layer);
     // The window column is blended on its own (capped); the camera look uses it.
     packed.windowSlot = layer.columnsMeta.findIndex(column => column.kind === 'window');
+    const captureDiffuse = layer.columnsMeta.some(column => column.kind === 'capture_diffuse');
+    const lightingDisclosure = captureDiffuse
+        ? 'Photo and Cloud are relit by simulation. The bake estimates and removes diffuse capture lighting and drops the capture’s sheen.'
+            + (monochrome ? '' : ' Photo uses a uniform low ambient light floor at night.')
+        : Blend.LIT_RECEIVERS_DISCLOSURE;
+    const lightingLimit = captureDiffuse
+        ? `Precomputed light basis · live spots re-baked with shadows · ${monochrome ? 'fixtures only' : 'uniform night ambient'} · capture sheen dropped`
+        : Blend.LIT_RECEIVERS_LIMIT;
     const spots = new Uint32Array(count * Blend.LIT_SPOT_WORDS);
     const weights = new Float32Array(Blend.LIT_WEIGHT_VEC4S * 4);
     const spotSlots = new Map(), spotVersions = new Map();
@@ -424,9 +432,9 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
                 liveSpots: spotSlots.size, gpuBytes: gpu.memoryBytes, layerBytes: layer.bytes, binding: 'sha256-verified',
                 provenance: layer.provenance, simulated: true, measured: false, look: look === 'camera' && operator === 'agx' ? 'camera' : 'eye',
                 whiteKelvin: whiteKelvin && Math.round(whiteKelvin), windowAmbient: windowMedian !== null && !monochrome, monochrome,
-                disclosure: Blend.LIT_RECEIVERS_DISCLOSURE + (monochrome ? ' Cloud stays monochrome: grey surfaces lit only by the fixtures, in their own colour.'
+                disclosure: lightingDisclosure + (monochrome ? ' Cloud stays monochrome: grey surfaces lit only by the fixtures, in their own colour.'
                     : look === 'camera' && operator === 'agx' && whiteKelvin ? ' ' + Exposure.litCameraDisclosure({ kelvin: whiteKelvin }) : ''),
-                limit: Blend.LIT_RECEIVERS_LIMIT });
+                limit: lightingLimit });
         },
     };
 }

@@ -25,11 +25,12 @@ const Core = (await import('../app/src/home-equipment-registration.js')).default
 const packs = fs.mkdtempSync(path.join(os.tmpdir(), 'lit-l4-'));
 const victoria = installPack(packs, 'victoria');
 const pack = { ...victoria.manifest };
-const served = (files, base = 'https://home.test/content-packs/victoria/' + victoria.revision + '.lighting/') => ({
+const served = (files, base = 'https://home.test/content-packs/victoria/' + victoria.revision + '.lighting/', missingStatus = 404) => ({
     baseUrl: base,
     fetchImpl: async url => {
         const name = decodeURIComponent(new URL(url).pathname.split('/').pop()), body = new URL(url).href.startsWith(base) ? files[name] : null;
-        return body ? { ok: true, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) } : { ok: false };
+        return body ? { ok: true, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) }
+            : { ok: false, status: missingStatus };
     },
 });
 const load = (files, set = 'splat', packManifest = pack) => Loader.loadLightingLayer({ ...served(files), pack: packManifest, digest: Core.digest, set });
@@ -76,11 +77,27 @@ test('the layer loads only when bound to the active pack, and every file read ma
     // Provenance must be modeled, never measured; schema pinned.
     await refusal(load(authoredLightingLayer(victoria, { tamper: m => { m.provenance.measured = true; } }).files), /lighting_layer_schema/);
     await refusal(load(authoredLightingLayer(victoria, { tamper: m => { m.schema = 'home-lighting-layer-2'; } }).files), /lighting_layer_schema/);
+    await refusal(load(authoredLightingLayer(victoria, { tamper: m => { m.version = 2; } }).files), /lighting_layer_schema/);
     // Absent layer.
     await refusal(load({}), /lighting_layer_absent/);
     // The layer lives beside the pack, never inside it.
     assert.equal(Loader.layerBaseUrl('https://home.test/content-packs/victoria/' + victoria.revision + '/', victoria.revision),
         'https://home.test/content-packs/victoria/' + victoria.revision + '.lighting/');
+});
+
+test('loads the Echo Park layer and rejects another home or an unavailable route', async () => {
+    const echo = installPack(packs, 'echo');
+    const base = Loader.layerBaseUrl('https://home.test/content-packs/echo/' + echo.revision + '/', echo.revision);
+    const loadEcho = (files, status = 404) => Loader.loadLightingLayer({
+        ...served(files, base, status), pack: echo.manifest, digest: Core.digest, set: 'points',
+    });
+    const layer = authoredLightingLayer(echo);
+    assert.deepEqual({ ...(await loadEcho(layer.files)).binding }, packBinding(echo.manifest));
+    const wrongSite = authoredLightingLayer(echo, { tamper: manifest => { manifest.site_id = 'victoria'; } });
+    await refusal(loadEcho(wrongSite.files), /lighting_layer_schema/);
+    await refusal(loadEcho({}), /lighting_layer_absent/);
+    await refusal(loadEcho({}, 401), /lighting_layer_unavailable/);
+    await refusal(loadEcho({}, 503), /lighting_layer_unavailable/);
 });
 
 test('the blend: dimming each light is monotone and zero intensity removes exactly its contribution', async () => {

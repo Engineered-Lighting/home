@@ -4,7 +4,7 @@
  *
  * The layer sits beside the accepted content pack, never inside it:
  * <revision>.lighting/lighting-manifest.json and one file per field. It is
- * private Den data like the pack. Pack bytes are never read here or changed
+ * private home data like the pack. Pack bytes are never read here or changed
  * anywhere; the layer is additive. The load rule mirrors the Python twin
  * (lightbake/binding.py verify_layer):
  *
@@ -75,7 +75,10 @@ export async function loadLightingLayer({ baseUrl, pack, digest, set, fetchImpl 
     if (!Object.values(LIT_LAYER_SETS).includes(set)) refuse('lighting_layer_set_unknown');
     const read = async (name, limit) => {
         const response = await fetchImpl(new URL(name, baseUrl).href, { cache: 'no-store', credentials: 'same-origin', signal });
-        if (!response?.ok) refuse(name === LIT_LAYER_MANIFEST ? 'lighting_layer_absent' : 'lighting_layer_file_unavailable:' + name);
+        if (!response?.ok) {
+            if (name !== LIT_LAYER_MANIFEST) refuse('lighting_layer_file_unavailable:' + name);
+            refuse(response?.status === 404 ? 'lighting_layer_absent' : 'lighting_layer_unavailable');
+        }
         const bytes = new Uint8Array(await response.arrayBuffer());
         if (bytes.byteLength > limit) refuse('lighting_layer_file_too_large:' + name);
         return bytes;
@@ -83,7 +86,8 @@ export async function loadLightingLayer({ baseUrl, pack, digest, set, fetchImpl 
     let manifest;
     try { manifest = JSON.parse(new TextDecoder().decode(await read(LIT_LAYER_MANIFEST, MAX_MANIFEST_BYTES))); }
     catch (error) { if (error instanceof LayerRefused || error?.name === 'AbortError') throw error; refuse('lighting_layer_manifest_invalid'); }
-    if (manifest?.schema !== LIT_LAYER_SCHEMA || manifest.provenance?.status !== 'modeled' || manifest.provenance?.measured !== false)
+    if (manifest?.schema !== LIT_LAYER_SCHEMA || manifest.version !== 1 || manifest.site_id !== pack?.siteId
+        || manifest.provenance?.status !== 'modeled' || manifest.provenance?.measured !== false)
         refuse('lighting_layer_schema');
     if (!canonicalEqual(manifest.binding, activePackBinding(pack, digest))) refuse('lighting_layer_binding_mismatch');
     for (const [name, asset] of Object.entries(manifest.pack_assets || {})) {

@@ -6,15 +6,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { installPack } from './fixtures/apartment-home-shell-fixtures.mjs';
-import { readActiveBinding } from '../web-gateway/equipment-registration.mjs';
+import { packBinding } from './fixtures/apartment-lit-layer-fixtures.mjs';
 import { createLightingLayerHandler } from '../web-gateway/lighting-layer.mjs';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const FIELDS = { albedo: 3, 'normal-oct': 2, 'basis-u8': 29, 'basis-scale': 2, 'bounce-tint': 3, flags: 1 };
 
-async function fixture(t) {
+async function fixture(t, site = 'victoria') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'home-lighting-layer-test-'));
-  const packs = path.join(root, 'packs'), pack = installPack(packs, 'victoria');
+  const packs = path.join(root, 'packs'), pack = installPack(packs, site);
   const directory = path.join(packs, pack.site, pack.revision);
   pack.files['apartment.mobile.ply'] = pack.files['apartment.ply'];
   pack.manifest.assets['apartment.mobile.ply'] = { path: 'apartment.mobile.ply', bytes: pack.files['apartment.ply'].length,
@@ -24,7 +24,7 @@ async function fixture(t) {
   const index = { schemaVersion: 1, packs: [{ manifest: pack.manifest, active: true }] };
   fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify(index));
   const layer = directory + '.lighting'; fs.mkdirSync(layer);
-  const manifest = { schema: 'home-lighting-layer-1', version: 1, site_id: 'victoria', binding: readActiveBinding(packs),
+  const manifest = { schema: 'home-lighting-layer-1', version: 1, site_id: site, binding: packBinding(pack.manifest),
     provenance: { status: 'modeled', measured: false, photometry: 'assumed' },
     pack_assets: Object.fromEntries(['apartment.ply', 'apartment.mobile.ply', 'points.ply', 'mesh.glb'].map(name =>
       [name, { bytes: pack.manifest.assets[name].bytes, sha256: pack.manifest.assets[name].sha256 }])),
@@ -47,7 +47,7 @@ async function fixture(t) {
   manifest.files['mesh-basis-u8.bin'] = { bytes: 15, sha256: hash('mesh-not-served') };
   const save = () => fs.writeFileSync(path.join(layer, 'lighting-manifest.json'), JSON.stringify(manifest)); save();
   const handler = createLightingLayerHandler({ contentPacksDir: packs, authenticate: req => req.headers.cookie === 'fixture-owner=1' });
-  const base = '/content-packs/victoria/' + pack.revision + '.lighting/';
+  const base = '/content-packs/' + site + '/' + pack.revision + '.lighting/';
   // Call the actual HTTP handler without a socket; this runs in network-denied
   // workstations too. Files, manifest binding and SHA checks remain real.
   const request = (name, { method = 'GET', authenticated = true, headers = {}, routeHandler = handler } = {}) => new Promise(resolve => {
@@ -71,23 +71,50 @@ async function fixture(t) {
   return { root, packs, pack, directory, layer, manifest, expected, save, base, request, handler };
 }
 
-test('serves the bound L3 manifest and all receiver fields with private GET/HEAD responses', async t => {
-  const f = await fixture(t);
-  const before = Object.fromEntries(fs.readdirSync(f.directory).map(name => [name, hash(fs.readFileSync(path.join(f.directory, name)))]));
-  const result = await f.request('lighting-manifest.json');
-  assert.equal(result.status, 200);
-  assert.deepEqual(JSON.parse(result.body), f.manifest);
-  assert.match(result.headers['cache-control'], /private.*no-store/);
-  assert.equal(result.headers['cross-origin-resource-policy'], 'same-origin');
-  assert.equal(result.headers['x-content-type-options'], 'nosniff');
-  for (const [name, bytes] of Object.entries(f.expected)) {
-    const get = await f.request(name), head = await f.request(name, { method: 'HEAD' });
-    assert.equal(get.status, 200, name); assert.deepEqual(get.body, bytes);
-    assert.equal(get.headers.etag, '"' + hash(bytes) + '"');
-    assert.equal(head.status, 200, name); assert.equal(head.body.length, 0);
-    assert.equal(Number(head.headers['content-length']), bytes.length);
-  }
-  for (const [name, digest] of Object.entries(before)) assert.equal(hash(fs.readFileSync(path.join(f.directory, name))), digest);
+for (const site of ['echo', 'victoria']) {
+  test(`${site}: serves the bound L3 manifest and all receiver fields with private GET/HEAD responses`, async t => {
+    const f = await fixture(t, site);
+    const before = Object.fromEntries(fs.readdirSync(f.directory).map(name => [name, hash(fs.readFileSync(path.join(f.directory, name)))]));
+    const result = await f.request('lighting-manifest.json');
+    assert.equal(result.status, 200);
+    assert.deepEqual(JSON.parse(result.body), f.manifest);
+    assert.match(result.headers['cache-control'], /private.*no-store/);
+    assert.equal(result.headers['cross-origin-resource-policy'], 'same-origin');
+    assert.equal(result.headers['x-content-type-options'], 'nosniff');
+    for (const [name, bytes] of Object.entries(f.expected)) {
+      const get = await f.request(name), head = await f.request(name, { method: 'HEAD' });
+      assert.equal(get.status, 200, name); assert.deepEqual(get.body, bytes);
+      assert.equal(get.headers.etag, '"' + hash(bytes) + '"');
+      assert.equal(head.status, 200, name); assert.equal(head.body.length, 0);
+      assert.equal(Number(head.headers['content-length']), bytes.length);
+    }
+    for (const [name, digest] of Object.entries(before)) assert.equal(hash(fs.readFileSync(path.join(f.directory, name))), digest);
+  });
+}
+
+test('distinguishes an absent Echo sidecar from a sidecar bound to another home', async t => {
+  const f = await fixture(t, 'echo');
+  const filename = path.join(f.layer, 'lighting-manifest.json');
+  fs.unlinkSync(filename);
+  const absent = await f.request('lighting-manifest.json');
+  assert.equal(absent.status, 404);
+  assert.equal(JSON.parse(absent.body).error, 'lighting_layer_not_found');
+
+  f.manifest.site_id = 'victoria';
+  f.save();
+  const otherSite = await f.request('lighting-manifest.json');
+  assert.equal(otherSite.status, 503);
+  assert.equal(JSON.parse(otherSite.body).error, 'lighting_layer_schema');
+
+  f.manifest.site_id = 'echo';
+  f.save();
+  const frameFile = path.join(f.directory, 'frame.json');
+  const frame = fs.readFileSync(frameFile);
+  frame[0] ^= 1;
+  fs.writeFileSync(frameFile, frame);
+  const changedFrame = await f.request('lighting-manifest.json');
+  assert.equal(changedFrame.status, 503);
+  assert.equal(JSON.parse(changedFrame.body).error, 'lighting_layer_pack_asset_mismatch');
 });
 
 test('requires explicit authentication, refuses writes and ignores unrelated routes', async t => {

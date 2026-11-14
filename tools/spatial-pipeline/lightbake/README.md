@@ -22,6 +22,8 @@ venv/Scripts/python 91_bake_light_basis.py --equipment <equipment-registration.j
 
 `--equipment` is the equipment registration bound to the same pack. It supplies the four mount positions and the wall planes. Nothing is downloaded.
 
+For Echo Park, pass the exact active pack to both steps with `--pack` and use a private output directory outside the pack with `--out`. Generate the input first with `node tools/spatial-pipeline/write-echo-virtual-lighting-document.mjs PACK OUTPUT.json` from the repository root. It uses the same modeled fixtures as the browser and carries no control authority. If the pack has no detected apertures, the bake uses a neutral diffuse estimate to recover material colors. The `capture_diffuse` column reconstructs that modeled capture state for validation. It represents no window and contributes no runtime night light.
+
 **Step 90, de-light:**
 1. Derive mesh normals; the GLB ships none.
 2. Build the ray-tracing scene. Rays are traced against the **uncut** scan surface: display cleanup can cut the rendered primitive, and trimesh keeps the uncut accessors in the same GLB with the same atlas. A **ceiling cap** is added because the Scaniverse mesh has no ceiling. The cap uses ceiling-splat radiance where observed. Elsewhere it is modeled as `L = rho_c/pi * E`, closed form because a flat ceiling doesn't see itself, with `rho_c` assumed (`--ceiling-albedo`, default 0.8).

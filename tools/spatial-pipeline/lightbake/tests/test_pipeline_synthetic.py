@@ -20,6 +20,28 @@ except ImportError:  # pragma: no cover
 
 
 @unittest.skipUnless(HAVE_WARP, "warp-lang not installed")
+class EchoWithoutApertures(unittest.TestCase):
+    def test_modeled_capture_keeps_the_fixture_bases(self):
+        from lightbake import bake, binding, cli, delight, synthetic_pack
+
+        with tempfile.TemporaryDirectory() as root:
+            _, pack, equipment = synthetic_pack.make(root, spp=64, site_id="echo", exterior_splats=False)
+            before = binding.snapshot(pack)
+            common = ["--pack", str(pack), "--equipment", str(equipment)]
+            delight.run(cli.parse(90, common + ["--capture-spp", "64"]))
+            manifest = bake.run(cli.parse(91, common + ["--spp", "16", "--mesh-spp", "16"]))
+            self.assertEqual(binding.snapshot(pack), before)
+            self.assertEqual(manifest["site_id"], "echo")
+            self.assertEqual(manifest["provenance"]["capture_diffuse"]["status"], "modeled")
+            self.assertEqual(manifest["columns"][-1]["kind"], "capture_diffuse")
+            self.assertEqual(sum(col["kind"] == "downward" for col in manifest["columns"]), 4)
+            self.assertEqual(sum(col["kind"] == "radial" for col in manifest["columns"]), 24)
+            for kind in ("splat", "splat-mobile", "points", "mesh"):
+                self.assertLessEqual(manifest["metrics"][kind]["capture_rerender_median_stop"], .25, kind)
+            binding.verify_layer(binding.default_layer_dir(pack), pack)
+
+
+@unittest.skipUnless(HAVE_WARP, "warp-lang not installed")
 class PipelineSynthetic(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

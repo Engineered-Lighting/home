@@ -203,7 +203,7 @@ def run(args):
     work.mkdir(parents=True, exist_ok=True)
     before = BND.snapshot(pack)
     binding, assets, manifest = BND.read_binding(pack)
-    mounts, walls, eq = scan.read_equipment(args.equipment, binding)
+    mounts, walls, eq = scan.read_equipment(args.equipment, binding, manifest["siteId"])
     prov = pack.parent / (pack.name + ".provenance.json")
     ceiling = 2.4
     if prov.exists():
@@ -256,6 +256,23 @@ def run(args):
     c_win = (L_measured.mean(0) / max(ENC.lum(L_measured.mean(0)), 1e-12)) if len(L_measured) else np.ones(3)
     log("exterior splats", n_ext, "apertures", len(apertures), "window tris", len(window["L"]),
         "glass faces", int(glass.sum()))
+    # The Echo scan has no detected apertures. Preserve a neutral estimate
+    # of its unknown capture illumination without inventing window geometry.
+    diffuse_floor = None
+    if manifest["siteId"] == "echo" and not len(L_measured):
+        usable = (s["dist"] < args.surface_tol) & (s["dc"].max(1) < 254.5 / 255)
+        if not usable.any():
+            raise ValueError("no usable capture samples for modeled diffuse light")
+        diffuse_floor = float(np.pi * np.percentile(R_splat[usable].max(1), 98) / args.white_patch_albedo)
+        if not np.isfinite(diffuse_floor) or diffuse_floor <= 0:
+            raise ValueError("no usable capture samples for modeled diffuse light")
+        log("capture baseline: modeled neutral diffuse fill; no detected windows")
+
+    def capture_irradiance(irradiance):
+        if diffuse_floor is None:
+            return irradiance
+        neutral = np.maximum(ENC.lum(irradiance), diffuse_floor)
+        return np.repeat(neutral[:, None], 3, axis=1)
 
     lamps = []
     if args.room_lamps:
@@ -277,7 +294,7 @@ def run(args):
     def model_ceiling(albedo):
         Ebc, Ewc, Elc, _, _ = capture(cc, np.tile([[0, 0, -1.0]], (len(cc), 1)))
         E_c = np.zeros_like(cap["radiance"])
-        E_c[cap["inside"]] = Ebc + Ewc + Elc
+        E_c[cap["inside"]] = capture_irradiance(Ebc + Ewc + Elc)
         rad = cap["radiance"].copy()
         rad[modeled] = albedo / np.pi * E_c[modeled]
         floor_c = args.eps_rel * float(np.median(ENC.lum(E_c[cap["inside"]]))) if cap["inside"].any() else 1e-6
@@ -341,7 +358,7 @@ def run(args):
 
     # Mesh vertices first: their median sets the eps floor shared by every receiver and the shader.
     Ebv, Ewv, Elv, esc_v, back_v = capture(tp.astype(np.float64), vn_t.astype(np.float64))
-    E_v = Ebv + Ewv + Elv
+    E_v = capture_irradiance(Ebv + Ewv + Elv)
     vert_emitter = in_aperture(tp.astype(np.float64), masks)
     yv = ENC.lum(E_v[~vert_emitter])
     floor = args.eps_rel * float(np.median(yv[yv > 0]))
@@ -372,7 +389,7 @@ def run(args):
             R = ENC.srgb_eotf(np.clip(d["dc"], 0, 1))
             clipped = d["dc"].max(1) >= 254.5 / 255
         Eb, Ew, El, esc, back = capture(Pr, Nn)
-        E_cap = Eb + Ew + El
+        E_cap = capture_irradiance(Eb + Ew + El)
         rho, flags, st = recover_albedo(R, E_cap, rho_max=args.rho_max, clipped=clipped, floor=floor)
         exterior = ((Pr[:, :2] @ nwall.T) - owall).min(1) < -0.10
         emitter = exterior | in_aperture(Pr, masks)
@@ -393,7 +410,7 @@ def run(args):
                          "albedo_luminance_median": float(np.median(ENC.lum(rho[good]))),
                          "albedo_luminance_p95": float(np.percentile(ENC.lum(rho[good]), 95))}
         log(name, json.dumps(results[name]))
-        if name == "splat":
+        if name == "splat" and diffuse_floor is None:
             sens = sensitivity(sc, d, good, walls, ceiling, args, R, Eb, Ew, El, rho, floor)
             for alt in (0.6, 0.9):  # the modeled ceiling's assumed paint albedo
                 if not modeled.any():
@@ -456,6 +473,7 @@ def run(args):
             "exterior_splats": n_ext, "window_colour_rgb": c_win.tolist(), "irradiance_floor": floor,
             "rho_max": args.rho_max, "results": results, "sensitivity": sens,
             "capture_state": capture_state(args, lamps, gain, gain_trace),
+            **({"diffuse_capture_floor": diffuse_floor} if diffuse_floor is not None else {}),
             "params": {k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items()}}
     with open(work / "delight.json", "w", encoding="utf-8") as f:
         json.dump(meta, f, indent=1)

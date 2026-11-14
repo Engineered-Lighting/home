@@ -57,9 +57,15 @@ const metadata = Object.freeze({ truth_role: 'virtual_preview', presentation: 's
     geometry_role: 'non_metric_decoration', metric_geometry: false, physical_commands: false,
     optical_registration: 'unavailable', photometry: 'unmeasured', receiving_surface: false });
 
-function prepare(document, expectedBinding) {
-    if (document?.schema !== 'home-equipment-registration-1' || document.version !== 1
-        || document.scope?.site_id !== 'victoria' || document.scope?.map_id !== 'victoria-den' || document.scope?.room_id !== 'den'
+function prepare(document, expectedBinding, siteId) {
+    const echo = siteId === 'echo';
+    const admitted = echo
+        ? document?.schema === 'home-echo-virtual-lighting-1' && document.scope?.site_id === 'echo'
+            && document.scope?.map_id === 'echo-apartment' && document.scope?.room_id === 'apartment'
+            && document.revision === 0 && hash(document.digest)
+        : siteId === 'victoria' && document?.schema === 'home-equipment-registration-1'
+            && document.scope?.site_id === 'victoria' && document.scope?.map_id === 'victoria-den' && document.scope?.room_id === 'den';
+    if (!admitted || document.version !== 1
         || !Number.isSafeInteger(document.revision) || document.revision < 0
         || !(document.digest === null && document.revision === 0 || hash(document.digest))) throw Error('equipment_document_identity');
     const binding = document.binding, refs = document.references;
@@ -150,7 +156,7 @@ function prepare(document, expectedBinding) {
         fixtures.push({ id: record.id, mountId: mount.id, label: typeof record.label === 'string' ? record.label.slice(0, 160) : 'Virtual fixture',
             anchor, direction, target: target && anchor.distanceTo(target) > .35 ? target : null, floor,
             walls: refs.walls.map(wall => ({ normal: new THREE.Vector3(...wall.normal_xy, 0), offset: wall.offset_m })),
-            reference, initialPan: pan, initialTilt: tilt, displayOnly: !saved,
+            reference, initialPan: pan, initialTilt: tilt, displayOnly: echo || !saved, spotOnlyByDefault: echo,
             originRole: resolved ? 'registered_fixture_position' : 'mount_anchor', aimSource });
     }
     return { fixtures, omitted, revision: document.revision, digest: document.digest, binding: { ...binding } };
@@ -169,9 +175,9 @@ function disposeChildren(group) {
 }
 
 function initialState(item) {
-    const channel = () => ({ on: true, brightness: .75, color_temp_kelvin: 3000 });
+    const channel = () => ({ on: !item.spotOnlyByDefault, brightness: .75, color_temp_kelvin: 3000 });
     return { radials: PROFILE.radials.zones.map(zone => ({ number: zone.number, ...channel(), azimuth_deg: zone.azimuth_deg })),
-        downward: channel(), spotlight: { ...channel(), brightness: 1 }, pan_deg: Math.round(item.initialPan), tilt_deg: Math.round(item.initialTilt) };
+        downward: channel(), spotlight: { ...channel(), on: true, brightness: 1 }, pan_deg: Math.round(item.initialPan), tilt_deg: Math.round(item.initialTilt) };
 }
 
 // Display colour only: this approximation makes the virtual channel controls
@@ -404,8 +410,8 @@ function buildFixture(item, state, depth, reducedMotion) {
     spotEmitter.position.y = -.015; spotEmitter.rotation.x = Math.PI / 2;
     const spotBeam = beam(roboticGroup);
 
-    // Dedicated, forgiving housing targets never make the beam volume or its
-    // receiver patch clickable. Invisible materials remain raycastable.
+    // Keep selection and direct aiming picks separate. The visible receiver
+    // can be grabbed for aiming without becoming a generic selection target.
     const pick = new THREE.Mesh(new THREE.SphereGeometry(.13, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
     pick.name = 'virtual-fixture-pick'; pick.position.z = -TUBE_HEIGHT / 2; root.add(pick);
     pick.userData = { interaction_role: 'fixture', fixture_id: item.id, mount_id: item.mountId };
@@ -594,10 +600,10 @@ function buildFixture(item, state, depth, reducedMotion) {
     root.traverse(node => { if (node !== root) node.userData = { ...metadata, ...node.userData, fixture_id: item.id, mount_id: item.mountId, origin_role: item.originRole, aim_source: item.aimSource, optical_origin_m: null }; });
     update(state);
     return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving || !!sweep,
-        pick, handlePick, setSelected(value) { selected = value; handle.visible = value; } };
+        pick, handlePick, spotPool: spotBeam.disc, setSelected(value) { selected = value; handle.visible = value; } };
 }
 
-export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) {
+export function createEquipmentVirtualFixtures(parent, { binding = null, siteId = 'victoria' } = {}) {
     if (!parent?.isObject3D) throw TypeError('equipment_preview_parent_required');
     const expectedBinding = binding && { ...binding };
     const root = new THREE.Group();
@@ -643,7 +649,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
         if (disposed) throw Error('equipment_preview_disposed');
         if (document == null) { clear(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; status = 'empty'; reason = null; return readback(); }
         try {
-            const next = prepare(document, expectedBinding);
+            const next = prepare(document, expectedBinding, siteId);
             const nextScope = JSON.stringify(next.binding);
             const nextSignature = JSON.stringify({ revision: next.revision, digest: next.digest, binding: next.binding,
                 fixtures: next.fixtures.map(item => ({ id: item.id, mountId: item.mountId, label: item.label, anchor: item.anchor.toArray(),
@@ -687,6 +693,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null } = {}) 
          * bounce re-bake waits for the Set sweep to land). */
         presentationActive() { return !disposed && presentationActive; },
         pickObjects() { return disposed || !root.visible ? [] : [...views].flatMap(([id, view]) => id === selectedId ? [view.pick, view.handlePick] : [view.pick]); },
+        aimPickObjects() { return disposed || !root.visible ? [] : [...views.values()].map(view => view.spotPool).filter(pool => pool.visible); },
         setSelected(fixtureId) {
             selectedId = views.has(fixtureId) ? fixtureId : null;
             for (const [id, view] of views) view.setSelected(id === selectedId);

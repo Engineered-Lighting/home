@@ -52,6 +52,11 @@ class PreviewTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = tmp.name
+        # This room's F3 sits at the reader's side, so the slide reach (a head 25 cm along the sofa) is always under
+        # its beam: the rules run without the reach, which has a test of its own.
+        reach = patch.object(preview, "SLIDE_REACH_M", 0.0)
+        reach.start()
+        self.addCleanup(reach.stop)
         self.now = 100.0
         self.seq = 0
         self.encoded = []
@@ -783,6 +788,7 @@ class DirectionTest(PreviewTest):
         self.assertTrue(all(b <= a for a, b in zip(levels, levels[1:])))
         self.assertEqual(self.moves(since)[-1]["effective"]["spot_level"], 0)
 
+    @patch.object(preview, "GAP_DRIFT_M_S", 0.0)   # it ticks without frames: not a test of a gap's drift
     def test_a_planned_end_is_dark_at_its_deadline(self):
         self.preview.configure({"phone_patience_s": 3})
         self.lit_by_direction()
@@ -799,6 +805,7 @@ class DirectionTest(PreviewTest):
             self.preview.tick()
         self.assertFalse(self.row()["on"], "dark at the patience's end, not after it")
 
+    @patch.object(preview, "GAP_DRIFT_M_S", 0.0)   # the hold's end, apart from a gap's drift (its own test)
     def test_stop_and_expiry_stay_instant(self):
         self.lit_by_direction()
         self.preview.stop({})
@@ -1005,6 +1012,60 @@ class DirectionTest(PreviewTest):
         self.assertTrue(self.preview._clear(row, dict(person, head_v=[-c * speed for c in toward]), .12),
                         "heading away, it does")
 
+    @patch.object(preview, "GAP_DRIFT_M_S", 0.03)   # this room's beam is 16.4 cm from the head: a margin that reaches it
+    def test_a_camera_gap_ends_early_when_the_beam_is_near_the_head(self):
+        """Through a camera gap the beam is judged from the last frame, the head carried on its path for the gap's age,
+        with GAP_DRIFT_M_S more margin for each second: a beam close to the head ends the hold early, one far from it
+        holds to GAP_HOLD_S."""
+        self.lit_by_direction()
+        row, person = self.preview.rows["F3"], self.preview.track
+        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
+                                         row["horizontal_world_reference"])
+        to = [person["head"][i] - row["aim_origin_m"][i] for i in range(3)]
+        along = sum(aim[i] * to[i] for i in range(3))
+        gap = math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3)))   # 16.4 cm here
+        seen = self.gap(preview.GAP_HOLD_S - .1)
+        dark_at = next(k for k, lit in enumerate(seen) if not lit) * .1 + .1
+        allowed = (gap - direction.AIM_KEEP_M) / preview.GAP_DRIFT_M_S
+        self.assertLess(dark_at, preview.GAP_HOLD_S - .1, "the hold ends early")
+        self.assertGreater(dark_at, allowed - 1.6, "not before the margin has grown past the beam")
+        self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head")
+
+    def test_a_cut_fixture_waits_before_it_is_admitted_again(self):
+        self.lit_by_direction()
+        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None:
+                          False):
+            self.now = round(self.now + .25, 6)
+            self.track()
+        self.assertFalse(self.row()["on"])
+        cut = self.now
+        self.frames(preview.CUT_HOLD_S - .3)
+        self.assertEqual(self.preview.rows["F3"]["reason"], "cut_hold")
+        self.assertFalse(self.row()["on"], "not relit inside the hold")
+        self.frames(1.0)
+        self.assertGreater(self.now - cut, preview.CUT_HOLD_S)
+        self.assertNotEqual(self.preview.rows["F3"]["reason"], "cut_hold", "admitted again after it")
+
+    def test_the_head_velocity_is_fitted_over_frames(self):
+        """Two noisy frames read a still head as moving; the velocity is fitted over HEAD_V_FRAMES frames."""
+        still = [(t * .4, (1.0 + (.02 if k % 2 else -.02), 1.0, 1.2)) for k, t in enumerate(range(4))]
+        v = preview.fitted_velocity(still)
+        self.assertLess(math.sqrt(sum(c * c for c in v)), .06, "a still head with 2 cm of jitter")
+        moving = [(t * .4, (1.0 + .23 * t * .4, 1.0, 1.2)) for t in range(4)]
+        self.assertAlmostEqual(preview.fitted_velocity(moving)[0], .23, places=6)
+        fast = [(t * .4, (1.0 + 3 * t * .4, 1.0, 1.2)) for t in range(4)]
+        self.assertAlmostEqual(math.sqrt(sum(c * c for c in preview.fitted_velocity(fast))), preview.HEAD_SPEED_MAX_M_S)
+
+    def test_the_clearance_reaches_along_the_sofa(self):
+        """A seated reader can slide along the sofa faster than the camera can follow: a beam must also clear the head
+        moved SLIDE_REACH_M to either side, across the facing."""
+        self.lit_by_direction()
+        row, person = self.preview.rows["F3"], dict(self.preview.track, head_v=None)
+        self.assertTrue(self.preview._clear(row, person, .12), "without the reach, clear (16 cm)")
+        with patch.object(preview, "SLIDE_REACH_M", .25):
+            self.assertFalse(self.preview._clear(row, person, .12), "F3 sits at the side: a slide takes the head under it")
+            self.assertTrue(self.preview._clear(row, dict(person, seated=False), .12), "the reach is for a seated reader")
+
     def test_the_clearance_is_to_the_eyes_too(self):
         """den-core's head point is the face joints' median, ears included, about 3 cm behind the eyes: the keep margin
         is also measured to the eyes."""
@@ -1021,7 +1082,7 @@ class DirectionTest(PreviewTest):
         head = [on_ray[i] + .14 * unit[i] for i in range(3)]    # the head point 14 cm off the beam
         eyes = [on_ray[i] + .10 * unit[i] for i in range(3)]    # and the eyes 10 cm
         self.assertTrue(self.preview._clear(row, dict(person, head=head, eyes=None), .12))
-        self.assertFalse(self.preview._clear(row, dict(person, head=head, eyes=eyes), .12), "the eyes are inside 12 cm")
+        self.assertFalse(self.preview._clear(row, dict(person, head=head, eyes=[eyes]), .12), "an eye is inside 12 cm")
 
     def test_every_emitting_beam_is_checked_whatever_den_core_says(self):
         """A light easing out with no candidate chosen (the leave fade with pre-aim off), or one den-core refuses first for
@@ -1042,12 +1103,12 @@ class DirectionTest(PreviewTest):
                     self.now = round(self.now + .1, 6)
                     self.track(seated=False)   # the leave fade, with no candidate chosen (pre-aim off)
                     self.assertEqual(self.row()["fade"]["purpose"], "fade_out")
-                    with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None: False):
+                    with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None: False):
                         self.now = round(self.now + .1, 6)
                         self.track(seated=False)
                 else:
                     with patch.object(preview.Preview, "_eye", refuse), patch.object(
-                            preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None: False):
+                            preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None: False):
                         self.now = round(self.now + .25, 6)
                         self.track()
                 self.assertFalse(self.row()["on"], "cut at once")
@@ -1064,12 +1125,12 @@ class DirectionTest(PreviewTest):
         self.assertIsNotNone(row["glide"])
         landing = row["glide"].target
         with patch.object(preview.Preview, "_clear",
-                          lambda owner, row, person, clearance, joints=None: joints is not None):
+                          lambda owner, row, person, clearance, joints=None, horizon=None: joints is not None):
             self.now = round(self.now + .1, 6)
             self.track()
         self.assertIsNotNone(self.preview.rows["F3"]["glide"], "still flying: the sweep isn't what lights")
         with patch.object(preview.Preview, "_clear",
-                          lambda owner, row, person, clearance, joints=None: tuple(joints or ()) != tuple(landing)):
+                          lambda owner, row, person, clearance, joints=None, horizon=None: tuple(joints or ()) != tuple(landing)):
             self.now = round(self.now + .1, 6)
             self.track()
         self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head", "its landing aim fails: cut")
@@ -1108,7 +1169,7 @@ class DirectionTest(PreviewTest):
         a standby's hand-over all point a little off that line): the light is cut at once, not eased."""
         self.lit_by_direction()
         self.assertTrue(self.row()["on"])
-        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance: False):
+        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None: False):
             self.now = round(self.now + .25, 6)
             self.track()
         self.assertFalse(self.row()["on"])
@@ -1125,8 +1186,8 @@ class DirectionTest(PreviewTest):
         nudged = (row["current"][0] + 300, row["current"][1])   # 3 degrees off: still in the beam
         row["current"] = nudged
         since = len(self.encoded)
-        with patch.object(preview.Preview, "_clear",
-                          lambda owner, row, person, clearance: tuple(row["current"]) != nudged):
+        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None:
+                          tuple(row["current"] if joints is None else joints) != nudged):
             self.read()
             self.frames(.5)
         moves = self.moves(since)
@@ -1145,8 +1206,8 @@ class DirectionTest(PreviewTest):
         def gone(owner, row, person):
             return row is owner.rows[lit] and owner._lighting(row) and not row["exiting"] or outgrown(owner, row, person)
 
-        def standby_near_head(owner, row, person, clearance):
-            return row is not owner.rows[spare] and clear(owner, row, person, clearance)
+        def standby_near_head(owner, row, person, clearance, joints=None, horizon=None):
+            return row is not owner.rows[spare] and clear(owner, row, person, clearance, joints, horizon)
         with patch.object(preview.Preview, "_outgrown", gone), patch.object(preview.Preview, "_clear", standby_near_head):
             self.frames(1.0)
         self.assertNotEqual(self.preview.rows[lit]["reason"], "handed_on")
@@ -1370,6 +1431,7 @@ class DirectionTest(PreviewTest):
         self.preview._exit("F3", row, self.now, "task_released", handoff=True)
         self.assertLessEqual(row["ramp"].duration, direction.EXIT_MAX_S)
 
+    @patch.object(preview, "GAP_DRIFT_M_S", 0.0)   # it ticks without frames: not a test of a gap's drift
     def test_a_dark_move_then_a_bloom_is_one_timed_move(self):
         self.timed_board(pre_aim=False)
         self.seat()
@@ -1415,12 +1477,20 @@ class DirectionTest(PreviewTest):
         since = len(self.encoded)
         self.now = round(self.now + .1, 6)
         self.track(seated=False, shift=-.3)
+        for _ in range(10):   # an exit's step waits its turn on the radio, so a cut keeps its slot
+            if self.moves(since):
+                break
+            self.now = round(self.now + .1, 6)
+            self.track(seated=False, shift=-.3)
+        self.assertIsNotNone(self.preview.rows["F3"]["glide"], "still flying when the exit goes")
         exit_moves = self.moves(since)
         self.assertEqual(len(exit_moves), 1)
         self.assertEqual((tuple(exit_moves[0]["requested"]["target_cdeg"]), exit_moves[0]["effective"]["spot_level"]),
                          (target, 0), "one MOVE to the target being flown: it joins the flight")
         self.assertEqual(exit_moves[0]["requested"]["timed"]["fade_ms"], 300)
-        self.assertTrue(exit_moves[0]["effective"]["lit_during_move"], "lit travel kept for a timed fade to dark (64a83b53)")
+        if tuple(exit_moves[0]["requested"]["start_cdeg"]) != tuple(exit_moves[0]["requested"]["target_cdeg"]):
+            self.assertTrue(exit_moves[0]["effective"]["lit_during_move"],
+                            "lit travel kept for a timed fade to dark while it flies (64a83b53)")
         self.assertTrue(self.row()["on"], "lit while it flies on, it fades rather than cuts")
         self.now = round(self.now + .35, 6)
         self.preview.tick()

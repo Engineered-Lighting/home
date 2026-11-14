@@ -586,6 +586,8 @@ class Preview:
                 if (name not in self.cut and self._lighting(row)
                         and not self._beam_clear(row, person, clearance, horizon)):
                     self.cut[name] = "beam_through_head"
+                elif name not in self.cut and self._lighting(row) and not self._others_clear(row):
+                    self.cut[name] = THROUGH_ANOTHER_HEAD   # someone else's head in the beam as it points
         # The room's glow follows the task light: it dims a beat after the spot starts and comes back as it ends.
         self.ambient.direct(directing and task and chosen is not None, self.settings, now)
         standby = self._standby(chosen, task, held, person) if directing else None
@@ -828,6 +830,29 @@ class Preview:
                                                                  and row["ramp"].end > 0))
         if landing:
             return self._clear(row, person, clearance, glide.target, horizon)
+        return True
+
+    def _others_clear(self, row):
+        """Every other person's head is out of the beam the board emits, on its aim now (or a dark flight's landing),
+        by the direction's keep clearance: their heads are checked on the line to the page at admission (_candidate),
+        and here on the beam as it actually points."""
+        if not self.others:
+            return True
+        if row["level"] > 0:
+            joints = row["current"]
+        elif row["glide"] is not None and (row["arrive_level"] or (row["ramp"] is not None and row["ramp"].sent
+                                                                    and row["ramp"].end > 0)):
+            joints = row["glide"].target
+        else:
+            return True
+        aim = self.core.joints.direction(joints[0] / 100, joints[1] / 100, row["horizontal_world_reference"])
+        for other in self.others:
+            to = [other["head"][i] - row["aim_origin_m"][i] for i in range(3)]
+            along = sum(aim[i] * to[i] for i in range(3))
+            gap = (math.sqrt(sum(c * c for c in to)) if along <= 0
+                   else math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))))
+            if gap < direction.GLARE_KEEP_M:
+                return False
         return True
 
     def _ready(self, row, person):

@@ -171,7 +171,7 @@ class RgbBodyTests(unittest.TestCase):
                                        {"receipt_depth_seq": 0})):
             f.frame(seq, empty=True, **changes)
             self.assertIsNone(f.last)
-        f.luma = 10
+        f.luma = 3
         f.frame(7, empty=True)
         self.assertIsNone(f.last)
         self.assertIsNone(f.channel.maker)

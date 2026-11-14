@@ -26,8 +26,11 @@ Numbers this phase sets, with where they come from:
   bundle's arrival time here less its captured_unix_ns is the camera-to-here transit. transit_s_median is its median
   over the health window, from frames where it lies between 0 and 5 s only; a clock that's wrong again gives null, and
   nothing else changes. The walk test adds it to "behind" for its capture-to-stream lag.
-- Too dark (plan L2): the frame's mean Y under 40 for 3 s, back over 60 for 3 s. Until step 6's infrared there's no
-  picture to use then, so the stream says mode none, why too dark.
+- Too dark (plan L2): the frame's mean Y under 6 for 3 s, back over 9 for 3 s; then there's no picture to use, so the
+  stream says mode none, why too dark. Measured on the den camera on 2026-11-14 (night-mode notes): under the den's
+  warm lamp the mean Y is 11-22, with only a screen lit 5-7, and at every frame of both den-detect found the owner
+  (0.86-0.96, 10-15 joints) and Qwen answered as for daylight. The line sits under all of that; plan L2's 40 and 60
+  called the lamp-lit den too dark. A frame under the line is never read as empty: it's too dark, as before.
 - Every bundle must say depth_correction applied when the method file asks for it (as step 2's paste checks); one
   that doesn't is refused, counted and never lifted. And when step 2's receipt names the correction its take was made
   on (source_correction: one factor, one calibration_sha256), every bundle must say applied with that factor and that
@@ -80,7 +83,7 @@ FLOOR_PAD_M = 1.0
 # simulation's chain.py hop 8 does, 85744f2c on claude/den-sim-connected).
 TRACK_FLOOR_SLOT = '"floor_m": {"open": true, "proposed": [0.0, 0.0, 4.572, 3.759]'
 TRACK_METHOD_COPY = "METHOD-den-track-floor.md"
-DARK_LUMA, LIGHT_LUMA, DARK_S = 40.0, 60.0, 3.0
+DARK_LUMA, LIGHT_LUMA, DARK_S = 6.0, 9.0, 3.0
 OFFSET_WINDOW, OFFSET_QUANTILE = 50, 0.05
 OUT_STATES = ("confirmed", "coasting")
 EPOCH_BACK_S = 1.0   # the camera's own clock going back more than this within a session is a new epoch

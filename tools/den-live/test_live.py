@@ -527,7 +527,7 @@ class Perceiving(unittest.TestCase):
 
     def test_too_dark_says_so_and_comes_back(self):
         dark = {'on': True}
-        p = self.perceiver(READING, luma=lambda bundle: 20.0 if dark['on'] else 120.0)
+        p = self.perceiver(READING, luma=lambda bundle: 3.0 if dark['on'] else 120.0)
         frames = bundles(READING)
         events = self.run_take(p, frames[:30])
         self.assertEqual(events[-1]['mode'], 'none')
@@ -537,6 +537,21 @@ class Perceiving(unittest.TestCase):
         events = self.run_take(p, frames[30:60])
         self.assertEqual(events[-1]['mode'], 'rgb')
         self.assertTrue(events[-1]['tracks'])
+
+    def test_a_lamp_lit_den_is_tracked_and_seated_as_by_day(self):
+        """The den's warm lamp at night is a mean Y of 11-22 (2026-11-14): the same events, track, seat and asks'
+        mode as a daylit frame. Just under the line (5) is still too dark, and an empty dark frame is never empty."""
+        day = self.run_take(self.perceiver(READING), bundles(READING))
+        p = self.perceiver(READING, luma=15.0)
+        lamp = self.run_take(p, bundles(READING))
+        self.assertEqual([(e['mode'], e['camera']['why'], e['perception_status']) for e in lamp],
+                         [(e['mode'], e['camera']['why'], e['perception_status']) for e in day])
+        self.assertEqual([[t['xy_m'] for t in e['tracks']] for e in lamp], [[t['xy_m'] for t in e['tracks']] for e in day])
+        self.assertEqual(p.snapshot.frame.mode, 'rgb', 'the ask asks in rgb')
+        self.assertIs(p.snapshot.tracks[0].seated.state, True, 'the seated rule holds on lamp-lit frames')
+        dim = self.run_take(self.perceiver(READING, luma=5.0), bundles(READING)[:30])
+        self.assertEqual((dim[-1]['mode'], dim[-1]['camera']['why'], dim[-1]['tracks']), ('none', 'too dark', []))
+        self.assertEqual(dim[-1]['presence'], 'unknown')
 
     def test_a_step_in_the_wall_clock_changes_nothing(self):
         """The tracker runs on the monotonic clock, so time sync stepping the wall clock back 30 s mid-run neither

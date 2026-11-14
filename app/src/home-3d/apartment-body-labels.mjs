@@ -106,11 +106,11 @@ export function attachApartmentBodyLabels({ engine, host, layer, person = () => 
             const l = project([cx + R * Math.cos(az + 0.07), cy + R * Math.sin(az + 0.07), z]), r = project([cx + R * Math.cos(az - 0.07), cy + R * Math.sin(az - 0.07), z]);
             ctx.fillStyle = 'rgba(184,216,255,0.95)'; ctx.beginPath(); ctx.moveTo(tip[0], tip[1]); ctx.lineTo(l[0], l[1]); ctx.lineTo(r[0], r[1]); ctx.closePath(); ctx.fill();
             if (st.detail >= 2 && st.eye && st.facing) {
-                const f = st.facing, G = 0.75, rot = (u, a) => [u[0] * Math.cos(a) - u[1] * Math.sin(a), u[0] * Math.sin(a) + u[1] * Math.cos(a), u[2]];
-                const e = project(st.eye), gl = rot(f, 0.3), gr = rot(f, -0.3);
+                const f = st.facing, G = 0.4, rot = (u, a) => [u[0] * Math.cos(a) - u[1] * Math.sin(a), u[0] * Math.sin(a) + u[1] * Math.cos(a), u[2]];
+                const e = project(st.eye), gl = rot(f, 0.16), gr = rot(f, -0.16);
                 const pl = project(st.eye.map((x, k) => x + gl[k] * G)), pr = project(st.eye.map((x, k) => x + gr[k] * G));
                 const g = ctx.createLinearGradient(e[0], e[1], (pl[0] + pr[0]) / 2, (pl[1] + pr[1]) / 2);
-                g.addColorStop(0, 'rgba(184,216,255,0.32)'); g.addColorStop(1, 'rgba(184,216,255,0)');
+                g.addColorStop(0, 'rgba(184,216,255,0.2)'); g.addColorStop(1, 'rgba(184,216,255,0)');
                 ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(e[0], e[1]); ctx.lineTo(pl[0], pl[1]); ctx.lineTo(pr[0], pr[1]); ctx.closePath(); ctx.fill();
             }
         }

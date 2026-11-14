@@ -16,7 +16,6 @@ import coordinator_live
 import direction
 from contracts import PERCEPTION_S, FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
 import preview
-import preview_trace
 import run_local
 import run_service
 import seated as seated_rule
@@ -943,22 +942,10 @@ class DirectionTest(PreviewTest):
     # ---- a board with the timed MOVE (firmware 62ea043): one MOVE per cue ----------------------------------------------
 
     def timed_board(self, join=True, pre_aim=True):
-        """F3 as a board that advertises the timed MOVE. Until the desk stage re-pins the codec to 62ea043, the codec's
-        echo of a timed MOVE is stubbed: only the encoding is stubbed, the planning and the light are the preview's."""
+        """F3 as a board that advertises the timed MOVE (c12.get_profile's capabilities), through the pinned codec."""
         caps = {"timed_move": True, "fade_curves": True, "join_flight": join, "at_rest": True}
         board = {"F3": {**FIXTURES["F3"], "profile": {**self.core.scurve.FICTIONAL_PROFILE, "fictional": False,
                                                         "label": "timed-test", "capabilities": caps}}}
-        frame = preview_trace._frame
-
-        def echo(fixture_id, action, seq, decision_id, move_token, move):
-            out = frame(fixture_id, action, seq, decision_id, move_token, move)
-            if action == "aim_move" and move.get("timed"):
-                out["effective"].update(timed=True, fade_supported=True, **move["timed"])
-            return out
-        for stub in (patch.object(preview_trace, "supports_timed", lambda: True, create=True),
-                     patch.object(preview_trace, "_frame", echo)):
-            stub.start()
-            self.addCleanup(stub.stop)
         self.preview = preview.Preview(self.core, binding=BINDING, fixtures=board, state=self.path,
                                        clock=lambda: self.now, threaded=False, append=self.encoded.append)
         self.preview.configure({"pre_aim": pre_aim})
@@ -973,6 +960,11 @@ class DirectionTest(PreviewTest):
         rise = self.moves(since)
         self.assertEqual(len(rise), 1, "one MOVE carries the whole rise")
         self.assertEqual(rise[0]["requested"]["timed"], {"min_duration_ms": 0, "fade_ms": 2000, "fade_curve": "ease_out"})
+        self.assertEqual((rise[0]["effective"]["timed"], rise[0]["effective"]["fade_ms"], rise[0]["effective"]["fade_curve"]),
+                         (True, 2000, "ease_out"), "the pinned codec encodes it")
+        payload = bytes.fromhex(rise[0]["payload_hex"])
+        self.assertEqual(payload[2] & 0x70, 0x10 | (1 << 5), "flag bit 4 and curve 1, ease-out")
+        self.assertEqual(int.from_bytes(payload[12:14], "little"), 2000, "fade_ms in bytes 12-13")
         goal = self.preview.rows["F3"]["goal"]
         self.now = round(self.now + 2 / 3, 6)
         self.preview.tick()

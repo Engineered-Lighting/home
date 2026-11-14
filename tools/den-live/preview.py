@@ -79,9 +79,9 @@ class Preview:
         self.jobs = queue.Queue(maxsize=64)
         self.halt = threading.Event()
         self.rows = {}
-        # A timed MOVE goes only where the board advertises it and the pinned codec can encode it (the desk-stage
-        # re-pin to firmware 62ea043 adds preview_trace.supports_timed); elsewhere the level train plays each fade.
-        timed_codec = bool(getattr(preview_trace, "supports_timed", lambda: False)())
+        # A timed MOVE goes only where the board advertises it and the pinned codec can encode it (c12_fc13.TIMED, flag
+        # bit 4, from the re-pin to firmware 62ea043); elsewhere the level train plays each fade.
+        timed_codec = getattr(preview_trace.wire, "TIMED", None) is not None
         for name, row in fixtures.items():
             profile = row.get("profile") or core.scurve.FICTIONAL_PROFILE
             origin, reference = row["aim_origin_m"], row["horizontal_world_reference"]

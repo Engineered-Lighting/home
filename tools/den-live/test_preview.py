@@ -985,6 +985,26 @@ class DirectionTest(PreviewTest):
         self.assertFalse(self.preview._clear(dict(row, current=at_head), person, .12), "pointed at the head")
         self.assertFalse(self.preview._clear(row, dict(person, head=None), .12), "no head, no clearance")
 
+    def test_the_clearance_looks_where_the_head_is_going(self):
+        """A reader sliding along the sofa reaches a held beam up to a frame and the camera's lag before a frame shows
+        it: the clearance also checks the head carried on by its velocity over the frame's age and one more frame."""
+        self.lit_by_direction()
+        row = self.preview.rows["F3"]
+        person = dict(self.preview.track)
+        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
+                                         row["horizontal_world_reference"])
+        to = [person["head"][i] - row["aim_origin_m"][i] for i in range(3)]
+        along = sum(aim[i] * to[i] for i in range(3))
+        off = [to[i] - along * aim[i] for i in range(3)]
+        gap = math.sqrt(sum(c * c for c in off))
+        toward = [-c / gap for c in off]   # straight at the beam's centre ray
+        self.assertTrue(self.preview._clear(row, dict(person, head_v=None), .12), "still, it clears")
+        speed = (gap - .05) / preview.HEAD_LEAD_S   # it would be 5 cm from the beam one frame on
+        self.assertFalse(self.preview._clear(row, dict(person, head_v=[c * speed for c in toward]), .12),
+                         "heading into the beam, it doesn't")
+        self.assertTrue(self.preview._clear(row, dict(person, head_v=[-c * speed for c in toward]), .12),
+                        "heading away, it does")
+
     def test_a_head_or_eyes_refusal_cuts_at_once_even_mid_crossfade(self):
         """Easing is for ordinary hand-offs: a light refused for the reader's head or eyes goes dark in the same
         snapshot, at level 0, whatever fade it's in."""

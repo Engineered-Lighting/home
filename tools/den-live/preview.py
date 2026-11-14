@@ -42,6 +42,14 @@ FACING_REFUSALS = ("in_front_of_reader", "no_facing")
 # A light on someone refused for these is in, or can't be checked against, their head or eyes: it's cut at once (one
 # level-0 MOVE), never eased out. Easing is for ordinary hand-offs and exits.
 EYE_REFUSALS = ("beam_through_head", "in_front_of_reader", "no_head", "no_facing")
+# The head's clearance from a lit beam is checked where the head is going as well as where the newest frame saw it: its
+# velocity over the last two frames, carried over the frame's age plus HEAD_LEAD_S (about one frame at the camera's
+# 2.6 a second), at most HEAD_LEAD_MAX_S and HEAD_SPEED_MAX_M_S. A reader sliding along the sofa at 23 cm a second
+# otherwise reaches a held beam up to a frame and the camera's lag before the check sees it.
+HEAD_LEAD_S = 0.4
+HEAD_LEAD_MAX_S = 1.0
+HEAD_SPEED_MAX_M_S = 1.5
+HEAD_V_FRAMES_S = (0.05, 1.5)   # two frames this far apart give a velocity
 # The direction's choice hysteresis (lighting-direction note): a dark pre-aim moves at most once a second, and while the
 # person is on their feet only for a torso move of more than this.
 PRE_AIM_STANDING_M = .3
@@ -317,6 +325,15 @@ class Preview:
         head = published_head(track) or body.head(joints)   # contract 2's head_point_m, perception's
         if head and not body.head(joints):
             joints["nose"] = [*head, 1.0]
+        before = self.track if self.track and self.track.get("track_id") == key[2] else None
+        head_v = None
+        if before and before.get("head") and head and self.captured is not None:
+            gap = captured - self.captured
+            if HEAD_V_FRAMES_S[0] <= gap <= HEAD_V_FRAMES_S[1]:
+                head_v = [(head[i] - before["head"][i]) / gap for i in range(3)]
+                speed = math.sqrt(sum(c * c for c in head_v))
+                if speed > HEAD_SPEED_MAX_M_S:
+                    head_v = [c * HEAD_SPEED_MAX_M_S / speed for c in head_v]
         self.captured = captured
         self.track_until, self.hold_until = deadline, hold
         # Contract 2's seated, published once by perception: the episode starts at its since_mono, the same instant
@@ -344,7 +361,7 @@ class Preview:
             target, basis = self.shift.update(captured, page, fallback, fallback_basis, self._lit_for(key[2]))
             self.target_basis = basis
         self.track = {"track_id": key[2], "head": head, "shoulder_mid": shoulders, "facing": facing,
-                      "target": target, "basis": basis, "seated": seated}
+                      "target": target, "basis": basis, "seated": seated, "head_v": head_v}
 
     def inference(self, reply):
         with self.lock:
@@ -431,7 +448,7 @@ class Preview:
                 # line to the page, but a rise in place, the hold without lit travel and a standby's hand-over all
                 # light a beam pointing up to 8 degrees off that line. Failing is a cut at once (_evaluate).
                 safe = result if kept else self._eye(name, row, person, True)
-                if safe.ok and not self._clear(row, person, direction.GLARE_KEEP_M):
+                if safe.ok and not self._clear(row, person, direction.AIM_KEEP_M):
                     safe = self.core.eye.aim.Candidate(name, False, "beam_through_head")
                 if not safe.ok and safe.reason in EYE_REFUSALS:
                     self.cut[name] = reasons[name] = safe.reason
@@ -726,17 +743,26 @@ class Preview:
 
     def _clear(self, row, person, clearance):
         """The beam as the fixture points now (its joints mid-glide) passes the head with at least `clearance`: the
-        head's distance from the beam's centre ray. False without a head."""
+        head's distance from the beam's centre ray, where the newest frame saw it and where it's going (HEAD_LEAD_S).
+        False without a head."""
         head = person.get("head")
         if not head:
             return False
         aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
                                          row["horizontal_world_reference"])
-        to = [head[i] - row["aim_origin_m"][i] for i in range(3)]
-        along = sum(aim[i] * to[i] for i in range(3))
-        if along <= 0:
-            return math.sqrt(sum(c * c for c in to)) >= clearance
-        return math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))) >= clearance
+        heads = [head]
+        velocity = person.get("head_v")
+        if velocity and self.captured is not None:
+            lead = min(HEAD_LEAD_MAX_S, max(0.0, self.clock() - self.captured) + HEAD_LEAD_S)
+            heads += [[head[i] + velocity[i] * lead * k for i in range(3)] for k in (.5, 1.0)]
+        for point in heads:
+            to = [point[i] - row["aim_origin_m"][i] for i in range(3)]
+            along = sum(aim[i] * to[i] for i in range(3))
+            gap = (math.sqrt(sum(c * c for c in to)) if along <= 0
+                   else math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3))))
+            if gap < clearance:
+                return False
+        return True
 
     @staticmethod
     def _can_send(row, now):

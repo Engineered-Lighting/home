@@ -97,6 +97,7 @@ WRISTS_LOST_S = 2.0             # without both wrists for this long, the page fa
 FACING_WINDOW_S = 3.0           # a seated person's facing is the circular mean over this window
 GLARE_KEEP_M = 0.12             # a lit fixture keeps its job while its beam's centre clears the head by this much
                                 # (admission still needs den-core's 0.15 m): head jitter can't flip it
+AIM_KEEP_M = 0.12               # and while the beam as it points now clears the head (and where it's going) by this
 
 
 def level_code(level):

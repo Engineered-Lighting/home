@@ -30,8 +30,9 @@ SETTINGS = {
                                   # leaves plan 05's bar C (dark within 1.0 s on 4 of 5) no room for a fade: at once
                                   # (Stop, Off and expiry stay instant)
     "crossfade_s": 1.2,           # a hand-off: the old fixture's fall and the new one's rise overlap
-    "glide_min_s": 1.0,           # a board with the timed MOVE flies a lit glide no faster than this: the same S-curve,
-                                  # slower (a board without it flies at its profile's pace)
+    "glide_s": 2.0,               # a lit reframe after the reader moves travels like a dolly: the fixture's S-curve,
+                                  # stretched to this long (never hurried past its own pace)
+    "creep_s": 4.0,               # a small reframe while they read creeps, slow enough not to draw the eye
     "shift_m": 0.06,              # how far the book's settled place must move before a lit spot glides after it
     "shift_hold_s": 1.5,          # the window whose median is the book's settled place (a page turn is shorter)
     "page_up_m": 0.05,            # the page's centre: this far up the page from the hands (the page faces the eyes)
@@ -43,7 +44,7 @@ SETTINGS = {
 }
 LIMITS = {"page_up_m": (0.0, 0.15), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
           "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 2.5), "leave_fade_s": (0.0, 1.0), "leave_fade_board_s": (0.0, 1.0),
-          "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
+          "crossfade_s": (0.0, 5.0), "glide_s": (0.0, 10.0), "creep_s": (0.0, 20.0),
           "ambient_dim_s": (0.0, 20.0), "ambient_delay_s": (0.0, 5.0), "ambient_restore_s": (0.0, 10.0),
           "shift_m": (0.0, 1.0), "shift_hold_s": (0.0, 10.0)}
 
@@ -246,6 +247,25 @@ class Glide:
                 "to_deg": [-self.target[0] / 100, -self.target[1] / 100],
                 "start_mono": self.started, "duration_s": round(self.duration, 6),
                 "limits": [round(x, 9) for x in self.curve.limits], "shape": "scurve-7"}
+
+
+# ---- The pace of a lit move -------------------------------------------------------------------------------------------
+
+# A lit spot holds its frame while the page is this well inside the beam (a fraction of half its FWHM: at 0.25 the page
+# keeps 96 % of the centre's light), so the light never drifts while someone reads; it reframes once they've moved. In
+# the reading sim that's about one lit move a session (the reframe after the reader's shift); 0.35 holds through the
+# shift itself and leaves the page off-centre.
+FRAME_HOLD = 0.25
+GLIDE_NEAR_M = 0.08             # a reframe for a page moved this little or less creeps over creep_s
+GLIDE_FAR_M = 0.20              # one moved this far or more travels over glide_s; between them, in proportion
+
+
+def glide_seconds(moved_m, settings):
+    """How long a lit reframe takes, like a camera move, from how far the page moved: a small correction creeps, so the
+    eye doesn't catch it; a big one, after the reader has shifted, is a dolly's deliberate move. The fixture's own
+    S-curve is stretched to this time (a timed MOVE's min_duration), so it starts and lands as softly as ever."""
+    x = min(1.0, max(0.0, (moved_m - GLIDE_NEAR_M) / (GLIDE_FAR_M - GLIDE_NEAR_M)))
+    return settings["creep_s"] + (settings["glide_s"] - settings["creep_s"]) * x
 
 
 # ---- Fades -------------------------------------------------------------------------------------------------------

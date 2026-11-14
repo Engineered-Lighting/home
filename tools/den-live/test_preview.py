@@ -828,10 +828,23 @@ class DirectionTest(PreviewTest):
         self.assertEqual((glides[0]["requested"]["travel"], glides[0]["effective"]["lit_during_move"]), ("lit", True))
         self.assertEqual(glides[0]["effective"]["spot_level"], round(level * 254), "it glides at the level it had")
         start, target = glides[0]["requested"]["start_cdeg"], glides[0]["requested"]["target_cdeg"]
-        expected = self.core.scurve.move_time(tuple((b - a) / 100 for a, b in zip(start, target)),
-                                              self.core.scurve.FICTIONAL_PROFILE["axes"])
-        self.assertAlmostEqual(glide["duration_s"], expected, places=5, msg="Home draws the board's own S-curve")
+        own = self.core.scurve.move_time(tuple((b - a) / 100 for a, b in zip(start, target)),
+                                         self.core.scurve.FICTIONAL_PROFILE["axes"])
+        self.assertEqual(glides[0]["requested"]["timed"]["min_duration_ms"], round(self.preview.settings["glide_s"] * 1000),
+                         "a 30 cm shift: a dolly's pace")
+        pace = self.preview.settings["glide_s"]
+        self.assertAlmostEqual(glide["duration_s"], max(own, pace), places=3,
+                               msg="Home draws the fixture's S-curve, stretched to the pace")
         self.assertEqual(glide["to_deg"], [-target[0] / 100, -target[1] / 100])
+
+    def test_the_frame_holds_while_the_page_stays_well_inside_the_beam(self):
+        """A lit spot doesn't drift with every few centimetres of the book: while the page keeps most of the beam's
+        light it holds its frame, and nothing moves while they read."""
+        self.lit_by_direction()
+        since = len(self.encoded)
+        self.frames(6, shift=-.07)   # the book 7 cm along: still well inside the beam
+        self.assertEqual([row for row in self.moves(since) if row["requested"]["start_cdeg"]
+                          != row["requested"]["target_cdeg"]], [], "the frame holds")
 
     def test_the_room_dims_under_the_task_light_and_comes_back(self):
         self.assertEqual(self.preview.latest["ambient"]["scale"], 1.0)
@@ -1425,8 +1438,9 @@ class DirectionTest(PreviewTest):
                 break
         self.assertIsNotNone(glide)
         move = next(row for row in reversed(self.moves()) if row["requested"]["start_cdeg"] != row["requested"]["target_cdeg"])
-        self.assertEqual(move["requested"]["timed"]["min_duration_ms"], 1000)
-        self.assertGreaterEqual(glide["duration_s"], 1.0, "the same S-curve, slower: Home draws the stretched one")
+        pace = self.preview.settings["glide_s"]   # a 30 cm shift
+        self.assertEqual(move["requested"]["timed"]["min_duration_ms"], round(pace * 1000))
+        self.assertGreaterEqual(glide["duration_s"], pace - 1e-6, "the same S-curve, slower: Home draws the stretched one")
         target = self.preview.rows["F3"]["glide"].target
         since = len(self.encoded)
         self.now = round(self.now + .1, 6)

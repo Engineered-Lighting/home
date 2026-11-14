@@ -675,6 +675,8 @@ class Preview:
             ramp = row["ramp"]
             if ramp is not None and ramp.end > ramp.start and not ramp.done(now):
                 return   # a rise finishes before the glide: one change at a time
+            if row["profile"].get("lit_motion") and self._in_beam(row, person["target"], direction.FRAME_HOLD):
+                return   # the frame holds: the page is still well inside the beam, so nothing moves while they read
             if not row["profile"].get("lit_motion"):
                 # A board that can't move lit makes every re-aim a blink. So it holds its aim while the page is still
                 # well inside the beam; once the page has gone, a standby on its way there takes the job when it lands
@@ -713,8 +715,12 @@ class Preview:
                     return
                 # One movement, one command: the glide carries the level the train has reached, and a rise in progress
                 # waits for it to land.
-                timed = {"min_duration_ms": round(self.settings["glide_min_s"] * 1000), "fade_ms": 0,
-                         "fade_curve": "linear"} if row["timed"] else None
+                # Its pace is a camera move's: a small reframe creeps, a big one is a dolly (direction.glide_seconds).
+                # A board with the timed MOVE stretches its S-curve to it; so does a virtual one, which Home draws.
+                moved = math.dist(row["target"], person["target"]) if row["target"] is not None else 0.0
+                pace = direction.glide_seconds(moved, self.settings)
+                timed = {"min_duration_ms": round(pace * 1000), "fade_ms": 0, "fade_curve": "linear"} if (
+                    row["timed"] or row["profile"].get("fictional")) else None
                 self._move(name, row, target, direction.level_code(row["level"]) / direction.LEVEL_CODES, "lit", now,
                            person, "task", timed=timed)
                 return

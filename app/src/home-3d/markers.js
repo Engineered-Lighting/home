@@ -1183,6 +1183,8 @@ export function createOverlay(apartmentRoot, { siteId } = {}) {
         virtualFixturesReadback: virtualFixtures.readback,
         virtualFixturePickObjects: virtualFixtures.pickObjects,
         virtualFixtureAimPickObjects: virtualFixtures.aimPickObjects,
+        virtualFixtureBeamPickObjects: virtualFixtures.beamPickObjects,
+        visibleSpotlightBeamDistance: virtualFixtures.visibleSpotlightBeamDistance,
         virtualFixtureInteractionDescriptor: virtualFixtures.interactionDescriptor,
         aimVirtualFixtureAtTarget: virtualFixtures.aimAtTarget,
         virtualFixturesPresentationActive: () => virtualFixtures.presentationActive?.() === true,

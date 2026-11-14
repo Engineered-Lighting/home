@@ -73,7 +73,8 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
   assert.ok(site === 'victoria' || site === 'echo' && part === 2 && RENDERER === 'webgl' && precision === 'exact');
   assert.ok(['exact','native'].includes(precision),'known frame precision contract');
-  assert.ok(['all','frames','controls','calibration'].includes(phase)&&(phase==='all'||precision==='native'&&part===1),'known proof phase');
+  assert.ok(phase === 'all' || site === 'echo' && phase === 'mesh' || precision === 'native' && part === 1
+    && ['frames', 'controls', 'calibration'].includes(phase), 'known proof phase');
   const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
   const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
@@ -305,9 +306,63 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         const overlay = window.__APT_ENGINE.overlay;
         return overlay.virtualFixturesReadback().fixtures.map(row => overlay.virtualFixtureInteractionDescriptor(row.fixture_id));
       });
+      const cameraPose = () => page.evaluate(() => window.__APT_ENGINE.camera.matrixWorld.toArray());
+      const meshDragPoints = () => page.evaluate(() => {
+        const engine = window.__APT_ENGINE, canvas = engine.renderer.domElement;
+        const rect = engine.picking.getHost().getBoundingClientRect();
+        const volumes = [], footprints = [];
+        engine.scene.traverseVisible(node => {
+          if (node.name === 'modeled-aim-volume') volumes.push(node);
+          if (node.name === 'modeled-aim-receiver-glow') footprints.push(node);
+        });
+        const bodies = engine.overlay.virtualFixturePickObjects().filter(node => node.userData.interaction_role === 'fixture');
+        const onCanvas = ({ x, y }) => document.elementFromPoint(x, y) === canvas;
+        const project = local => {
+          const world = engine.apartmentRoot.localToWorld(engine.camera.position.clone().fromArray(local));
+          const screen = engine.picking.projectToScreen(world);
+          const pointer = { x: Math.round(rect.left + screen.x), y: Math.round(rect.top + screen.y) };
+          return screen.visible && onCanvas(pointer) ? { world, pointer } : null;
+        };
+        const pick = (objects, { x, y }) => engine.picking.pick(objects, x, y, { doubleSided: true });
+        let empty = null;
+        for (const fx of [.34, .44, .54, .64]) for (const fy of [.34, .46, .58, .70]) {
+          const start = { x: Math.round(rect.left + rect.width * fx), y: Math.round(rect.top + rect.height * fy) };
+          const end = { x: start.x + 72, y: start.y + 12 };
+          if (!empty && onCanvas(start) && onCanvas(end) && !pick([...bodies, ...footprints, ...volumes], start).length)
+            empty = { start, end };
+        }
+        for (const volume of volumes) {
+          const { fixture_id: id, beam_origin_m: origin, endpoint_m: endpoint } = volume.userData;
+          const descriptor = engine.overlay.virtualFixtureInteractionDescriptor(id);
+          if (!descriptor?.state.spotlight.on || descriptor.state.spotlight.brightness <= 0 || !origin || !endpoint) continue;
+          for (const along of [.58, .46, .70]) {
+            const sample = project(origin.map((value, axis) => value + (endpoint[axis] - value) * along));
+            if (!sample || pick(bodies, sample.pointer).length || pick(footprints, sample.pointer).length) continue;
+            const candidates = new Set(pick(volumes, sample.pointer).map(hit => hit.object.userData.fixture_id));
+            if (candidates.size !== 1 || !candidates.has(id)) continue;
+            const surface = engine.displaySurfaceHit(sample.pointer.x, sample.pointer.y);
+            if (surface) {
+              const nearest = engine.apartmentRoot.localToWorld(engine.camera.position.clone().fromArray(surface.point));
+              if (nearest.distanceTo(engine.camera.position) < sample.world.distanceTo(engine.camera.position)) continue;
+            }
+            for (const point of [[2, 2, 0], [2.8, 1.4, 0], [1.4, 2.8, 0], [3.3, 2.9, 0]]) {
+              if (Math.hypot(point[0] - descriptor.display_anchor_m[0], point[1] - descriptor.display_anchor_m[1]) < .4) continue;
+              const destination = project(point)?.pointer;
+              if (!destination || Math.hypot(destination.x - sample.pointer.x, destination.y - sample.pointer.y) < 45) continue;
+              const hit = engine.displaySurfaceHit(destination.x, destination.y);
+              if (hit && Math.hypot(...hit.point.map((value, axis) => value - point[axis])) < .1) {
+                const label = engine.overlay.virtualFixturesReadback().fixtures.find(fixture => fixture.fixture_id === id).label;
+                return { empty, beam: { id, label, start: sample.pointer, end: destination, point: hit.point } };
+              }
+            }
+          }
+        }
+        return { empty, beam: null };
+      });
       assert.equal(await lighting.getAttribute('aria-pressed'), 'false');
       await haControls.waitFor({ state: 'visible' });
-      for (const [view, mode, receiver] of [['Mesh', 'mesh', null], ['Photo', 'splat', 'splat'], ['Cloud', 'points', 'points']]) {
+      const views = [['Mesh', 'mesh', null], ['Photo', 'splat', 'splat'], ['Cloud', 'points', 'points']];
+      for (const [view, mode, receiver] of phase === 'mesh' ? views.slice(0, 1) : views) {
         await enterMode(page, view + ' view', mode);
         await stable(page, view + ':off');
         await lighting.click();
@@ -339,13 +394,29 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
           const state = window.__APT_ENGINE.litState();
           return kind ? state.receivers?.liveSpots === 4 : state.shadowLights > 0 && state.bounce?.status === 'ready';
         }, receiver, { timeout: WAIT_MS });
+        if (mode === 'mesh') {
+          const { empty } = await meshDragPoints();
+          assert.ok(empty, 'Mesh has empty canvas outside every fixture, footprint, and beam');
+          const before = await descriptors(), pose = await cameraPose();
+          await page.mouse.move(empty.start.x, empty.start.y);
+          await page.mouse.down();
+          await page.mouse.move(empty.end.x, empty.end.y, { steps: 8 });
+          await page.mouse.up();
+          await page.waitForFunction(before => window.__APT_ENGINE.camera.matrixWorld.elements
+            .some((value, index) => Math.abs(value - before[index]) > 1e-3), pose, { timeout: 5000 });
+          assert.equal(await fixtureControls.count(), 0, 'dragging empty space leaves the fixture inspector closed');
+          assert.deepEqual(await descriptors(), before, 'dragging empty space moves only the camera');
+          await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
+          await frames(page, 4);
+          check('echo_mesh_empty_drag_orbits');
+        }
         await stable(page, view + ':on');
         const effect = await frameDiff(page, view + ':on', view + ':off');
         assert.ok(effect.sameCamera && effect.sameProjection && effect.max > 8 && effect.over8 > 0,
           view + ' shows modeled illumination: ' + JSON.stringify(effect));
 
         const initial = await descriptors();
-        const plan = await page.evaluate(() => {
+        const plan = mode === 'mesh' ? (await meshDragPoints()).beam : await page.evaluate(() => {
           const engine = window.__APT_ENGINE, canvas = engine.renderer.domElement;
           const rect = engine.picking.getHost().getBoundingClientRect();
           for (const label of [...document.querySelectorAll('[data-apt-fixture-label]:not([hidden])')].reverse()) {
@@ -368,7 +439,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
           }
           return null;
         });
-        assert.ok(plan, view + ' has a visible label and reachable authored floor');
+        assert.ok(plan, view + ' has a ' + (mode === 'mesh' ? 'visible beam midsection' : 'visible label') + ' and reachable authored floor');
         const shadowState = () => page.evaluate(() => {
           const engine = window.__APT_ENGINE, state = engine.litState();
           const lights = [];
@@ -379,8 +450,16 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
           return { lights, blends: state.receivers?.blends ?? null, bounce: state.bounce };
         });
         const beforeAim = await shadowState();
+        const poseBefore = await cameraPose();
+        if (mode === 'mesh') {
+          assert.equal(await fixtureControls.count(), 0, 'the beam drag starts with no selected fixture');
+          assert.equal(await page.locator('[data-apt-aim-reticle]:not([hidden])').count(), 0, 'no aim handle is active');
+        }
         await page.mouse.move(plan.start.x, plan.start.y);
         await page.mouse.down();
+        if (mode === 'mesh') {
+          await fixtureControls.getByRole('heading', { name: plan.label, exact: true }).waitFor({ timeout: 5000 });
+        }
         await page.mouse.move(plan.end.x, plan.end.y, { steps: 8 });
         await page.locator('[data-apt-aim-chip]:not([hidden])').waitFor({ state: 'visible' });
         assert.deepEqual(await descriptors(), initial, 'the ghost does not move the committed aim');
@@ -392,6 +471,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         assert.ok(Math.hypot(...after.target.point.map((value, axis) => value - plan.point[axis])) < .06);
         assert.deepEqual(after.display_anchor_m, before.display_anchor_m);
         assert.deepEqual(moved.filter(row => row.fixture_id !== plan.id), initial.filter(row => row.fixture_id !== plan.id));
+        if (mode === 'mesh') assert.deepEqual(await cameraPose(), poseBefore, 'dragging a beam does not orbit');
         if (receiver) {
           await page.waitForFunction(blends => {
             const state = window.__APT_ENGINE.litState();
@@ -433,6 +513,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         await tabs('Aim').click();
         await fixtureControls.getByRole('button', { name: 'Undo aim', exact: true }).click();
         assert.deepEqual(await descriptors(), initial);
+        if (mode === 'mesh') check('echo_mesh_unselected_beam_drag_and_undo', { fixture: plan.id });
         await lighting.click();
         await page.waitForFunction(() => !window.__APT_ENGINE.litState()?.active && !window.__APT_ENGINE.litState()?.wanted,
           null, { timeout: WAIT_MS });

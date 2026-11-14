@@ -1016,6 +1016,35 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         deskTargetSurfaceHit(clientX, clientY, binding) {
             return deskSurfacePicking.surfaceHit(clientX, clientY, binding);
         },
+        pickEchoSpotlightBeam(clientX, clientY) {
+            if (siteId !== 'echo' || modes.mode !== 'mesh' || !litWanted || litMode !== 'mesh') return null;
+            const volumes = overlay.virtualFixtureBeamPickObjects();
+            if (!volumes.length) return null;
+            const intervals = new Map();
+            for (const hit of picking.pick(volumes, clientX, clientY, { doubleSided: true })) {
+                if (!intervals.has(hit.object)) intervals.set(hit.object, []);
+                intervals.get(hit.object).push(hit.distance);
+            }
+            if (!intervals.size) return null;
+
+            // Use the rendered mesh and the same near and cutaway filters as
+            // the depth pass. The aim target still uses the registered proxy.
+            const mesh = modes.getMesh();
+            const near = Math.max(camera.near, modes.getMeshNearCut());
+            const policy = modes.debugInfo?.().dollhouseCutaway;
+            const point = new THREE.Vector3();
+            const blocker = mesh?.visible && picking.pick([mesh], clientX, clientY).find(hit => {
+                if (-point.copy(hit.point).applyMatrix4(camera.matrixWorldInverse).z < near) return false;
+                return cutawayM.dollhouseKeep(apartmentRoot.worldToLocal(point.copy(hit.point)).toArray(), policy) >= .5;
+            });
+            const opaqueDistance = blocker ? blocker.distance : Infinity;
+            let distance = Infinity, id = null;
+            for (const [volume, hits] of intervals) {
+                const candidate = overlay.visibleSpotlightBeamDistance(volume, picking.raycaster.ray, hits, opaqueDistance);
+                if (candidate < distance) { distance = candidate; id = volume.userData.fixture_id; }
+            }
+            return id;
+        },
         /* Under the dollhouse cut-away the viewer looks down into the room, so
          * a tap on visible floor must not land on the collision ceiling above
          * it, and hairline floor cracks must not read as "no surface"

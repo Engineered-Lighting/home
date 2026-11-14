@@ -47,6 +47,8 @@
     { id: "select", label: "Click a light", action: "Select it and open its controls" },
     { id: "drag-spotlight", label: "Drag a virtual spotlight", homes: ["echo", "victoria"],
       action: "Grab its housing, label or visible pool. Release over a reachable room surface to set its modeled aim." },
+    { id: "drag-beam", label: "Drag a spotlight beam", homes: ["echo"],
+      action: "In Mesh with Lighting on, grab the visible beam and drop it on a room surface to aim." },
     { id: "aim-handle", label: "Drag the aim handle", homes: ["echo", "victoria"],
       action: "Propose where the selected modeled light points; nothing physical moves" },
   ].map(Object.freeze));

@@ -6153,11 +6153,12 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
         if (reticle) return id && id !== aimActionsRef.current.selectedFixture() ? id : null;
         if (id) return id;
         const pool = engine.picking.pick(overlay.virtualFixtureAimPickObjects?.() || [], x, y, { doubleSided: true })[0];
-        if (!pool) return null;
-        const hit = engine.displaySurfaceHit?.(x, y);
-        if (!hit) return null;
-        const point = engine.apartmentRoot.worldToLocal(pool.point.clone()).toArray();
-        return Math.hypot(...point.map((value, axis) => value - hit.point[axis])) < .08 ? pool.object.userData.fixture_id : null;
+        const hit = pool && engine.displaySurfaceHit?.(x, y);
+        if (hit) {
+          const point = engine.apartmentRoot.worldToLocal(pool.point.clone()).toArray();
+          if (Math.hypot(...point.map((value, axis) => value - hit.point[axis])) < .08) return pool.object.userData.fixture_id;
+        }
+        return engine.pickEchoSpotlightBeam?.(x, y) ?? null;
       },
       surfaceHit: (x, y) => {
         const target = host.ownerDocument.elementFromPoint(x, y);

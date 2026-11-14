@@ -600,7 +600,7 @@ function buildFixture(item, state, depth, reducedMotion) {
     root.traverse(node => { if (node !== root) node.userData = { ...metadata, ...node.userData, fixture_id: item.id, mount_id: item.mountId, origin_role: item.originRole, aim_source: item.aimSource, optical_origin_m: null }; });
     update(state);
     return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving || !!sweep,
-        pick, handlePick, spotPool: spotBeam.disc, setSelected(value) { selected = value; handle.visible = value; } };
+        pick, handlePick, spotPool: spotBeam.disc, spotVolume: spotBeam.volume, setSelected(value) { selected = value; handle.visible = value; } };
 }
 
 export function createEquipmentVirtualFixtures(parent, { binding = null, siteId = 'victoria' } = {}) {
@@ -694,6 +694,11 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         presentationActive() { return !disposed && presentationActive; },
         pickObjects() { return disposed || !root.visible ? [] : [...views].flatMap(([id, view]) => id === selectedId ? [view.pick, view.handlePick] : [view.pick]); },
         aimPickObjects() { return disposed || !root.visible ? [] : [...views.values()].map(view => view.spotPool).filter(pool => pool.visible); },
+        beamPickObjects() {
+            if (disposed || !root.visible || depth.readback().status !== 'bounded_visible_opaque_depth') return [];
+            return [...views.values()].map(view => view.spotVolume).filter(volume => volume.visible);
+        },
+        visibleSpotlightBeamDistance: Spotlight.visibleSpotlightBeamDistance,
         setSelected(fixtureId) {
             selectedId = views.has(fixtureId) ? fixtureId : null;
             for (const [id, view] of views) view.setSelected(id === selectedId);

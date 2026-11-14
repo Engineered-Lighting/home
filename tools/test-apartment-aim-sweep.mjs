@@ -21,6 +21,7 @@ function replaceOne(source, from, to) {
 }
 const spotlight = dataModule(replaceOne(fs.readFileSync(sourceFile('equipment-spotlight-visual.mjs'), 'utf8'),
   "from 'three'", 'from ' + JSON.stringify(threeURL)));
+const { createEquipmentSpotlightVisual, visibleSpotlightBeamDistance } = await import(spotlight);
 let actual = replaceOne(fs.readFileSync(sourceFile('equipment-virtual-fixtures.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL));
 actual = replaceOne(actual, 'import(`./equipment-spotlight-visual.mjs${new URL(import.meta.url).search}`)', 'import(' + JSON.stringify(spotlight) + ')');
 for (const name of ['home-den-fixtures.js', 'home-apartment-aiming.js']) actual = replaceOne(actual,
@@ -66,6 +67,33 @@ function drawing(f) {
 }
 
 test('the sweep constant is the SPEC 650 ms', () => assert.equal(AIM_SWEEP_MS, 650));
+
+test('beam aiming sees visible scattering and respects opaque depth, room edges, and lights that are off', () => {
+  const parent = new THREE.Group(), anchor = new THREE.Vector3();
+  const floor = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+  const outsideWall = { normal: new THREE.Vector3(1, 0, 0), offset: .3 };
+  const beam = createEquipmentSpotlightVisual(parent, null, { anchor, floor, walls: [] });
+  const clipped = createEquipmentSpotlightVisual(parent, null, { anchor, floor, walls: [outsideWall] });
+  const light = { on: true, brightness: 1, color_temp_kelvin: 3000 };
+  const start = new THREE.Vector3(0, 0, 2), direction = new THREE.Vector3(0, 0, -1);
+  const picker = new THREE.Raycaster(new THREE.Vector3(-2, 0, 1.25), new THREE.Vector3(1, 0, 0));
+  const sample = (visual, depth = Infinity) => {
+    visual.volume.updateWorldMatrix(true, false);
+    visual.volume.material.side = THREE.DoubleSide;
+    const distances = picker.intersectObject(visual.volume, false).map(hit => hit.distance);
+    assert.ok(distances.length);
+    return visibleSpotlightBeamDistance(visual.volume, picker.ray, distances, depth);
+  };
+  for (const view of [beam, clipped]) view.update(start, direction, 2, 40, light);
+  assert.ok(sample(beam) < 2);
+  assert.equal(sample(beam, 1.5), Infinity, 'a wall in front stops the beam');
+  assert.ok(sample(beam, 2) < 2, 'a visible section before an opaque surface is enough');
+  assert.equal(sample(clipped), Infinity, 'space outside the room is clipped');
+  picker.ray.origin.set(0, 0, 1.25);
+  assert.ok(sample(beam) < .2, 'the camera can be inside the beam');
+  beam.update(start, direction, 2, 40, { ...light, on: false });
+  assert.equal(sample(beam), Infinity);
+});
 
 test('without sweep, aimAtTarget draws the new aim at once exactly as before', t => {
   const time = clock(t), f = fixture(t);

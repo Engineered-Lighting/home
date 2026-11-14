@@ -4,6 +4,51 @@
 import * as THREE from 'three';
 
 const MAX_DEPTH_DIMENSION = 1024, MAX_OPAQUE_MESHES = 512, MAX_ROOM_PLANES = 33;
+const BEAM_STEPS = 32, BEAM_MIN_OPACITY = .0005;
+
+/** Find the first part of the displayed cone that contributes to this pixel.
+ * Distances are on the camera ray; cone tests use the current swept transform. */
+export function visibleSpotlightBeamDistance(volume, ray, intersections, opaqueDistance) {
+    const { uLength, uRadius, uTanAngle, uLevel, uBeamToRoom, uRoomPlanes, uRoomPlaneCount } = volume.material.uniforms;
+    const length = uLength.value, radius = uRadius.value, level = uLevel.value;
+    if (level <= 0) return Infinity;
+    const inverse = new THREE.Matrix4().copy(volume.matrixWorld).invert();
+    const eye = ray.origin.clone().applyMatrix4(inverse);
+    const axial = .5 - eye.y;
+    const inside = axial >= 0 && axial <= 1 && Math.hypot(eye.x, eye.z) < axial;
+    const entry = inside ? 0 : intersections[0];
+    const exit = Math.min(opaqueDistance, intersections.at(-1));
+    if (exit <= entry) return Infinity;
+
+    const step = (exit - entry) / BEAM_STEPS;
+    const localScale = new THREE.Vector3(radius, length, radius);
+    const direction = ray.at(1, new THREE.Vector3()).applyMatrix4(inverse).sub(eye).multiply(localScale).normalize();
+    const forward = Math.max(0, direction.y);
+    const point = new THREE.Vector3(), roomPoint = new THREE.Vector3();
+    const smooth = THREE.MathUtils.smoothstep;
+    const roomPlanes = uRoomPlanes.value.slice(0, uRoomPlaneCount.value);
+    let first = Infinity, opticalDepth = 0;
+    for (let i = 0; i < BEAM_STEPS; i++) {
+        const distance = entry + (i + .5) * step;
+        ray.at(distance, point).applyMatrix4(inverse).multiply(localScale);
+        const along = .5 * length - point.y;
+        if (along < 0 || along > length) continue;
+        const radial = Math.hypot(point.x, point.z) / Math.max(.012, along * uTanAngle.value);
+        const penumbra = 1 - smooth(radial, .48, 1);
+        if (penumbra <= 0) continue;
+        roomPoint.copy(point).applyMatrix4(uBeamToRoom.value);
+        const clipped = roomPlanes.some(plane =>
+            plane.x * roomPoint.x + plane.y * roomPoint.y + plane.z * roomPoint.z < plane.w - .001);
+        if (clipped) continue;
+        const weight = penumbra ** 2 * (1 - smooth(along, .5 * length, length)) * smooth(along, .015, .10)
+            * smooth(distance, .02, .20) / (1 + .42 * along * along);
+        if (weight <= 0) continue;
+        if (first === Infinity) first = distance;
+        opticalDepth += weight * step;
+    }
+    const opacity = Math.min((1 - Math.exp(-opticalDepth * 1.65)) * 1.35 * (.65 + .35 * forward ** 4), .32) * level;
+    return opacity >= BEAM_MIN_OPACITY ? first : Infinity;
+}
 
 export function displaySpotlightWhite(kelvin) {
     const stops = [[1500, '#ff9451'], [2700, '#ffd0a0'], [4000, '#ffe6cf'], [6500, '#f5f7ff']];
@@ -169,7 +214,7 @@ const fragmentShader = /* glsl */`
             exit = min(exit,dot(surface-uCameraLocal,ray));
         }
         if(exit <= entry) discard;
-        const int STEPS = 32;
+        const int STEPS = ${BEAM_STEPS};
         float stepLength = (exit-entry)/float(STEPS), opticalDepth = 0.0;
         for(int i=0;i<STEPS;i++) {
             float distanceToEye = entry+(float(i)+0.5)*stepLength;
@@ -193,7 +238,7 @@ const fragmentShader = /* glsl */`
         }
         float forward = pow(max(0.0,dot(-ray,vec3(0.0,-1.0,0.0))),4.0);
         float alpha = min((1.0-exp(-opticalDepth*1.65))*1.35*(0.65+0.35*forward),0.32)*uLevel;
-        if(alpha<0.0005) discard;
+        if(alpha<${BEAM_MIN_OPACITY}) discard;
         gl_FragColor = vec4(uLightColor,alpha);
         #include <tonemapping_fragment>
         #include <colorspace_fragment>
@@ -214,7 +259,7 @@ export function createEquipmentSpotlightVisual(parent, depth, item) {
         blending: THREE.AdditiveBlending, toneMapped: false });
     const volume = new THREE.Mesh(new THREE.ConeGeometry(1, 1, 64, 1, false), material);
     volume.name = 'modeled-aim-volume'; volume.renderOrder = 21; parent.add(volume);
-    volume.userData = { presentation: 'qualitative_scattering', scattering_steps: 32, receiving_surface: false };
+    volume.userData = { presentation: 'qualitative_scattering', scattering_steps: BEAM_STEPS, receiving_surface: false };
     const inverse = new THREE.Matrix4(), physicalScale = new THREE.Matrix4();
     let disposed = false;
     material.addEventListener('dispose', () => { disposed = true; });

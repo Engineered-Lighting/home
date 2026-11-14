@@ -465,13 +465,22 @@ class Ambient:
         self.scale = 1.0
         self.ramp = None
         self.goal = 1.0
+        self.cct_goal = None
+        self.cue = None   # a cue's warmth as a line in scale, (scale0, k0, scale1, k1), once a learned warmth is in play
 
-    def direct(self, task, settings, now):
-        goal = settings["ambient_task_scale"] if task else 1.0
-        if goal == self.goal:
+    def direct(self, task, settings, now, goal=None, cct_k=None):
+        """goal and cct_k: the room glow the owner taught for this situation (plan 04b), as a scale of the house level
+        and a warmth, fixed by the preview for the cue; None keeps the direction's own."""
+        goal = goal if goal is not None else settings["ambient_task_scale"] if task else 1.0
+        if (goal, cct_k) == (self.goal, self.cct_goal):
             return
         current = self.value(now)
-        self.goal = goal
+        k0 = self._warmth(current, settings)
+        k1 = cct_k if cct_k is not None else self.kelvin(goal, settings)
+        # Off the direction's own curve (a learned warmth now, or one still being left), the warmth follows the cue's
+        # scale on a straight line between its ends, so it never jumps.
+        self.cue = None if cct_k is None and k0 == self.kelvin(current, settings) else (current, k0, goal, k1)
+        self.goal, self.cct_goal = goal, cct_k
         if goal < current:
             self.ramp = Ramp(current, goal, settings["ambient_dim_s"], "ease_in_out", now + settings["ambient_delay_s"],
                              "ambient_dim")
@@ -494,15 +503,24 @@ class Ambient:
         warm = 0.0 if task >= 1.0 else min(1.0, max(0.0, (1.0 - scale) / (1.0 - task)))
         return round(AMBIENT_CCT_K[0] + (AMBIENT_CCT_K[1] - AMBIENT_CCT_K[0]) * warm)
 
+    def _warmth(self, scale, settings):
+        if self.cue is None:
+            return self.kelvin(scale, settings)
+        s0, k0, s1, k1 = self.cue
+        if s1 == s0:
+            return k1
+        return round(k0 + (k1 - k0) * min(1.0, max(0.0, (scale - s0) / (s1 - s0))))
+
     def published(self, settings, now):
         """The one ambient record (Home's glow now, den_lighting's bulb plan later): the value now, and the cue it's on.
         phase: dim, restore or steady; goal_*: where the cue lands; ramp_s and ramp_starts_mono: its time (a dim starts
         ambient_delay_s after it's called, so ramp_starts_mono can be ahead of now)."""
         ramp = self.ramp
         scale = self.value(now)
-        out = {"level": round(settings["ambient_level"] * scale, 4), "scale": round(scale, 4),
-               "cct_k": self.kelvin(scale, settings), "goal_level": round(settings["ambient_level"] * self.goal, 4),
-               "goal_scale": round(self.goal, 4), "goal_cct_k": self.kelvin(self.goal, settings),
+        out = {"level": round(min(1.0, settings["ambient_level"] * scale), 4), "scale": round(scale, 4),
+               "cct_k": self._warmth(scale, settings),
+               "goal_level": round(min(1.0, settings["ambient_level"] * self.goal), 4),
+               "goal_scale": round(self.goal, 4), "goal_cct_k": self._warmth(self.goal, settings),
                "phase": "steady", "ramp_s": 0.0, "ramp_starts_mono": None}
         if ramp is not None and self.ramp is not None:
             out.update(phase="dim" if ramp.end < ramp.start else "restore", ramp_s=ramp.duration,

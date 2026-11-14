@@ -514,7 +514,8 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
 **The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
 
 **What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
-- Two or three stills from a continuously supported subject window, none from before the seated episode began (`since_mono`) or the association became confident, made into JPEGs in the detector's process (`stills.py`). The reply's gate carries that `seated_since_mono`, the instant the lighting preview's episode starts from too.
+- Two or three stills, chosen newest first and spanning at most 1 s back from the newest frame (`ask.STILLS_SPAN_S`, contract 3), so the first ask after a cue shows the cue. They come from a continuously supported subject window, none from before the seated episode began (`since_mono`) or the association became confident, made into JPEGs in the detector's process (`stills.py`). The reply's gate carries that `seated_since_mono`, the instant the lighting preview's episode starts from too.
+- **One bad frame** (contract 2's consumer rule): a stale snapshot or an unsafe frame is no new ask, and drops nothing. The stills, `eligibility_revision`, the earlier answer, a pending stills request and a reply in flight are kept, until the person binding (`service_run_id`, `camera_epoch`, `track_id`, `association_revision`) or the gate changes. A second person, or a gap of `PERCEPTION_S` or more, still resets.
 - Today's Lab question, with three changes:
   - "hobby" and "craft" are added;
   - the old camera placement is removed;
@@ -606,6 +607,22 @@ takes or camera access.
   - an `IPAddressAllow` for Home Assistant's address.
 
   Both are only there while the asks block is. `install.sh` refuses settings that set the ask up without a token, and a token without such settings, so the unit can't be left waiting for a credential that isn't there.
+
+**Cue to light, the instrument** (`cue_light.py`, `latency-budget.md` "The instrument"):
+- **During a cue run:** `ask_check.py`'s subscriber keeps every `spot_snapshot` with its arrival time on this PC. It saves the numbers to `<data root>\cue-light\<time>\`: `cues.json` and `spots.jsonl`. Each snapshot keeps only its epoch, seq, on, stopped, whether any fixture is lit, and the highest level: never a target, an angle or a frame.
+- **Home's paint stamps:** with the program's paint-stamp patch, Home keeps `window.HomeDenPaintStamps` on the frame after it applies the spots. Save them from the browser's console with `copy(JSON.stringify(HomeDenPaintStamps))`, then:
+
+  ```powershell
+  Get-Clipboard | Set-Content -Encoding ascii <that folder>\paint.json
+  ```
+
+- **The report:** it lines up each cue's first change in light, the snapshot and the paint, on one clock:
+
+  ```powershell
+  python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\cue_light.py report <that folder> --paint <that folder>\paint.json
+  ```
+
+  `--take <take.json>` reads a recorded take's cue marks instead.
 
 ### Tests
 

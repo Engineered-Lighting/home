@@ -40,7 +40,7 @@ class TraceTest(unittest.TestCase):
             self.assertEqual((row["outcome"], row["sent"], row["endpoint"], row["cluster"]),
                              ("encoded_only", False, 18, 0xFC13))
             self.assertEqual((row["schema"], row["run_id"], row["registration_revision"]),
-                             ("c12-preview-trace-2", F3["epoch"], F3["snapshot"]["binding"]["scan_revision"]))
+                             ("c12-fixture-trace-3", F3["epoch"], F3["snapshot"]["binding"]["scan_revision"]))
             self.assertRegex(row["profile_sha256"], r"^[0-9a-f]{64}$")
             self.assertEqual(row["frame"], {"endpoint": 18, "cluster": 0xFC13, "command_id": expected["command"],
                                             "seq": expected["sequence"], "payload_hex": expected["payload_hex"]})

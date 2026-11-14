@@ -20,7 +20,10 @@ MAX_PREVIEW_VALID_MS = 1500
 # its subject (track, camera epoch, association revision) and the reply it answers (request_id, which a lit MOVE must
 # have). A run header row opens each day file a run writes to: the run's mono-and-wall anchor and the codec's and the
 # host simulator's hashes.
-SCHEMA = "c12-preview-trace-2"
+# Trace v3 (plan 05, step 05-3): the same encoded rows, where `sent: false` now means "this row is the encoding". The
+# FC13 sender (c12_send.py) adds a send row (`kind: send`) after each call or drop, and the run header names the desk
+# mapping: {fixture_id, device, light}, or null for a virtual-only run, which may send nothing.
+SCHEMA = "c12-fixture-trace-3"
 FIRMWARE_COMMIT = "cf1c325"
 # The v2-a host simulator the replay is checked with: c12v2_sim.exe, built on 2026-11-12 from the firmware's
 # tests/v2/c12v2_sim.cpp (C12 lane). Contract 5, item 5: its SHA-256 was on disk nowhere until here.
@@ -76,13 +79,22 @@ def _frame(fixture_id, action, seq, decision_id, move_token, move):
     return frame
 
 
+def valid_desk(desk):
+    """The one fixture a desk run sends to (plan 05 §3.6): {fixture_id, device, light}."""
+    return (isinstance(desk, dict) and set(desk) == {"fixture_id", "device", "light"}
+            and all(isinstance(desk[key], str) and desk[key].strip() for key in ("fixture_id", "device"))
+            and type(desk["light"]) is bool)
+
+
 class PreviewTrace:
     """Write one trace per intent. The append callback defines local storage."""
 
     def __init__(self, epoch, append, *, initial_sequence=0, binding=None, profiles=None, clock=time.monotonic,
-                 wall=time.time):
+                 wall=time.time, desk=None):
         if not isinstance(epoch, str) or not epoch or not _integer(initial_sequence, 0, 65535):
             raise ValueError("preview trace needs an epoch and a u16 initial sequence")
+        if desk is not None and not valid_desk(desk):
+            raise ValueError("the desk mapping needs a fixture, a device and light true or false")
         self.epoch, self.append = epoch, append
         self.initial_sequence = initial_sequence
         binding = binding or {}
@@ -98,7 +110,7 @@ class PreviewTrace:
             "schema": SCHEMA, "kind": "run_header", "run_id": self.epoch, "at_mono": clock(), "at_ts": wall(),
             "codec": "c12_fc13", "codec_sha256": CODEC_SHA256, "firmware": FIRMWARE_COMMIT,
             "simulator_sha256": SIMULATOR_SHA256, "binding": dict(self.binding),
-            "profile_sha256": dict(self.profile_hashes),
+            "profile_sha256": dict(self.profile_hashes), "desk": None if desk is None else dict(desk),
         }
         self.sequences = {}
         self.ordinal = 0

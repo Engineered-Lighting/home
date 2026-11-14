@@ -36,11 +36,12 @@ import threading
 import time
 
 import ha_link
+import preview_trace
 
 
 DOMAIN = "c12"
 SERVICE_SCHEMA = "c12-service-1"
-SEND_SCHEMA = "c12-fixture-trace-3"
+SEND_SCHEMA = preview_trace.SCHEMA   # send rows sit in the same trace as the rows they send
 KEEP_LIT_TIMEOUT_S = 1.0
 CALL_TIMEOUT_S = 2.0   # c12.move waits up to about 1 s for its MOVE_ACK
 STOP_CALLS = 3

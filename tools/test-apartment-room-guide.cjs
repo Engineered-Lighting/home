@@ -81,8 +81,8 @@ test('help rows are generated from the key map and nothing else', () => {
     assert.deepEqual(rows.keys, Guide.KEY_MAP.filter(row => !row.homes || row.homes.includes(home)));
     assert.deepEqual(rows.gestures, Guide.GESTURES.filter(row => !row.homes || row.homes.includes(home)));
   }
-  assert.deepEqual(Guide.helpRows('echo').keys.map(row => row.id), ['orbit', 'tilt', 'zoom', 'home', 'cycle', 'escape', 'help']);
-  assert.deepEqual(Guide.helpRows('victoria').keys.map(row => row.id), ['orbit', 'tilt', 'zoom', 'home', 'cycle', 'aim-mode', 'aim-set', 'aim-history', 'escape', 'help']);
+  for (const home of ['echo', 'victoria'])
+    assert.deepEqual(Guide.helpRows(home).keys.map(row => row.id), ['orbit', 'tilt', 'zoom', 'home', 'cycle', 'aim-mode', 'aim-set', 'aim-history', 'escape', 'help']);
   assert.equal(new Set(Guide.KEY_MAP.flatMap(row => row.keys)).size, Guide.KEY_MAP.flatMap(row => row.keys).length, 'no key is listed twice');
 });
 
@@ -91,10 +91,10 @@ test('the room key handler binds exactly the room keys the help lists', () => {
   assert.equal(handlers.length, 1, 'one production room key handler');
   const bound = new Set(keyLiterals(apartment, handlers[0]));
   assert.deepEqual([...bound].sort(), [...roomKeys].sort(), 'handler keys equal KEY_MAP room keys in both directions');
-  // A and Z are bound only on Victoria with a modeled light selected.
+  // A and Z are bound where a modeled light is selected.
   const source = text(apartment, handlers[0]);
-  assert.match(source, /\(e\.key === "a" \|\| e\.key === "z"\)[\s\S]{0,200}virtualFixtureControlsOpen && selectedSiteId === "victoria"/);
-  assert.deepEqual(Guide.KEY_MAP.find(row => row.id === 'aim-mode').homes, ['victoria']);
+  assert.match(source, /\(e\.key === "a" \|\| e\.key === "z"\)[\s\S]{0,200}virtualFixtureControlsOpen && virtualFixtureDocument/);
+  assert.deepEqual(Guide.KEY_MAP.find(row => row.id === 'aim-mode').homes, ['echo', 'victoria']);
   // Zoom keys keep their existing condition, so the listing says nothing more specific.
   // W2 binds Enter and ⌘Z/Ctrl+Z (Shift to redo) in the aim key handler, so only its rows may name them.
   assert.ok(Guide.KEY_MAP.every(row => !/Enter|⌘|Shift|F\b/.test(row.label) || row.owner === 'aim'), 'unbound keys from the design are not promised');
@@ -103,7 +103,7 @@ test('the room key handler binds exactly the room keys the help lists', () => {
   const aimRows = Guide.KEY_MAP.filter(row => row.owner === 'aim');
   assert.deepEqual([...new Set(keyLiterals(apartment, aim[0]))].sort(), [...aimRows.flatMap(row => row.keys), 'z'].sort(),
     "the aim handler binds exactly the aim rows plus A/Z's z, used with Cmd/Ctrl");
-  assert.ok(aimRows.every(row => row.homes?.join() === 'victoria'));
+  for (const row of aimRows) assert.deepEqual(row.homes, ['echo', 'victoria']);
 });
 
 test('every other room keydown listener only handles keys the help lists', () => {
@@ -176,6 +176,9 @@ test('layer rows: unavailable rows explain why, and fixtures have one setter', (
     assert.ok(groups.find(group => group.id === 'shadows').rows.every(row => !row.available && row.reason === 'Planned'));
   }
   const victoria = Guide.layerGroups(cases[1]).flatMap(group => group.rows);
+  const echoVirtual = Guide.layerGroups({ homeId: 'echo', seams: cases[1].seams }).flatMap(group => group.rows);
+  assert.equal(echoVirtual.find(row => row.id === 'fixtures').set, setter);
+  assert.equal(echoVirtual.find(row => row.id === 'fixtures').ariaLabel, 'Show virtual spotlights layer');
   assert.equal(victoria.find(row => row.id === 'fixtures').set, setter, 'Layers calls the owner setter itself');
   assert.equal(victoria.find(row => row.id === 'fixtures').ariaLabel, 'Show virtual spotlights layer');
   assert.equal(victoria.find(row => row.id === 'follow').reason, 'Needs continuous tracking · planned');

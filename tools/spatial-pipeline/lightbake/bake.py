@@ -1,11 +1,12 @@
-"""Step 91: path-traced unit light basis, 40 B/receiver encoding, per-vertex mesh layer, manifest.
+"""Step 91: path-traced unit light basis, per-receiver and per-vertex encoding, manifest.
 
-Columns (29): 4 downlights, 24 radials (fixture-major, zones 1..6), 1 window.
+Victoria: 4 downlights, 24 radials (fixture-major, zones 1..6), 1 window.
 Fixture columns are irradiance per lumen of emitter flux (lx/lm) with assumed
 Gaussian lobes from home-den-fixtures.js defaults; the window column is the
 capture-state daylight through the detected openings (capture-relative units,
-white-balanced; its colour is lighting-manifest.json columns[28].colour_rgb).
-The four robotic spots are live (L5) and are not baked.
+white-balanced; its colour is the last manifest column's colour_rgb).
+Echo's capture-only document produces one capture column. Spotlights in both
+homes are computed at runtime from each fixture's current position and aim.
 
 Mesh: the Scaniverse atlas packs faces at about half a texel each at 2048^2
 (15 % of the atlas area is covered by UV triangles), so an atlas lightmap
@@ -52,13 +53,13 @@ def run(args):
     BND.assert_outside(out, pack)
     work = out / "_work"
     before = BND.snapshot(pack)
-    binding, assets, _ = BND.read_binding(pack)
+    binding, assets, pack_manifest = BND.read_binding(pack)
     with open(work / "delight.json", "rb") as f:
         meta90 = json.loads(f.read())
     if meta90["binding"] != binding or meta90["pack_snapshot_after"] != BND.snapshot_digest(before):
         raise SystemExit("step 90 output is for different pack bytes; rerun 90_delight_layer.py")
     z = np.load(work / "delight.npz")
-    mounts, walls, eq = scan.read_equipment(args.equipment, binding)
+    mounts, walls, eq = scan.read_equipment(args.equipment, binding, pack_manifest["siteId"])
     if eq != meta90["equipment"]:
         raise SystemExit("equipment registration changed since step 90")
     cols = scan.fixture_columns(mounts, args.emitter_drop)
@@ -80,16 +81,26 @@ def run(args):
     w_cap[-1] = 1.0
     colours = np.ones((K, 3))
     colours[-1] = c_win
+    diffuse_capture = meta90.get("diffuse_capture_floor") is not None
+
+    def with_capture_column(basis, capture_irradiance):
+        if diffuse_capture:
+            basis[:, -1, :] = capture_irradiance
+        return basis
 
     for name, src in SET_SOURCES.items():
         P, N = z[f"{name}_Pr"], z[f"{name}_normal"].astype(np.float64)
         rho, flags, R = z[f"{name}_rho"], z[f"{name}_flags"], z[f"{name}_R"]
         ts = time.time()
-        B = sc.basis(P, N, spp=args.spp, bounces=args.bounces)
+        B = with_capture_column(sc.basis(P, N, spp=args.spp, bounces=args.bounces), z[f"{name}_E_cap"])
         log(name, "basis", B.shape, "%.1fs" % (time.time() - ts))
         Bs = ENC.lum(B)
         cs = ENC.column_scales(Bs)
         rec = ENC.encode_receivers(rho, N, Bs, B, flags, cs)
+        if diffuse_capture:
+            # Fixture CCT supplies color at runtime. Keep the modeled
+            # capture column neutral instead of tinting the recovered albedo.
+            rec["bounce-tint"].fill(255)
         set_files = {}
         for field, arr in rec.items():
             _write(out, f"{name}-{field}.bin", arr, set_files)
@@ -118,12 +129,14 @@ def run(args):
     Nv = z["render_vn"].astype(np.float64)
     flags_v = z["render_flags"]
     ts = time.time()
-    B = sc.basis(Pv, Nv, spp=args.mesh_spp, bounces=args.bounces)
+    B = with_capture_column(sc.basis(Pv, Nv, spp=args.mesh_spp, bounces=args.bounces), z["render_E"])
     log("mesh vertices basis", B.shape, "%.1fs" % (time.time() - ts))
     Bs = ENC.lum(B)
     cs_m = ENC.column_scales(Bs)
     u8, s16 = ENC.encode_basis(Bs, cs_m)
     tint = ENC.encode_tint(ENC.bounce_tint(B, cs_m))
+    if diffuse_capture:
+        tint.fill(255)
     E16 = np.minimum(z["render_E"], ENC.FP16_MAX).astype("<f2")
     mesh_files = {}
     kv = {"keyed_by": "vertex index of meshes[0].primitives[0]"}
@@ -169,12 +182,13 @@ def run(args):
                                     "source": "home-den-fixtures.js defaultFixture (downlight_ring.beam_deg, "
                                               "radials.beam_half_angle_deg, radials.elevation_tilt_deg)"},
                         "emitter_origin": f"mount position (approximate) minus {args.emitter_drop} m (assumed)"})
-    columns.append({"index": K - 1, "kind": "window", "unit": "capture_relative_irradiance",
-                    "colour_rgb": c_win.tolist(),
-                    "note": "daylight and adjacent-room light through the detected openings at the capture state; "
-                            "weight 1 x colour_rgb reproduces it; scale down for a night ambient"})
+    columns.append({"index": K - 1, "kind": "capture_diffuse" if diffuse_capture else "window",
+                    "unit": "capture_relative_irradiance", "colour_rgb": c_win.tolist(),
+                    "note": "Modeled neutral capture baseline without detected apertures; no window light or physical light levels inferred."
+                    if diffuse_capture else "daylight and adjacent-room light through the detected openings at the capture state; "
+                                            "weight 1 x colour_rgb reproduces it; scale down for a night ambient"})
     manifest = {
-        "schema": SCHEMA, "version": 1, "site_id": "victoria",
+        "schema": SCHEMA, "version": 1, "site_id": pack_manifest["siteId"],
         "created_at": datetime.now(timezone.utc).isoformat(),
         "binding": binding,
         "pack_assets": {k: assets[k] for k in ("apartment.ply", "apartment.mobile.ply", "points.ply", "mesh.glb")},
@@ -185,14 +199,16 @@ def run(args):
                            "step90_identical": meta90["pack_snapshot_before"] == meta90["pack_snapshot_after"]},
         "provenance": {"status": "modeled", "measured": False, "photometry": "assumed", "disclosure": DISCLOSURE,
                        "albedo": "de-lit from capture radiance (gathered capture-state bounce + window emitters); "
-                                 "clamped; flagged", "capture_state": meta90["capture_state"]},
+                                 "clamped; flagged", "capture_state": meta90["capture_state"],
+                       **({"capture_diffuse": {"status": "modeled", "irradiance_floor": meta90["diffuse_capture_floor"]}}
+                          if diffuse_capture else {})},
         "equipment": eq,
         "columns": columns,
-        "encoding": {"receiver_record": "albedo rgb8 sRGB | normal-oct 2xu8 | basis-u8 x29 sqrt | basis-scale fp16 | "
+        "encoding": {"receiver_record": f"albedo rgb8 sRGB | normal-oct 2xu8 | basis-u8 x{K} sqrt | basis-scale fp16 | "
                                         "bounce-tint rgb8 | flags u8 (one file per field)",
                      "decode": "b_k=(u8_k/255)^2*scale*column_scale_k; tint=t/lum(t); E=tint*sum_k w_k*c_k*b_k; "
                                "L=albedo/pi*E",
-                     "mesh_record": "capture-irradiance fp16x3 | normal-oct 2xu8 | basis-u8 x29 | basis-scale fp16 | "
+                     "mesh_record": f"capture-irradiance fp16x3 | normal-oct 2xu8 | basis-u8 x{K} | basis-scale fp16 | "
                                     "bounce-tint rgb8 | flags u8, per vertex of meshes[0].primitives[0]",
                      "mesh_albedo": "rho = clamp(pi * srgb_to_linear(atlas(uv)) / max(E_cap(interpolated), floor), "
                                     "0, rho_max) per fragment",

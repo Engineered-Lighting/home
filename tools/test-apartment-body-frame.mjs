@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const F = await import(pathToFileURL(path.join(ROOT, 'app/src/home-3d/apartment-body-frame.mjs')).href);
@@ -57,6 +58,24 @@ test('bytes that disagree with the shape are refused: keys out of order, an unkn
     assert.equal(decodeBodyFrame(kind), null, 'kind 2 is not defined');
     const junk = { ...f, points: { ...f.points, kind: '!!!!' } };
     assert.equal(decodeBodyFrame(junk), null);
+});
+
+test('the live decoder admits measured geometry and clear events only', () => {
+    const live = measuredBodyEvent(), clear = measuredBodyEvent({ reason: 'empty', mode: 'none' });
+    const { decoded } = F.decodeLiveBodyEvent(live);
+    assert.equal(decoded.n, live.points.count);
+    assert.deepEqual(decoded.torso, { facingDeg: 90, shoulder: [1.2, 1.46, 1.51], pelvisZ: 0.78 });
+    assert.deepEqual(F.decodeLiveBodyEvent(clear), { event: clear });
+    const legacyPoints = (list) => {
+        const { count, key, position_mm, normal, kind } = frame(list).points;
+        return { count, key, position_mm, normal, kind };
+    };
+    for (const invalid of [frame([[1, 0, 0, 1]]), { ...clear, track_id: 'leaked' }, { ...live, head: {} },
+        { ...live, seq: -1 }, { ...live, expires_ts: 102 }, { ...live, mode: 'none' },
+        { ...live, points: { ...live.points, normal: undefined } }, { ...live, points: { ...live.points, head: '' } },
+        { ...live, points: legacyPoints([[1, 0, 0, 1, KIND.backFill]]) }, { ...live, points: legacyPoints([[640 * 400, 0, 0, 1]]) }]) {
+        assert.equal(F.decodeLiveBodyEvent(invalid), null);
+    }
 });
 
 test('interpolation: equal keys move between frames, unmatched points fade out and in', () => {

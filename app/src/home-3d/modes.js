@@ -909,6 +909,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
         getMesh() { return state.mesh; },
         getCollision() { return state.collision; },
+        getMeshNearCut() { return state.meshNearCut.value; },
         setMeshNearCut(v) { state.meshNearCut.value = v; },
         setDollhouseCutaway(policy, worldToLocal) {
             if (disposed) return;

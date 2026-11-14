@@ -1,7 +1,8 @@
 /* The live body in the apartment view, drawn in the owner-approved "Recording" look (2026-11-11): a projected memory in
  * warm light. Fine hot particles with interference bands, an analogue flicker and a rare glitch band, hotter where the
  * surface turns away and where it moves, two trailing frames, a soft glow, motes in the air and a faint floor pool.
- * - Provenance shows: back fill is a little dimmer, remembered limbs dimmer still, guessed limbs faint and flickering.
+ * - Provenance shows: back fill is a little dimmer, remembered limbs dimmer still, guessed limbs a little dimmer, never
+ *   flickering (owner, 2026-11-12: guessed legs that blink read as bouncing, not as a guess).
  * - The head is drawn thinner (no face: the data is depth only).
  * - What the person holds is part of the house, not of the person: steady points in Home's accent blue (#4D9CFF), no
  *   glow, flicker or trails.
@@ -13,17 +14,20 @@ import * as THREE from 'three';
 import { KIND, decodeBodyFrame, drawBuffers, mergeFrames, mergeJoints, zoomRatio, MAX_POINTS } from './apartment-body-frame.mjs';
 
 export const RECORDING = Object.freeze({ tint: [1.0, 0.5, 0.16], core: [1.0, 0.88, 0.62], object: [0x4d / 255, 0x9c / 255, 0xff / 255],
-    world: 0.0105, minPx: 1.1, gain: 1.15, glowWorld: 0.05, glowGain: 0.16, motes: 22, pool: 0.14 });
+    // No per-dot glow (glowGain 0): the design's glow was one bloom over the figure, and a halo behind every dot read
+    // as haze on each dot (owner, 2026-11-12). Gain and trails as the design had them.
+    world: 0.0105, minPx: 1.1, gain: 0.9, glowWorld: 0.05, glowGain: 0, trails: [0.4, 0.18], motes: 22, pool: 0.14 });
 const CAPACITY = MAX_POINTS * 2, GONE_S = 2.5, FADE_S = 0.6;
 
 const VERT = /* glsl */`
 attribute float aKind, aAlpha, aMotion, aHead, aRand;
 uniform float uScalePx, uWorld, uSizeMul, uMinPx, uMaxPx;
 uniform vec3 uGlitch;
+uniform bool uMeasuredOnly;
 varying float vAlpha, vRim, vKind, vMotion, vRand, vHead, vWz;
 void main() {
   vec3 p = position, n = length(normal) > 0.1 ? normalize(normal) : vec3(0.0, 0.0, 1.0);
-  if (aKind < 4.5) {
+  if (!uMeasuredOnly && aKind < 4.5) {
     if (p.z > uGlitch.x && p.z < uGlitch.y) p.x += uGlitch.z;
     p += (vec3(fract(aRand * 13.7), fract(aRand * 71.3), fract(aRand * 37.1)) - 0.5) * 0.006;
   }
@@ -51,11 +55,11 @@ bool thinHead() { return vHead > 0.35 && vRand > 0.45; }
 const HOLO = COMMON + /* glsl */`
 void main() {
   float d = length(gl_PointCoord - vec2(0.5)); if (d > 0.5 || thinHead() || isObj() > 0.5) discard;
-  float g = isGuess(); if (g > 0.5 && hash(vec2(floor(uTime * 9.0), vRand * 91.0)) > 0.55) discard;
+  float g = isGuess();
   float core = exp(-d * d * 18.0);
   float band = 0.62 + 0.38 * pow(0.5 + 0.5 * sin(vWz * 150.0 + uTime * 2.2), 3.0);
   float e = (0.75 + 1.3 * vRim * vRim * (1.0 - vHead) + 1.1 * vMotion) * band * uFlicker * uGain * (1.0 - 0.3 * vHead);
-  e *= 1.0 - 0.55 * g - 0.2 * isMem() - 0.35 * isBack();
+  e *= 1.0 - 0.3 * g - 0.2 * isMem() - 0.35 * isBack();
   vec3 col = mix(uTint, uCore, clamp(vRim * vRim + vMotion * 0.8, 0.0, 1.0));
   gl_FragColor = vec4(col * e * core * vAlpha * uOpacity * (1.0 - 0.35 * vHead), 1.0);
 }`;
@@ -97,22 +101,24 @@ function release(root) {
 }
 
 export function attachApartmentBodyLayer(engine, { now = () => performance.now() / 1000, animate = true, reducedMotion = false,
-    zoomT = null, look = RECORDING } = {}) {
+    zoomT = null, look = RECORDING, measuredOnly = false } = {}) {
     const parent = engine?.apartmentRoot;
     if (!parent || typeof parent.add !== 'function') throw Error('apartment_body_root_missing');
     const reduced = () => (typeof reducedMotion === 'function' ? reducedMotion() : reducedMotion) === true;
     const root = new THREE.Group();
     root.name = 'home-apartment-body-owned';
     root.userData.noLightingAuthority = true;
+    if (measuredOnly) root.userData.excludeFromApartmentCapture = true;
     parent.add(root);
 
     const shared = { uTime: { value: 0 }, uScalePx: { value: 600 }, uFlicker: { value: 1 }, uGlitch: { value: new THREE.Vector3(9, 9, 0) },
-        uSizeMul: { value: 1 }, uTint: { value: new THREE.Vector3(...look.tint) }, uCore: { value: new THREE.Vector3(...look.core) } };
+        uMeasuredOnly: { value: measuredOnly }, uSizeMul: { value: 1 }, uTint: { value: new THREE.Vector3(...look.tint) },
+        uCore: { value: new THREE.Vector3(...look.core) } };
     const material = (fragmentShader, extra, options) => new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader,
         uniforms: { ...shared, uWorld: { value: look.world }, uMinPx: { value: look.minPx }, uMaxPx: { value: 24 }, uGain: { value: look.gain }, uOpacity: { value: 0 }, ...extra },
         transparent: true, depthWrite: false, depthTest: true, blending: THREE.AdditiveBlending, ...options });
     function geometry() {
-        const g = new THREE.BufferGeometry(), B = drawBuffers(CAPACITY);
+        const g = new THREE.BufferGeometry(), B = drawBuffers(measuredOnly ? MAX_POINTS : CAPACITY);
         g.setAttribute('position', new THREE.BufferAttribute(B.pos, 3).setUsage(THREE.DynamicDrawUsage));
         g.setAttribute('normal', new THREE.BufferAttribute(B.nrm, 3).setUsage(THREE.DynamicDrawUsage));
         for (const [name, array] of [['aKind', B.kind], ['aAlpha', B.alpha], ['aMotion', B.motion], ['aHead', B.head], ['aRand', B.rand]])
@@ -122,12 +128,13 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         return { g, B };
     }
     const points = (geo, mat, name, order) => { const o = new THREE.Points(geo.g, mat); o.name = name; o.frustumCulled = false; o.renderOrder = order; root.add(o); return o; };
-    const now0 = geometry(), ghostGeo = [geometry(), geometry()];
+    const now0 = geometry(), ghostGeo = measuredOnly ? [] : [geometry(), geometry()];
     const holo = material(HOLO), glow = material(GLOW, { uWorld: { value: look.glowWorld }, uMinPx: { value: 2 }, uMaxPx: { value: 48 }, uGain: { value: look.glowGain } });
     const halo = material(HALO, { uWorld: { value: 0.07 }, uMinPx: { value: 2 }, uMaxPx: { value: 64 } }, { blending: THREE.NormalBlending });
     const objectMat = material(OBJECT, { uTint: { value: new THREE.Vector3(...look.object) }, uGain: { value: 1 } }, { blending: THREE.NormalBlending, depthWrite: true });
-    const ghosts = [0.5, 0.25].map(() => material(HOLO));
-    points(now0, halo, 'body-halo', 18); points(now0, glow, 'body-glow', 19); points(now0, holo, 'body-recording', 20); points(now0, objectMat, 'body-held-object', 21);
+    const ghosts = ghostGeo.map(() => material(HOLO));
+    points(now0, halo, 'body-halo', 18); points(now0, glow, 'body-glow', 19).visible = look.glowGain > 0;
+    points(now0, holo, 'body-recording', 20); points(now0, objectMat, 'body-held-object', 21);
     ghostGeo.forEach((geo, i) => points(geo, ghosts[i], `body-trail-${i + 1}`, 17));
 
     // Motes: dust in the warm light around the person, drifting up.
@@ -144,6 +151,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         fragmentShader: POOL_FRAG, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
         uniforms: { uTint: { value: new THREE.Vector3(1, 0.55, 0.2) }, uOpacity: { value: 0 } } });
     const pool = new THREE.Mesh(new THREE.PlaneGeometry(1.4, 1.4), poolMat); pool.name = 'body-floor-pool'; pool.position.z = 0.012; pool.renderOrder = 3; root.add(pool);
+    if (measuredOnly) for (const child of root.children) child.visible = child.name === 'body-recording';
 
     // The WebGPU path (?renderer=webgpu) can't run the GLSL above: there the layer hides it and draws through the TSL
     // twin in apartment-body-webgpu.mjs, from the same buffers and uniforms (the particles and the held object).
@@ -153,18 +161,19 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         const cb = new URL(import.meta.url).search;
         import(`./apartment-body-webgpu.mjs${cb}`).then(({ createBodySprites }) => {
             if (disposed) return;
-            twin = createBodySprites({ B: now0.B, shared, body: holo.uniforms, held: objectMat.uniforms });
+            twin = createBodySprites({ B: now0.B, shared, body: holo.uniforms, held: measuredOnly ? null : objectMat.uniforms });
             for (const o of twin.objects) root.add(o);
+            twin.update(now0.B.n);
         }).catch(error => console.warn('[home-3d] body layer: WebGPU twin unavailable', error));
     }
 
     let disposed = false, rafId = null, last = null, frames = [], period = 0.15, presence = 0, centroid = null, joints = {}, trackId = null, seen = null, poolOn = true;
-    let speed = 0, prevCentroid = null, object = null;
+    let speed = 0, prevCentroid = null, object = null, torso = null;
     const scratch = new THREE.Vector3(), camWorld = new THREE.Vector3();
 
     function write(F, geo, fade = 1) {
         const B = geo.B;
-        if (!F) { geo.g.setDrawRange(0, 0); return; }
+        if (!F) { B.n = 0; geo.g.setDrawRange(0, 0); return; }
         mergeFrames(null, F, 1, B);
         if (fade !== 1) for (let i = 0; i < B.n; i++) B.alpha[i] *= fade;
         for (const name of Object.keys(geo.g.attributes)) geo.g.attributes[name].needsUpdate = true;
@@ -174,7 +183,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
     /* One stream frame. Returns false, drawing nothing new, for one that isn't a valid den-live-body-1 frame. A new
      * track replaces the old one at once (one person per layer). */
     function update(frame) {
-        if (disposed) return false;
+        if (disposed || measuredOnly) return false;
         const F = decodeBodyFrame(frame);
         if (!F) return false;
         const at = now();
@@ -186,6 +195,29 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         trackId = F.trackId; seen = at; object = F.object;
         write(frames[frames.length - 2] || null, ghostGeo[0]); write(frames[frames.length - 3] || null, ghostGeo[1]);
         return true;
+    }
+
+    function updateMeasured(frame) {
+        if (disposed || !measuredOnly) return false;
+        write(frame, now0);
+        twin?.update(now0.B.n);
+        trackId = frame.trackId;
+        seen = now();
+        centroid = frame.centroid;
+        torso = frame.torso;
+        presence = 1;
+        return true;
+    }
+
+    function clear() {
+        if (disposed) return;
+        frames = []; trackId = null; seen = null; centroid = null; prevCentroid = null; joints = {};
+        torso = null; object = null; speed = 0; presence = 0; period = 0.15;
+        write(null, now0);
+        for (const geo of ghostGeo) write(null, geo);
+        for (const mat of [holo, objectMat, glow, halo, ...ghosts, moteMat, poolMat]) mat.uniforms.uOpacity.value = 0;
+        mote.a.fill(0); mote.age.fill(9); mote.next = 0; mote.carry = 0;
+        twin?.update(0);
     }
 
     function spawnMotes(dt, n, B) {
@@ -228,9 +260,15 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
             const h = renderer?.getDrawingBufferSize ? renderer.getDrawingBufferSize(new THREE.Vector2()).y : 900;
             shared.uScalePx.value = h / (2 * Math.tan(camera.fov * Math.PI / 360));
         }
+        if (measuredOnly) {
+            shared.uSizeMul.value = 1 + 0.25 * currentZoom();
+            shared.uFlicker.value = still ? 1 : 0.93 + 0.05 * Math.sin(at * 31) + 0.03 * Math.sin(at * 77);
+            holo.uniforms.uOpacity.value = presence;
+            return;
+        }
         const fresh = seen != null && at - seen < GONE_S;
         presence += ((fresh && frames.length ? 1 : 0) - presence) * (1 - Math.exp(-step / (fresh ? 0.35 : FADE_S)));
-        if (!fresh && presence < 0.02 && frames.length) { frames = []; trackId = null; object = null; now0.g.setDrawRange(0, 0); ghostGeo.forEach(geo => geo.g.setDrawRange(0, 0)); }
+        if (!fresh && presence < 0.02 && frames.length) clear();
 
         let n = 0;
         if (frames.length) {
@@ -253,7 +291,8 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         shared.uGlitch.value.set(!still && g < 0.16 ? z0 : 9, !still && g < 0.16 ? z0 + 0.1 : 9, 0.02 * Math.sin(at * 90));
         holo.uniforms.uOpacity.value = presence; objectMat.uniforms.uOpacity.value = presence;
         glow.uniforms.uOpacity.value = presence * (1 - 0.6 * zt); halo.uniforms.uOpacity.value = presence * 0.035;
-        ghosts[0].uniforms.uOpacity.value = still ? 0 : presence * 0.5; ghosts[1].uniforms.uOpacity.value = still ? 0 : presence * 0.25;
+        const trails = look.trails || [0.4, 0.18];
+        ghosts[0].uniforms.uOpacity.value = still ? 0 : presence * trails[0]; ghosts[1].uniforms.uOpacity.value = still ? 0 : presence * trails[1];
         moteMat.uniforms.uOpacity.value = presence;
         poolMat.uniforms.uOpacity.value = poolOn ? presence * look.pool * (1 - 0.5 * zt) : 0;
         if (centroid) pool.position.set(centroid[0], centroid[1], 0.012);
@@ -273,17 +312,20 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
 
     return {
         update,
+        updateMeasured,
+        clear,
         tick,
         /* The floor pool off (the Lighting view: a warm glow on the floor could read as a lamp's). */
         setPool(on) { poolOn = on !== false; },
         /* What the labels need, in the apartment frame: the interpolated joints, the smoothed centroid, ground speed,
          * the held object's points (every 3rd) and this frame's object label. */
         snapshot() {
+            if (measuredOnly) return { trackId, presence, centroid: centroid && centroid.slice(), torso, joints: {} };
             const B = now0.B, objectPoints = [];
             for (let i = 0; i < B.n; i += 3) if (B.kind[i] === KIND.heldObject && B.alpha[i] > 0.3) objectPoints.push([B.pos[i * 3], B.pos[i * 3 + 1], B.pos[i * 3 + 2]]);
             return { trackId, presence, centroid: centroid && centroid.slice(), joints: { ...joints }, speed, objectPoints, object: objectPoints.length > 8 ? object : null };
         },
-        status: () => ({ trackId, frames: frames.length, points: now0.B.n, presence, period_s: period, since_s: seen == null ? null : now() - seen,
+        status: () => ({ trackId, frames: measuredOnly ? Number(seen != null) : frames.length, points: now0.B.n, presence, period_s: period, since_s: seen == null ? null : now() - seen,
             webgpu: !!twin }),
         dispose() {
             if (disposed) return;

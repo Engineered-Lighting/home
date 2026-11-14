@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { register } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fileUrl = relative => pathToFileURL(path.join(ROOT, 'app/src', relative)).href;
@@ -19,7 +20,7 @@ export async function resolve(specifier, context, next) {
 }`));
 const THREE = await import(map.three);
 const { attachApartmentBodyLayer } = await import(fileUrl('home-3d/apartment-body-layer.mjs'));
-const { encodeBodyFrame, KIND } = await import(fileUrl('home-3d/apartment-body-frame.mjs'));
+const { decodeLiveBodyEvent, encodeBodyFrame, KIND } = await import(fileUrl('home-3d/apartment-body-frame.mjs'));
 
 async function webgpuLayer() {
     const apartmentRoot = new THREE.Group(), camera = new THREE.PerspectiveCamera(35, 1.5, 0.1, 100), clock = { t: 100 };
@@ -70,5 +71,26 @@ test('a renderer that isn\'t the node renderer keeps the WebGL objects and loads
     assert.equal(layer.status().webgpu, false);
     assert.ok(group.getObjectByName('body-recording').visible);
     assert.equal(group.getObjectByName('body-recording-webgpu'), undefined);
+    layer.dispose();
+});
+
+test('measured WebGPU instance count clears immediately even if the twin loads late', async () => {
+    const apartmentRoot = new THREE.Group(), camera = new THREE.PerspectiveCamera();
+    const layer = attachApartmentBodyLayer({ apartmentRoot, camera, renderer: { isWebGPURenderer: true } }, { animate: false, measuredOnly: true });
+    const { decoded } = decodeLiveBodyEvent(measuredBodyEvent());
+    const group = apartmentRoot.getObjectByName('home-apartment-body-owned');
+    assert.equal(layer.status().webgpu, false);
+    layer.updateMeasured(decoded);
+    layer.clear();
+    for (let i = 0; i < 50 && !layer.status().webgpu; i++) await new Promise(resolve => setTimeout(resolve, 20));
+    const recording = group.getObjectByName('body-recording-webgpu');
+    assert.equal(recording.count, 0);
+    assert.deepEqual(group.children.filter(child => child.visible), [recording]);
+    layer.updateMeasured(decoded);
+    layer.tick(0.016);
+    assert.equal(recording.count, decoded.n);
+    layer.clear();
+    assert.equal(recording.count, 0);
+    assert.equal(layer.status().points, 0);
     layer.dispose();
 });

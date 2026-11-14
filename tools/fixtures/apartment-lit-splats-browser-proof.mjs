@@ -68,15 +68,39 @@ function browserOptions(precision) {
 }
 const RENDERER_QUERY = RENDERER === 'webgpu' ? '&renderer=webgpu' : '';
 
-export async function runLitSplatsBrowserProof({ part, signal, precision='exact', phase='all' }) {
+export async function runLitSplatsBrowserProof({ part, signal, precision='exact', phase='all', site = 'victoria' }) {
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
+  assert.ok(site === 'victoria' || site === 'echo' && part === 2 && RENDERER === 'webgl' && precision === 'exact');
   assert.ok(['exact','native'].includes(precision),'known frame precision contract');
-  assert.ok(['all','frames','controls','calibration'].includes(phase)&&(phase==='all'||precision==='native'&&part===1),'known proof phase');
+  assert.ok(phase === 'all' || site === 'echo' && ['mesh', 'receivers'].includes(phase) || precision === 'native' && part === 1
+    && ['frames', 'controls', 'calibration'].includes(phase), 'known proof phase');
   const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
   const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
   const packs = path.join(run, 'packs'), privateRoot = path.join(run, 'private');
-  const echo = installPack(packs, 'echo'), victoria = installPack(packs, 'victoria');
-  const layer = authoredLightingLayer(victoria);
+  const echoModeled = site === 'echo';
+  const echoOptions = echoModeled ? { seedDevices: [
+    [.6, .9, 2.3], [3, 2.8, 2.2], [1, 3, 2.3], [3, 1, 2.2],
+  ].map((pos, index) => ({ type: 'light', id: 'authored-echo-' + (index + 1), room_id: 'authored-room',
+    name: 'Authored Echo light ' + (index + 1), ha_entity_id: 'light.authored_echo_' + (index + 1),
+    pos, height_preset: 'ceiling' })) } : undefined;
+  const echo = installPack(packs, 'echo', echoOptions), victoria = installPack(packs, 'victoria');
+  const savedEcho = { ...echo.seed, revision: 14, devices: [
+    [.63, .85, 2.3], [3.11, 2.91, 2.25], [1.08, 3.08, 2.2], [3.1, .98, 2.18],
+    [.34, 3.49, 1.37], [.87, .29, 1.12], [1.58, 3.52, 1.68], [2.03, 2.96, 2.25], [2.46, 3.66, 2.25],
+    [3.43, 3.42, 2.25], [3.67, 2.3, 2.18], [3.54, .42, .93], [1.95, .45, 2.35],
+  ].map((pos, index) => {
+    const id = 'authored-echo-' + (index + 1);
+    return { id, type: 'light', name: 'Saved fixture ' + (index + 1), pos, room_id: 'authored-room',
+      ha_entity_id: (index === 11 ? 'switch.' : 'light.') + id.replace(/-/g, '_') };
+  }) };
+  const layer = echoModeled
+    ? authoredLightingLayer(echo, { sockets: echo.seed.devices.map(row => ({
+      fixtureId: 'echo-virtual-' + row.id, mountId: 'echo-mount-' + row.id, position: row.pos,
+    })), tamper: manifest => {
+      const index = manifest.columns.length - 1;
+      manifest.columns[index] = { ...manifest.columns[index], kind: 'capture_diffuse' };
+    } })
+    : authoredLightingLayer(victoria);
   fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1,
     packs: [echo, victoria].map(item => ({ manifest: item.manifest, active: true, baseUrl: item.base })) }));
   initRegistration(privateRoot, authoredDocument(readActiveBinding(packs), Core), { contentPacksDir: packs });
@@ -102,8 +126,9 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     page.on('request', request => requested.push(new URL(request.url()).pathname));
     await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off' + query, { waitUntil: 'domcontentloaded' });
     await page.locator('.apt-home-shell[data-home-layout="unified"]').waitFor({ timeout: WAIT_MS });
-    await page.waitForFunction(() => window.__APT_ENGINE?.siteId === 'victoria'
-      && window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.length === 4, null, { timeout: WAIT_MS });
+    await page.waitForFunction(site => window.__APT_ENGINE?.siteId === site && (site === 'echo'
+      ? !!document.querySelector('button[aria-label="Lighting"]:not([disabled])')
+      : window.__APT_ENGINE.overlay.virtualFixturesReadback().fixtures.length === 4), site, { timeout: WAIT_MS });
     const backend=await page.evaluate(()=>{
       const gl=window.__APT_ENGINE.renderer.getContext?.(),extension=gl?.getExtension?.('WEBGL_debug_renderer_info');
       return {renderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):gl?.getParameter?.(gl.RENDERER)||'unknown',unmasked:!!extension,
@@ -237,7 +262,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         else if (url.pathname.startsWith(layer.base)) { body = layer.files[decodeURIComponent(url.pathname.slice(layer.base.length))]; receipt.requests.push(url.pathname); }
         else { const pack = [echo, victoria].find(item => url.pathname.startsWith(item.base)); if (pack) { body = pack.files[url.pathname.slice(pack.base.length)]; if (url.pathname.endsWith('.json')) type = 'application/json'; } }
         if (!body && url.pathname.startsWith('/proxy/')) {
-          const value = url.pathname.endsWith('/model') || url.pathname.endsWith('/apartment_model') ? echo.seed
+          const value = url.pathname.endsWith('/apartment_model') ? savedEcho : url.pathname.endsWith('/model') ? echo.seed
             : url.pathname.endsWith('/api/states') ? [] : url.pathname.endsWith('/api/config') ? { unit_system: { length: 'm' } } : {};
           body = Buffer.from(JSON.stringify(value)); type = 'application/json';
         }
@@ -258,9 +283,15 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     browser = await chromium.launch(browserOptions(precision));
     const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, serviceWorkers: 'block', reducedMotion: 'reduce' });
     await context.addCookies([{ name: 'authored_owner_session', value: '1', url: origin }]);
-    await context.addInitScript(() => {
-      localStorage.setItem('apartment3d.site', 'victoria'); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true;
-    });
+    await context.addInitScript(({ site, draft }) => {
+      localStorage.setItem('apartment3d.site', site); localStorage.setItem('home.perf.backgroundWarmup', 'off'); window.HG_DISABLE_SERVICE_WORKER = true;
+      if (site === 'echo') {
+        localStorage.setItem('apartment3d.shader.uJitterAmp', '0');
+        window.__HOME_WEB_HA_TOKEN_PROXY = true;
+        window.__HOME_WEB_HA_TOKEN = 'authored-test-proxy-marker';
+        if (draft) localStorage.setItem('apartment3d.modelDraft', JSON.stringify(draft));
+      }
+    }, { site, draft: echoModeled && phase === 'mesh' ? { ...echo.seed, revision: 15 } : null });
     if(nativeWebgl)await context.addInitScript({content:'window.__nativeRgbaReference = '+nativeRgbaReference.toString()+';'});
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
@@ -274,7 +305,256 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
     });
     await context.routeWebSocket('**/*', socket => socket.close());
 
-    if (part === 1) {
+    if (echoModeled) {
+      const { page } = await openPage(context, RENDERER_QUERY);
+      const lighting = page.getByRole('button', { name: 'Lighting', exact: true });
+      const haControls = page.locator('[aria-label="Room controls"]');
+      const modeledControls = page.getByRole('complementary', { name: 'Room lighting inspector', exact: true });
+      const fixtureControls = page.getByRole('complementary', { name: 'Fixture lighting inspector', exact: true });
+      const descriptors = () => page.evaluate(() => {
+        const overlay = window.__APT_ENGINE.overlay;
+        return overlay.virtualFixturesReadback().fixtures.map(row => overlay.virtualFixtureInteractionDescriptor(row.fixture_id));
+      });
+      const cameraPose = () => page.evaluate(() => window.__APT_ENGINE.camera.matrixWorld.toArray());
+      const meshDragPoints = () => page.evaluate(() => {
+        const engine = window.__APT_ENGINE, canvas = engine.renderer.domElement;
+        const rect = engine.picking.getHost().getBoundingClientRect();
+        const volumes = [], footprints = [];
+        engine.scene.traverseVisible(node => {
+          if (node.name === 'modeled-aim-volume') volumes.push(node);
+          if (node.name === 'modeled-aim-receiver-glow') footprints.push(node);
+        });
+        const bodies = engine.overlay.virtualFixturePickObjects().filter(node => node.userData.interaction_role === 'fixture');
+        const onCanvas = ({ x, y }) => document.elementFromPoint(x, y) === canvas;
+        const project = local => {
+          const world = engine.apartmentRoot.localToWorld(engine.camera.position.clone().fromArray(local));
+          const screen = engine.picking.projectToScreen(world);
+          const pointer = { x: Math.round(rect.left + screen.x), y: Math.round(rect.top + screen.y) };
+          return screen.visible && onCanvas(pointer) ? { world, pointer } : null;
+        };
+        const pick = (objects, { x, y }) => engine.picking.pick(objects, x, y, { doubleSided: true });
+        let empty = null;
+        for (const fx of [.34, .44, .54, .64]) for (const fy of [.34, .46, .58, .70]) {
+          const start = { x: Math.round(rect.left + rect.width * fx), y: Math.round(rect.top + rect.height * fy) };
+          const end = { x: start.x + 72, y: start.y + 12 };
+          if (!empty && onCanvas(start) && onCanvas(end) && !pick([...bodies, ...footprints, ...volumes], start).length)
+            empty = { start, end };
+        }
+        for (const volume of volumes) {
+          const { fixture_id: id, beam_origin_m: origin, endpoint_m: endpoint } = volume.userData;
+          const descriptor = engine.overlay.virtualFixtureInteractionDescriptor(id);
+          if (!descriptor?.state.spotlight.on || descriptor.state.spotlight.brightness <= 0 || !origin || !endpoint) continue;
+          for (const along of [.58, .46, .70]) {
+            const sample = project(origin.map((value, axis) => value + (endpoint[axis] - value) * along));
+            if (!sample || pick(bodies, sample.pointer).length || pick(footprints, sample.pointer).length) continue;
+            const candidates = new Set(pick(volumes, sample.pointer).map(hit => hit.object.userData.fixture_id));
+            if (candidates.size !== 1 || !candidates.has(id)) continue;
+            const surface = engine.displaySurfaceHit(sample.pointer.x, sample.pointer.y);
+            if (surface) {
+              const nearest = engine.apartmentRoot.localToWorld(engine.camera.position.clone().fromArray(surface.point));
+              if (nearest.distanceTo(engine.camera.position) < sample.world.distanceTo(engine.camera.position)) continue;
+            }
+            for (const point of [[2, 2, 0], [2.8, 1.4, 0], [1.4, 2.8, 0], [3.3, 2.9, 0]]) {
+              if (Math.hypot(point[0] - descriptor.display_anchor_m[0], point[1] - descriptor.display_anchor_m[1]) < .4) continue;
+              const destination = project(point)?.pointer;
+              if (!destination || Math.hypot(destination.x - sample.pointer.x, destination.y - sample.pointer.y) < 45) continue;
+              const hit = engine.displaySurfaceHit(destination.x, destination.y);
+              if (hit && Math.hypot(...hit.point.map((value, axis) => value - point[axis])) < .1) {
+                const label = engine.overlay.virtualFixturesReadback().fixtures.find(fixture => fixture.fixture_id === id).label;
+                return { empty, beam: { id, label, start: sample.pointer, end: destination, point: hit.point } };
+              }
+            }
+          }
+        }
+        return { empty, beam: null };
+      });
+      assert.equal(await lighting.getAttribute('aria-pressed'), 'false');
+      await haControls.waitFor({ state: 'visible' });
+      const views = [['Mesh', 'mesh', null], ['Photo', 'splat', 'splat'], ['Cloud', 'points', 'points']];
+      for (const [view, mode, receiver] of views.filter(([, , kind]) => phase === 'all' || !!kind === (phase === 'receivers'))) {
+        await enterMode(page, view + ' view', mode);
+        await stable(page, view + ':off');
+        await lighting.click();
+        await page.waitForFunction(({kind, count}) => {
+          const engine = window.__APT_ENGINE, state = engine.litState();
+          return state?.active && (state.receivers?.kind || null) === kind
+            && engine.overlay.virtualFixturesReadback().fixtures.length === count;
+        }, { kind: receiver, count: savedEcho.devices.length }, { timeout: WAIT_MS });
+        await settled(page);
+        if (receiver) {
+          const disclosure = page.locator('[data-apt-lit-disclosure]');
+          await disclosure.waitFor({ state: 'visible' });
+          const detail = await disclosure.getAttribute('title');
+          assert.match(detail, /estimates and removes diffuse capture lighting/);
+          assert.doesNotMatch(detail, /85%|night exterior/);
+          assert.equal(await page.evaluate(() => window.__APT_ENGINE.litState().receivers.windowAmbient), false);
+          const limit = await disclosure.locator('[data-apt-lit-bounce-limit]').textContent();
+          if (receiver === 'splat') {
+            assert.match(detail, /uniform low ambient light floor at night/);
+            assert.match(limit, /uniform night ambient/);
+          } else {
+            assert.match(detail, /grey surfaces lit only by the fixtures/);
+            assert.match(limit, /fixtures only/);
+          }
+        }
+        await modeledControls.waitFor({ state: 'visible' });
+        assert.equal(await haControls.count(), 0);
+        const mapped = await page.evaluate(() => {
+          const overlay = window.__APT_ENGINE.overlay;
+          return overlay.virtualFixturesReadback().fixtures.map(({ fixture_id: id, label }) => {
+            const { display_anchor_m, display_origin_m } = overlay.virtualFixtureInteractionDescriptor(id);
+            return [id, label, display_anchor_m, display_origin_m];
+          });
+        });
+        const expected = savedEcho.devices.map(({id, name, pos}) => ['echo-virtual-' + id, name, pos, pos]);
+        assert.deepEqual(mapped.sort(), expected.sort(), view + ' uses every saved name and exact mount and beam origin');
+        for (const { name } of savedEcho.devices) {
+          assert.equal(await modeledControls.getByRole('button', { name: 'Select ' + name, exact: true }).count(), 1,
+            view + ' exposes the saved name ' + name);
+        }
+        check('echo_' + mode + '_saved_names_and_positions', { count: mapped.length });
+        await page.waitForFunction(({kind, count}) => {
+          const state = window.__APT_ENGINE.litState();
+          return kind ? state.receivers?.liveSpots === count : state.shadowLights > 0 && state.bounce?.status === 'ready';
+        }, { kind: receiver, count: savedEcho.devices.length }, { timeout: WAIT_MS });
+        if (mode === 'mesh') {
+          const { empty } = await meshDragPoints();
+          assert.ok(empty, 'Mesh has empty canvas outside every fixture, footprint, and beam');
+          const before = await descriptors(), pose = await cameraPose();
+          await page.mouse.move(empty.start.x, empty.start.y);
+          await page.mouse.down();
+          await page.mouse.move(empty.end.x, empty.end.y, { steps: 8 });
+          await page.mouse.up();
+          await page.waitForFunction(before => window.__APT_ENGINE.camera.matrixWorld.elements
+            .some((value, index) => Math.abs(value - before[index]) > 1e-3), pose, { timeout: 5000 });
+          assert.equal(await fixtureControls.count(), 0, 'dragging empty space leaves the fixture inspector closed');
+          assert.deepEqual(await descriptors(), before, 'dragging empty space moves only the camera');
+          await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
+          await frames(page, 4);
+          check('echo_mesh_empty_drag_orbits');
+        }
+        await stable(page, view + ':on');
+        const effect = await frameDiff(page, view + ':on', view + ':off');
+        assert.ok(effect.sameCamera && effect.sameProjection && effect.max > 8 && effect.over8 > 0,
+          view + ' shows modeled illumination: ' + JSON.stringify(effect));
+
+        const initial = await descriptors();
+        const plan = mode === 'mesh' ? (await meshDragPoints()).beam : await page.evaluate(() => {
+          const engine = window.__APT_ENGINE, canvas = engine.renderer.domElement;
+          const rect = engine.picking.getHost().getBoundingClientRect();
+          const bodies = engine.overlay.virtualFixturePickObjects().filter(node => node.userData.interaction_role === 'fixture');
+          const project = world => {
+            const screen = engine.picking.projectToScreen(world);
+            const point = { x: Math.round(rect.left + screen.x), y: Math.round(rect.top + screen.y) };
+            return screen.visible && document.elementFromPoint(point.x, point.y) === canvas ? point : null;
+          };
+          for (const body of [...bodies].reverse()) {
+            const id = body.userData.fixture_id;
+            const d = engine.overlay.virtualFixtureInteractionDescriptor(id);
+            const start = project(body.getWorldPosition(engine.camera.position.clone()));
+            if (!d?.state.spotlight.on || !start
+                || engine.picking.pick(bodies, start.x, start.y)[0]?.object !== body) continue;
+            for (const point of [[2, 2, 0], [2.8, 1.4, 0], [1.4, 2.8, 0], [3.3, 2.9, 0]]) {
+              if (Math.hypot(point[0] - d.display_anchor_m[0], point[1] - d.display_anchor_m[1]) < .4) continue;
+              const world = engine.apartmentRoot.localToWorld(engine.camera.position.clone().set(...point));
+              const end = project(world);
+              if (!end || Math.hypot(end.x - start.x, end.y - start.y) < 45) continue;
+              const hit = engine.displaySurfaceHit(end.x, end.y);
+              if (hit && Math.hypot(...hit.point.map((value, axis) => value - point[axis])) < .1)
+                return { id, start, end, point: hit.point };
+            }
+          }
+          return null;
+        });
+        assert.ok(plan, view + ' has a ' + (mode === 'mesh' ? 'visible beam midsection' : 'visible fixture marker') + ' and reachable authored floor');
+        const shadowState = () => page.evaluate(() => {
+          const engine = window.__APT_ENGINE, state = engine.litState();
+          const lights = [];
+          engine.scene.traverse(node => {
+            if (!node.isSpotLight || !node.castShadow || node.userData.lit_source !== 'spot') return;
+            lights.push({ id: node.userData.fixture_id, target: node.target.position.toArray() });
+          });
+          return { lights, blends: state.receivers?.blends ?? null, bounce: state.bounce };
+        });
+        const beforeAim = await shadowState();
+        const poseBefore = await cameraPose();
+        if (mode === 'mesh') {
+          assert.equal(await fixtureControls.count(), 0, 'the beam drag starts with no selected fixture');
+          assert.equal(await page.locator('[data-apt-aim-reticle]:not([hidden])').count(), 0, 'no aim handle is active');
+        }
+        await page.mouse.move(plan.start.x, plan.start.y);
+        await page.mouse.down();
+        if (mode === 'mesh') {
+          await fixtureControls.getByRole('heading', { name: plan.label, exact: true }).waitFor({ timeout: 5000 });
+        }
+        await page.mouse.move(plan.end.x, plan.end.y, { steps: 8 });
+        await page.locator('[data-apt-aim-chip]:not([hidden])').waitFor({ state: 'visible' });
+        assert.deepEqual(await descriptors(), initial, 'the ghost does not move the committed aim');
+        await page.mouse.up();
+        await page.waitForFunction(id => !!window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).target, plan.id);
+        await fixtureControls.waitFor({ state: 'visible' });
+        const moved = await descriptors(), before = initial.find(row => row.fixture_id === plan.id);
+        const after = moved.find(row => row.fixture_id === plan.id);
+        assert.ok(Math.hypot(...after.target.point.map((value, axis) => value - plan.point[axis])) < .06);
+        assert.deepEqual(after.display_anchor_m, before.display_anchor_m);
+        assert.deepEqual(moved.filter(row => row.fixture_id !== plan.id), initial.filter(row => row.fixture_id !== plan.id));
+        if (mode === 'mesh') assert.deepEqual(await cameraPose(), poseBefore, 'dragging a beam does not orbit');
+        if (receiver) {
+          await page.waitForFunction(blends => {
+            const state = window.__APT_ENGINE.litState();
+            return state.receivers?.blends > blends && state.bounce.receiverSpotMs != null
+              && !window.__APT_ENGINE.overlay.virtualFixturesPresentationActive();
+          }, beforeAim.blends, { timeout: WAIT_MS });
+        } else {
+          await page.waitForFunction(({id, before}) => {
+            let current = null;
+            window.__APT_ENGINE.scene.traverse(node => {
+              if (node.isSpotLight && node.castShadow && node.userData.lit_source === 'spot'
+                  && node.userData.fixture_id === id) current = node.target.position.toArray();
+            });
+            return current && JSON.stringify(current) !== JSON.stringify(before);
+          }, {id: plan.id, before: beforeAim.lights.find(row => row.id === plan.id)?.target }, { timeout: WAIT_MS });
+        }
+        await settled(page);
+        const afterAim = await shadowState();
+        await stable(page, view + ':aimed');
+        const aimEffect = await frameDiff(page, view + ':aimed', view + ':on');
+        assert.ok(aimEffect.sameCamera && aimEffect.sameProjection && aimEffect.max > 8,
+          view + ' visibly moves the light after aiming: ' + JSON.stringify(aimEffect));
+
+        const tabs = name => fixtureControls.getByRole('tab', { name, exact: true });
+        await tabs('Light').click();
+        assert.equal(await fixtureControls.getByRole('slider', { name: 'Down brightness', exact: true }).count(), 0);
+        assert.equal(await fixtureControls.getByRole('slider', { name: 'Radial brightness', exact: true }).count(), 0);
+        const brightness = fixtureControls.getByRole('slider', { name: 'Brightness', exact: true });
+        await brightness.press('Home');
+        await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === 0, plan.id);
+        const dimmed = (await descriptors()).find(row => row.fixture_id === plan.id);
+        assert.deepEqual(dimmed, { ...after, state: { ...after.state, spotlight: { ...after.state.spotlight, brightness: 0 } } },
+          'only the selected virtual spotlight brightness changes');
+        await settled(page);
+        await stable(page, view + ':dimmed');
+        const dimming = await frameDiff(page, view + ':dimmed', view + ':aimed');
+        assert.ok(dimming.sameCamera && dimming.sameProjection && dimming.max > 8 && dimming.over8 > 0,
+          view + ' reacts to the actual brightness slider: ' + JSON.stringify(dimming));
+        await brightness.press('End');
+        await page.waitForFunction(id => window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id).state.spotlight.brightness === 1, plan.id);
+        await tabs('Aim').click();
+        await fixtureControls.getByRole('button', { name: 'Undo aim', exact: true }).click();
+        assert.deepEqual(await descriptors(), initial);
+        if (mode === 'mesh') check('echo_mesh_unselected_beam_drag_and_undo', { fixture: plan.id });
+        await lighting.click();
+        await page.waitForFunction(() => !window.__APT_ENGINE.litState()?.active && !window.__APT_ENGINE.litState()?.wanted,
+          null, { timeout: WAIT_MS });
+        await haControls.waitFor({ state: 'visible' });
+        assert.equal(await fixtureControls.count(), 0);
+        await stable(page, view + ':restored');
+        const restoration = await assertSameFrame(page, view + ':restored', view + ':off', view + ' restores the original frame');
+        check('echo_' + mode, { effect, aimEffect, dimming, restoration, aimedFixture: plan.id,
+          shadowTargetMoved: !receiver, receiverReblend: receiver ? afterAim.blends - beforeAim.blends : null });
+      }
+      await page.close();
+    } else if (part === 1) {
     // ---- Lighting off: nothing lit loads and the frame is the identical frame.
     const on = await openPage(context, RENDERER_QUERY);
     if (RENDERER === 'webgpu') assert.equal(await on.page.evaluate(() => window.__APT_ENGINE.renderer.backend?.isWebGPUBackend === true), true,

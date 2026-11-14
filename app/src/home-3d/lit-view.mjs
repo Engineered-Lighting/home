@@ -85,6 +85,7 @@ export const LIT_LOOKS = Object.freeze(['camera', 'eye']);
 export const LIT_DESIGN_EV100 = Exposure.ev100FromExposure(Model.LIT_EXPOSURE);
 // Cached shadow maps by softness: 4 spots at 2048, 4 downs at 1024 (halved when reduced).
 export const LIT_SHADOW_MAP_SIZES = Object.freeze({ crisp: 2048, soft: 1024 });
+const ECHO_SPOT_SHADOW_MAP_SIZE = 1024;
 export const LIT_LUX_LABEL = 'Modeled lux';
 // Below LIT_TARGET_FPS for this many consecutive 500 ms stats, Lit declares
 // a reduced quality instead of silently dropping frames.
@@ -110,10 +111,11 @@ export function fixtureModelInput(fixtureRoot) {
     fixtureRoot.updateWorldMatrix(true, true);
     const local = node => fixtureRoot.parent.worldToLocal(node.getWorldPosition(new THREE.Vector3())).toArray();
     const robotic = fixtureRoot.getObjectByName('robotic-spotlight')?.userData;
-    const down = fixtureRoot.getObjectByName('downward-zone'), emitter = fixtureRoot.getObjectByName('downward-emitter');
-    const orb = fixtureRoot.getObjectByName('fixture-orb');
+    const spotOnly = fixtureRoot.userData?.spot_only === true;
+    const down = !spotOnly && fixtureRoot.getObjectByName('downward-zone'), emitter = !spotOnly && fixtureRoot.getObjectByName('downward-emitter');
+    const orb = !spotOnly && fixtureRoot.getObjectByName('fixture-orb');
     const zones = [];
-    for (let number = 1; number <= 6; number++) {
+    for (let number = 1; !spotOnly && number <= 6; number++) {
         const channel = fixtureRoot.getObjectByName('radial-zone-' + number)?.userData?.channel;
         if (channel) zones.push({ number, azimuth_deg: channel.azimuth_deg, channel });
     }
@@ -135,6 +137,8 @@ export function fixtureWorldLights(fixtureRoot, { spotFwhmDeg = 20 } = {}) {
     const parent = fixtureRoot.parent;
     return Model.fixtureLights(input, { spotFwhmDeg }).map(light => ({
         ...light, fixtureId: input.fixtureId,
+        shadowSize: fixtureRoot.userData?.spot_only === true ? ECHO_SPOT_SHADOW_MAP_SIZE : LIT_SHADOW_MAP_SIZES[light.shadow],
+        coordinatorSpot: light.kind === 'spot' && fixtureRoot.userData.coordinator_spot === true,
         origin: parent.localToWorld(new THREE.Vector3(...light.origin)),
         direction: new THREE.Vector3(...light.direction).transformDirection(parent.matrixWorld),
     }));
@@ -245,7 +249,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     let active = false, quality = 'full', slow = 0, swapped = [], lights = [], signature = '', saved = null, mesh = null;
     // L4: the receiver controller while Lit relights Photo or Cloud, and the
     // mesh the bake traces (the displayed mesh, or in Photo/Cloud the scan).
-    let receivers = null, bakeSource = null, receiverMeterAt = -Infinity;
+    let receivers = null, bakeSource = null, receiverMeterAt = -Infinity, receiverSpotsChanged = false;
     // The 160 ms ease: what each light shows, and the clock of the last step.
     let placementSignature = '', shown = [], easedAt = null, easing = false;
     // Partial night adaptation: EV above the design night, toward the latest
@@ -405,8 +409,9 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             baker ||= Bake.createBakeClient({ endpoint: createBakeEndpoint(), onScene, onLightmap, onLux, onError, onReceiverLayer });
             bakeScene = baker.setScene(triangles, albedo);
             if (receivers) {
-                const { set, positions, normals } = receivers.bakeReceivers();
-                baker.setReceivers(set, positions, normals);
+                const { set, positions, normals, directFirst } = receivers.bakeReceivers();
+                receivers.clearSpotColumns?.();
+                baker.setReceivers(set, positions, normals, { directFirst });
             }
         } catch (error) { bounce = { ...bounce, status: 'error', error: String(error?.message || error) }; }
     }
@@ -446,10 +451,10 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         changed();
     }
     function onReceiverLayer(message) {
-        if (!active || !receivers || message.scene !== bakeScene) return;
-        if (receivers.setSpotColumn(message.key, message.version, message.data)) {
+        if (!active || !receivers || message.scene !== bakeScene || receivers.set && message.set !== receivers.set) return;
+        if (receivers.setSpotColumn(message.key, message.version, message.data, message.bounced)) {
             bounce = { ...bounce, receiverSpotMs: message.ms ?? null };
-            changed();
+            receiverSpotsChanged = true;
         }
     }
     function onError(message) {
@@ -457,7 +462,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         bounce = { ...bounce, status: 'error', error: message.message };
         changed();
     }
-    const bakeKey = source => `${source.fixtureId ?? ''}:${source.kind}:${source.number ?? 0}`;
+    const bakeKey = source => `${source.fixtureId ?? ''}:${source.kind}:${source.number ?? 0}${source.coordinatorSpot ? ':direct' : ''}`;
     const round = values => values.map(value => (typeof value === 'number' ? +value.toFixed(5) : value));
     function namedAims() {
         return (getNamedAims() || []).slice(0, MAX_LUX_AIMS).map(aim => {
@@ -471,14 +476,17 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
      * still drawing (the 650 ms Set sweep) waits for it to land. */
     function syncBake(exact) {
         if (!baker || !bakeScene || bounce.status === 'building' || bounce.status === 'error') return;
-        const allLights = exact.map(source => ({
+        const allLights = exact.filter(source => receivers || !source.coordinatorSpot).map(source => ({
             key: bakeKey(source), mode: source.kind === 'spot' ? 'vpl' : 'sky',
+            directOnly: source.coordinatorSpot,
             origin: round(source.origin.toArray()), direction: round(source.direction.toArray()),
             cosOuter: Math.cos(source.halfAngle), cosInner: Math.cos(source.halfAngle * (1 - source.penumbra)),
             candela: quality === 'reduced' && source.kind === 'zone' ? 0 : source.candela, color: round(Model.cctToLinearRgb(source.kelvin)) }));
         // L4: the basis already carries the downs' and zones' bounce for the
         // receivers; only the live spots are baked (the lux readout keeps all).
-        const bakeLights = receivers ? allLights.filter(light => light.mode === 'vpl') : allLights;
+        const bakeLights = receivers ? allLights.filter(light => light.mode === 'vpl').map(light => ({
+            ...light, key: receivers.spotBakeKey ? receivers.spotBakeKey(light.key) : light.key,
+        })).filter(light => light.key !== null) : allLights;
         const aims = namedAims();
         const placement = bakeLights.filter(light => light.mode === 'vpl').map(light => light.key + light.origin.join(',') + light.direction.join(',')).join('|');
         const weights = Object.fromEntries(bakeLights.map(light => [light.key, light.color.map(c => c * light.candela)]));
@@ -490,7 +498,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         }
         deferredSince = null; bakeSignature = next; bakePlacement = placement;
         baker.update({ lights: bakeLights.map(({ candela, color, ...light }) => light), weights, exposure: LIT_EXPOSURE, quality: bakeQuality, aims,
-            luxLights: allLights.filter(light => light.candela > 0) });
+            luxLights: allLights.filter(light => !light.directOnly && light.candela > 0) });
         if (bounce.status === 'ready') bounce = { ...bounce, status: 'baking' };
     }
 
@@ -498,9 +506,9 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         const light = new THREE.SpotLight(0xffffff, 0, 0, source.halfAngle, source.penumbra, 2);
         light.name = 'lit-' + source.kind + (source.number ? '-' + source.number : '');
         light.userData = { lit_source: source.kind, assumed_lumens: LIT_ASSUMED_LUMENS[source.kind], measured: false,
-            shape: source.kind + (source.number || ''), shadow: source.shadow };
+            shape: lightShape(source), shadowSize: source.shadowSize };
         if (source.shadow) {
-            const size = LIT_SHADOW_MAP_SIZES[source.shadow];
+            const size = source.shadowSize;
             light.castShadow = true;
             light.shadow.autoUpdate = false; light.shadow.needsUpdate = true;
             light.shadow.mapSize.set(size, size);
@@ -520,7 +528,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     function applyQuality() {
         for (const light of lights) {
             if (!light.castShadow) continue;
-            const full = LIT_SHADOW_MAP_SIZES[light.userData.shadow], size = quality === 'reduced' ? full / 2 : full;
+            const full = light.userData.shadowSize, size = quality === 'reduced' ? full / 2 : full;
             if (light.shadow.mapSize.x === size) continue;
             light.shadow.mapSize.set(size, size); light.shadow.map?.dispose?.(); light.shadow.map = null; light.shadow.needsUpdate = true;
         }
@@ -548,6 +556,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         if (luminance !== null && luminance !== undefined) { metered = luminance; meterSerial++; }
     }
 
+    const lightShape = source => [source.fixtureId, source.kind, source.number, source.shadowSize].join(':');
     /* Follow the fixtures' current exact state. Cheap when nothing changed. */
     function sync(camera = null) {
         if (!active) return false;
@@ -558,7 +567,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
             for (const light of lights) if (light.castShadow) light.shadow.needsUpdate = true;
         }
         const exact = (getFixtureRoots() || []).flatMap(root => fixtureWorldLights(root, { spotFwhmDeg }));
-        const shape = exact.map(source => source.kind + (source.number || '')).join(',');
+        const shape = exact.map(lightShape).join(',');
         if (shape !== lights.map(light => light.userData.shape).join(',')) { rebuild(exact); applyQuality(); }
         syncBake(exact);
         // SPEC: ease each set level and Kelvin on the 160 ms clock. The first
@@ -602,6 +611,11 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         const source = getBakeMesh?.() || null;
         if (source !== bakeSource) swapMaterials(null, source);
         const exact = (getFixtureRoots() || []).flatMap(root => fixtureWorldLights(root, { spotFwhmDeg }));
+        if (receivers.trackSpots?.(exact.filter(source => source.kind === 'spot')
+            .map(source => [bakeKey(source), round(source.origin.toArray()).join(',')]))) {
+            receiverSpotsChanged = true;
+            shown = [];
+        }
         syncBake(exact);
         const at = now(), elapsed = easedAt === null ? Infinity : at - easedAt;
         const step = Model.easeLights(exact, shown, elapsed, { snap: elapsed === Infinity || !!reducedMotion?.matches });
@@ -621,7 +635,9 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
     function tickReceivers(camera) {
         if (!active || !receivers) return false;
         try { sync(camera); } catch (_) { /* the frame still renders */ }
-        return receivers.flush();
+        const blended = receivers.flush();
+        if (receiverSpotsChanged && blended) { receiverSpotsChanged = false; changed(); }
+        return blended;
     }
 
     function enable() {
@@ -660,6 +676,7 @@ export function createLitView({ scene, renderer, getMesh, getFixtureRoots, spotF
         frame?.uninstall();
         if (saved?.receiversOnly) {
             receivers = null; restoreMaterials(); disposeOccluders();
+            receiverSpotsChanged = false;
             baker?.dispose(); baker = null; bakeScene = 0; lightmap?.dispose(); lightmap = null; lux = [];
             bakeSignature = ''; bakePlacement = ''; deferredSince = null; bounce = idleBounce();
             shown = []; easedAt = null; easing = false;

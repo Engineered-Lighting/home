@@ -49,7 +49,7 @@ function browserOptions() {
   return { headless: true, args, ...(process.platform === 'linux' ? { channel: 'chromium' } : !installed ? { channel: 'msedge' } : {}) };
 }
 
-test('real authored room selection keeps native input ownership and never dispatches output', { timeout: 145000 }, async () => {
+test('real authored room selection keeps native input ownership and never dispatches output', { timeout: 175000 }, async () => {
   assert.ok(!process.env.HOME_APARTMENT_CANDIDATE_ROOT, 'proof serves only this worktree');
   const run = path.join(ROOT, '.tmp/apartment-room-selection-browser', 'run-' + Date.now());
   fs.mkdirSync(run, { recursive: true });
@@ -71,8 +71,8 @@ test('real authored room selection keeps native input ownership and never dispat
   const save = () => fs.writeFileSync(path.join(run, 'receipt.json'), JSON.stringify(receipt, null, 2) + '\n');
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
     receipt.deadline_at = Date.now(); save();
-    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s room selection browser deadline'));
-  }, 145000); });
+    browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('175s room selection browser deadline'));
+  }, 175000); });
   const check = async (name, operation) => {
     receipt.current_stage = name;
     const phase = { name, started_at: Date.now(), completed: false };
@@ -302,7 +302,8 @@ test('real authored room selection keeps native input ownership and never dispat
     await showReticle();
     const beforeAim = await descriptor(fixtures[0].fixture_id);
     // The native fixture-body drag (selects; no aim, orbit or proposal) runs in
-    // test-apartment-aim-wiring-browser.mjs, so this proof keeps its 145 s budget.
+    // test-apartment-aim-wiring-browser.mjs. Its budget is 175 s: hosted runs took 90 to 146 s (PR #441), and the
+    // runner's per-file limit is 180 s.
     await check('Escape cancels an actual active aim before the next Escape clears selection', async () => {
       const start = await reticlePoint(), end = await canvasPoint('surface', null, start); assert.ok(start && end);
       await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 });

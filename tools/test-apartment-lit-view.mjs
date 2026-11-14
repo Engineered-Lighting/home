@@ -41,6 +41,11 @@ for (const name of ['lit-display.mjs', 'lit-basis-blend.mjs']) litSource = repla
 const Bake = await import(pathToFileURL(sourceFile('lit-bvh-bake.mjs')).href);
 const { roomBox } = await import('./fixtures/lit-bake-scenes.mjs');
 const Lit = await import(dataModule(litSource));
+let receiverSource = replaceOne(fs.readFileSync(sourceFile('lit-receivers.mjs'), 'utf8'), "from 'three'", 'from ' + JSON.stringify(threeURL));
+for (const name of ['lit-basis-blend.mjs', 'lit-exposure.mjs', 'lit-layer-loader.mjs']) {
+  receiverSource = replaceOne(receiverSource, 'import(`./' + name + '${search}`)', fileImport(name));
+}
+const Receivers = await import(dataModule(receiverSource));
 const EXPOSURE = .038;
 // Every sync lands 10 s after the last, so the 160 ms ease has settled; the
 // easing itself is proved below and in test-lit-model.mjs on a controlled clock.
@@ -49,10 +54,11 @@ const SPEC_LUMENS = { spot: 450, down: 350, zone: 120 };
 const binding = { content_revision: 'authored-victoria-lit-r1', registration_version: 1,
   manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
 
-function world(t) {
+function world(t, { createBakeEndpoint, now = settledClock() } = {}) {
   const scene = new THREE.Scene(), root = new THREE.Group(); root.rotation.x = -Math.PI / 2; scene.add(root);
   const fixtures = createEquipmentVirtualFixtures(root, { binding });
-  assert.equal(fixtures.setDocument(authoredDocument(binding, Core)).status, 'ready');
+  const document = authoredDocument(binding, Core);
+  assert.equal(fixtures.setDocument(document).status, 'ready');
   const hook = shader => { shader.fragmentShader = shader.fragmentShader.replace('#include <common>', '#include <common>\n// display-hook'); };
   const display = new THREE.MeshBasicMaterial({ map: new THREE.Texture(), toneMapped: false });
   display.onBeforeCompile = hook; display.customProgramCacheKey = () => 'home-scan-display-floor-0-1';
@@ -60,11 +66,134 @@ function world(t) {
   const mesh = new THREE.Group(), face = new THREE.Mesh(displayGeometry, display); mesh.add(face); root.add(mesh);
   const renderer = { shadowMap: { enabled: false, type: THREE.BasicShadowMap, autoUpdate: true, needsUpdate: false }, toneMapping: THREE.NoToneMapping };
   let current = mesh;
-  const lit = Lit.createLitView({ scene, renderer, getMesh: () => current, getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20, now: settledClock() });
+  const lit = Lit.createLitView({ scene, renderer, getMesh: () => current, getFixtureRoots: () => fixtures.root.children, spotFwhmDeg: 20,
+    now, createBakeEndpoint });
   t.after(() => { lit.disable(); fixtures.dispose(); });
-  return { scene, root, fixtures, mesh, face, display, displayGeometry, hook, renderer, lit, setMesh: next => { current = next; } };
+  return { scene, root, fixtures, document, mesh, face, display, displayGeometry, hook, renderer, lit, setMesh: next => { current = next; } };
 }
 const lights = w => w.lit.group.children.filter(node => node.isSpotLight);
+
+test('Echo receiver limits admit the actual full Cloud, and refuse insufficient GPU capacity', () => {
+  const count = 1_150_854, spotCapacity = 13;
+  const common = { useBasis: false, spotCapacity };
+  const limits = { maxStorageBufferBindingSize: 128 * 2 ** 20, maxBufferSize: 256 * 2 ** 20, maxComputeWorkgroupsPerDimension: 65535 };
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, webgpu: true, limits }).bytes, count * (13 * 8 + 32));
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, webgpu: true,
+    limits: { ...limits, maxStorageBufferBindingSize: 100 * 2 ** 20 } }), null);
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, limits: { maxTextureSize: 2048, maxArrayTextureLayers: 13 } }).height, 562);
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, limits: { maxTextureSize: 2048, maxArrayTextureLayers: 12 } }), null);
+  assert.equal(Receivers.receiverGpuLayout(count, { ...common, limits: { maxTextureSize: 1024, maxArrayTextureLayers: 13 } }), null);
+});
+
+test('Echo uploads all 13 spot columns independently, reports uploaded progress, and ignores an obsolete slot lifetime', async () => {
+  const gl = { MAX_TEXTURE_SIZE: 1, MAX_ARRAY_TEXTURE_LAYERS: 2, getParameter: key => key === 1 ? 2048 : 16 };
+  const uploads = [];
+  const renderer = { getContext: () => gl, getRenderTarget: () => null, setRenderTarget() {}, info: {},
+    render(scene) {
+      const map = scene.children[0].material.uniforms.uSpots.value;
+      uploads.push([...map.layerUpdates]); map.clearLayerUpdates();
+    } };
+  const object = new THREE.Object3D();
+  // The material itself is covered by the real-renderer browser test.
+  const source = replaceOne(receiverSource, 'import(`./pointcloud.js${search}`)',
+    'Promise.resolve({ createLitPointsMaterial: () => ({ dispose() {} }) })');
+  const { createLitReceivers } = await import(dataModule(source));
+  object.geometry = new THREE.BufferGeometry();
+  object.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3), 3));
+  const layer = { siteId: 'echo', set: 'points', count: 1, columns: 1, columnsMeta: [{ kind: 'capture_diffuse' }],
+    albedo: Uint8Array.of(128, 128, 128), basis: Uint8Array.of(0), scale: Uint16Array.of(0), tint: Uint8Array.of(0, 0, 0),
+    flags: Uint8Array.of(0), normalOct: Uint8Array.of(128, 128) };
+  const controller = await createLitReceivers({ renderer, kind: 'points', object, layer });
+  const keys = Array.from({ length: 13 }, (_, index) => 'light-' + index + ':spot:0');
+  const placements = keys.map((key, index) => [key, index + ',0,1']);
+  assert.equal(controller.trackSpots(placements), true);
+  assert.equal(controller.state().expectedSpots, 13);
+  assert.equal(controller.state().liveSpots, 0);
+  await controller.attach(); controller.flush(); uploads.length = 0;
+  const column = new Uint16Array(3).fill(Bake.toHalf(0.5));
+  for (const key of keys) assert.equal(controller.setSpotColumn(controller.spotBakeKey(key), 1, column, false), true);
+  assert.equal(controller.state().liveSpots, 0);
+  controller.flush();
+  assert.deepEqual(uploads.at(-1), keys.map((_, index) => index));
+  assert.equal(controller.state().liveSpots, 13);
+  assert.equal(controller.state().bouncedSpots, 0);
+  const last = keys.at(-1), old = controller.spotBakeKey(last);
+  assert.equal(controller.setSpotColumn(old, 2, column, true), true);
+  controller.flush();
+  assert.deepEqual(uploads.at(-1), [12]);
+  assert.equal(controller.state().bouncedSpots, 1);
+  assert.equal(controller.trackSpots(placements), false, 'the same fixture origins preserve columns through aim and dimming');
+  assert.equal(controller.spotBakeKey(last), old);
+  const relocated = [...placements.slice(0, -1), [last, '2,3,1']];
+  controller.trackSpots(relocated);
+  assert.equal(controller.state().liveSpots, 12);
+  assert.equal(controller.state().bouncedSpots, 0);
+  assert.notEqual(controller.spotBakeKey(last), old);
+  assert.equal(controller.setSpotColumn(old, 9, column), false);
+  assert.equal(controller.setSpotColumn(controller.spotBakeKey(last), 1, column), true);
+  controller.flush();
+  assert.equal(controller.state().liveSpots, 13);
+  assert.equal(controller.state().bouncedSpots, 1);
+  const relocatedKey = controller.spotBakeKey(last);
+  controller.trackSpots(relocated.slice(0, -1));
+  controller.trackSpots(relocated);
+  assert.notEqual(controller.spotBakeKey(last), relocatedKey, 'remove and restore is a new admission');
+  assert.equal(controller.setSpotColumn(relocatedKey, 99, column), false);
+  await controller.detach(); controller.dispose(); object.geometry.dispose();
+});
+
+test('coordinator-owned spots start dark, block manual writes and snap in Lit without a bounce contribution', async t => {
+  const posted = [];
+  const w = world(t, { now: () => 1, createBakeEndpoint: () => {
+    const inner = Bake.createLocalBakeEndpoint({ gpu: null });
+    return { ...inner, postMessage(data, transfer) { posted.push(data); inner.postMessage(data, transfer); } };
+  } });
+  const id = w.fixtures.readback().fixtures[0].fixture_id;
+  assert.equal(w.fixtures.setFixtureState(id, { spotlight: { on: true, brightness: .7 } }).ok, true);
+  const remembered = w.fixtures.interactionDescriptor(id).state;
+  assert.equal(remembered.spotlight.on, true);
+  assert.equal(w.fixtures.setDocument(w.document, { coordinator: true }).status, 'ready');
+  const scope = w.fixtures.coordinatorSpotScope();
+  assert.equal(w.fixtures.setFixtureState(id, remembered).ok, false, 'a remembered lit preview cannot take ownership');
+  assert.equal(w.fixtures.interactionDescriptor(id).state.spotlight.on, false);
+  assert.equal(w.fixtures.setFixtureState(id, { spotlight: { on: true } }).ok, false);
+  assert.equal(w.fixtures.aimAtTarget(id, { point: [0, 0, 1], normal: [0, 0, 1] }).ok, false);
+  assert.equal(w.fixtures.setFixtureState(id, { downward: { brightness: .2 } }).ok, true);
+  w.lit.enable();
+  assert.ok(lights(w).filter(light => light.name === 'lit-spot').every(light => light.intensity === 0));
+  const rows = scope.fixture_ids.map(fixture_id => ({ fixture_id, on: true, level: .7, cct_k: 3100, pan_deg: 3.2, tilt_deg: 41.5 }));
+  assert.equal(w.fixtures.applyCoordinatorSpots(rows, scope.generation), true);
+  w.lit.sync();
+  assert.ok(lights(w).find(light => light.name === 'lit-spot').intensity > 0, 'the 160 ms easing clock did not advance');
+  for (let i = 0; i < 40 && !posted.some(message => message.type === 'lights'); i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    w.lit.sync();
+  }
+  const update = posted.find(message => message.type === 'lights');
+  assert.ok(update?.lights.length);
+  assert.ok(update.lights.every(light => light.mode !== 'vpl'), 'the moving spot never enters the mesh lightmap');
+  assert.equal(w.fixtures.applyCoordinatorSpots(null), true);
+  w.lit.sync();
+  assert.ok(lights(w).filter(light => light.name === 'lit-spot').every(light => light.intensity === 0));
+  assert.equal(w.fixtures.interactionDescriptor(id).state.downward.brightness, .2);
+});
+
+test('a coordinator aim hits the registered floor from the fixture pivot and reports an upward miss', t => {
+  const w = world(t);
+  w.fixtures.setDocument(w.document, { coordinator: true });
+  const scope = w.fixtures.coordinatorSpotScope();
+  const id = scope.fixture_ids[0], root = w.fixtures.root.children[0];
+  const rows = scope.fixture_ids.map(fixture_id => ({ fixture_id, on: fixture_id === id, level: 200 / 254,
+    cct_k: 2700, pan_deg: -45, tilt_deg: 80, target_m: [1, 1, 4] }));
+  assert.equal(w.fixtures.applyCoordinatorSpots(rows, scope.generation), true);
+  const beam = () => root.getObjectByName('robotic-spotlight').userData;
+  assert.deepEqual(beam().beam_origin_m, w.fixtures.interactionDescriptor(id).display_origin_m);
+  assert.equal(beam().receiver_kind, 'floor');
+  assert.ok(Math.abs(beam().endpoint_m[2]) < 1e-9, 'the requested point cannot replace the floor hit');
+  assert.equal(w.fixtures.applyCoordinatorSpots(rows.map(row => ({ ...row, tilt_deg: -90 })), scope.generation), true);
+  assert.equal(beam().receiver_kind, 'unavailable');
+  assert.equal(beam().receiver_role, 'bounded_guide_only');
+});
 
 test('the light model is renderer-independent and pure', () => {
   const source = fs.readFileSync(sourceFile('lit-model.mjs'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');

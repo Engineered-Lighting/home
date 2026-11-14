@@ -24,6 +24,11 @@ ENTRY_ANSWERS = 1
 # The keep rule's time hysteresis (contract 10, "For 04"): both sofa sockets sit within 3 degrees of side-on, so a
 # fixture lit for someone stays theirs through a facing refusal that hasn't lasted this long.
 KEEP_HOLD_S = 1.0
+# The gap hold (plan 05 section 3.5, contract 4): the camera's newest frame can go 1.5-2.4 s without changing, about 5
+# times a minute. A spot already lit stays lit while its person's newest fresh frame is at most this old, the same 3.0 s
+# at which contract 2 ends the camera epoch; keep-lit goes on through the gap. Lighting still needs a pose at most
+# POSE_AGE_S old, and evidence on a fresh frame (standing, leaving, a second person) darkens at once.
+GAP_HOLD_S = 3.0
 FACING_REFUSALS = ("in_front_of_reader", "no_facing")
 CONTROL_KEYS = ("on", "stopped", "stop_counter")
 BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipment_digest")
@@ -84,6 +89,7 @@ class Preview:
         self.retired_runs = set()
         self.track_seq = -1
         self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
+        self.hold_until = None   # while lit, the track holds to here through a camera gap (GAP_HOLD_S)
         self.eligible_track = None
         self.captured = None   # the newest frame taken for the track
         self.since = None      # the published seated since_mono the episode was built at
@@ -162,7 +168,7 @@ class Preview:
     def _drop_track(self):
         """The person binding changed (any of its four keys), or a control reset it: the episode, its onset, the need
         state and its requests all go."""
-        self.track_binding = self.track = self.track_until = self.episode = self.eligibility = None
+        self.track_binding = self.track = self.track_until = self.hold_until = self.episode = self.eligibility = None
         self.eligible_track = None
         self.captured = self.since = None
         self.shift = self.target_basis = None
@@ -170,7 +176,7 @@ class Preview:
     def _darken(self):
         """Contract 2's consumer rule: a stale snapshot or an unsafe frame darkens. No light until a current, posed,
         seated frame of the same person; the episode, its onset, the need state and the requests stay."""
-        self.track = self.track_until = None
+        self.track = self.track_until = self.hold_until = None
 
     def tracking(self, snapshot):
         with self.lock:
@@ -193,18 +199,21 @@ class Preview:
             frame = field(snapshot, "frame")
             captured = field(frame, "capture_mono")
             earliest = field(frame, "capture_earliest_mono")
-            deadline = min(captured, earliest) + POSE_AGE_S if finite(captured) and finite(earliest) else (
-                captured + POSE_AGE_S if finite(captured) else -math.inf)
+            base = min(captured, earliest) if finite(captured) and finite(earliest) else captured
+            deadline = base + POSE_AGE_S if finite(base) else -math.inf
             tracks = field(snapshot, "tracks", ())
-            if (field(snapshot, "status") != "fresh" or field(snapshot, "presence") != "present"
-                    or not finite(captured) or not captured <= now < deadline or len(tracks) != 1
+            if field(snapshot, "status") != "fresh" or not finite(captured) or not captured <= now < deadline:
+                # No new frame (a camera gap: perception's stale snapshots) or a late one: nothing to learn here.
+                # _expire darkens at the light's deadline, or, while a spot is lit, at the gap hold's.
+                pass
+            elif (field(snapshot, "presence") != "present" or len(tracks) != 1
                     or any(field(frame, k) != self.binding[k] for k in ("transform_id", "scan_revision"))):
                 self._darken()
             else:
                 eligibility = field(snapshot, "eligibility_revision")
                 if self.eligibility is not None and eligibility != self.eligibility:
                     self.episode = self.shift = self.target_basis = None
-                self._track(tracks[0], captured, deadline, now)
+                self._track(tracks[0], captured, deadline, base + GAP_HOLD_S, now)
                 # The ask names the eligible track only on a frame that may start an ask. A bad frame publishes None
                 # with the same eligibility revision, and the person stays eligible for the reply already in flight.
                 eligible = field(snapshot, "eligible_track_id")
@@ -215,7 +224,7 @@ class Preview:
 
     offer_snapshot = tracking
 
-    def _track(self, track, captured, deadline, now):
+    def _track(self, track, captured, deadline, hold, now):
         key = (*self.scope, field(track, "track_id"), field(track, "association_revision"))
         if None in key:
             self._darken()
@@ -235,7 +244,7 @@ class Preview:
         if head and not body.head(joints):
             joints["nose"] = [*head, 1.0]
         self.captured = captured
-        self.track_until = deadline
+        self.track_until, self.hold_until = deadline, hold
         # Contract 2's seated, published once by perception: the episode starts at its since_mono, the same instant
         # the ask's stills start from. It's rebuilt only when that published since moves, never on episode.started:
         # a none or multiple reply moves started on to the negative, and the episode must keep that.
@@ -273,8 +282,12 @@ class Preview:
 
     offer_inference = inference
 
+    def _lit(self):
+        return any(row["token"] is not None or row["level"] > 0 or (row["motion"] and row["motion"]["level"] > 0)
+                   or (row["pending"] and row["pending"]["level"] > 0) for row in self.rows.values())
+
     def _expire(self, now):
-        if self.track_until is not None and now >= self.track_until:
+        if self.track_until is not None and now >= self.track_until and (now >= self.hold_until or not self._lit()):
             self._darken()
         if self.episode is not None:
             self.episode.expire(now, self.settings["phone_patience_s"])
@@ -329,13 +342,24 @@ class Preview:
         # A light needs a current, posed, seated frame: a reply that lands while the frames are stale, poseless or
         # unsafe (say, an ask sent as the person stood up) is taken into the episode but lights nothing.
         task = self.task_until() is not None and bool(person and person["seated"])
+        # In a camera gap (the newest frame older than POSE_AGE_S, held while lit up to GAP_HOLD_S): the fixture lit for
+        # this person keeps its job, aim and level, and nothing new is aimed or lit.
+        held = person is not None and now >= self.track_until
         for row in self.rows.values():
             self._advance(row, now, task and self.on and not self.stopped)
         chosen, target, reasons = None, None, {}
-        if person and person["target"] is not None and (task or self.settings["pre_aim"]):
+        if held:
+            if task:
+                chosen = next((name for name, row in self.rows.items() if row["job"] == person["track_id"] and (
+                    row["token"] is not None or (row["motion"] and row["motion"]["level"] > 0))), None)
+            if chosen is not None:
+                motion = self.rows[chosen]["motion"]
+                target = tuple(motion["target_cdeg"]) if motion else self.rows[chosen]["current"]
+        elif person and person["target"] is not None and (task or self.settings["pre_aim"]):
             chosen, target, reasons = self._candidate(person, now)
         diagnostic = {"kind": "task" if task else "pre_aim", "fixture": chosen, "refused": reasons,
-                      "target_basis": person and person["basis"], "joints_cdeg": list(target) if target else None}
+                      "target_basis": person and person["basis"], "joints_cdeg": list(target) if target else None,
+                      "gap_hold": held}
         subject = self._subject()
         previous = self.latest_decision or {}
         if diagnostic != previous.get("proposal") or subject != previous.get("subject"):
@@ -539,7 +563,7 @@ class Preview:
                               "move_decision_id": move.get("decision_id"), "keep_lit_token": row["token"]}
         limit = self.task_until()
         if any(row["on"] for row in fixtures.values()):
-            until = min(now + POSE_AGE_S, limit or now, self.track_until or now)
+            until = min(now + POSE_AGE_S, limit or now, self.hold_until or now)
         else:
             until = now + POSE_AGE_S
         self.latest = {"schema": "den-virtual-spots-1", "home": "den", "site": self.site, "epoch": self.epoch, "seq": self.seq,

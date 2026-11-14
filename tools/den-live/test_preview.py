@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import ask
+import c12_fc13
 import coordinator_live
 import direction
 from contracts import PERCEPTION_S, FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
@@ -947,6 +948,8 @@ class DirectionTest(PreviewTest):
 
     def timed_board(self, join=True, pre_aim=True):
         """F3 as a board that advertises the timed MOVE (c12.get_profile's capabilities), through the pinned codec."""
+        if getattr(c12_fc13, "TIMED", None) is None:
+            self.skipTest("the pinned codec predates the timed MOVE (firmware 62ea043)")
         caps = {"timed_move": True, "fade_curves": True, "join_flight": join, "at_rest": True}
         board = {"F3": {**FIXTURES["F3"], "profile": {**self.core.scurve.FICTIONAL_PROFILE, "fictional": False,
                                                         "label": "timed-test", "capabilities": caps}}}

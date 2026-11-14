@@ -482,9 +482,9 @@ class PreviewTest(unittest.TestCase):
         self.assertFalse(self.row()["on"])
 
     def test_facing_jitter_under_a_second_keeps_the_lit_fixture(self):
-        """Contract 10, for 04: a facing refusal of the lit fixture holds it for KEEP_HOLD_S before releasing it. The
-        direction's seated facing is the mean of the last 3 s (direction.FACING_WINDOW_S), so a turn becomes a
-        refusal only once most of that window has turned: a real turn still releases it, a little later."""
+        """Contract 10, for 04, as the owner settled it on 2026-11-14 ("if I turn to face a light that's already on,
+        that's fine"): a lit fixture keeps its job through facing jitter and through a real turn alike. Only admission
+        refuses a fixture in front of the reader."""
         self.light()
         for _ in range(3):   # 0.75 s turned the other way
             self.now += .25
@@ -498,9 +498,8 @@ class PreviewTest(unittest.TestCase):
             self.now += .25
             self.track(turned=True)
             seen.append(self.row()["on"])
-        self.assertTrue(all(seen[:5]), "1.25 s turned: the averaged facing hasn't turned yet")
-        self.assertFalse(seen[-1], "a refusal that lasts past the hold releases it")
-        self.assertEqual(self.row()["reason"], "in_front_of_reader")
+        self.assertTrue(all(seen), "3 s turned toward the light: it stays on")
+        self.assertEqual(self.row()["reason"], "task")
 
     def test_the_subject_names_the_person_and_the_reply(self):
         self.seat()
@@ -1138,7 +1137,7 @@ class DirectionTest(PreviewTest):
     def test_a_head_or_eyes_refusal_cuts_at_once_even_mid_crossfade(self):
         """Easing is for ordinary hand-offs: a light refused for the reader's head or eyes goes dark in the same
         snapshot, at level 0, whatever fade it's in."""
-        for reason in ("beam_through_head", "in_front_of_reader"):
+        for reason in ("beam_through_head", "no_head"):
             with self.subTest(reason):
                 self.encoded.clear()
                 lit, spare = self.two_lit()
@@ -1217,10 +1216,9 @@ class DirectionTest(PreviewTest):
         for level in (0, .01, .08, .2, .5, .77, 1):
             self.assertAlmostEqual(direction.output(level), self.core.spot_light.dimming_fraction(level), places=12)
 
-    def test_a_lit_fixture_keeps_its_job_by_the_owners_facing_margin(self):
-        """den-core admits a fixture at side-on or behind and keeps a lit one to 5 degrees in front, the owner's setting;
-        facing_keep_deg lets the owner choose up to 10, so the shoulders' swing on a side-on socket doesn't hand its
-        light on. A real turn past the margin still refuses it."""
+    def test_a_lit_fixture_keeps_its_job_however_the_reader_turns(self):
+        """The owner (2026-11-14): turning to face a light that's already on is fine. A lit fixture is never refused for
+        facing; admission is den-core's, so nothing new lights in front of the reader."""
         person = {"track_id": "t1", "head": (1.2, 1.0, 1.25), "shoulder_mid": (1.2, 1.0, .95), "facing": (0.0, 1.0),
                   "target": (1.2, 1.3, .7)}
 
@@ -1228,16 +1226,11 @@ class DirectionTest(PreviewTest):
             a = math.radians(degrees_in_front)
             return {"aim_origin_m": [1.2 + 2 * math.cos(a), 1.0 + 2 * math.sin(a), 2.5],
                     "horizontal_world_reference": [0, 1, 0]}
-        self.assertEqual(self.preview.settings["facing_keep_deg"], 5.0, "den-core's, by default")
         self.assertEqual(self.preview._eye("X", socket(3), person, False).reason, "in_front_of_reader",
                          "admission is den-core's")
-        for keep in (5.0, 10.0):
-            with self.subTest(keep):
-                self.assertEqual(self.preview.configure({"facing_keep_deg": keep})[0], 200)
-                self.assertTrue(self.preview._eye("X", socket(keep - 1), person, True).ok, "kept through the swing")
-                self.assertEqual(self.preview._eye("X", socket(keep + 1), person, True).reason, "in_front_of_reader",
-                                 "a real turn refuses it")
-        self.assertEqual(self.preview.configure({"facing_keep_deg": 15.0})[0], 400, "no more than 10")
+        for degrees in (5, 30, 80):
+            self.assertTrue(self.preview._eye("X", socket(degrees), person, True).ok, f"lit, {degrees} deg in front")
+        self.assertTrue(self.preview._eye("X", socket(30), dict(person, facing=None), True).ok, "lit, no facing")
 
     def dark_only(self, *names):
         """Real fixtures without lit travel (lit_motion false): the 0.5 s train and the radio rule."""

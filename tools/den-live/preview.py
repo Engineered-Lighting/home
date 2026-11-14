@@ -41,7 +41,7 @@ GAP_HOLD_S = 3.0
 FACING_REFUSALS = ("in_front_of_reader", "no_facing")
 # A light on someone refused for these is in, or can't be checked against, their head or eyes: it's cut at once (one
 # level-0 MOVE), never eased out. Easing is for ordinary hand-offs and exits.
-EYE_REFUSALS = ("beam_through_head", "in_front_of_reader", "no_head", "no_facing")
+EYE_REFUSALS = ("beam_through_head", "no_head")
 # The head's clearance from a beam is checked where the head is going as well as where the newest frame saw it: a
 # velocity fitted over the last HEAD_V_FRAMES frames (within HEAD_V_WINDOW_S; with fewer, none: two noisy frames read
 # 9-44 cm a second for a still head), at most HEAD_SPEED_MAX_M_S, carried over a horizon. Keeping a lit beam: the
@@ -437,22 +437,24 @@ class Preview:
         return self.episode.deadline(self.settings["phone_patience_s"])
 
     def _eye(self, name, row, person, kept):
-        """den-core's eye rule for this fixture, with the direction's hysteresis for a fixture lit for this person: it's
-        refused for its beam's centre passing the head only once that's inside GLARE_KEEP_M (admission keeps den-core's
-        0.15 m), and for being in front of the reader only once it's more than facing_keep_deg past side-on (den-core
-        admits at side-on and keeps to 5). So a few centimetres of head jitter, or the shoulders' swing on a side-on
-        socket, can't hand the light to another fixture."""
+        """den-core's eye rule for this fixture. Admission is den-core's: nothing new lights in front of the reader. A
+        fixture already lit for this person keeps its job however they turn (the owner, 2026-11-14: turning to face a
+        light that's on is fine), and is refused for its beam's centre passing the head only once that's inside
+        GLARE_KEEP_M (admission keeps den-core's 0.15 m), so head jitter can't flip it. The head and the eyes are also
+        checked on the beam as it points (_beam_clear), whichever way the reader faces."""
         eye = self.core.eye
         result = eye.evaluate(name, row, person, person["target"], kept)
-        if kept and result.reason in ("beam_through_head", "in_front_of_reader"):
+        if kept and result.reason in ("beam_through_head", "in_front_of_reader", "no_facing") and person.get("head"):
             aim = eye.aim
-            reader = aim.Reader(tuple(person["shoulder_mid"]), tuple(person["facing"][:2]) + (0.0,), "shoulders",
+            facing = person.get("facing")
+            if not facing:   # facing doesn't matter to a lit light: any horizontal direction will do for den-core
+                facing = (1.0, 0.0)
+            reader = aim.Reader(tuple(person["shoulder_mid"]), tuple(facing[:2]) + (0.0,), "shoulders",
                                 tuple(person["head"]), "pose", tuple(person["target"]))
             fixture = aim.Fixture(name, tuple(row["aim_origin_m"]), tuple(row["horizontal_world_reference"]),
                                   dict(aim.DEFAULT_LIMITS))
             held = aim.evaluate_fixture(fixture, reader, dataclasses.replace(
-                eye._KEEP, head_clearance_m=direction.GLARE_KEEP_M,
-                min_behind_cos=-math.sin(math.radians(self.settings["facing_keep_deg"]))))
+                eye._KEEP, head_clearance_m=direction.GLARE_KEEP_M, min_behind_cos=-1.0))
             result = held if held.ok else result
         return result
 

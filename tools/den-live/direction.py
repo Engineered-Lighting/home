@@ -35,18 +35,13 @@ SETTINGS = {
     "shift_m": 0.06,              # how far the book's settled place must move before a lit spot glides after it
     "shift_hold_s": 1.5,          # the window whose median is the book's settled place (a page turn is shorter)
     "page_up_m": 0.05,            # the page's centre: this far up the page from the hands (the page faces the eyes)
-    "facing_keep_deg": 5.0,       # a lit fixture keeps its job while it's no more than this in front of side-on.
-                                  # 5 is den-core's, the owner's setting of 2026-11-12; 10 is the owner's to choose:
-                                  # it stops nearly all the hand-offs the shoulders' swing makes on a side-on socket,
-                                  # but keeps a fixture up to 10 degrees in front after a real turn. Admission is
-                                  # den-core's side-on either way.
     "ambient_level": 0.75,        # the room's glow when nobody is doing a task (Home's own display default)
     "ambient_task_scale": 0.4,    # under a task light, the glow drops to this fraction
     "ambient_dim_s": 4.0,         # the room dims more slowly than the spot rises, so the eye follows it
     "ambient_delay_s": 0.5,       # and starts a beat after the spot, so the spot leads
     "ambient_restore_s": 1.5,     # when the task ends the room comes back as the spot goes out: no one sits in the dark
 }
-LIMITS = {"page_up_m": (0.0, 0.15), "facing_keep_deg": (5.0, 10.0), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
+LIMITS = {"page_up_m": (0.0, 0.15), "ambient_level": (0.0, 1.0), "ambient_task_scale": (0.0, 1.0),
           "fade_in_s": (0.0, 10.0), "fade_out_s": (0.0, 2.5), "leave_fade_s": (0.0, 1.0), "leave_fade_board_s": (0.0, 1.0),
           "crossfade_s": (0.0, 5.0), "glide_min_s": (0.0, 10.0),
           "ambient_dim_s": (0.0, 20.0), "ambient_delay_s": (0.0, 5.0), "ambient_restore_s": (0.0, 10.0),

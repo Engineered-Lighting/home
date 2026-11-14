@@ -417,6 +417,8 @@ test('cross-home card works during HA outage and recovers a lost reply on reload
     const lost = actions.at(-1).body.operation_id;
     phase = 'reload and look up the lost action';
     await page.reload({ waitUntil: 'domcontentloaded' });
+    // As after the first reload: the shell must be up before its Chat tab can be clicked.
+    await page.waitForFunction(() => !!window.HomeLightingControl && window.HomeServe?.active, null, { timeout: 45000 });
     await showChat();
     await page.getByRole('button', { name: 'Check outcome' }).click();
     await page.getByText(/Done.*Reading lamp.*Los Angeles.*Reading lamp.*Victoria/).waitFor();

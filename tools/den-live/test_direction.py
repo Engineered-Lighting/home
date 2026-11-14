@@ -83,17 +83,17 @@ class SCurveTest(unittest.TestCase):
 
 class FadeTest(unittest.TestCase):
     def test_the_curves(self):
-        for curve in ("bloom", "smooth", "out", "linear"):
+        for curve in ("ease_out", "ease_in_out", "linear"):
             values = [direction.ease(curve, k / 50) for k in range(51)]
             self.assertEqual((values[0], values[-1]), (0.0, 1.0))
             self.assertTrue(all(b >= a for a, b in zip(values, values[1:])))
-        self.assertGreater(direction.ease("out", .5), .7, "an exit lets most of the light go first")
-        self.assertGreater(direction.ease("bloom", .05), .07, "a rise is visible at its first step")
-        self.assertAlmostEqual(direction.ease("bloom", 1 / 3), .5, msg="and half way at a third of its time")
-        self.assertAlmostEqual(direction.ease("smooth", .5), .5)
+        self.assertGreater(direction.ease("ease_out", .5), .7, "an exit lets most of the light go first")
+        self.assertGreater(direction.ease("ease_out", .05), .07, "a rise is visible at its first step")
+        self.assertAlmostEqual(direction.ease("ease_out", 1 / 3), .5, msg="and half way at a third of its time")
+        self.assertAlmostEqual(direction.ease("ease_in_out", .5), .5)
 
     def test_a_ramp_pauses(self):
-        ramp = direction.Ramp(0.0, 0.8, 2.0, "smooth", 10.0, "fade_in")
+        ramp = direction.Ramp(0.0, 0.8, 2.0, "ease_in_out", 10.0, "fade_in")
         self.assertAlmostEqual(ramp.value(11.0), 0.4)
         ramp.paused(0.5)
         self.assertAlmostEqual(ramp.value(11.5), 0.4)

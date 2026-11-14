@@ -498,7 +498,7 @@ class Preview:
             if (task and row["job"] == person["track_id"]
                     and (row["exiting"] == "task_released" or (row["exiting"] == "task_ending" and extended))):
                 row.update(exiting=None, ended_at=None, reason="task", goal=self._goal(row, person))
-                row["ramp"] = direction.Ramp(row["level"], row["goal"], self.settings["fade_in_s"], "bloom", now,
+                row["ramp"] = direction.Ramp(row["level"], row["goal"], self.settings["fade_in_s"], "ease_out", now,
                                              "fade_in")
             return
         if row["dip"] is not None:
@@ -528,13 +528,13 @@ class Preview:
             fade = self.settings["crossfade_s" if handoff else "fade_in_s"]
             row.update(goal=goal, job=person["track_id"], target=person["target"], basis=person["basis"],
                        reason="task", ended_at=None)
-            curve = "smooth" if handoff else "bloom"
+            curve = "ease_in_out" if handoff else "ease_out"
             # Back from a dip (a dark move while lit) it returns over the crossfade, not the slow first rise.
             back = row["move"] is not None and row["move"].get("requested", {}).get("cue") == "dip_move"
             fade = self.settings["crossfade_s"] if back else fade
             # A rise's first step goes with the yes: the bloom starts one step in, already visible.
-            start = now - row["step_s"] if curve == "bloom" and not back else now
-            row["ramp"] = direction.Ramp(row["level"], goal, fade, "smooth" if back else curve, start,
+            start = now - row["step_s"] if curve == "ease_out" and not back else now
+            row["ramp"] = direction.Ramp(row["level"], goal, fade, "ease_in_out" if back else curve, start,
                                          "crossfade_in" if handoff or back else "fade_in")
             return
         if target != effective_target:
@@ -565,12 +565,12 @@ class Preview:
             # Dim or dark travel (or a path past the head): fade down, move, rise again.
             down = min(self.settings["move_dim_level"] if travel == "dim" else 0.0, row["level"])
             row["dip"] = (target, down, person)
-            row["ramp"] = direction.Ramp(row["level"], down, self.settings["fade_out_s"], "out", now, "dip")
+            row["ramp"] = direction.Ramp(row["level"], down, self.settings["fade_out_s"], "ease_out", now, "dip")
             return
         if row["ramp"] is None and goal > 0 and abs(goal - row["goal"]) > .1 * goal:
             # The book moved to where this fixture gives it a different amount of light (plan C6's 10 %).
             row["goal"] = goal
-            row["ramp"] = direction.Ramp(row["level"], goal, self.settings["crossfade_s"], "smooth", now, "level")
+            row["ramp"] = direction.Ramp(row["level"], goal, self.settings["crossfade_s"], "ease_in_out", now, "level")
         row.update(job=person["track_id"], target=person["target"], basis=person["basis"])
 
     def _in_beam(self, row, point):
@@ -622,8 +622,8 @@ class Preview:
             if ending is None or row["glide"] is not None:
                 self._release(name, row, now, reason)
             return
-        # The curves: a crossfade is smooth; an exit lets most of the light go first ("out").
-        curve = "smooth" if handoff else "out"
+        # The curves: a crossfade eases in and out; an exit lets most of the light go first (ease_out).
+        curve = "ease_in_out" if handoff else "ease_out"
         row["ramp"] = direction.Ramp(row["level"], 0.0, min(fade, bound - now), curve, now,
                                      "crossfade_out" if handoff else "fade_out")
         row.update(exiting=reason, reason=reason, dip=None, lit_until=bound, ended_at=ending)

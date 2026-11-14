@@ -182,20 +182,19 @@ class Glide:
 # ---- Fades -------------------------------------------------------------------------------------------------------
 
 def ease(curve, x):
-    """0 to 1 over x in 0..1. Levels are already close to perceived lightness (Home's dimming curve is CIE lightness), so
+    """0 to 1 over x in 0..1, on the C12's own fade curves (the timed MOVE's flag bits 5-6, firmware 62ea043), named as
+    c12.move's fade_curve names them, so a fade the coordinator plays as a level train is the one the board will play
+    from a single timed MOVE. Levels are already close to perceived lightness (Home's dimming curve is CIE lightness), so
     the curves act on what the eye sees.
-    - bloom: a quarter sine, for a rise: visible at the first step (8 % of the goal at 0.1 s into a 2 s rise), half way
-      by a third of the time, and settling softly, the way a warm lamp comes up;
-    - smooth: a cosine in-out, for crossfades: no visible start or landing, so two fixtures trade evenly;
-    - out: fast at first, soft at the end, for exits: most of the light goes in the first half;
+    - ease_out, sin(x pi/2): rises and exits. A rise is visible at its first step (8 % of the goal 0.1 s into a 2 s
+      rise), half way at a third of its time, and settles softly; an exit lets most of the light go first;
+    - ease_in_out, (1 - cos(x pi))/2: crossfades and the room's glow, with no visible start or landing;
     - linear."""
     x = min(1.0, max(0.0, x))
-    if curve == "bloom":
+    if curve == "ease_out":
         return math.sin(math.pi * x / 2.0)
-    if curve == "smooth":
+    if curve == "ease_in_out":
         return (1.0 - math.cos(math.pi * x)) / 2.0
-    if curve == "out":
-        return 1.0 - (1.0 - x) ** 2
     return x
 
 
@@ -350,10 +349,10 @@ class Ambient:
         current = self.value(now)
         self.goal = goal
         if goal < current:
-            self.ramp = Ramp(current, goal, settings["ambient_dim_s"], "smooth", now + settings["ambient_delay_s"],
+            self.ramp = Ramp(current, goal, settings["ambient_dim_s"], "ease_in_out", now + settings["ambient_delay_s"],
                              "ambient_dim")
         else:
-            self.ramp = Ramp(current, goal, settings["ambient_restore_s"], "smooth", now, "ambient_restore")
+            self.ramp = Ramp(current, goal, settings["ambient_restore_s"], "ease_in_out", now, "ambient_restore")
 
     def value(self, now):
         if self.ramp is None:

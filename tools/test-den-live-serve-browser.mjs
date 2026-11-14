@@ -43,7 +43,7 @@ let folder, upstream, relay, gateway, browser, origin, den, scene, ordinaryPort,
 let previewPort = null;
 const relaySockets = new Set();
 const fake = { streams: new Set(), bodies: new Set(), sockets: new Set(), actions: [], ws: [], labels: null,
-  bodyAvailable: true, bodyStreaming: true, bodySeq: 0, haOffline: false,
+  bodyAvailable: true, bodyStreaming: true, bodySeq: 0, haOffline: false, inference: null, subject: null,
   control: { on: false, stopped: false, stop_counter: 0 }, epoch: 'fixture-epoch', seq: 0 };
 
 function json(res, value, status = 200) {
@@ -63,7 +63,7 @@ function spotEvent() {
   const ids = scene.equipment.filter(item => item.kind === 'mount' && item.position_m != null).map(mount =>
     scene.equipment.find(item => item.kind === 'fixture' && item.mounted_at_ref === mount.id)?.id ?? `${mount.id}-virtual-fixture`);
   return { ...golden.snapshot, site: 'victoria', epoch: fake.epoch, seq: ++fake.seq,
-    sampled_mono: now, valid_until_mono: now + 1.5, ...fake.control,
+    sampled_mono: now, valid_until_mono: now + 1.5, ...fake.control, subject: fake.subject ?? golden.snapshot.subject ?? null,
     binding: { transform_id: 'authored-transform', scan_revision: den.revision,
       equipment_revision: scene.revision, equipment_digest: scene.digest },
     fixtures: Object.fromEntries(ids.map(fixture => [fixture, { ...row,
@@ -95,9 +95,16 @@ async function upstreamRequest(req, res) {
   }
   if (pathname === denBase + '/stream') return openEvents(res, fake.streams, out => {
     const now = Date.now() / 1000;
+    // With fake.inference, the fields the live caption reads (docs/design/den-inference/SPEC.md): Qwen's answer and
+    // its facts, the seated flag and an identity. Without it, exactly what den-live sends today.
+    // ageS keeps the answer that many seconds old in every event; without it, activity.at is fixed and the answer ages.
+    const inference = fake.inference && { ...fake.inference, activity: fake.inference.activity && { ...fake.inference.activity,
+      at: fake.inference.ageS != null ? now - fake.inference.ageS : fake.inference.activity.at } };
     const people = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform',
       content_revision: den.revision, capture_ts: now, emitted_ts: now, mode: 'rgb', camera: { status: 'ok' },
-      tracks: [{ track_id: 'authored-person', state: 'confirmed', xy_m: [1.2, 1.5], sigma_m: .1, age_s: 0 }] };
+      ...(inference ? { health: { qwen: { state: 'asking', why: null, last_reply_at: inference.activity?.at ?? null, reply_s_median: 1.6, asks_per_min: 28 } } } : {}),
+      tracks: [{ track_id: 'authored-person', state: 'confirmed', xy_m: [1.2, 1.5], sigma_m: .1, age_s: 0,
+        camera_epoch: 1, association_revision: 1, ...(inference ? { seated: true, identity: inference.identity, activity: inference.activity } : {}) }] };
     out.write('event: people\ndata: ' + JSON.stringify(people) + '\n\n');
     if (fake.spotStreaming !== false) out.write('event: spot_snapshot\ndata: ' + JSON.stringify(spotEvent()) + '\n\n');
   }, {}, 'event: spot_clock\ndata: ' + JSON.stringify({ epoch: fake.epoch, server_mono: performance.now() / 1000 }) + '\n\n');
@@ -247,7 +254,7 @@ before(async () => {
     HOME_WEB_AUTH_FILE: path.join(folder, 'missing-auth.json'), HOME_WEB_BASIC_AUTH: 'fixture:ordinary-auth-required',
     HOME_CONTENT_PACKS_DIR: packs, HOME_WEB_EQUIPMENT_REGISTRATION_ENABLED: '1',
     HOME_WEB_EQUIPMENT_REGISTRATION_ROOT: registration, HOME_WEB_EQUIPMENT_REGISTRATION_ORIGIN: origin,
-    HOME_WEB_DEN_LIVE: '1', HOME_WEB_DEN_BODY_V2: '1', HOME_WEB_DEN_VIRTUAL: '1',
+    HOME_WEB_DEN_LIVE: '1', HOME_WEB_DEN_BODY_V2: '1', HOME_WEB_DEN_VIRTUAL: '1', HOME_WEB_DEN_CAPTION: '1',
     HOME_WEB_DEN_LIVE_TARGET: target + '/api/den-live', HOME_WEB_ENABLE_LEGACY_HA_PROXY: '1',
     HOME_WEB_HA_TARGET: target, HOME_WEB_HA_TOKEN_FILE: haFile,
     HOME_WEB_SERVE_LIGHTING_RELAY_CREDENTIAL_FILE: relayFile, HOME_WEB_AGENT_BFF_TARGET: target + '/api/agent' });
@@ -691,4 +698,38 @@ inPart(2, 'the real coordinator trace, virtual spot and Stop agree through Full 
     previewPort = null;
     await preview?.stop();
   }
+});
+
+test('the live caption says who it is, what Qwen said and for how long, and what the light does for them', { timeout: 120000 }, async () => {
+  const initial = { ...fake.control };
+  const caption = page => page.evaluate(() => window.HomeDenLiveView?.status()?.caption?.[0] ?? null);
+  try {
+    for (const mobile of [false, true]) {
+      const now = Date.now() / 1000;
+      fake.inference = { ageS: 1, identity: { kind: 'household', label: 'Sam', score: .93, at: now - 4 },
+        activity: { word: 'reading', close_up: true, at: now - 1, facts: { held_object: 'book', book_state: 'open', gaze_target: 'book', subject_posture: 'sitting' },
+          basis: ['book_in_hands', 'book_pages_open', 'head_down'] } };
+      fake.control.on = true; fake.control.stopped = false;
+      fake.subject = { track_id: 'authored-person', camera_epoch: 1, association_revision: 1, request_id: 'ask-1' };
+      const { page, context } = await openHome(mobile);
+      try {
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.caption?.[0]?.line === 'Reading', null, { timeout: 60000 })
+          .catch(async error => { console.log('caption status', JSON.stringify(await page.evaluate(() => window.HomeDenLiveView?.status()?.caption ?? null))); throw error; });
+        let shown = await caption(page);
+        assert.equal(shown.name, 'Sam');
+        assert.equal(shown.object, 'Book');
+        assert.match(shown.age, /^\d+ s$/);
+        await page.waitForFunction(() => /reading light/.test(window.HomeDenLiveView?.status()?.caption?.[0]?.house ?? ''), null, { timeout: 20000 });
+        assert.equal(await page.locator('.home-den-live-chip-qwen').textContent(), '', 'the caption takes over the chip line');
+        assert.equal(await page.locator('canvas.apt-body-labels').count(), 0, 'the body draws no second caption');
+        if (process.env.HOME_DEN_CAPTION_SHOTS) await page.screenshot({ path: path.join(process.env.HOME_DEN_CAPTION_SHOTS, `caption-${mobile ? 'phone' : 'desktop'}.png`) });
+        // The answer is 10 s old a moment from now: the word goes at once, with no grace.
+        fake.inference = { ...fake.inference, ageS: null, activity: { ...fake.inference.activity, at: Date.now() / 1000 - 9.3 } };
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.caption?.[0]?.line === 'Waiting for Qwen', null, { timeout: 5000 });
+        shown = await caption(page);
+        assert.equal(shown.object, null);
+        assert.equal(shown.life, '0.0 100');
+      } finally { await context.close(); }
+    }
+  } finally { fake.inference = null; fake.subject = null; Object.assign(fake.control, initial); }
 });

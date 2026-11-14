@@ -9,7 +9,10 @@
  * Otherwise it closes the streams and disposes the layers. The coordinator's spots ride the people stream.
  * A heartbeat is an SSE comment, which EventSource never shows; den-live sends an event at least once a second while
  * its loop runs (an idle one says why), so 3 s with no event reads as "stream stopped".
- * The body has an independent connection, and the coordinator panel uses the current spot playback for its readout. */
+ * The body has an independent connection, and the coordinator panel uses the current spot playback for its readout.
+ * With HomeDenLive.caption (the gateway's HOME_WEB_DEN_CAPTION), each person gets the live caption
+ * (home-den-inference-caption.mjs): who, Qwen's word and its life, what they hold, and what the light does for them.
+ * It takes over the chip's Qwen line and the body's own labels, so nothing is said twice. */
 const config = window.HomeDenLive;
 const STOPPED_MS = 3000, REOPEN_MS = 5000, TICK_MS = 500, BODY_RETRY_MS = 2000;
 const BODY_CLOCK_REFRESH_MS = 60 * 60 * 1000;
@@ -26,7 +29,10 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     const spotKit = config.virtual === true
         ? await import(`./home-den-spot-playback.mjs${cb}`).catch(error => { console.warn('[den-live] virtual spots unavailable', error); return null; })
         : null;
-    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit);
+    const captionKit = config.caption === true
+        ? await import(`./home-den-inference-caption.mjs${cb}`).catch(error => { console.warn('[den-live] caption unavailable', error); return null; })
+        : null;
+    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit);
     if (typeof config.body === 'string') {
         void Promise.all([import(`./home-3d/apartment-body-layer.mjs${cb}`), import(`./home-3d/apartment-body-labels.mjs${cb}`),
             import(`./home-3d/apartment-body-frame.mjs${cb}`)])
@@ -36,12 +42,13 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     }
 }
 
-function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) {
+function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit = null) {
     const lookOnly = window.HomeLookOnly?.active === true;
     let engine = null, scope = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
-    let panel = null;
+    let panel = null, caption = null;
     let bodyKit = null, body = null, bodyRetryAt = 0, bodyFrames = 0, bodyAt = 0, watermark = null, pageActive = true;
-    const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site, onChange: () => panel?.refresh() });
+    const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site,
+        onChange: () => { panel?.refresh(); caption?.setSpot(spots?.current() ?? null); } });
     const scene = current => `${current.contentRevision ?? ''}:${current.sceneIdentity?.registrationVersion ?? ''}:${current.sceneIdentity?.frameDigest ?? ''}`;
 
     /* The den's room view is on screen: the den's engine, its canvas shown at room scale, the page visible. */
@@ -64,8 +71,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
         latest = event; lastAt = performance.now(); events += 1;
         const matched = sameScan(event);
         spots?.tracking(matched ? event.transform_id : null, matched ? event.content_revision : null);
-        if (matched) layer?.update(event);
-        else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine); }
+        if (matched) { layer?.update(event); caption?.update(event, lastAt); }
+        else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine); caption?.clear(); }
         render();
     }
     const isCurrent = () => engine && engine === denEngine() && scope === scene(engine);
@@ -83,6 +90,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
             if (source !== next || !isCurrent()) return;
             try { spots.receive(JSON.parse(message.data)); }
             catch (_) { spots.sourceLost(); }
+            caption?.setSpot(spots.current() ?? null);
         });
         next.addEventListener('error', () => {
             if (source !== next) return;
@@ -188,11 +196,26 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
             if (!presentation || !admitted()) { presentation?.dispose(); disposeBody(owned); return; }
             owned.layer = bodyKit.attachLayer(current, { measuredOnly: true, animate: false,
                 reducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches });
-            owned.labels = bodyKit.attachLabels({ engine: current, host, layer: owned.layer, animate: false });
+            // The caption speaks for the person when it's on; the body then draws no labels of its own.
+            owned.labels = caption ? { tick() {}, clear() {}, dispose() {} }
+                : bodyKit.attachLabels({ engine: current, host, layer: owned.layer, animate: false });
         } catch (error) { console.warn('[den-live] body layer not mounted', error); disposeBody(owned); }
+    }
+    function mountCaption(current) {
+        const canvas = current.renderer.domElement;
+        // The stage, so the caption sits over the room's label pills; older layouts fall back to the view itself.
+        const host = canvas.closest('.apt-home-stage') || canvas.closest('[data-home-apartment-view="1"]') || canvas.parentElement;
+        const names = () => Object.fromEntries((current.overlay?.virtualFixturesReadback?.()?.fixtures || [])
+            .filter(row => typeof row.label === 'string').map(row => [row.fixture_id, row.label]));
+        try {
+            caption = captionKit.attachDenCaption({ engine: current, host, markers: () => layer?.markers() ?? [],
+                body: () => body?.engine === current && body.ready ? body.layer?.snapshot?.() ?? null : null, names,
+                reducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches });
+        } catch (error) { console.warn('[den-live] caption not mounted', error); caption = null; }
     }
     function close() {
         source?.close(); source = null;
+        caption?.dispose(); caption = null;
         layer?.dispose(); layer = null; engine = null;
         spots?.disconnect();
         spots?.attach(null);
@@ -212,6 +235,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
             scope = scene(current);
             spots?.attach(current.overlay);
             layer = attachApartmentPeopleLayer(current);
+            if (captionKit) mountCaption(current);
         }
         const now = performance.now();
         if (!source && (!closedAt || now - closedAt > REOPEN_MS)) open();
@@ -280,7 +304,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
         chip.dataset.banner = kind;
         if (chip.title !== title) chip.title = title;
         setText(chip.querySelector('.home-den-live-chip-facts'), facts);
-        setText(chip.querySelector('.home-den-live-chip-qwen'), fresh && sameScan(latest) ? qwenLine(latest, (now - lastAt) / 1000) : '');
+        setText(chip.querySelector('.home-den-live-chip-qwen'), fresh && sameScan(latest) && !caption ? qwenLine(latest, (now - lastAt) / 1000) : '');
         setText(chip.querySelector('.home-den-live-chip-banner'), words);
     }
 
@@ -298,7 +322,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit) 
             body: bodyKit ? { stream: body?.connection ? ['connecting', 'open', 'closed'][body.connection.source.readyState] : 'none',
                 mounted: !!body?.layer, frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null,
                 reason: body?.reason ?? null, last_paint_age_s: body?.lastPaintAge ?? null, layer: body?.layer?.status() ?? null } : null ,
-            coordinator: panel ? panel.status() : null, spot: spots?.current() ?? null }),
+            coordinator: panel ? panel.status() : null, spot: spots?.current() ?? null, caption: caption ? caption.status() : null }),
         markers: () => layer ? layer.markers() : [],
     });
     return kit => { bodyKit = kit; sync(); };

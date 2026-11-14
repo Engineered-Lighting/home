@@ -1,0 +1,410 @@
+<title>Den Signal Path Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="den-shell.css">
+<style>
+/* Direction B, Signal path: the chain from camera to beam as a live strip under the room. Each node shows its own
+   measured numbers; a pulse runs only when a real event arrives, and each leg lasts its measured p50. */
+.device[data-layout="phone"] .app { grid-template-rows: 46% 54%; }
+.device[data-layout="phone"] .bottom { overflow: auto; overscroll-behavior: contain; }
+
+.tag { position: absolute; left: 0; top: 0; display: flex; gap: 6px; align-items: baseline; padding: 3px 7px; border-radius: 6px;
+  background: var(--cv-glass); border: 1px solid var(--cv-line); white-space: nowrap; pointer-events: none; will-change: transform; }
+.tag b { font: 600 12.5px/1.2 var(--sans); color: var(--cv-fg-0); }
+.tag span { font: 500 11.5px/1.2 var(--mono); color: var(--cv-ice); }
+.tag span.off { color: var(--cv-fg-3); }
+.status { position: absolute; left: 10px; top: 10px; display: flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 8px;
+  background: var(--cv-glass); border: 1px solid var(--cv-line); font: 500 12px/1.2 var(--sans); color: var(--cv-fg-1); max-width: calc(100% - 20px); }
+.status .sd { width: 7px; height: 7px; border-radius: 50%; background: var(--cv-ok); box-shadow: 0 0 8px var(--cv-ok); flex: 0 0 auto; }
+.status[data-state="attention"] .sd { background: var(--cv-attn); box-shadow: none; border-radius: 1px; transform: rotate(45deg); }
+.status[data-state="connecting"] .sd { background: var(--cv-fg-4); box-shadow: none; }
+.status .sb { color: var(--cv-attn); }
+
+.strip-wrap { position: relative; }
+.strip { position: relative; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); padding: 10px 14px 6px; }
+.pulses { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; }
+.node { position: relative; z-index: 2; display: grid; grid-template-rows: 16px auto auto auto; gap: 3px; min-width: 0; padding-right: 12px; }
+.n-rail { height: 16px; display: flex; align-items: center; }
+.shape { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--hg-fg-4); }
+.node[data-state="live"] .shape { background: var(--apt-ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--apt-ok) 22%, transparent), 0 0 10px color-mix(in srgb, var(--apt-ok) 60%, transparent); }
+.node[data-state="attn"] .shape { background: var(--apt-attn); border-radius: 1px; transform: rotate(45deg) scale(.9); }
+.node[data-state="blocked"] .shape { width: 12px; height: 4px; border-radius: 1px; background: var(--apt-blocked); }
+.node[data-state="off"] .shape { background: var(--hg-fg-4); }
+.n-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.n-name b { font: 600 13px/1.2 var(--sans); color: var(--hg-fg-0); white-space: nowrap; }
+.n-big { font: 500 15px/1.15 var(--mono); color: var(--hg-fg-0); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.node[data-state="attn"] .n-big, .node[data-state="blocked"] .n-big { color: var(--apt-attn); }
+.node[data-state="off"] .n-big { color: var(--hg-fg-3); }
+.n-lines { display: grid; gap: 1px; min-width: 0; }
+.n-lines div { font: 500 11.5px/1.35 var(--mono); color: var(--hg-fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.n-lines div.hi { color: var(--hg-fg-1); white-space: normal; }
+.n-lines div.warn { color: var(--apt-attn); white-space: normal; }
+.n-lines div:empty { display: none; }
+.prop { color: var(--apt-proposed); }
+.life { height: 3px; border-radius: 2px; background: var(--hg-border); overflow: hidden; margin-top: 2px; }
+.life i { display: block; height: 100%; background: var(--hg-ice); }
+.life[hidden] { display: none; }
+.ticks { display: block; width: 100%; height: 14px; margin-top: 2px; }
+
+.ruler { position: relative; z-index: 2; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 6px 14px;
+  margin: 2px 14px 10px; padding-top: 8px; border-top: 1px solid var(--hg-border); }
+.ruler-label { font: 600 12.5px/1.2 var(--sans); color: var(--hg-fg-0); white-space: nowrap; }
+.ruler-label small { display: block; font: 500 11px/1.3 var(--mono); color: var(--hg-fg-3); }
+.bar { position: relative; height: 22px; min-width: 0; }
+.bar-track { position: absolute; left: 0; right: 0; top: 9px; height: 4px; border-radius: 2px; background: var(--hg-border); }
+.seg-a, .seg-b { position: absolute; top: 7px; height: 8px; border-radius: 2px; }
+.seg-a { background: var(--hg-ice); }
+.seg-b { background: var(--apt-warm); }
+.seg-a[hidden], .seg-b[hidden] { display: none; }
+.goal { position: absolute; top: 0; height: 22px; width: 0; border-left: 1px dashed var(--hg-fg-2); }
+.goal span, .scale span { position: absolute; top: -2px; left: 4px; font: 500 10.5px/1 var(--mono); color: var(--hg-fg-3); white-space: nowrap; }
+.scale { position: absolute; top: 0; height: 22px; width: 0; }
+.scale span { top: auto; bottom: -3px; left: -4px; }
+.ruler-text { font: 500 12px/1.35 var(--mono); color: var(--hg-fg-1); text-align: right; font-variant-numeric: tabular-nums; }
+.ruler-text small { display: block; color: var(--hg-fg-3); font-size: 11px; }
+.key { display: inline-flex; gap: 10px; flex-wrap: wrap; }
+.key i { display: inline-block; width: 10px; height: 6px; border-radius: 1px; margin-right: 4px; vertical-align: 1px; }
+
+/* the phone: the strip stacks into a list, the rail runs down the left */
+.device[data-layout="phone"] .strip { grid-template-columns: minmax(0, 1fr); gap: 12px; padding: 12px 14px 8px; }
+.device[data-layout="phone"] .node { grid-template-columns: 22px minmax(0, auto) minmax(0, 1fr); grid-template-rows: none; padding-right: 0; gap: 2px 10px; }
+.device[data-layout="phone"] .n-rail { grid-row: 1 / span 4; height: auto; align-items: flex-start; padding-top: 4px; }
+.device[data-layout="phone"] .node > :not(.n-rail) { grid-column: 2 / 4; }
+.device[data-layout="phone"] .node > .n-name { grid-column: 2; grid-row: 1; }
+.device[data-layout="phone"] .node > .n-big { grid-column: 3; grid-row: 1; text-align: right; font-size: 13.5px; align-self: baseline; }
+.device[data-layout="phone"] .ticks { height: 10px; }
+.device[data-layout="phone"] .strip { gap: 10px; }
+.device[data-layout="phone"] .n-lines { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 10px; }
+.device[data-layout="phone"] .ruler { grid-template-columns: minmax(0, 1fr); margin: 0 14px 12px; }
+.device[data-layout="phone"] .ruler-text { text-align: left; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="links.js"></script>
+<script src="den-sim.js"></script>
+<script src="den-client.js"></script>
+<script src="den-stage.js"></script>
+<script src="den-shell.js"></script>
+<script>
+(function () {
+const NOTES = `
+<article class="note"><h2>What this direction is</h2>
+<p>The whole chain, camera to beam, as one strip under the room. Each stage shows the numbers den-live measures for it: rates, p50 and p95 latencies, Qwen's reply time and the coordinator's reason.</p>
+<p>Nothing moves on its own. A pulse runs only when an event really arrives: a people event replays its journey with each leg lasting its measured p50, an answer runs from Qwen to the coordinator, and each 10 Hz spot snapshot ticks the beam. When the stream stops, the pulses stop and every stage says how long it has been.</p>
+<p>The ruler at the bottom measures each lighting: from Qwen's still to the first light, against the 2 s goal. That is a lower bound on cue to light, because the cue happened before the still.</p></article>
+<article class="note"><h2>Bindings</h2><ul>
+<li>Camera: <code>health.fps_in</code>, <code>transit_s_median</code>, <code>dropped_per_min</code>, <code>mode</code>, <code>camera.why</code>.</li>
+<li>Detector and tracker: <code>health.timings_ms</code> fetch, detector, lift, track, publish (p50 and p95); behind = <code>lag_s_median + transit_s_median</code>.</li>
+<li>Qwen: <code>health.qwen</code> state, why, <code>reply_s_median</code>, <code>asks_per_min</code>, <code>last_reply_at</code>; in flight and outcome from <code>inflight_since</code>, <code>last_outcome</code> <span class="pill-proposed">proposed</span>.</li>
+<li>Coordinator: the 2 s poll's <code>decision.proposal</code>, and the spot row's <code>reason</code> and <code>subject</code>.</li>
+<li>Beam: the spot row's <code>level</code>, <code>cct_k</code>, <code>motion_phase</code>. Ruler: <code>activity.capture_ts</code> <span class="pill-proposed">proposed</span>; today only answer to light.</li></ul></article>
+<article class="note"><h2>Design check</h2><dl class="score">
+<dt>Readable</dt><dd>Clear to anyone who knows the system; a lot of numbers for anyone else. It explains where time goes, not what the person is doing. On a phone it takes half the screen.</dd>
+<dt>Honest</dt><dd>Strongest of the four: every number is den-live's own, pulses come only from real arrivals, gaps show as gaps, and the ruler says it's a lower bound.</dd>
+<dt>Fast</dt><dd>Text changes only when values change. The pulse canvas redraws each frame but holds a few shapes; it stops when nothing arrives.</dd>
+<dt>Delight</dt><dd>Medium. The rhythm of real events is satisfying, and the ruler is the one number the owner wants. Better as a drawer than the main view.</dd></dl></article>`;
+
+const NODES = [
+    { key: 'camera', name: 'Camera' }, { key: 'detector', name: 'Detector' }, { key: 'tracker', name: 'Tracker' },
+    { key: 'qwen', name: 'Qwen' }, { key: 'coord', name: 'Coordinator' }, { key: 'beam', name: 'Beam' },
+];
+const GOAL_S = 2, SCALE_S = 4;
+
+DenShell.mount({ letter: 'B', title: 'Signal path: every stage, live',
+    subtitle: 'The pipeline from camera to beam, with its own measured numbers. Synthetic stream at real rates; no frames or real positions.',
+    notes: NOTES, side: 0, phoneStage: '46%', startAt: 19.0,
+    setup(ctx) {
+        const { overlay, stage, esc, bottom } = ctx;
+        overlay.innerHTML = `<div class="status" id="status" data-state="connecting"><span class="sd"></span><span id="status-text">Connecting…</span></div>`;
+        bottom.innerHTML = `<div class="strip-wrap" id="wrap"><canvas class="pulses" id="pulses" aria-hidden="true"></canvas>
+          <div class="strip" id="strip" role="list" aria-label="Pipeline stages">${NODES.map(n => `
+            <div class="node" role="listitem" data-node="${n.key}" data-state="off">
+              <div class="n-rail"><span class="shape" aria-hidden="true"></span></div>
+              <div class="n-name"><b>${n.name}</b></div>
+              <div class="n-big"></div>
+              <div class="n-lines"><div class="l1"></div><div class="l2"></div><div class="l3"></div><div class="l4"></div></div>
+              <div class="life" hidden><i></i></div>
+              <canvas class="ticks" aria-hidden="true"></canvas>
+            </div>`).join('')}</div>
+          <div class="ruler" id="ruler">
+            <div class="ruler-label">Still → light<small>lower bound on cue → light</small></div>
+            <div class="bar" aria-hidden="true"><div class="bar-track"></div><div class="seg-a" id="seg-a" hidden></div><div class="seg-b" id="seg-b" hidden></div>
+              <div class="goal" style="left:${GOAL_S / SCALE_S * 100}%"><span>2 s goal</span></div>
+              ${[0, 1, 3, 4].map(s => `<div class="scale" style="left:${s / SCALE_S * 100}%"><span>${s}</span></div>`).join('')}</div>
+            <div class="ruler-text" id="ruler-text">Waiting for a lighting<small>measured when the spot first lights for a task</small></div>
+          </div></div>`;
+
+        const $ = id => document.getElementById(id);
+        const nodes = Object.fromEntries(NODES.map(n => {
+            const el = bottom.querySelector(`[data-node="${n.key}"]`);
+            return [n.key, { el, big: el.querySelector('.n-big'), l: [1, 2, 3, 4].map(i => el.querySelector('.l' + i)),
+                life: el.querySelector('.life'), lifeBar: el.querySelector('.life i'), ticks: el.querySelector('.ticks'), dot: el.querySelector('.shape') }];
+        }));
+        const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+        const html = (node, value) => { if (node._h !== value) { node.innerHTML = value; node._h = value; } };
+        const cls = (node, name, on) => { if (node.classList.contains(name) !== on) node.classList.toggle(name, on); };
+        const state = (n, s) => { if (nodes[n].el.dataset.state !== s) nodes[n].el.dataset.state = s; };
+        const lines = (n, values) => nodes[n].l.forEach((el, i) => {
+            const v = values[i] || ''; const [t, c] = Array.isArray(v) ? v : [v, ''];
+            if (c.includes('html')) html(el, t); else text(el, t);
+            cls(el, 'hi', c.includes('hi')); cls(el, 'warn', c.includes('warn'));
+        });
+        const ms = v => v == null ? '—' : `${Math.round(v)}`;
+        const secs = v => v == null ? '—' : v < 10 ? `${v.toFixed(1)} s` : `${Math.round(v)} s`;
+        const P = () => ctx.proposed;
+
+        /* tags on the stage: a name and Qwen's word, for orientation only */
+        const tags = new Map();
+        function drawTags(view) {
+            const anchors = stage.anchors(), seen = new Set();
+            for (const t of view.tracks) {
+                const a = anchors.get(t.id);
+                if (!a || a.floor.behind) continue;
+                seen.add(t.id);
+                let el = tags.get(t.id);
+                if (!el) { el = document.createElement('div'); el.className = 'tag'; el.innerHTML = '<b></b><span></span>'; overlay.appendChild(el); tags.set(t.id, el); }
+                text(el.firstChild, t.identity.name);
+                const w = t.activity ? t.activity.words : t.seated === false ? (t.posture || 'Not seated') : '';
+                text(el.lastChild, w); cls(el.lastChild, 'off', !t.activity);
+                const x = Math.max(6, Math.min(stage.size.width - el.offsetWidth - 6, a.floor.x - el.offsetWidth / 2));
+                const y = Math.max(44, Math.min(stage.size.height - 50, a.floor.y + 8));
+                el.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+                el.style.opacity = String(Math.min(1, a.opacity));
+            }
+            for (const [id, el] of tags) if (!seen.has(id)) { el.remove(); tags.delete(id); }
+        }
+
+        /* pulses: one per real arrival, along the rail through the stage dots */
+        const pulses = [];
+        let pending = null, lastArrival = -Infinity, lastNow = null, lastReason = null, lastLevel = 0, lastInflight = null, lastPoll = null, pollAt = null;
+        const polls = [], marks = [];   // coordinator poll arrivals, and decision changes
+        const measures = [];
+        const canvas = $('pulses'), pctx = canvas.getContext('2d');
+        const wrap = $('wrap');
+        function anchorsOfDots() {
+            const base = wrap.getBoundingClientRect();
+            return NODES.map(n => { const r = nodes[n.key].dot.getBoundingClientRect(); return [r.left + r.width / 2 - base.left, r.top + r.height / 2 - base.top]; });
+        }
+        function spawn(kind, from, to, legs, now) { if (!ctx.reduced()) pulses.push({ kind, from, to, legs, start: now }); if (pulses.length > 40) pulses.shift(); }
+
+        let colors = null, colorsAt = -1;
+        function readColors(now) {
+            if (colors && Math.abs(now - colorsAt) < 0.5) return colors;
+            const cs = getComputedStyle(wrap);
+            colors = { line: cs.getPropertyValue('--hg-border-strong').trim(), ice: cs.getPropertyValue('--hg-ice').trim(),
+                warm: cs.getPropertyValue('--apt-warm').trim(), fg3: cs.getPropertyValue('--hg-fg-3').trim(), ok: cs.getPropertyValue('--apt-ok').trim(),
+                attn: cs.getPropertyValue('--apt-attn').trim(), mono: '500 10.5px "Geist Mono", ui-monospace, monospace' };
+            colorsAt = now; return colors;
+        }
+
+        function drawPulses(view, now, legLabels) {
+            const W = wrap.clientWidth, H = wrap.scrollHeight || wrap.clientHeight, dpr = Math.min(2, devicePixelRatio || 1);
+            if (canvas.width !== Math.round(W * dpr) || canvas.height !== Math.round(H * dpr)) {
+                canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr); canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+            }
+            pctx.setTransform(dpr, 0, 0, dpr, 0, 0); pctx.clearRect(0, 0, W, H);
+            const pts = anchorsOfDots(), c = readColors(now), phone = ctx.layout === 'phone';
+            // the rail, each leg drawn solid when its source stage is live, dashed when it isn't
+            for (let i = 0; i < pts.length - 1; i++) {
+                const live = nodes[NODES[i].key].el.dataset.state === 'live';
+                pctx.strokeStyle = c.line; pctx.lineWidth = 1; pctx.setLineDash(live ? [] : [3, 4]);
+                pctx.beginPath(); pctx.moveTo(pts[i][0] + 8, pts[i][1]); pctx.lineTo(pts[i + 1][0] - 8, pts[i + 1][1]);
+                if (phone) { pctx.beginPath(); pctx.moveTo(pts[i][0], pts[i][1] + 8); pctx.lineTo(pts[i + 1][0], pts[i + 1][1] - 8); }
+                pctx.stroke();
+                if (!phone && legLabels[i]) {
+                    pctx.setLineDash([]); pctx.font = c.mono; pctx.fillStyle = c.fg3; pctx.textBaseline = 'bottom';
+                    const tx = pts[i][0] + 16, ty = pts[i][1] - 3;
+                    if (pts[i + 1][0] - pts[i][0] > 120) pctx.fillText(legLabels[i], tx, ty);
+                }
+            }
+            pctx.setLineDash([]);
+            // pulses travel leg by leg; each leg's duration is its measured p50 (or a fixed hand-off for an answer)
+            for (let k = pulses.length - 1; k >= 0; k--) {
+                const p = pulses[k];
+                const total = p.legs.reduce((a, b) => a + b, 0), el = now - p.start;
+                if (el > total + 0.45 || el < -0.05) { pulses.splice(k, 1); continue; }
+                const color = p.kind === 'answer' ? c.ice : p.kind === 'decision' ? c.warm : c.ice;
+                const posAt = time => {
+                    let t = Math.max(0, Math.min(total, time)), i = p.from;
+                    for (const d of p.legs) { if (t <= d || i === p.to - 1) { const u = d > 0 ? Math.min(1, t / d) : 1; const a = pts[i], b = pts[i + 1]; return [a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]; } t -= d; i += 1; }
+                    return pts[p.to];
+                };
+                const head = posAt(el), fade = el > total ? 1 - (el - total) / 0.45 : 1;
+                // the tail: where the pulse was over the last 0.25 s
+                pctx.strokeStyle = color; pctx.lineCap = 'round';
+                for (let s = 0; s < 6; s++) {
+                    const a = posAt(el - s * 0.04), b = posAt(el - (s + 1) * 0.04);
+                    pctx.globalAlpha = fade * (1 - s / 6) * 0.7; pctx.lineWidth = 3 - s * 0.35;
+                    pctx.beginPath(); pctx.moveTo(a[0], a[1]); pctx.lineTo(b[0], b[1]); pctx.stroke();
+                }
+                pctx.globalAlpha = fade; pctx.fillStyle = color;
+                pctx.beginPath(); pctx.arc(head[0], head[1], p.kind === 'answer' ? 4 : 3, 0, Math.PI * 2); pctx.fill();
+                pctx.globalAlpha = 1;
+            }
+        }
+
+        function drawTicks(n, times, windowS, now, color, live) {
+            const cv = nodes[n].ticks, W = cv.clientWidth, H = cv.clientHeight, dpr = Math.min(2, devicePixelRatio || 1);
+            if (!W) return;
+            if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) { cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); }
+            const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+            const c = readColors(now);
+            g.fillStyle = c.line; g.fillRect(0, H - 1, W, 1);
+            g.fillStyle = color;
+            for (const t of times) {
+                const age = now - t; if (age < 0 || age > windowS) continue;
+                const x = W - age / windowS * W;
+                g.globalAlpha = live ? Math.max(0.25, 1 - age / windowS) : 0.3;
+                g.fillRect(Math.round(x), 2, 1.5, H - 3);
+            }
+            g.globalAlpha = 1;
+        }
+
+        function frame(view, now, dt) {
+            const jumped = lastNow == null || Math.abs(now - lastNow) > 0.5;
+            lastNow = now;
+            const T = view.timings || {}, q = view.qwen, light = view.light, live = view.live;
+            const stale = live ? null : `no event for ${Math.floor(view.sincePeople)} s`;
+            const dark = view.banner && view.banner.kind === 'too-dark';
+
+            // the stage's status pill
+            const st = $('status');
+            st.dataset.state = view.connecting ? 'connecting' : view.banner ? 'attention' : 'live';
+            html($('status-text'), view.connecting ? 'Connecting…' : view.banner
+                ? `<span class="sb">${esc(view.banner.words)}</span>${view.banner.detail ? ' · ' + esc(view.banner.detail) : ''}`
+                : `Live · ${view.count === 1 ? '1 person' : view.count + ' people'} · ${view.behind.toFixed(2)} s behind`);
+
+            // Camera
+            state('camera', !live ? 'attn' : dark ? 'attn' : 'live');
+            text(nodes.camera.big, live ? `${view.fps != null ? view.fps.toFixed(1) : '—'} fps` : 'stale');
+            lines('camera', [
+                stale ? [stale, 'warn'] : dark ? ['too dark · infrared not on yet', 'warn'] : `mode ${ctx.client.state.people?.mode ?? '—'}`,
+                `transit ${view.transit != null ? Math.round(view.transit * 1000) + ' ms' : '—'}`,
+                `dropped ${view.dropped ?? '—'} /min`]);
+            // Detector
+            state('detector', !live ? 'attn' : dark ? 'attn' : 'live');
+            text(nodes.detector.big, !live ? 'stale' : T.detector ? `${ms(T.detector.p50)} ms` : '—');
+            lines('detector', [
+                stale ? [stale, 'warn'] : dark ? ['no picture to use', 'warn'] : `p95 ${ms(T.detector?.p95)} ms`,
+                `fetch ${ms(T.fetch?.p50)} · p95 ${ms(T.fetch?.p95)}`, '']);
+            // Tracker
+            const bodies = ctx.client.state.arrivals.filter(a => a.kind === 'body' && now - a.at <= 2).length / 2;
+            state('tracker', !live ? 'attn' : dark ? 'attn' : 'live');
+            text(nodes.tracker.big, live ? `${view.behind.toFixed(2)} s behind` : 'stale');
+            lines('tracker', [
+                stale ? [stale, 'warn'] : [`${view.count === 0 ? 'no one' : view.count === 1 ? '1 person' : view.count + ' people'}${dark ? ' · too dark' : ''}`, 'hi'],
+                `lift ${ms(T.lift?.p50)} · track ${ms(T.track?.p50)} ms`,
+                `body ${bodies ? bodies.toFixed(1) + ' /s' : 'none'}`]);
+
+            // Qwen
+            const answer = view.tracks.map(t => t.activity).filter(Boolean).sort((a, b) => a.age - b.age)[0] || null;
+            const qs = !q ? 'off' : !live ? 'attn' : q.state === 'asking' ? 'live' : q.state === 'unavailable' ? 'attn' : 'off';
+            state('qwen', qs);
+            const inflight = P() && q && q.inflightAge != null && q.state === 'asking';
+            text(nodes.qwen.big, !q ? '—' : !live ? 'stale' : answer ? answer.words : inflight ? 'asking…' : q.state === 'asking' ? 'waiting' : q.state === 'unavailable' ? 'unavailable' : 'off');
+            const outcome = P() && q && q.lastOutcome && q.lastOutcome.kind !== 'bound' && q.lastOutcome.age < 10 ? q.lastOutcome : null;
+            lines('qwen', [
+                stale ? [stale, 'warn'] : answer ? [`${secs(answer.age)} old · ${secs(answer.left)} left`, 'hi']
+                    : outcome ? [outcome.words, 'warn'] : q && q.state !== 'asking' ? [q.why || '—', q.state === 'unavailable' ? 'warn' : '']
+                    : q && q.lastReplyAge != null ? `last reply ${secs(q.lastReplyAge)} ago` : '',
+                q ? `reply ${q.replyMedian != null ? q.replyMedian.toFixed(1) + ' s' : '—'} · ${q.asksPerMin ?? 0} /min` : '',
+                P() ? (inflight ? [`<span class="prop">in flight ${secs(q.inflightAge)}</span>`, 'html'] : '') : '']);
+            nodes.qwen.life.hidden = !answer;
+            if (answer) nodes.qwen.lifeBar.style.width = (answer.life * 100).toFixed(1) + '%';
+
+            // Coordinator: the poll's proposal, and the spot rows' reasons (10 Hz)
+            const coord = view.coordinator;
+            if (coord !== lastPoll) { lastPoll = coord; if (coord) { pollAt = now; polls.push(now); } }
+            while (polls.length && now - polls[0] > 30) polls.shift();
+            const f3 = light ? light.fixtures.find(f => f.id === 'F3') : null;
+            const spotFresh = light && light.fresh;
+            const kind = coord?.decision?.proposal?.kind ?? null;
+            state('coord', !spotFresh ? (light ? 'attn' : 'off') : light.stopped ? 'blocked' : kind ? 'live' : 'off');
+            const SHORT = { task: 'Task · lit', pre_aim: 'Pre-aim', waiting_for_task: 'Waiting', waiting_for_tracking: 'No one tracked',
+                task_released: 'Releasing', stopped: 'Stop holds', off: 'Off' };
+            text(nodes.coord.big, !light ? '—' : !spotFresh ? 'stale' : light.stopped ? 'Stop holds' : f3 ? (SHORT[f3.reason] || f3.reason) : '—');
+            const subj = light && light.subject;
+            const refused = light && spotFresh ? light.fixtures.filter(f => f.refused) : [];
+            lines('coord', [
+                !spotFresh && light ? [`no snapshot for ${Math.floor(light.age)} s`, 'warn'] : f3 ? [f3.words, 'hi'] : '',
+                subj ? `for ${subj.track_id.split('-').slice(-2).join('-')}${subj.request_id ? ' · ' + subj.request_id : ''}` : 'no subject',
+                refused.length ? `${refused.length} other spot${refused.length > 1 ? 's' : ''} refused` : '',
+                pollAt != null ? `poll ${secs(now - pollAt)} ago` : '']);
+
+            // Beam
+            const level = spotFresh && f3 ? f3.level : 0;
+            state('beam', !light ? 'off' : !spotFresh ? 'attn' : light.stopped ? 'blocked' : level > 0 ? 'live' : f3 && f3.target ? 'live' : 'off');
+            text(nodes.beam.big, !light ? '—' : !spotFresh ? 'stale' : level > 0 ? `${Math.round(level * 100)}% · ${f3.cct} K` : f3 && f3.target ? 'aimed, dark' : 'off');
+            const spots = ctx.client.state.arrivals.filter(a => a.kind === 'spot' && now - a.at <= 1).length;
+            lines('beam', [
+                !spotFresh && light ? [`no snapshot for ${Math.floor(light.age)} s`, 'warn'] : f3 ? [`Spot 3 · ${f3.phase}`, f3.phase === 'moving' ? 'hi' : ''] : '',
+                `${spots} snapshots /s`, '']);
+
+            // pulses from real arrivals (none after a seek: those arrived before this moment)
+            const arrivals = ctx.client.state.arrivals;
+            if (jumped) lastArrival = now;
+            const people = (T.fetch?.p50 ?? 180) / 1000, det = ((T.detector?.p50 ?? 40) + (T.lift?.p50 ?? 6)) / 1000;
+            for (const a of arrivals) {
+                if (a.at <= lastArrival) continue;
+                if (a.kind === 'people' && live) spawn('people', 0, 2, [people, det], now);
+                if (a.kind === 'answer') spawn('answer', 3, 4, [0.35], now);
+            }
+            if (arrivals.length) lastArrival = Math.max(lastArrival, arrivals[arrivals.length - 1].at);
+            if (P() && q) {
+                const nowInflight = q.inflightAge != null;
+                if (nowInflight && lastInflight === false && !jumped) spawn('people', 2, 3, [0.3], now);   // stills go to Qwen
+                lastInflight = nowInflight;
+            }
+            const reason = spotFresh && f3 ? f3.reason : null;
+            if (reason !== lastReason) { if (!jumped && reason && lastReason) { spawn('decision', 4, 5, [0.35], now); marks.push(now); } lastReason = reason; }
+            while (marks.length && now - marks[0] > 30) marks.shift();
+
+            // the ruler: when the spot first lights for a task, find the answer behind it. Home can see the light before
+            // the people event that carries that answer, so wait up to 2 s for it: by request id with the proposed
+            // fields, else the first close-up answer to show up (matched by time, which can be wrong).
+            if (!jumped && lastLevel === 0 && level > 0 && f3 && f3.reason === 'task') pending = { at: now, request: subj && subj.request_id, track: subj && subj.track_id };
+            lastLevel = level;
+            if (jumped) pending = null;
+            if (pending) {
+                const track = view.tracks.find(t => t.id === pending.track) || view.tracks[0];
+                const a = track && track.activity;
+                const match = a && (P() && pending.request ? a.requestId === pending.request : a.closeUp && a.age < now - pending.at + 2.5);
+                if (match) {
+                    const given = now - a.age, still = a.stillAge != null ? now - a.stillAge : null;
+                    measures.push({ at: pending.at, answer: pending.at - given, still: still != null ? pending.at - still : null, byId: !!(P() && pending.request) });
+                    if (measures.length > 4) measures.shift();
+                    pending = null;
+                } else if (now - pending.at > 2) pending = null;
+            }
+            const m = measures[measures.length - 1];
+            if (m) {
+                const segA = $('seg-a'), segB = $('seg-b');
+                const total = m.still != null ? m.still : m.answer;
+                const toPct = s => Math.min(100, s / SCALE_S * 100);
+                if (m.still != null) { segA.hidden = false; segA.style.left = '0%'; segA.style.width = toPct(m.still - m.answer) + '%'; }
+                else segA.hidden = true;
+                segB.hidden = false; segB.style.left = (m.still != null ? toPct(m.still - m.answer) : 0) + '%'; segB.style.width = Math.max(0.5, toPct(m.answer)) + '%';
+                const ago = now - m.at;
+                html($('ruler-text'), m.still != null
+                    ? `${m.still.toFixed(1)} s ${m.still <= GOAL_S ? '· within goal' : '· over goal'}<small><span class="key"><span><i style="background:var(--hg-ice)"></i>still → answer ${(m.still - m.answer).toFixed(1)} s</span><span><i style="background:var(--apt-warm)"></i>answer → light ${m.answer.toFixed(1)} s</span></span> · ${secs(ago)} ago</small>`
+                    : `answer → light ${m.answer.toFixed(1)} s<small>matched by time · the still's time needs <span class="prop">activity.capture_ts</span> · ${secs(ago)} ago</small>`);
+            }
+
+            // ticks: each mark is one real arrival
+            const c = readColors(now);
+            drawTicks('camera', arrivals.filter(a => a.kind === 'people').map(a => a.at), 4, now, c.ice, live);
+            drawTicks('detector', arrivals.filter(a => a.kind === 'people').map(a => a.at), 4, now, c.fg3, live);
+            drawTicks('tracker', arrivals.filter(a => a.kind === 'body').map(a => a.at), 4, now, c.fg3, live);
+            drawTicks('qwen', ctx.client.state.replies.map(r => r.at), 30, now, c.ice, live);
+            drawTicks('coord', polls.concat(marks), 30, now, c.fg3, !!spotFresh);
+            drawTicks('beam', arrivals.filter(a => a.kind === 'spot').map(a => a.at), 2, now, c.warm, !!spotFresh);
+
+            const legs = [T.fetch ? `${ms(T.fetch.p50)} ms` : '', T.detector ? `${ms(T.detector.p50 + (T.lift?.p50 ?? 0))} ms` : '',
+                'stills', 'answer', 'decision'];
+            drawPulses(view, now, legs);
+            drawTags(view);
+        }
+        return { frame };
+    } });
+})();
+</script>

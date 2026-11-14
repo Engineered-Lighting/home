@@ -21,16 +21,18 @@ between requests; If-None-Match on the same frame gets 304 and no body. Every
 other answer, on every path and for every error, is the earlier release's:
 HTTP/1.0, then close. A body the client stops reading closes the connection.
 
-Night (pilot-20261114-night): NightSwitch watches the RGB preview's mean Y on
-every bundle, den-live's own too-dark rule (under NIGHT['dark_luma'] for
-NIGHT['hold_s'] is night, over NIGHT['light_luma'] for as long is day). At
-night the IR flood is on (NIGHT['flood']), and a slim GET that says
+Night (pilot-20261114-night, only with --night auto; off by default):
+NightSwitch watches the RGB preview's mean Y on every bundle, den-live's own
+too-dark rule (under NIGHT['dark_luma'] for NIGHT['hold_s'] is night, over
+NIGHT['light_luma'] for as long is day). At night the IR drivers take
+NIGHT['flood'] and NIGHT['dots'] (both 0: on this camera they light the right
+mono only, which hurts depth), and a slim GET that says
 X-Den-Bundle-Accept: den-camera-slim-2 gets the night bundle
 (SLIM_NIGHT_SCHEMA): the slim bundle plus the rectified-left mono plane, with
 bundle_omits ['right'] and the IR state as ir. Every other answer, by day or
 by night, is the slim release's, byte for byte: /frame.npz and
-den-camera-slim-1 are unchanged (by night their left and right planes see the
-flood). --night off keeps the IR drivers at 0, as every earlier release.
+den-camera-slim-1 are unchanged. With --night off, the default, nothing
+changes at all: the IR drivers stay at 0, as in every earlier release.
 """
 import argparse
 import base64
@@ -78,11 +80,13 @@ SLIM_PATH = '/frame-slim.npz'
 SLIM_SCHEMA = 'den-camera-slim-1'
 SLIM_COMPRESSLEVEL = 1
 # Night, measured 2026-11-14 with tools/den-camera/night_probe.py: see NightSwitch. The thresholds are den-live's
-# too-dark rule (perceive.py DARK_LUMA, LIGHT_LUMA, DARK_S), so a night camera turns its flood on where den-live would
-# otherwise go dark. dots is the dot projector at night (0-1, 1200 mA full scale), flood the flood (1500 mA).
+# too-dark rule (perceive.py DARK_LUMA, LIGHT_LUMA, DARK_S, claude/den-live-lamp), so a night camera switches where
+# den-live would otherwise go dark. dots is the dot projector at night (0-1, 1200 mA full scale), flood the flood
+# (1500 mA). Both stay 0: on this camera both light the right mono only (the left, which depth is aligned to, gains
+# 1.6% of the right's brightness), so stereo depth gets worse (61% valid -> 54% with the flood, 42% with the dots).
 SLIM_NIGHT_SCHEMA = 'den-camera-slim-2'
 ACCEPT_HEADER = 'X-Den-Bundle-Accept'
-NIGHT = {'dark_luma': 40.0, 'light_luma': 60.0, 'hold_s': 3.0, 'flood': 1.0, 'dots': 0.0}
+NIGHT = {'dark_luma': 6.0, 'light_luma': 9.0, 'hold_s': 3.0, 'flood': 0.0, 'dots': 0.0}
 
 
 def _unique_json(pairs):
@@ -1282,8 +1286,9 @@ def main():
     parser.add_argument('--jpeg-host-clock', help='Protected fresh commissioned camera-host UTC evidence JSON')
     parser.add_argument('--jpeg-evidence-uid', type=int, help='Explicit Linux owner UID for both causal evidence inputs')
     parser.add_argument('--rtsp-url', default=os.environ.get('RTSP_URL', 'rtsp://127.0.0.1:8554/den/rgb'))
-    parser.add_argument('--night', choices=('auto', 'off'), default='auto',
-                        help='auto: the IR flood and the night bundle in the dark (NightSwitch); off: IR stays at 0')
+    parser.add_argument('--night', choices=('auto', 'off'), default='off',
+                        help='auto: the night switch and the night bundle in the dark (NightSwitch); off (default): '
+                             'as the slim release, IR at 0')
     args = parser.parse_args()
     if not (0 < args.bundle_fps <= args.fps <= 30) or args.stale_seconds <= 0:
         parser.error('Require 0 < bundle-fps <= fps <= 30 and positive stale-seconds')

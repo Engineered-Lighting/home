@@ -84,11 +84,16 @@ class Switch(unittest.TestCase):
         return [switch.update(luma, i * step) for i, luma in enumerate(lumas)], switch
 
     def test_den_lives_numbers(self):
-        self.assertEqual({k: self.camera.NIGHT[k] for k in ('dark_luma', 'light_luma', 'hold_s')},
-                         {'dark_luma': 40.0, 'light_luma': 60.0, 'hold_s': 3.0})
+        self.assertEqual(self.camera.NIGHT, {'dark_luma': 6.0, 'light_luma': 9.0, 'hold_s': 3.0,
+                                             'flood': 0.0, 'dots': 0.0}, "den-live's line; IR off on this camera")
+
+    def test_night_is_off_unless_asked_for(self):
+        source = RELEASE.read_text(encoding='utf-8')
+        self.assertEqual(source.count("parser.add_argument('--night', choices=('auto', 'off'), default='off',"), 1)
+        self.assertEqual(source.count("switch = NightSwitch(**NIGHT) if args.night == 'auto' else None"), 1)
 
     def test_dark_for_the_hold_is_night_and_light_for_the_hold_is_day(self):
-        modes, switch = self.run_lumas([10.0] * 13 + [120.0] * 13)
+        modes, switch = self.run_lumas([3.0] * 13 + [120.0] * 13)
         self.assertEqual(modes[11], 'day')
         self.assertEqual(modes[12], 'night')   # 3.0 s after the first dark frame
         self.assertEqual(modes[24], 'night')
@@ -96,17 +101,17 @@ class Switch(unittest.TestCase):
         self.assertEqual(switch.switches, 2)
 
     def test_between_the_lines_or_one_frame_the_other_way_restarts_the_count(self):
-        modes, switch = self.run_lumas(([10.0] * 10 + [50.0]) * 4)
+        modes, switch = self.run_lumas(([3.0] * 10 + [7.5]) * 4)
         self.assertEqual(set(modes), {'day'})
-        modes, _ = self.run_lumas(([10.0] * 10 + [90.0]) * 4)
+        modes, _ = self.run_lumas(([3.0] * 10 + [90.0]) * 4)
         self.assertEqual(set(modes), {'day'}, 'dusk flicker never switches')
         self.assertEqual(switch.switches, 0)
 
     def test_the_rule_refuses_nonsense(self):
         with self.assertRaises(ValueError):
-            self.camera.NightSwitch(60.0, 40.0, 3.0)
+            self.camera.NightSwitch(9.0, 6.0, 3.0)
         with self.assertRaises(ValueError):
-            self.camera.NightSwitch(40.0, 60.0, 0.0)
+            self.camera.NightSwitch(6.0, 9.0, 0.0)
 
     def test_night_step_sets_the_drivers_on_a_change_and_bundles_only_at_night(self):
         class Device:
@@ -121,16 +126,16 @@ class Switch(unittest.TestCase):
 
         device, switch = Device(), self.camera.NightSwitch(**self.camera.NIGHT)
         arrays, meta = frames(), metadata('fictional-session')
-        dark = dict(arrays, rgb_nv12=np.full((540, 640), 8, np.uint8))
+        dark = dict(arrays, rgb_nv12=np.full((540, 640), 3, np.uint8))
         light = dict(arrays, rgb_nv12=np.full((540, 640), 150, np.uint8))
         logging.disable(logging.INFO)
         self.addCleanup(logging.disable, logging.NOTSET)
         out = [self.camera.night_step(switch, device, dark, meta, t) for t in (0.0, 1.0, 2.0, 3.0, 3.25)]
         self.assertEqual(out[:4], [None] * 4, 'by day, and on the switching frame itself, no night bundle')
-        self.assertEqual(device.calls, [('flood', 1.0), ('dots', 0.0)])
+        self.assertEqual(device.calls, [('flood', 0.0), ('dots', 0.0)])
         night = json.loads(bytes(npz(out[4])['metadata_json']).decode())
-        self.assertEqual(night['ir'], {'mode': 'night', 'flood': 1.0, 'dots': 0.0, 'switches': 1,
-                                       'rule': {'dark_luma': 40.0, 'light_luma': 60.0, 'hold_s': 3.0}})
+        self.assertEqual(night['ir'], {'mode': 'night', 'flood': 0.0, 'dots': 0.0, 'switches': 1,
+                                       'rule': {'dark_luma': 6.0, 'light_luma': 9.0, 'hold_s': 3.0}})
         back = [self.camera.night_step(switch, device, light, meta, t) for t in (4.0, 7.0, 7.25)]
         self.assertIsNotNone(back[0], 'still night while the light holds')
         self.assertEqual(back[1:], [None, None])

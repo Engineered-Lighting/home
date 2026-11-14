@@ -62,6 +62,8 @@ function actualSource(source) {
     context[name] = vm.runInContext(text(initializer), context, { timeout: 1000 });
   }
   function callback(node, context, installing = new Set()) {
+    if (typeof node === 'string') node = declarations.get(node)?.id;
+    assert.ok(node, 'actual callback exists');
     if (node.type === 'Identifier' && !Object.prototype.hasOwnProperty.call(context, node.name)) {
       const init = declarations.get(node.name)?.init;
       assert.ok(init, 'actual callback declaration exists: ' + node.name);
@@ -108,6 +110,7 @@ class AuthoredTarget {
     }
     return null;
   }
+  matches(selector) { return this.closest(selector) === this; }
   contains(node) { for (; node; node = node.parentElement) if (node === this) return true; return false; }
   addEventListener(type, callback, options) {
     const capture = options === true || options?.capture === true;
@@ -146,13 +149,14 @@ function emit(target, type, detail = {}) {
   return event;
 }
 
-function fixture(actual, { site = 'victoria' } = {}) {
+function fixture(actual, { site = 'victoria', echoVirtualActive = false } = {}) {
   const window = new AuthoredTarget('window'), host = new AuthoredTarget('div', window), canvas = new AuthoredTarget('canvas', host);
-  const ids = ['authored-vic-3', 'authored-vic-1', 'authored-vic-4', 'authored-vic-2'];
+  const fixtureSite = echoVirtualActive ? 'echo' : 'victoria';
+  const ids = [3, 1, 4, 2].map(number => `authored-${fixtureSite}-${number}`);
   // This is the existing five-field descriptor binding, with authored hashes.
-  const binding = { content_revision: 'authored-victoria-r1', registration_version: 1,
+  const binding = { content_revision: `authored-${fixtureSite}-r1`, registration_version: 1,
     manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
-  const document = { binding, revision: 7, digest: 'd'.repeat(64) };
+  const document = { scope: { site_id: fixtureSite }, binding, revision: 7, digest: 'd'.repeat(64) };
   const descriptors = new Map(ids.map((id, index) => [id, { schema: 'home-virtual-fixture-interaction-1',
     generation: 1, fixture_id: id, mount_id: 'authored-mount-' + index,
     binding: copy(binding), equipment_revision: 7, equipment_digest: document.digest,
@@ -165,26 +169,29 @@ function fixture(actual, { site = 'victoria' } = {}) {
   const state = { selectedSite: site, selectedId: '', open: false, channel: 'spotlight', notice: '',
     calls: [], services: [], hit: null, shellReveals: 0, descriptorOrder: ids.slice(), visible: true,
     previewRevision: 7, previewDigest: document.digest, previewStatus: 'ready', pickErrorOnce: false,
-    elementAtPoint: canvas, pointLookups: [] };
+    elementAtPoint: canvas, pointLookups: [], aimPreview: null };
   const inputDocument = { elementFromPoint(x, y) { state.pointLookups.push([x, y]); return state.elementAtPoint; } };
   host.ownerDocument = inputDocument; canvas.ownerDocument = inputDocument;
   const snapshot = () => state.descriptorOrder.map(id => ({ fixture_id: id, label: id, state: copy(descriptors.get(id).state) }));
+  const fixtureObjects = ids.map(id => ({ userData: { fixture_id: id, interaction_role: 'fixture' } }));
   const overlay = {
     virtualFixtureInteractionDescriptor: id => descriptors.has(id) ? copy(descriptors.get(id)) : null,
     virtualFixturesReadback: () => ({ status: state.previewStatus, fixture_count: ids.length,
       revision: state.previewRevision, digest: state.previewDigest, visible: state.visible, fixtures: snapshot() }),
     setVirtualFixtureSelected: id => { state.calls.push(['overlay-select', id]); return overlay.virtualFixtureInteractionDescriptor(id); },
-    virtualFixturePickObjects: () => [], pickObjects: () => [], targetPickObjects: () => [],
+    virtualFixturePickObjects: () => fixtureObjects, pickObjects: () => [], targetPickObjects: () => [],
     setHover() {}, setTargetHover() {},
     aimVirtualFixtureAtTarget: (id, target) => { descriptors.get(id).target = copy(target); return { ok: true, descriptor: overlay.virtualFixtureInteractionDescriptor(id) }; },
     restoreVirtualFixtureAim: (id, before) => { descriptors.set(id, copy(before)); return { ok: true }; },
   };
   const engine = { siteId: site, contentRevision: 'authored-' + site + '-r1',
     sceneIdentity: { siteId: site, contentRevision: 'authored-' + site + '-r1', registrationVersion: 1, frameDigest: binding.frame_digest },
-    renderer: { domElement: canvas }, overlay,
-    picking: { pick: () => {
+    renderer: { domElement: canvas }, modes: { mode: 'mesh' }, overlay,
+    picking: { pick: objects => {
       if (state.pickErrorOnce) { state.pickErrorOnce = false; throw Error('Authored unavailable pick'); }
-      return state.hit ? [{ object: { userData: { fixture_id: state.hit, deviceId: state.hit } } }] : [];
+      if (site === 'echo') return state.hit ? [{ object: { userData: { deviceId: state.hit } } }] : [];
+      const object = objects.find(candidate => candidate.userData.fixture_id === state.hit);
+      return object ? [{ object }] : [];
     } },
     displaySurfaceHit: () => ({ point: [1, 2, 0], normal: [0, 0, 1] }),
     rig: { inCameraPose: () => false, stepAzimuth() {}, stepElevation() {}, snapHome() {} } };
@@ -200,7 +207,7 @@ function fixture(actual, { site = 'victoria' } = {}) {
   const values = { window, open: true, phase: 'ready', editing: false, calibCam: null, liveOn: false,
     virtualSpotlightsVisible: true, spatialScale: 'apartment', rehearsalIsolated: false, unifiedShell: true,
     selectedSiteId: site, selectedContentRevision: 'authored-' + site + '-r1', selectedSiteInterior: true,
-    apartmentSceneControlsEnabled: true, apartmentPlacementDisplayEnabled: true, apartmentDeviceControlsEnabled: site === 'echo',
+    apartmentSceneControlsEnabled: true, apartmentPlacementDisplayEnabled: true, apartmentDeviceControlsEnabled: site === 'echo', echoVirtualActive,
     apartmentAuthorityKey: 'authored-authority', workspaceAuthorityRef: { current: { key: 'authored-authority' } },
     modelSiteRef: { current: site }, modelScopeRef: { current: { siteId: site, contentRevision: 'authored-' + site + '-r1',
       registrationVersion: 1, frameDigest: binding.frame_digest, authorityKey: 'authored-authority' } },
@@ -210,6 +217,15 @@ function fixture(actual, { site = 'victoria' } = {}) {
     virtualFixtureDocument: document, virtualFixtureBindingKey: JSON.stringify(['authored-authority', binding]),
     virtualFixtureItems: snapshot(), virtualFixtureId: '', virtualFixtureControlsOpen: false,
     virtualAimHistoryRef: { current: { undo: [], redo: [] } }, virtualAimGestureRef: { current: null },
+    radialGestureOwnerRef: { current: null },
+    aimPresentationRef: { current: {
+      readback: () => ({ dragging: false }), describeDirectAim: () => ({ valid: true }),
+      previewDirectAim: (before, model) => { state.aimPreview = model?.valid ? before.fixture_id : null; },
+      clearDirectAim: () => { state.aimPreview = null; },
+    } },
+    aimActionsRef: { current: { selectedFixture: () => state.selectedId } },
+    aimProposals: { scopeFromDescriptor: (site, descriptor) => ({ site, id: descriptor.fixture_id }), current: () => null },
+    APT_AIM_HISTORY_STEPS: 30,
     virtualFixtureStatesRef: { current: { key: 'authored-binding', states: new Map(), targets: new Map() } }, denDeskAimPreviewRef: { current: null }, lightingBrainRef: { current: null }, releaseFixtureForHandChange: () => {},
     virtualFixturePreviewDirtyRef: { current: false }, directionalViewRef: { current: null },
     deskTargetCaptureRef: { current: null }, calibApiRef: { current: null }, calibPickRef: { current: false },
@@ -218,7 +234,7 @@ function fixture(actual, { site = 'victoria' } = {}) {
     requestAnimationFrame: requestFrame, cancelAnimationFrame: cancelFrame,
     showToast: (...args) => state.calls.push(['toast', copy(args)]),
     callSvc: (...args) => state.services.push(copy(args)),
-    onShowShellControls: () => state.shellReveals++,
+    onShowShellControls: () => state.shellReveals++, onShowShellAim: null,
     setVirtualFixtureId: id => { state.selectedId = id; values.virtualFixtureId = id; state.calls.push(['id', id]); },
     setVirtualFixtureControlsOpen: value => { state.open = value; values.virtualFixtureControlsOpen = value;
       values.virtualFixtureControlsOpenRef.current = value; state.calls.push(['open', value]); },
@@ -233,10 +249,12 @@ function fixture(actual, { site = 'victoria' } = {}) {
   };
   const context = vm.createContext(values), cleanups = [];
   for (const name of ['selectionEngine', 'selectionLifecycle']) actual.capture(name, context);
+  values.aimActionsRef.current.applyDirect = actual.callback('applyDirectAim', context);
   const mount = node => { const cleanup = actual.callback(node, context)(); if (typeof cleanup === 'function') cleanups.push(cleanup); };
   const listSelect = actual.callback(actual.listSelect, context);
   return { actual, ids, binding, document, descriptors, state, values, context, engine, host, canvas, window,
     select: id => listSelect(id), mount,
+    flushFrames() { for (const [id, callback] of [...queuedFrames]) { queuedFrames.delete(id); callback(); } },
     mountKeyboard: () => mount(actual.keyboardEffect),
     mountPointer: () => { mount(actual.emptyClickEffect); mount(actual.gestureEffect); },
     dispose() { for (const cleanup of cleanups.reverse()) cleanup(); },
@@ -353,6 +371,19 @@ test('candidate: Echo keeps its existing semantic cycle owner', () => {
   f.key('n'); assert.deepEqual(f.state.calls, [['echo-semantic-cycle']]); assert.deepEqual(f.state.services, []); f.dispose();
 });
 
+test('Echo virtual lighting cycles modeled fixtures without selecting or commanding a Home Assistant device', () => {
+  const f = fixture(current, { site: 'echo', echoVirtualActive: true });
+  f.values.semanticDevicesForRoom = [{ id: 'authored-echo-light' }];
+  f.mountKeyboard();
+  const before = f.fingerprint(), event = f.key('n');
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(f.state.selectedId, f.ids[0]);
+  assert.ok(!f.state.calls.some(([kind]) => kind === 'echo-semantic-cycle'));
+  assert.deepEqual(f.state.services, []);
+  assert.equal(f.fingerprint(), before);
+  f.dispose();
+});
+
 for (const modifier of ['ctrlKey', 'metaKey', 'altKey', 'shiftKey']) test('candidate: modified N/P does not select under ' + modifier, () => {
   const f = fixture(current); f.mountKeyboard(); const event = f.key('n', f.host, { [modifier]: true });
   assert.equal(event.defaultPrevented, false); assert.deepEqual(f.state.calls, []); f.dispose();
@@ -387,16 +418,38 @@ test('selecting from nothing opens Light with the Zones tool; a later selection 
 test('candidate: explicit post-aim compatibility click never clears selection or its retained target/history', () => {
   const f = fixture(current); f.mountPointer(); f.state.hit = f.ids[0];
   const untouched = f.fingerprint();
-  emit(f.canvas, 'pointerdown'); emit(f.canvas, 'pointermove', { clientX: 135 }); emit(f.canvas, 'pointerup', { clientX: 135 });
+  emit(f.canvas, 'pointerdown');
+  assert.equal(f.canvas.hasPointerCapture(1), true, 'the host listener captures on the canvas');
+  emit(f.canvas, 'pointermove', { clientX: 135 }); f.flushFrames();
+  assert.equal(f.state.aimPreview, f.ids[0]);
+  assert.equal(f.fingerprint(), untouched, 'an in-progress drag changes only the presentation');
+  emit(f.canvas, 'pointerup', { clientX: 135 });
   const before = f.fingerprint(), undo = copy(f.values.virtualAimHistoryRef.current.undo);
-  // W2: only the reticle aims (APT-A01). The real gesture owner still owns
-  // this fixture-body drag and selects, but it previews and commits nothing.
   assert.equal(f.state.open, true); assert.equal(f.state.selectedId, f.ids[0], 'the body press selected its fixture');
-  assert.equal(before, untouched, 'a fixture-body drag never moves an aim');
-  assert.deepEqual(undo, [], 'a fixture-body drag records no aim history');
+  assert.equal(f.canvas.hasPointerCapture(1), false);
+  assert.equal(f.state.aimPreview, null);
+  assert.deepEqual(f.descriptors.get(f.ids[0]).target, { point: [1, 2, 0], normal: [0, 0, 1] });
+  assert.equal(undo.length, 1, 'the drag records one undo step');
+  assert.equal(undo[0].fixture_id, f.ids[0]);
   emit(f.canvas, 'click', { clientX: 135 });
   assert.equal(f.state.open, true); assert.equal(f.state.selectedId, f.ids[0]);
   assert.equal(f.fingerprint(), before); assert.deepEqual(copy(f.values.virtualAimHistoryRef.current.undo), undo);
+  assert.deepEqual(f.state.services, []); f.dispose();
+});
+
+for (const [name, retire] of [
+  ['a covered release point', f => { f.state.elementAtPoint = new AuthoredTarget('button', f.host); }],
+  ['a retired scene', f => { f.values.spatialLifecycleRevisionRef.current++; }],
+]) test('a visible body-drag preview cannot commit after ' + name, () => {
+  const f = fixture(current); f.mountPointer(); f.state.hit = f.ids[0];
+  const before = f.fingerprint();
+  emit(f.canvas, 'pointerdown'); emit(f.canvas, 'pointermove', { clientX: 135 }); f.flushFrames();
+  assert.equal(f.state.aimPreview, f.ids[0]);
+  retire(f);
+  emit(f.canvas, 'pointerup', { clientX: 135 });
+  assert.equal(f.state.aimPreview, null);
+  assert.equal(f.fingerprint(), before);
+  assert.deepEqual(f.values.virtualAimHistoryRef.current.undo, []);
   assert.deepEqual(f.state.services, []); f.dispose();
 });
 

@@ -25,11 +25,12 @@ const Core = (await import('../app/src/home-equipment-registration.js')).default
 const packs = fs.mkdtempSync(path.join(os.tmpdir(), 'lit-l4-'));
 const victoria = installPack(packs, 'victoria');
 const pack = { ...victoria.manifest };
-const served = (files, base = 'https://home.test/content-packs/victoria/' + victoria.revision + '.lighting/') => ({
+const served = (files, base = 'https://home.test/content-packs/victoria/' + victoria.revision + '.lighting/', missingStatus = 404) => ({
     baseUrl: base,
     fetchImpl: async url => {
         const name = decodeURIComponent(new URL(url).pathname.split('/').pop()), body = new URL(url).href.startsWith(base) ? files[name] : null;
-        return body ? { ok: true, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) } : { ok: false };
+        return body ? { ok: true, arrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength) }
+            : { ok: false, status: missingStatus };
     },
 });
 const load = (files, set = 'splat', packManifest = pack) => Loader.loadLightingLayer({ ...served(files), pack: packManifest, digest: Core.digest, set });
@@ -76,11 +77,27 @@ test('the layer loads only when bound to the active pack, and every file read ma
     // Provenance must be modeled, never measured; schema pinned.
     await refusal(load(authoredLightingLayer(victoria, { tamper: m => { m.provenance.measured = true; } }).files), /lighting_layer_schema/);
     await refusal(load(authoredLightingLayer(victoria, { tamper: m => { m.schema = 'home-lighting-layer-2'; } }).files), /lighting_layer_schema/);
+    await refusal(load(authoredLightingLayer(victoria, { tamper: m => { m.version = 2; } }).files), /lighting_layer_schema/);
     // Absent layer.
     await refusal(load({}), /lighting_layer_absent/);
     // The layer lives beside the pack, never inside it.
     assert.equal(Loader.layerBaseUrl('https://home.test/content-packs/victoria/' + victoria.revision + '/', victoria.revision),
         'https://home.test/content-packs/victoria/' + victoria.revision + '.lighting/');
+});
+
+test('loads the Echo Park layer and rejects another home or an unavailable route', async () => {
+    const echo = installPack(packs, 'echo');
+    const base = Loader.layerBaseUrl('https://home.test/content-packs/echo/' + echo.revision + '/', echo.revision);
+    const loadEcho = (files, status = 404) => Loader.loadLightingLayer({
+        ...served(files, base, status), pack: echo.manifest, digest: Core.digest, set: 'points',
+    });
+    const layer = authoredLightingLayer(echo);
+    assert.deepEqual({ ...(await loadEcho(layer.files)).binding }, packBinding(echo.manifest));
+    const wrongSite = authoredLightingLayer(echo, { tamper: manifest => { manifest.site_id = 'victoria'; } });
+    await refusal(loadEcho(wrongSite.files), /lighting_layer_schema/);
+    await refusal(loadEcho({}), /lighting_layer_absent/);
+    await refusal(loadEcho({}, 401), /lighting_layer_unavailable/);
+    await refusal(loadEcho({}, 503), /lighting_layer_unavailable/);
 });
 
 test('the blend: dimming each light is monotone and zero intensity removes exactly its contribution', async () => {
@@ -136,7 +153,7 @@ test('the blend matches the layer contract decode and L2\'s display chain', asyn
             const b = (layer.basis[i * layer.columns + k] / 255) ** 2 * half(layer.scale[i]) * layer.columnScale[k];
             for (let c = 0; c < 3; c++) E[c] += b * weights[k * 4 + c] / layer.columnScale[k] * t[c] / ty;
         }
-        const ambient = Blend.blendWeights({ lights: [], columns: [] }).weights.subarray(36 * 4, 36 * 4 + 3);
+        const ambient = Blend.blendWeights({ lights: [], columns: [] }).weights.subarray(Blend.AMBIENT_SLOT * 4, Blend.AMBIENT_SLOT * 4 + 3);
         const expected = [0, 1, 2].map(c => srgb(layer.albedo[i * 3 + c] / 255) / Math.PI * (E[c] + ambient[c]));
         Blend.blendReceiver(set, i, weights).forEach((value, c) => assert.ok(Math.abs(value - expected[c]) <= 1e-9 + 1e-6 * expected[c], `${i}:${c}`));
         const display = Blend.blendReceiverDisplay(set, i, weights);
@@ -176,8 +193,8 @@ test('a live spot\'s receiver column: shadowed direct light plus its bounce, lin
 
     // Spot weights scale linearly with candela; zero candela removes it.
     const layer = await load(authoredLightingLayer(victoria).files), set = Blend.packReceiverSet(layer);
-    const spots = new Uint32Array(set.count * Blend.LIT_SPOT_WORDS);
-    Blend.writeSpotColumn(spots, set.count, 1, new Uint16Array(set.count * 3).fill(Bake.toHalf(0.5)));
+    const spots = Array.from({ length: Blend.LIT_SPOT_SLOTS }, () => new Uint32Array(set.count * Blend.LIT_SPOT_WORDS));
+    Blend.writeSpotColumn(spots[1], set.count, new Uint16Array(set.count * 3).fill(Bake.toHalf(0.5)));
     const key = Blend.lightKey(lights()[7]);
     const dark = lights({ down: 0, zone: 0 });
     const at = level => {
@@ -218,6 +235,25 @@ test('L5\'s bake host posts each moved spot\'s column for a registered receiver 
     client.dispose();
 });
 
+test('Echo streams shadowed direct columns for 13 spots before their bounce updates', async t => {
+    const scene = twoRoomScene();
+    const endpoint = Bake.createLocalBakeEndpoint({ gpu: null });
+    const messages = [];
+    const client = Bake.createBakeClient({ endpoint, onReceiverLayer: message => messages.push(message) });
+    t.after(() => client.dispose());
+    client.setScene(scene.triangles, scene.albedo);
+    client.setReceivers('points', Float32Array.of(1.2, 1.4, 0.001), Float32Array.of(0, 0, 1), { directFirst: true });
+    const { candela, color, ...base } = roomALights()[0];
+    const spots = Array.from({ length: 13 }, (_, index) => ({ ...base, key: 'echo-' + index }));
+    client.update({ lights: spots, weights: {}, exposure: 1, quality: 'cpu', aims: [] });
+    const deadline = performance.now() + 10000;
+    while (messages.length < 26 && performance.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.deepEqual(messages.slice(0, 13).map(row => [row.key, row.bounced]), spots.map(row => [row.key, false]));
+    assert.deepEqual(messages.slice(13).map(row => [row.key, row.bounced]), spots.map(row => [row.key, true]));
+    assert.ok(messages.every(row => row.data.length === 3));
+    assert.ok(messages.slice(13).every((row, index) => row.version > messages[index].version));
+});
+
 test('the camera look: white balance toward the fixtures keeps exposure, highlights land at display 0.8', () => {
     const warm = Model.cctToLinearRgb(3000), m = Exposure.whiteBalanceMatrix(warm);
     const out = m.map(row => row[0] * warm[0] + row[1] * warm[1] + row[2] * warm[2]);
@@ -252,12 +288,12 @@ test('the night ambient follows the window column; exterior splats get the assum
     const floor = Model.cctToLinearRgb(Exposure.LIT_AMBIENT_FLOOR.kelvin);
     const lux = Exposure.LIT_AMBIENT_FLOOR.lux, share = Blend.LIT_WINDOW_AMBIENT.share;
     for (let c = 0; c < 3; c++) {
-        assert.ok(Math.abs(weights[36 * 4 + c] - (1 - share) * lux * floor[c] * Model.LIT_EXPOSURE) < 1e-9, 'a uniform remainder');
-        assert.ok(Math.abs(weights[42 * 4 + c] - layer.columnScale[window] * share * lux / median * floor[c] * Model.LIT_EXPOSURE) < 1e-9,
+        assert.ok(Math.abs(weights[Blend.AMBIENT_SLOT * 4 + c] - (1 - share) * lux * floor[c] * Model.LIT_EXPOSURE) < 1e-9, 'a uniform remainder');
+        assert.ok(Math.abs(weights[Blend.WINDOW_SLOT * 4 + c] - layer.columnScale[window] * share * lux / median * floor[c] * Model.LIT_EXPOSURE) < 1e-9,
             'the rest through the window column, scaled to its median');
         assert.equal(weights[window * 4 + c], 0, 'the window column is blended on its own, capped');
     }
-    assert.ok(Math.abs(weights[42 * 4 + 3] - Blend.LIT_WINDOW_AMBIENT.capRatio * median / layer.columnScale[window]) < 1e-9, 'capped at 4x the median');
+    assert.ok(Math.abs(weights[Blend.WINDOW_SLOT * 4 + 3] - Blend.LIT_WINDOW_AMBIENT.capRatio * median / layer.columnScale[window]) < 1e-9, 'capped at 4x the median');
     // The capped window term, receiver by receiver: never above 4x the median share.
     const withWindow = { ...set, windowSlot: window };
     const capped = Blend.blendWeights({ lights: dark, columns: layer.columnsMeta, columnScale: layer.columnScale, look: 'camera', windowMedian: 1e-6 }).weights;

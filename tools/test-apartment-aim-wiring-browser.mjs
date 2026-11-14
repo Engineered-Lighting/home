@@ -1,6 +1,5 @@
 // W2 aim wiring on the mounted Home shell, with authored Victoria fixtures:
-// HANDOFF "Direct selection" (APT-R01), and a native, ledger-witnessed fixture-body
-// drag that selects without aiming or orbiting (APT-A01).
+// Native selection and direct, ledger-witnessed fixture aiming.
 // Zero non-GET requests, WebSocket sends and service calls.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +9,7 @@ import { aimWiringProof, FILE_TIMEOUT_MS } from './fixtures/apartment-aim-wiring
 // Hosted CI spends tens of seconds per check, so each W2 suite keeps two checks
 // inside its own fixed 145 s deadline.
 test('aim wiring: direct selection and a native body drag through the mounted Home shell without output', { timeout: FILE_TIMEOUT_MS }, () => aimWiringProof('selection-body-drag', async ({ page, context, check, fixtures, ids, descriptor, pose, blur, inspector, fixtureInspector,
-  selectedTab, title, overlayState, until, canvasPoint, surfaceHit, near, settle, reticleDrag, save, receipt }) => {
+  selectedTab, title, overlayState, until, canvasPoint, surfaceHit, near, settle }) => {
     await check('Direct selection: label, cylinder and list row open the same Light inspector; hover changes nothing', async () => {
       const target = fixtures[1];
       const initial = await overlayState();
@@ -45,15 +44,14 @@ test('aim wiring: direct selection and a native body drag through the mounted Ho
     });
 
     const id = fixtures[0].fixture_id;
-    await page.locator(`[data-apt-fixture-label="${id}"]`).click(); await fixtureInspector().waitFor();
-    await blur(); await page.keyboard.press('a');
-    await until('Spot tool and Aim tab', () => document.querySelector('[data-apt-directional-mode="spot"]')?.getAttribute('aria-pressed') === 'true');
-    await until('reticle', () => !document.querySelector('[data-apt-aim-reticle]')?.hidden);
     const original = await descriptor(id);
 
-    await check('a body drag selects its light but neither moves the aim nor orbits', async () => {
+    await check('a body drag from the unselected room aims its light and leaves the other fixtures and camera unchanged', async () => {
       const other = fixtures[3].fixture_id, otherBefore = await descriptor(other);
+      await inspector().and(page.locator('[aria-label="Room lighting inspector"]')).waitFor();
+      assert.equal((await overlayState()).reticle, null, 'the drag starts without opening the fixture or selecting Spot');
       const start = await canvasPoint('fixture', other), end = await canvasPoint('surface', null, start); assert.ok(start && end);
+      const expected = await surfaceHit(end); assert.ok(expected);
       const poseBefore = await pose();
       // A native, witnessed mouse: the same 16-sample ledger as the Home shell drags.
       const session = await context.newCDPSession(page);
@@ -75,7 +73,15 @@ test('aim wiring: direct selection and a native body drag through the mounted Ho
         await mouse.move(start.x, start.y); await mouse.move(start.x, start.y + 1);
         await mouse.down();
         await until('pointer-down selects', label => document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent === label, fixtures[3].label);
-        await mouse.move(end.x, end.y, { steps: 12 }); await mouse.up();
+        await mouse.move(end.x, end.y, { steps: 12 });
+        await until('live aim chip', () => !document.querySelector('[data-apt-aim-chip]')?.hidden);
+        assert.deepEqual(await descriptor(other), otherBefore, 'the live preview leaves the current aim unchanged until release');
+        const captured = await page.evaluate(() => {
+          const pointer = window.__aimBodyWitness.observed.find(row => row.type === 'pointerdown');
+          return window.__APT_ENGINE.renderer.domElement.hasPointerCapture(pointer.pointerId);
+        });
+        assert.equal(captured, true, 'the spotlight drag owns pointer capture');
+        await mouse.up();
         witnessed = await page.evaluate(() => { const value = window.__aimBodyWitness; value.cleanup(); window.__aimBodyWitness = null;
           return { observed: value.observed, dragstarts: value.dragstarts }; });
       } finally { await session.detach().catch(() => {}); }
@@ -85,10 +91,15 @@ test('aim wiring: direct selection and a native body drag through the mounted Ho
       const proof = assertDirectionalNativeMouseLedger({ ledger: record, observed: witnessed.observed, dragstarts: witnessed.dragstarts });
       assert.equal(proof.samples, 16);
       await settle();
-      assert.deepEqual(await descriptor(other), otherBefore, 'the dragged light keeps its exact aim');
+      const after = await descriptor(other);
+      assert.ok(after.target && near(after.target.point, expected.point), 'release applies the selected surface directly');
+      assert.deepEqual(after.display_anchor_m, otherBefore.display_anchor_m, 'the fixture mount stays fixed');
+      for (const channel of ['spotlight', 'downward', 'radials']) assert.deepEqual(after.state[channel], otherBefore.state[channel]);
       assert.deepEqual(await descriptor(id), original, 'the other light keeps its exact aim');
       assert.deepEqual(await pose(), poseBefore, 'the body drag did not orbit');
-      assert.equal((await overlayState()).bar, null, 'a body drag proposes nothing');
+      assert.equal((await overlayState()).bar, null, 'the drop needs no proposal confirmation');
+      await page.getByRole('button', { name: 'Undo aim', exact: true }).click();
+      assert.deepEqual(await descriptor(other), otherBefore, 'Undo restores the aim and channels');
       await page.locator(`[data-apt-fixture-label="${id}"]`).click(); await until('back', label => document.querySelector('[aria-label="Fixture lighting inspector"] .apt-ui-title')?.textContent === label, fixtures[0].label);
       return { fixture_id: other, pose: poseBefore, native_samples: proof.samples };
     });

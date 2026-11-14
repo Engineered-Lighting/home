@@ -4,10 +4,10 @@
  * - Say less zoomed out: name at the overview, name and what they're doing at room zoom, everything up close.
  * - Nothing flickers: activity changes and clears only after 2 s (a new one shows at once when none is shown), the
  *   held-object tag stays 1.5 s past its last sighting, and the caption changes side only past 42% / 66% of the width.
- * - Head direction (nose against the ear midpoint) shakes about 12 degrees per frame. A quick 0.12 s average takes the
- *   edge off; the drawn direction follows it with a 0.9 s time constant while the gap is noise-sized and 0.1 s once it
- *   passes about 20 degrees, so a real turn still lands within a second. Its origin is smoothed over 0.25 s and the
- *   ring height over 0.5 s. */
+ * - Facing is the skeleton's: the shoulder and hip lines (facingOf below), steadied by a quick 0.12 s average, then
+ *   followed with a 0.9 s time constant while the gap is noise-sized and 0.1 s once it passes about 20 degrees, so a
+ *   real turn still lands within a second. The sight line's origin (the head) is smoothed over 0.25 s and the ring
+ *   height over 0.5 s. */
 
 export const DEBOUNCE_ACTIVITY_S = 2, OBJECT_HOLD_S = 1.5, SIDE_FLIP = Object.freeze([0.42, 0.66]);
 export const SEATED_PELVIS_M = 0.72, WALKING_MPS = 0.25;
@@ -16,6 +16,32 @@ const DEG = Math.PI / 180;
 const mid = (a, b) => [0, 1, 2].map(k => (a[k] + b[k]) / 2);
 const ease = (dt, tau) => 1 - Math.exp(-Math.max(0, dt) / tau);
 const has = (J, ...names) => names.every(name => Array.isArray(J?.[name]));
+
+/* Which way the person faces, on the floor plane (z up), as a unit 3-vector with z 0, or null. From the skeleton: the
+ * line across the shoulders is about 40 cm wide, so its normal is steady, where nose
+ * against the ear midpoint is about 10 cm of noisy depth (owner, 2026-11-12: "knowing the direction my skeleton is
+ * facing"). The shoulders' line when both are there, else the hips'. Forward is that line turned a quarter to the right (the person's left shoulder is on their left). The nose
+ * only settles a left/right swap: when it sits clearly behind the torso, forward is flipped. Without shoulders, nose
+ * against the ears is the fallback. */
+export function facingOf(joints) {
+    let ax = 0, ay = 0;   // the shoulders when both are there (nearly always seen); else the hips
+    const pair = has(joints, 'left_shoulder', 'right_shoulder') ? ['left_shoulder', 'right_shoulder'] : has(joints, 'left_hip', 'right_hip') ? ['left_hip', 'right_hip'] : null;
+    if (pair) { ax = joints[pair[0]][0] - joints[pair[1]][0]; ay = joints[pair[0]][1] - joints[pair[1]][1]; }
+    const across = Math.hypot(ax, ay);
+    if (across > 0.1) {
+        let fx = ay / across, fy = -ax / across;
+        if (has(joints, 'nose', 'left_shoulder', 'right_shoulder')) {
+            const chest = mid(joints.left_shoulder, joints.right_shoulder);
+            if ((joints.nose[0] - chest[0]) * fx + (joints.nose[1] - chest[1]) * fy < -0.04) { fx = -fx; fy = -fy; }
+        }
+        return [fx, fy, 0];
+    }
+    if (has(joints, 'nose', 'left_ear', 'right_ear')) {
+        const ears = mid(joints.left_ear, joints.right_ear), v = [joints.nose[0] - ears[0], joints.nose[1] - ears[1], 0];
+        return Math.hypot(v[0], v[1]) > 1e-6 ? v : null;
+    }
+    return null;
+}
 
 /* 0 overview, 1 room, 2 close: from zoomRatio (0 closest .. 1 overview). */
 export function detailFor(zoomT) { return zoomT < 0.35 ? 2 : zoomT < 0.8 ? 1 : 0; }
@@ -58,13 +84,13 @@ export function createBodyAnnotationState() {
         /* now (s), dt (s), joints {name: [x,y,z]} in the apartment frame, centroid [x,y,z], activity (the house's
          * word for what they're doing, or null), object: {label, confidence} | null when this frame shows none,
          * headScreenX and width (px) for the caption's side, zoomT (0 closest .. 1 overview). */
-        step({ now, dt, joints, centroid, activity: incoming = null, object = null, headScreenX = null, width = null, zoomT = 1 }) {
+        step({ now, dt, joints, centroid, torso = null, activity: incoming = null, object = null, headScreenX = null, width = null, zoomT = 1 }) {
             if (centroid && lastCentroid && dt > 0) {
                 const v = Math.hypot(centroid[0] - lastCentroid[0], centroid[1] - lastCentroid[1]) / dt;
                 speed += (v - speed) * Math.min(1, dt / 0.4);
             }
             if (centroid) lastCentroid = centroid.slice();
-            const pelvisZ = has(joints, 'left_hip', 'right_hip') ? (joints.left_hip[2] + joints.right_hip[2]) / 2 : null;
+            const pelvisZ = torso ? torso.pelvisZ : has(joints, 'left_hip', 'right_hip') ? (joints.left_hip[2] + joints.right_hip[2]) / 2 : null;
             const seated = pelvisZ != null && pelvisZ < SEATED_PELVIS_M, walking = !seated && speed > WALKING_MPS;
             const posture = pelvisZ == null ? '' : seated ? 'Seated' : walking ? 'Walking' : 'Standing';
 
@@ -84,17 +110,25 @@ export function createBodyAnnotationState() {
             ringZ = ringZ == null ? ringTarget : ringZ + (ringTarget - ringZ) * ease(dt, 0.5);
 
             let dir = null, head = null;
-            if (has(joints, 'nose', 'left_ear', 'right_ear')) {
+            if (torso) {
+                if (Number.isFinite(torso.facingDeg)) {
+                    const azimuth = torso.facingDeg * DEG; // Producer bearings are clockwise from apartment +Y.
+                    dir = [Math.sin(azimuth), Math.cos(azimuth), 0];
+                }
+            } else {
+                const raw = facingOf(joints);
+                if (raw) dir = facing.step(raw, dt);
+            }
+            if (!torso && has(joints, 'nose', 'left_ear', 'right_ear')) {
                 const ears = mid(joints.left_ear, joints.right_ear);
                 head = ears.map((x, k) => x + (joints.nose[k] - x) * 0.3);
-                dir = facing.step(joints.nose.map((x, k) => x - ears[k]), dt);
                 eye = eye ? eye.map((x, k) => x + (head[k] - x) * ease(dt, 0.25)) : head.slice();
             }
             return { detail: detailFor(zoomT), right, posture, seated, walking, speed, activity, since: activity && since != null ? now - since : 0,
                 object: holding ? { label: objectLabel, confidence: objectConfidence } : null,
-                ringZ, ringRadius: seated ? 0.42 : 0.45, head, eye, facing: dir, facingAz: dir ? Math.atan2(dir[1], dir[0]) : null };
+                ringZ, ringRadius: seated ? 0.42 : 0.45, head, eye: torso ? null : eye, facing: dir, facingAz: dir ? Math.atan2(dir[1], dir[0]) : null };
         },
-        reset() { facing.reset(); activity = ''; candidate = ''; since = null; objectUntil = -Infinity; ringZ = null; eye = null; speed = 0; lastCentroid = null; },
+        reset() { facing.reset(); activity = ''; candidate = ''; since = null; objectUntil = -Infinity; right = true; ringZ = null; eye = null; speed = 0; lastCentroid = null; },
     };
 }
 

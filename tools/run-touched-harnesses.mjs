@@ -76,6 +76,12 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-body-(?:annotation-model|labels)\.mjs|tools\/test-apartment-body-annotation-model\.mjs)$/, ["test-apartment-body-annotation-model.mjs"]],
   // Any body module: the ports rule (no GLSL without a WebGPU twin) and the twin itself.
   [/^(?:app\/src\/home-3d\/apartment-body-[\w-]+\.mjs|tools\/test-apartment-body-webgpu\.mjs)$/, ["test-apartment-webgpu-ports.mjs", "test-apartment-body-webgpu.mjs"]],
+  [/^(?:app\/src\/home-den-spot-playback\.mjs|tools\/test-den-spot-playback\.mjs)$/, ["test-den-spot-playback.mjs"]],
+  // The live den view's people layer: markers from den-live's people stream.
+  [/^(?:app\/src\/home-3d\/apartment-people-layer\.mjs|tools\/test-apartment-people-layer\.mjs)$/, ["test-apartment-people-layer.mjs"]],
+  [/^(?:app\/src\/home-den-live-qwen\.mjs|tools\/test-den-live-qwen-line\.mjs)$/, ["test-den-live-qwen-line.mjs"]],
+  [/^(?:app\/src\/home-den-coordinator-panel\.mjs|tools\/test-den-coordinator-panel\.mjs)$/, ["test-den-coordinator-panel.mjs"]],
+  [/^(?:app\/src\/(?:home-den-(?:live-view|live-qwen|coordinator-panel|labels-view)\.mjs|home-lighting-control\.js|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|serve-home|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/test-den-live-serve-browser\.mjs)$/, ["test-den-live-serve-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
@@ -180,6 +186,7 @@ const MAP = [
   [/^(?:app\/src\/(?:home-apartment(?:-aim-library|-echo-aim|-chat-aim|-aim-proposals)\.js|home-apartment(?:-aim-library|-room-overlay|-aim)?\.jsx|home-app\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-(?:aim-library(?:-browser|-shell-browser)?|chat-aim)\.mjs)$/,
     ["test-apartment-aim-library.mjs", "test-apartment-aim-library-browser.mjs", "test-apartment-aim-library-shell-browser.mjs", "test-apartment-chat-aim.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-data)?\.(?:jsx|js)|home-3d\/(?:echo-virtual-lighting|equipment-virtual-fixtures|engine|lit-(?:layer-loader|receivers|view|basis-blend|bvh-bake))\.m?js)|tools\/(?:test-echo-virtual-lighting(?:-receivers)?(?:-browser)?|fixtures\/apartment-lit-splats-browser-proof)\.mjs)$/, ["test-echo-virtual-lighting.mjs", "test-echo-virtual-lighting-browser.mjs", "test-echo-virtual-lighting-receivers-browser.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser(?:-part2)?\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
@@ -200,6 +207,7 @@ const MAP = [
     "run-native-agent-security-tests", "run-web-gateway-lighting-brain-tests.mjs",
   ]],
   [/^tools\/run-web-gateway-lighting-brain-tests\.mjs$/, ["run-web-gateway-lighting-brain-tests.mjs"]],
+  [/^(?:web-gateway\/(?:server|den-live-route|serve-home|look-only|home-location|content-pack-route|equipment-registration|lighting-brain-route|lighting-layer)\.mjs|tools\/(?:run-web-gateway-look-only-tests|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["run-web-gateway-look-only-tests.mjs"]],
   // Ahead-of-time JSX: the loaders, the build, the gateway's verified
   // manifest and the hooks that run the build on deploy and installer builds.
   [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],

@@ -20,8 +20,8 @@
  * Splat and point colours stay scene-referred HDR; lit-frame.mjs composites
  * them into one half-float frame and runs the camera look once per pixel.
  * The pass runs in modes.js's splat tick, before renderer.render() and never
- * inside it, and only when a weight has changed. The four live spots' columns arrive from L5's bake worker each time
- * a spot moves.
+ * inside it, and only when a weight has changed. The live spot columns arrive
+ * from L5's bake worker each time a spot moves.
  */
 import * as THREE from 'three';
 
@@ -33,6 +33,24 @@ const Exposure = await import(`./lit-exposure.mjs${search}`);
 // Meter samples: a fixed spread of receivers, kept when they are in view.
 const METER_SAMPLES = 4096;
 const W = Blend.LIT_TEXTURE_WIDTH;
+const MAX_RECEIVER_GPU_BYTES = 160 * 1024 * 1024;
+
+export function receiverGpuLayout(count, { webgpu, useBasis, spotCapacity, limits } = {}) {
+    if (!Number.isSafeInteger(count) || count <= 0 || ![Blend.LIT_SPOT_SLOTS, Blend.LIT_ECHO_SPOT_SLOTS].includes(spotCapacity)) return null;
+    const height = Math.ceil(count / W), stride = webgpu ? count : W * height;
+    const spotBytes = stride * spotCapacity * Blend.LIT_SPOT_WORDS * Uint32Array.BYTES_PER_ELEMENT;
+    const basisBytes = useBasis ? stride * Blend.LIT_BASIS_WORDS * Uint32Array.BYTES_PER_ELEMENT : 0;
+    const metaBytes = stride * Blend.LIT_META_WORDS * Uint32Array.BYTES_PER_ELEMENT;
+    const outputBytes = stride * (webgpu ? 16 : 8);
+    const bytes = spotBytes + basisBytes + metaBytes + outputBytes;
+    if (bytes > MAX_RECEIVER_GPU_BYTES) return null;
+    if (webgpu) {
+        const bindingLimit = Math.min(limits?.maxStorageBufferBindingSize ?? 0, limits?.maxBufferSize ?? 0);
+        if (Math.max(spotBytes, basisBytes, metaBytes, outputBytes) > bindingLimit
+            || Math.ceil(count / 64) > (limits?.maxComputeWorkgroupsPerDimension ?? 0)) return null;
+    } else if (Math.max(W, height) > (limits?.maxTextureSize ?? 0) || spotCapacity > (limits?.maxArrayTextureLayers ?? 0)) return null;
+    return { height, stride, bytes };
+}
 
 /* Why this renderer cannot light receivers, or null: the node renderer's
  * WebGL2 backend has no compute (the splat colour hook says the same). */
@@ -84,22 +102,40 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
     if (unsupported) return { available: false, reason: unsupported };
     const { count, positions } = receiverPositions(kind, object);
     if (!layer || layer.count !== count) return { available: false, reason: 'lighting_layer_count_mismatch' };
+    const echo = layer.siteId === 'echo', useBasis = !echo;
+    const spotCapacity = echo ? Blend.LIT_ECHO_SPOT_SLOTS : Blend.LIT_SPOT_SLOTS;
+    const gl = node ? null : renderer.getContext();
+    const layout = receiverGpuLayout(count, { webgpu: node, useBasis, spotCapacity,
+        limits: node ? renderer.backend.device.limits : { maxTextureSize: gl.getParameter(gl.MAX_TEXTURE_SIZE),
+            maxArrayTextureLayers: gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS) } });
+    if (!layout) return { available: false, reason: 'lit_receivers_gpu_capacity' };
     // The point cloud stays monochrome (owner, 2026-10-20): grey surfaces, coloured light.
     const monochrome = kind === 'points';
-    const packed = Blend.packReceiverSet(monochrome ? { ...layer, albedo: Blend.greyAlbedo(layer.albedo) } : layer);
+    const packed = Blend.packReceiverSet(monochrome ? { ...layer, albedo: Blend.greyAlbedo(layer.albedo) } : layer, { useBasis });
     // The window column is blended on its own (capped); the camera look uses it.
-    packed.windowSlot = layer.columnsMeta.findIndex(column => column.kind === 'window');
-    const spots = new Uint32Array(count * Blend.LIT_SPOT_WORDS);
+    packed.windowSlot = useBasis ? layer.columnsMeta.findIndex(column => column.kind === 'window') : -1;
+    const captureDiffuse = layer.columnsMeta.some(column => column.kind === 'capture_diffuse');
+    const lightingDisclosure = captureDiffuse
+        ? 'Photo and Cloud are relit by simulation. The bake estimates and removes diffuse capture lighting and drops the capture’s sheen.'
+            + (monochrome ? '' : ' Photo uses a uniform low ambient light floor at night.')
+        : Blend.LIT_RECEIVERS_DISCLOSURE;
+    const lightingLimit = captureDiffuse
+        ? `Precomputed surface colors · live spots re-baked with shadows · ${monochrome ? 'fixtures only' : 'uniform night ambient'} · capture sheen dropped`
+        : Blend.LIT_RECEIVERS_LIMIT;
+    const columnWords = layout.stride * Blend.LIT_SPOT_WORDS;
+    const spotData = new Uint32Array(columnWords * spotCapacity);
+    const spots = Array.from({ length: spotCapacity }, (_, slot) => spotData.subarray(slot * columnWords, (slot + 1) * columnWords));
     const weights = new Float32Array(Blend.LIT_WEIGHT_VEC4S * 4);
-    const spotSlots = new Map(), spotVersions = new Map();
-    let operator = Exposure.LIT_TONE.view, signature = '', dirty = true, spotsDirty = false, attached = false, disposed = false, hdrSwapped = false;
+    const admitted = new Map(), byBakeKey = new Map(), readySlots = new Map(), dirtySlots = new Set();
+    let nextAdmission = 0, liveSpots = 0, bouncedSpots = 0, expectedSpots = 0;
+    let operator = Exposure.LIT_TONE.view, signature = '', dirty = true, attached = false, disposed = false, hdrSwapped = false;
     let blends = 0, lastBlendMs = null, matched = [], unbaked = [], whiteKelvin = null;
     if (!Blend.LIT_LOOKS.includes(look)) throw fail('lit_look_unknown');
     /* The window column's median over the room's interior receivers
      * (capture-relative): the night ambient through the windows is scaled
      * to it (lit-basis-blend.mjs LIT_WINDOW_AMBIENT). */
     const windowMedian = (() => {
-        const k = layer.columnsMeta.findIndex(column => column.kind === 'window');
+        const k = packed.windowSlot;
         if (k < 0) return null;
         const half = h => { const e = (h >>> 10) & 31, m = h & 1023; return e === 0 ? m * 2 ** -24 : e === 31 ? Infinity : (1 + m / 1024) * 2 ** (e - 15); };
         const values = [], step = Math.max(1, Math.floor(count / 20000));
@@ -138,7 +174,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
 
     // ---- WebGL: GPGPU into an RGBA16F target ---------------------------------
     async function createGlBlend() {
-        const height = Math.ceil(count / W);
+        const { height } = layout;
         const texture = (words, offset, stride) => {
             const data = new Uint32Array(W * height * 4);
             for (let i = 0; i < count; i++) data.set(words.subarray(i * stride + offset, i * stride + offset + 4), i * 4);
@@ -148,8 +184,18 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             map.needsUpdate = true;
             return map;
         };
-        const maps = { uMeta: texture(packed.meta, 0, 4), uBasisA: texture(packed.basis, 0, 8), uBasisB: texture(packed.basis, 4, 8),
-            uSpotA: texture(spots, 0, 8), uSpotB: texture(spots, 4, 8) };
+        const spotTexture = new THREE.DataArrayTexture(spotData, W, height, spotCapacity);
+        spotTexture.format = THREE.RGIntegerFormat;
+        spotTexture.type = THREE.UnsignedIntType;
+        spotTexture.internalFormat = 'RG32UI';
+        // Allocate the array up front. Zero-weight slots are never sampled.
+        spotTexture.addLayerUpdate(0);
+        spotTexture.needsUpdate = true;
+        const maps = { uMeta: texture(packed.meta, 0, 4), uSpots: spotTexture };
+        if (useBasis) {
+            maps.uBasisA = texture(packed.basis, 0, 8);
+            maps.uBasisB = texture(packed.basis, 4, 8);
+        }
         const target = new THREE.WebGLRenderTarget(W, height, { format: THREE.RGBAFormat, type: THREE.HalfFloatType, depthBuffer: false,
             stencilBuffer: false, generateMipmaps: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
         target.texture.name = 'lit-receivers-relit';
@@ -158,7 +204,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             ...Object.fromEntries(Object.entries(maps).map(([name, map]) => [name, { value: map }])) };
         const quadScene = new THREE.Scene(), camera = new THREE.Camera();
         const material = new THREE.ShaderMaterial({ name: 'lit-receivers-blend', uniforms,
-            vertexShader: Blend.LIT_BLEND_VERTEX_GLSL, fragmentShader: Blend.litBlendFragmentGlsl({ windowSlot: packed.windowSlot }),
+            vertexShader: Blend.LIT_BLEND_VERTEX_GLSL, fragmentShader: Blend.litBlendFragmentGlsl({ useBasis, spotCapacity, windowSlot: packed.windowSlot }),
             depthTest: false, depthWrite: false, blending: THREE.NoBlending, toneMapped: false });
         const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
         quad.frustumCulled = false;
@@ -169,11 +215,8 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             // The blend is scene-referred: the look and operator live in the frame.
             retone() {},
             uploadSpots() {
-                for (const [name, offset] of [['uSpotA', 0], ['uSpotB', 4]]) {
-                    const data = maps[name].image.data;
-                    for (let i = 0; i < count; i++) data.set(spots.subarray(i * 8 + offset, i * 8 + offset + 4), i * 4);
-                    maps[name].needsUpdate = true;
-                }
+                for (const slot of dirtySlots) spotTexture.addLayerUpdate(slot);
+                spotTexture.needsUpdate = true;
             },
             run() {
                 for (let k = 0; k < Blend.LIT_WEIGHT_VEC4S; k++) weightValues[k].fromArray(weights, k * 4);
@@ -251,7 +294,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
                 target.dispose(); material.dispose(); quad.geometry.dispose();
                 for (const map of Object.values(maps)) map.dispose();
             },
-            memoryBytes: W * height * 4 * 4 * 5 + W * height * 8,
+            memoryBytes: layout.bytes,
         };
     }
 
@@ -261,11 +304,11 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
         const hook = kind === 'splat' ? object.colorHook?.() : null;
         if (kind === 'splat' && !hook?.available) return { available: false, reason: hook?.reason || 'splat_relit_unavailable' };
         const attribute = (array, size) => new THREE.StorageBufferAttribute(array, size);
-        const metaAttr = attribute(packed.meta, 4), basisAttr = attribute(packed.basis, 4), spotAttr = attribute(spots, 4);
+        const metaAttr = attribute(packed.meta, 4), basisAttr = useBasis ? attribute(packed.basis, 4) : null, spotAttr = attribute(spotData, 2);
         const weightAttr = attribute(weights, 4);
         const read = (attr, type, n) => T.storage(attr, type, n).toReadOnly();
-        const buffers = { meta: read(metaAttr, 'uvec4', count), basis: read(basisAttr, 'uvec4', count * 2),
-            spots: read(spotAttr, 'uvec4', count * 2), weights: read(weightAttr, 'vec4', Blend.LIT_WEIGHT_VEC4S) };
+        const buffers = { meta: read(metaAttr, 'uvec4', count), basis: basisAttr && read(basisAttr, 'uvec4', count * 2),
+            spots: read(spotAttr, 'uvec2', count * spotCapacity), weights: read(weightAttr, 'vec4', Blend.LIT_WEIGHT_VEC4S) };
         let output = null, write;
         if (hook) write = (i, rgb) => hook.write.element(i).assign(T.vec4(rgb, 0));
         else {
@@ -274,13 +317,16 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             write = (i, rgb) => store.element(i).assign(T.vec4(rgb, 1));
         }
         let compute = null;
-        const build = () => { compute = Blend.litBlendComputeNode(T, { count, ...buffers, windowSlot: packed.windowSlot, write }); };
+        const build = () => { compute = Blend.litBlendComputeNode(T, { count, ...buffers, spotCapacity, windowSlot: packed.windowSlot, write }); };
         build();
         let restore = null;
         return {
             backend: 'webgpu-compute',
             retone() {},
-            uploadSpots() { spotAttr.needsUpdate = true; },
+            uploadSpots() {
+                for (const slot of dirtySlots) spotAttr.addUpdateRange(slot * columnWords, columnWords);
+                spotAttr.needsUpdate = true;
+            },
             run() { weightAttr.needsUpdate = true; renderer.compute(compute); },
             async attach() {
                 if (hook) { hook.setActive(true); restore = () => hook.setActive(false); return; }
@@ -314,7 +360,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
                 return Array.from({ length: n }, (_, i) => [values[i * 4], values[i * 4 + 1], values[i * 4 + 2]]);
             },
             dispose() { compute?.dispose?.(); },
-            memoryBytes: count * (16 + 32 + 32) + (output ? count * 16 : 0),
+            memoryBytes: layout.bytes,
         };
     }
 
@@ -336,19 +382,51 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             gpu.dispose();
         },
         /* World receivers for L5's bake (fresh arrays, transferable). */
-        bakeReceivers() { return { set: layer.set, ...worldReceivers() }; },
-        /* A live spot's column from the bake (half rgb per receiver). */
-        setSpotColumn(key, version, halves) {
-            if (disposed || !(halves instanceof Uint16Array) || halves.length !== count * 3) return false;
-            if ((spotVersions.get(key) ?? -1) > version) return false;
-            let slot = spotSlots.get(key);
-            if (slot === undefined) {
-                if (spotSlots.size >= Blend.LIT_SPOT_SLOTS) return false;
-                slot = spotSlots.size; spotSlots.set(key, slot);
+        bakeReceivers() { return { set: layer.set, directFirst: echo, ...worldReceivers() }; },
+        /* A removed fixture's slot can be reused without displaying its old
+         * column. A unique worker key also discards replies for that lifetime. */
+        trackSpots(placements) {
+            const wanted = new Map(placements);
+            if (wanted.size === admitted.size && expectedSpots === wanted.size
+                && placements.every(([key, origin]) => admitted.get(key)?.origin === origin)) return false;
+            expectedSpots = wanted.size;
+            for (const [key, entry] of admitted) {
+                if (wanted.has(key) && wanted.get(key) === entry.origin) continue;
+                admitted.delete(key); byBakeKey.delete(entry.bakeKey); readySlots.delete(key);
+                if (entry.uploaded) liveSpots--;
+                if (entry.uploadedBounce) bouncedSpots--;
+                dirtySlots.delete(entry.slot);
             }
-            spotVersions.set(key, version);
-            Blend.writeSpotColumn(spots, count, slot, halves);
-            spotsDirty = true; dirty = true; signature = '';
+            const occupied = new Set([...admitted.values()].map(entry => entry.slot));
+            let slot = 0;
+            for (const [key, origin] of wanted) {
+                if (admitted.has(key)) continue;
+                while (occupied.has(slot)) slot++;
+                if (slot >= spotCapacity) break;
+                const bakeKey = `${++nextAdmission}:${key}`;
+                const entry = { key, origin, bakeKey, slot, version: -1, bounced: false, uploaded: false, uploadedBounce: false };
+                admitted.set(key, entry); byBakeKey.set(bakeKey, entry); occupied.add(slot);
+            }
+            dirty = true;
+            return true;
+        },
+        spotBakeKey(key) { return admitted.get(key)?.bakeKey ?? null; },
+        clearSpotColumns() {
+            for (const entry of admitted.values()) {
+                entry.version = -1; entry.bounced = false; entry.uploaded = false; entry.uploadedBounce = false;
+            }
+            readySlots.clear(); dirtySlots.clear();
+            liveSpots = bouncedSpots = 0; dirty = true;
+        },
+        /* A live spot's column from the bake (half rgb per receiver). */
+        setSpotColumn(bakeKey, version, halves, bounced = true) {
+            const entry = byBakeKey.get(bakeKey);
+            if (disposed || !entry || !Number.isSafeInteger(version) || entry.version >= version
+                || !(halves instanceof Uint16Array) || halves.length !== count * 3) return false;
+            entry.version = version; entry.bounced = bounced;
+            Blend.writeSpotColumn(spots[entry.slot], count, halves);
+            readySlots.set(entry.key, entry.slot); dirtySlots.add(entry.slot);
+            dirty = true;
             return true;
         },
         /* Follow the eased lights, the adaptation gain, the operator and the
@@ -359,7 +437,8 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
             if (disposed) return false;
             if (next !== operator) { operator = next; gpu.retone(); }
             if (Blend.LIT_LOOKS.includes(nextLook)) look = nextLook;
-            const result = Blend.blendWeights({ lights, columns: layer.columnsMeta, columnScale: layer.columnScale, spotSlots, gain, look, windowMedian, monochrome }, weights);
+            const result = Blend.blendWeights({ lights, columns: useBasis ? layer.columnsMeta : [], columnScale: layer.columnScale,
+                spotSlots: readySlots, gain, look, windowMedian, monochrome }, weights);
             matched = result.matched; unbaked = result.unbaked; whiteKelvin = result.whiteKelvin;
             const next2 = Array.from(weights, value => value.toPrecision(7)).join(',');
             if (next2 !== signature) { signature = next2; dirty = true; }
@@ -369,8 +448,19 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
         flush() {
             if (!attached || disposed || !dirty) return false;
             const t0 = performance.now();
-            if (spotsDirty) { gpu.uploadSpots(); spotsDirty = false; }
+            if (dirtySlots.size) gpu.uploadSpots();
             gpu.run();
+            if (dirtySlots.size) {
+                for (const entry of admitted.values()) {
+                    if (!dirtySlots.has(entry.slot)) continue;
+                    if (!entry.uploaded) { entry.uploaded = true; liveSpots++; }
+                    if (entry.uploadedBounce !== entry.bounced) {
+                        entry.uploadedBounce = entry.bounced;
+                        bouncedSpots += entry.bounced ? 1 : -1;
+                    }
+                }
+                dirtySlots.clear();
+            }
             dirty = false; blends++; lastBlendMs = performance.now() - t0;
             return true;
         },
@@ -379,7 +469,7 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
         async readback(n = Math.min(count, 64)) {
             const gpuRows = await gpu.readback(Math.min(n, count));
             const cpu = gpuRows.map((_, i) => Blend.blendReceiver(packed, i, weights, spots).map(value => Math.max(0, value)));
-            return { gpu: gpuRows, cpu, unit: 'pre-exposed linear radiance', preExposure: weights[(Blend.LIT_BASIS_SLOTS + Blend.LIT_SPOT_SLOTS + 1) * 4] };
+            return { gpu: gpuRows, cpu, unit: 'pre-exposed linear radiance', preExposure: weights[Blend.PARAMS_SLOT * 4] };
         },
         /* What lit-frame.mjs draws in its scene-referred pass for this object. */
         drawables() { return (drawables() || []).filter(Boolean); },
@@ -421,12 +511,12 @@ export async function createLitReceivers({ renderer, kind, object, layer, look =
         state() {
             return Object.freeze({ available: true, kind, set: layer.set, source: layer.source, count, backend: gpu.backend, attached,
                 operator, blends, lastBlendMs, columns: layer.columns, matched: matched.length, unbaked: Object.freeze(unbaked.slice()),
-                liveSpots: spotSlots.size, gpuBytes: gpu.memoryBytes, layerBytes: layer.bytes, binding: 'sha256-verified',
+                liveSpots, bouncedSpots, expectedSpots, spotCapacity, gpuBytes: gpu.memoryBytes, layerBytes: layer.bytes, binding: 'sha256-verified',
                 provenance: layer.provenance, simulated: true, measured: false, look: look === 'camera' && operator === 'agx' ? 'camera' : 'eye',
                 whiteKelvin: whiteKelvin && Math.round(whiteKelvin), windowAmbient: windowMedian !== null && !monochrome, monochrome,
-                disclosure: Blend.LIT_RECEIVERS_DISCLOSURE + (monochrome ? ' Cloud stays monochrome: grey surfaces lit only by the fixtures, in their own colour.'
+                disclosure: lightingDisclosure + (monochrome ? ' Cloud stays monochrome: grey surfaces lit only by the fixtures, in their own colour.'
                     : look === 'camera' && operator === 'agx' && whiteKelvin ? ' ' + Exposure.litCameraDisclosure({ kelvin: whiteKelvin }) : ''),
-                limit: Blend.LIT_RECEIVERS_LIMIT });
+                limit: lightingLimit });
         },
     };
 }

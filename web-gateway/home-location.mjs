@@ -153,10 +153,21 @@ function isLoopback(address) {
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
-export function proxyProtocolListener(httpServer) {
+// Set on a socket accepted by a listener with { required: true } once its PROXY line is read. A required listener is
+// the one Tailscale Serve forwards to with --proxy-protocol=1, so its first line is always Serve's own: a client can't
+// put one before it. (On an optional listener a client's own first line can't be told from Serve's.) It refuses any
+// connection that isn't from loopback or doesn't start with a PROXY line, so Serve forwarding there without the
+// option fails at once instead of quietly trusting clients.
+export const VIA_SERVE = Symbol("homeWebViaServe");
+
+export function proxyProtocolListener(httpServer, { required = false } = {}) {
   const SIGNATURE = Buffer.from("PROXY ");
   return net.createServer({ pauseOnConnect: false }, (socket) => {
-    if (!isLoopback(socket.remoteAddress)) { httpServer.emit("connection", socket); return; }
+    if (!isLoopback(socket.remoteAddress)) {
+      if (required) socket.destroy();
+      else httpServer.emit("connection", socket);
+      return;
+    }
     let buffered = Buffer.alloc(0);
     const timer = setTimeout(() => socket.destroy(), PROXY_HEADER_TIMEOUT_MS);
     const finish = (rest) => {
@@ -172,7 +183,11 @@ export function proxyProtocolListener(httpServer) {
     const onData = (chunk) => {
       buffered = Buffer.concat([buffered, chunk]);
       const prefix = buffered.subarray(0, SIGNATURE.length);
-      if (!SIGNATURE.subarray(0, prefix.length).equals(prefix)) { finish(buffered); return; }
+      if (!SIGNATURE.subarray(0, prefix.length).equals(prefix)) {
+        if (required) onError();
+        else finish(buffered);
+        return;
+      }
       if (buffered.length < SIGNATURE.length) return;
       const end = buffered.indexOf("\r\n");
       if (end < 0) {
@@ -182,6 +197,7 @@ export function proxyProtocolListener(httpServer) {
       const parsed = end + 2 <= PROXY_HEADER_MAX ? parseProxyLine(buffered.subarray(0, end).toString("latin1")) : null;
       if (!parsed) { onError(); return; }
       if (parsed.address) socket[CLIENT_ADDRESS] = parsed.address;
+      if (required) socket[VIA_SERVE] = true;
       finish(buffered.subarray(end + 2));
     };
     socket.on("data", onData);

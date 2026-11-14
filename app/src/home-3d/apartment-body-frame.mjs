@@ -14,7 +14,9 @@
  *   head         uint8   1-255 inside the head region, drawn thinner (optional, default 0) */
 
 export const BODY_SCHEMA = 'den-live-body-1';
+export const LIVE_BODY_SCHEMA = 'den-live-body-2';
 export const MAX_POINTS = 16384;
+const DEPTH_PIXELS = 640 * 400;
 export const KIND = Object.freeze({ measured: 0, backFill: 1, guessed: 3, remembered: 4, heldObject: 5 });
 const KINDS = new Set(Object.values(KIND));
 export const COCO = Object.freeze(['nose', 'left_eye', 'right_eye', 'left_ear', 'right_ear', 'left_shoulder', 'right_shoulder',
@@ -59,6 +61,10 @@ export function validBodyFrame(frame) {
  * an unknown kind). Positions come back in metres. */
 export function decodeBodyFrame(frame) {
     if (!validBodyFrame(frame)) return null;
+    return decodePoints(frame);
+}
+
+function decodePoints(frame) {
     const n = frame.points.count, p = frame.points, raw = {};
     for (const name of Object.keys(FIELDS)) {
         if (p[name] == null) continue;
@@ -90,6 +96,38 @@ export function decodeBodyFrame(frame) {
     return { trackId: frame.track_id, seq: Number.isSafeInteger(frame.seq) ? frame.seq : null, captureTs: frame.capture_ts, n, keys, pos, nrm, kind, alpha, motion, head,
         objects, centroid: sn ? [sx / sn, sy / sn, sz / sn] : null, joints, jointStatus,
         object: frame.object ? { label: frame.object.label ?? null, confidence: frame.object.confidence ?? null } : null };
+}
+
+const LIVE_FIELDS = ['schema', 'home', 'run_id', 'track_epoch', 'content_revision', 'transform_id', 'seq', 'mode', 'status'];
+const READY_FIELDS = ['track_id', 'capture_ts', 'expires_ts', 'points', 'facing_deg', 'shoulder_midpoint_m', 'pelvis_z_m'];
+const POINT_FIELDS = ['count', 'key', 'position_mm', 'normal', 'kind'];
+const CLEAR_REASONS = new Set(['empty', 'ambiguous', 'pose_unavailable', 'warming_background', 'insufficient_depth',
+    'head_mask_unavailable', 'scope_changed', 'stale', 'unavailable']);
+const liveId = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
+const exactFields = (object, fields) => !!object && Object.keys(object).length === fields.length
+    && fields.every(key => Object.hasOwn(object, key));
+
+/* Only the live mount uses this decoder. It accepts current measured geometry and torso summaries. */
+export function decodeLiveBodyEvent(event) {
+    if (event?.schema !== LIVE_BODY_SCHEMA || !liveId(event.home) || !liveId(event.run_id)
+        || !liveId(event.content_revision) || !liveId(event.transform_id)
+        || !(liveId(event.track_epoch) || Number.isSafeInteger(event.track_epoch) && event.track_epoch >= 0)
+        || !Number.isSafeInteger(event.seq) || event.seq <= 0 || !['rgb', 'infrared', 'none'].includes(event.mode)) return null;
+    if (event.status === 'clear') {
+        return exactFields(event, [...LIVE_FIELDS, 'reason']) && CLEAR_REASONS.has(event.reason) ? { event } : null;
+    }
+    if (event.status !== 'ready' || event.mode === 'none' || !exactFields(event, [...LIVE_FIELDS, ...READY_FIELDS])
+        || !liveId(event.track_id) || !finite(event.capture_ts) || event.expires_ts !== event.capture_ts + 1
+        || !(event.facing_deg === null || finite(event.facing_deg) && event.facing_deg >= 0 && event.facing_deg < 360)
+        || !(event.shoulder_midpoint_m === null || finite3(event.shoulder_midpoint_m))
+        || !(event.pelvis_z_m === null || finite(event.pelvis_z_m) && Math.abs(event.pelvis_z_m) <= 100)) return null;
+    const p = event.points;
+    if (!exactFields(p, POINT_FIELDS) || !Number.isSafeInteger(p.count) || p.count < 1 || p.count > MAX_POINTS
+        || POINT_FIELDS.slice(1).some(key => typeof p[key] !== 'string' || p[key].length !== 4 * Math.ceil(p.count * FIELDS[key] / 3))) return null;
+    const decoded = decodePoints(event);
+    if (!decoded || decoded.keys.at(-1) >= DEPTH_PIXELS || decoded.kind.some(kind => kind !== KIND.measured)) return null;
+    decoded.torso = { facingDeg: event.facing_deg, shoulder: event.shoulder_midpoint_m, pelvisZ: event.pelvis_z_m };
+    return { event, decoded };
 }
 
 /* Scratch arrays for drawing up to `capacity` points. */

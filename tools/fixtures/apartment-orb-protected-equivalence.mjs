@@ -37,6 +37,17 @@ function material(value) {
     uniforms: value.uniforms ? Object.fromEntries(Object.entries(value.uniforms).map(([name, uniform]) => [name, snapshot(uniform.value)])) : null };
 }
 
+// The second home's lighting (2026-11-12) added spot_only and room_id after this pin was recorded. At their neutral
+// values (false, null), which every symbolic fixture here has, they are left out so the cylinder pin still holds; any
+// other value is kept and changes the fingerprint.
+const NEUTRAL_LATER_FIELDS = Object.freeze({ spot_only: false, room_id: null });
+function withoutNeutralLaterFields(value) {
+  if (!value || typeof value !== 'object') return value;
+  const out = { ...value };
+  for (const [key, neutral] of Object.entries(NEUTRAL_LATER_FIELDS)) if (Object.hasOwn(out, key) && out[key] === neutral) delete out[key];
+  return out;
+}
+
 export function protectedFingerprint(api) {
   api.root.updateMatrixWorld(true);
   const fixtures = api.root.children.map(root => {
@@ -45,14 +56,14 @@ export function protectedFingerprint(api) {
       if (ORB_COSMETIC_NAME.test(node.name)) return;
       const materials = Array.isArray(node.material) ? node.material : node.material ? [node.material] : [];
       nodes.push({ path, type: node.type, position: node.position.toArray(), quaternion: node.quaternion.toArray(), scale: node.scale.toArray(),
-        visible: node.visible, renderOrder: node.renderOrder, userData: clone(node.userData),
+        visible: node.visible, renderOrder: node.renderOrder, userData: clone(withoutNeutralLaterFields(node.userData)),
         geometry: geometry(node.geometry), materials: materials.map(material) });
       for (const child of node.children) visit(child, path + '/' + child.name);
     };
     visit(root, root.name);
     return { fixture_id: root.userData.fixture_id, nodes };
   });
-  const readback = api.readback();
+  const read = api.readback(), readback = { ...read, fixtures: read.fixtures.map(withoutNeutralLaterFields) };
   return clone({ readback,
     descriptors: readback.fixtures.map(item => api.interactionDescriptor(item.fixture_id)),
     picks: api.pickObjects().map(node => ({ name: node.name, userData: node.userData, position: node.position.toArray(),

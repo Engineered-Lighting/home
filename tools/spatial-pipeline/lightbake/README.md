@@ -22,6 +22,8 @@ venv/Scripts/python 91_bake_light_basis.py --equipment <equipment-registration.j
 
 `--equipment` is the equipment registration bound to the same pack. It supplies the four mount positions and the wall planes. Nothing is downloaded.
 
+For Echo Park, pass the exact active pack to both steps with `--pack` and use a private output directory outside the pack with `--out`. Generate the capture input first with `node tools/spatial-pipeline/write-echo-virtual-lighting-document.mjs PACK OUTPUT.json` from the repository root. It reads the pack and frame only. The bake supplies the material colors and geometry for relighting, and the browser computes each spotlight from the saved Echo Park layout. If the pack has no detected apertures, the bake uses a neutral diffuse estimate to recover material colors. The `capture_diffuse` column reconstructs that modeled capture state for validation.
+
 **Step 90, de-light:**
 1. Derive mesh normals; the GLB ships none.
 2. Build the ray-tracing scene. Rays are traced against the **uncut** scan surface: display cleanup can cut the rendered primitive, and trimesh keeps the uncut accessors in the same GLB with the same atlas. A **ceiling cap** is added because the Scaniverse mesh has no ceiling. The cap uses ceiling-splat radiance where observed. Elsewhere it is modeled as `L = rho_c/pi * E`, closed form because a flat ceiling doesn't see itself, with `rho_c` assumed (`--ceiling-albedo`, default 0.8).
@@ -33,13 +35,13 @@ venv/Scripts/python 91_bake_light_basis.py --equipment <equipment-registration.j
 8. Run a sensitivity pass over the unanswered capture questions and the modeled ceiling.
 
 **Step 91, bake:**
-1. Path-trace 29 unit bases: 4 downlights and 24 radials in lx/lm (assumed Gaussian lobes from `home-den-fixtures.js`), plus 1 window column for capture daylight. The trace uses the scan BVH and the de-lit albedo, with direct light, shadows and 5 bounces.
-2. Encode splats and points in the 40 B/receiver format, and the mesh per vertex.
+1. For Victoria, path-trace 29 unit bases for 4 downlights and 24 radials in lx/lm (assumed Gaussian lobes from `home-den-fixtures.js`), plus 1 window column for capture daylight. The trace uses the scan BVH and the de-lit albedo, with direct light, shadows and 5 bounces. The Echo Park capture-only input produces one capture column.
+2. Encode splats and points per receiver, and the mesh per vertex.
 3. Check self-consistency, check the size budget, and write the manifest.
 
 **Why the mesh is per vertex, not lightmapped.** The Scaniverse atlas covers only 15 % of its area with UV triangles. The median face is about half a texel at 2048², so an atlas lightmap or a downsampled albedo atlas would be mostly bleed between islands. The rendered primitive's vertices are about 3 cm apart, so they carry the basis instead. The shader forms albedo at full atlas resolution, per fragment, as `clamp(pi * atlas / max(E_cap, floor), 0, rho_max)`. With no lightmap there is no OIDN pass: per-receiver noise is controlled by sample count.
 
-The four robotic spots are live lights (L5) and are not baked.
+The browser computes spotlight illumination from each fixture's current position and aim.
 
 ## Capture-state parameters (Q1–Q4, unanswered)
 
@@ -63,18 +65,18 @@ There is one file per field for each receiver set: `splat` (`apartment.ply`), `s
 |---|---|
 | `*-albedo.bin` | rgb8, sRGB-encoded |
 | `*-normal-oct.bin` | 2 × u8, octahedral |
-| `*-basis-u8.bin` | 29 × u8, sqrt-encoded |
+| `*-basis-u8.bin` | 1 × u8 per manifest column, sqrt-encoded |
 | `*-basis-scale.bin` | fp16 |
 | `*-bounce-tint.bin` | rgb8 |
 | `*-flags.bin` | u8 |
 
-That is 40 B per receiver. Decode with `b_k = (u8/255)² · scale · column_scale_k`, `E = tint/lum(tint) · Σ w_k c_k b_k`, then `L = albedo/π · E`. The mesh is keyed by vertex index of `meshes[0].primitives[0]`, at 43 B per vertex:
+That is 40 B per Victoria receiver and 12 B per receiver for an Echo Park capture-only layer. Decode with `b_k = (u8/255)² · scale · column_scale_k`, `E = tint/lum(tint) · Σ w_k c_k b_k`, then `L = albedo/π · E`. The mesh is keyed by vertex index of `meshes[0].primitives[0]`, at 43 B per Victoria vertex and 15 B per Echo Park capture-only vertex.
 
 | File | Per vertex |
 |---|---|
 | `mesh-capture-irradiance.bin` | fp16 × 3 |
 | `mesh-normal-oct.bin` | 2 × u8 |
-| `mesh-basis-u8.bin` | 29 × u8 |
+| `mesh-basis-u8.bin` | 1 × u8 per manifest column |
 | `mesh-basis-scale.bin` | fp16 |
 | `mesh-bounce-tint.bin` | rgb8 |
 | `mesh-flags.bin` | u8 |

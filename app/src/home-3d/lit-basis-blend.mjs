@@ -47,20 +47,21 @@ const Exposure = await import(`./lit-exposure.mjs${search}`);
 
 // Basis slots on the GPU: 29 columns padded to 8 words of 4 bytes.
 export const LIT_BASIS_SLOTS = 32;
-// Live spot columns per receiver (Victoria has four robotic spots).
+// Victoria has four robotic spots. Echo reserves a column for each mapped light.
 export const LIT_SPOT_SLOTS = 4;
-// Words per receiver: meta (albedo|flags, tint, scale), basis, spot halves.
-export const LIT_META_WORDS = 4, LIT_BASIS_WORDS = 8, LIT_SPOT_WORDS = LIT_SPOT_SLOTS * 2;
+export const LIT_ECHO_SPOT_SLOTS = 13;
+export const LIT_META_WORDS = 4, LIT_BASIS_WORDS = 8, LIT_SPOT_WORDS = 2;
 // Texel rows on the WebGL path; Spark's splat index maps to (i % W, i / W).
 export const LIT_TEXTURE_WIDTH = 2048;
 // The layer's luminance weights (tools/spatial-pipeline/lightbake/encode.py).
 export const LIT_LAYER_LUMA = Object.freeze([0.2126, 0.7152, 0.0722]);
 // Weights: basis slots, spot slots, ambient, (preExposure, gain, AgX power),
 // the camera white balance (three rows), then the night exterior.
-export const LIT_WEIGHT_VEC4S = LIT_BASIS_SLOTS + LIT_SPOT_SLOTS + 7;
-const AMBIENT_SLOT = LIT_BASIS_SLOTS + LIT_SPOT_SLOTS, PARAMS_SLOT = AMBIENT_SLOT + 1, WB_SLOT = PARAMS_SLOT + 1, EXTERIOR_SLOT = WB_SLOT + 3;
+export const LIT_WEIGHT_VEC4S = LIT_BASIS_SLOTS + LIT_ECHO_SPOT_SLOTS + 7;
+export const AMBIENT_SLOT = LIT_BASIS_SLOTS + LIT_ECHO_SPOT_SLOTS, PARAMS_SLOT = AMBIENT_SLOT + 1;
+const WB_SLOT = PARAMS_SLOT + 1, EXTERIOR_SLOT = WB_SLOT + 3;
 // The night ambient through the window column: rgb per unit of (u8/255)^2 x scale, w = its cap.
-const WINDOW_SLOT = EXTERIOR_SLOT + 1;
+export const WINDOW_SLOT = EXTERIOR_SLOT + 1;
 export const LIT_LOOKS = Object.freeze(['camera', 'eye']);
 /* ASSUMED, never measured (owner photos replace them: a night photo out of
  * the window, the blinds state). */
@@ -97,19 +98,21 @@ export function greyAlbedo(albedo) {
  *         y bounce tint r | g << 8 | b << 16
  *         z basis scale, fp16 bits
  *   basis 29 sqrt-encoded bytes, little-endian, zero-padded to 32. */
-export function packReceiverSet({ count, columns, albedo, basis, scale, tint, flags }) {
+export function packReceiverSet({ count, columns, albedo, basis, scale, tint, flags }, { useBasis = true } = {}) {
     if (!Number.isSafeInteger(count) || count <= 0 || !Number.isInteger(columns) || columns < 1 || columns > LIT_BASIS_SLOTS)
         throw new RangeError('lit_receivers_invalid');
     if (albedo.length !== count * 3 || basis.length !== count * columns || scale.length !== count || tint.length !== count * 3
         || flags.length !== count) throw new RangeError('lit_receivers_size_mismatch');
-    const meta = new Uint32Array(count * LIT_META_WORDS), words = new Uint32Array(count * LIT_BASIS_WORDS);
-    const bytes = new Uint8Array(words.buffer);
+    const meta = new Uint32Array(count * LIT_META_WORDS), words = useBasis ? new Uint32Array(count * LIT_BASIS_WORDS) : null;
+    const bytes = words && new Uint8Array(words.buffer);
     for (let i = 0; i < count; i++) {
         const a = i * 3, m = i * LIT_META_WORDS;
         meta[m] = (albedo[a] | (albedo[a + 1] << 8) | (albedo[a + 2] << 16) | (flags[i] << 24)) >>> 0;
-        meta[m + 1] = tint[a] | (tint[a + 1] << 8) | (tint[a + 2] << 16);
-        meta[m + 2] = scale[i];
-        bytes.set(basis.subarray(i * columns, (i + 1) * columns), i * LIT_BASIS_WORDS * 4);
+        if (bytes) {
+            meta[m + 1] = tint[a] | (tint[a + 1] << 8) | (tint[a + 2] << 16);
+            meta[m + 2] = scale[i];
+            bytes.set(basis.subarray(i * columns, (i + 1) * columns), i * LIT_BASIS_WORDS * 4);
+        }
     }
     return { count, columns, meta, basis: words, windowSlot: -1 };
 }
@@ -147,8 +150,8 @@ into = new Float32Array(LIT_WEIGHT_VEC4S * 4)) {
     for (const light of lights) {
         const key = lightKey(light);
         if (light.kind === 'spot') {
-            const slot = spotSlots.get(key);
-            if (slot === undefined || slot >= LIT_SPOT_SLOTS) { unbaked.push(key); continue; }
+            const slot = spotSlots.get(light.coordinatorSpot ? `${key}:direct` : key);
+            if (!Number.isInteger(slot) || slot < 0 || slot >= LIT_ECHO_SPOT_SLOTS) { unbaked.push(key); continue; }
             const rgb = Model.cctToLinearRgb(light.kelvin), candela = Number.isFinite(light.candela) ? light.candela : 0;
             for (let c = 0; c < 3; c++) into[(LIT_BASIS_SLOTS + slot) * 4 + c] = candela * rgb[c] * exposure;
         } else if (!matched.includes(key)) unbaked.push(key);
@@ -201,18 +204,15 @@ export function displayParams(weights) {
 
 /* ---- Spot columns ------------------------------------------------------------
  * L5 posts each live spot's column per receiver as half rgb (Uint16 x 3); the
- * GPU keeps all spot slots per receiver as half pairs: word 2s = r | g << 16,
- * word 2s + 1 = b. */
-export function writeSpotColumn(spots, count, slot, halves) {
-    if (!(spots instanceof Uint32Array) || spots.length !== count * LIT_SPOT_WORDS || slot < 0 || slot >= LIT_SPOT_SLOTS)
-        throw new RangeError('lit_spot_slot_invalid');
+ * storage is column-major so each re-aim uploads only its own column. */
+export function writeSpotColumn(column, count, halves) {
+    if (!(column instanceof Uint32Array) || column.length < count * LIT_SPOT_WORDS || !(halves instanceof Uint16Array)
+        || halves.length !== count * 3) throw new RangeError('lit_spot_column_invalid');
     for (let i = 0; i < count; i++) {
-        const o = i * LIT_SPOT_WORDS + slot * 2;
-        if (!halves) { spots[o] = 0; spots[o + 1] = 0; continue; }
-        spots[o] = (halves[i * 3] | (halves[i * 3 + 1] << 16)) >>> 0;
-        spots[o + 1] = halves[i * 3 + 2];
+        column[i * 2] = (halves[i * 3] | (halves[i * 3 + 1] << 16)) >>> 0;
+        column[i * 2 + 1] = halves[i * 3 + 2];
     }
-    return spots;
+    return column;
 }
 
 /* ---- CPU twin ----------------------------------------------------------------- */
@@ -245,24 +245,28 @@ export function blendReceiver(set, i, weights, spots = null, out = [0, 0, 0]) {
         for (let c = 0; c < 3; c++) out[c] = weights[EXTERIOR_SLOT * 4 + c] * (0.5 + a);
         return out;
     }
-    const tint = decodeTint(meta[m + 1]), scale = half(meta[m + 2]);
     let er = 0, eg = 0, eb = 0;
-    for (let w = 0; w < LIT_BASIS_WORDS; w++) {
-        const word = set.basis[i * LIT_BASIS_WORDS + w];
-        for (let b = 0; b < 4; b++) {
-            const u = ((word >>> (8 * b)) & 255) / 255, q = u * u, k = (w * 4 + b) * 4;
-            er += q * weights[k]; eg += q * weights[k + 1]; eb += q * weights[k + 2];
+    if (set.basis) {
+        const tint = decodeTint(meta[m + 1]), scale = half(meta[m + 2]);
+        for (let w = 0; w < LIT_BASIS_WORDS; w++) {
+            const word = set.basis[i * LIT_BASIS_WORDS + w];
+            for (let b = 0; b < 4; b++) {
+                const u = ((word >>> (8 * b)) & 255) / 255, q = u * u, k = (w * 4 + b) * 4;
+                er += q * weights[k]; eg += q * weights[k + 1]; eb += q * weights[k + 2];
+            }
         }
+        if (set.windowSlot >= 0) {
+            const u = ((set.basis[i * LIT_BASIS_WORDS + (set.windowSlot >> 2)] >>> (8 * (set.windowSlot & 3))) & 255) / 255;
+            const b = Math.min(u * u * scale, weights[WINDOW_SLOT * 4 + 3]) / Math.max(scale, 1e-30);
+            er += b * weights[WINDOW_SLOT * 4]; eg += b * weights[WINDOW_SLOT * 4 + 1]; eb += b * weights[WINDOW_SLOT * 4 + 2];
+        }
+        er *= tint[0] * scale; eg *= tint[1] * scale; eb *= tint[2] * scale;
     }
-    if (set.windowSlot >= 0) {
-        const u = ((set.basis[i * LIT_BASIS_WORDS + (set.windowSlot >> 2)] >>> (8 * (set.windowSlot & 3))) & 255) / 255;
-        const b = Math.min(u * u * scale, weights[WINDOW_SLOT * 4 + 3]) / Math.max(scale, 1e-30);
-        er += b * weights[WINDOW_SLOT * 4]; eg += b * weights[WINDOW_SLOT * 4 + 1]; eb += b * weights[WINDOW_SLOT * 4 + 2];
-    }
-    er *= tint[0] * scale; eg *= tint[1] * scale; eb *= tint[2] * scale;
-    if (spots) for (let s = 0; s < LIT_SPOT_SLOTS; s++) {
-        const o = i * LIT_SPOT_WORDS + s * 2, k = (LIT_BASIS_SLOTS + s) * 4, rg = spots[o];
-        er += half(rg) * weights[k]; eg += half(rg >>> 16) * weights[k + 1]; eb += half(spots[o + 1]) * weights[k + 2];
+    if (spots) for (let s = 0; s < spots.length; s++) {
+        const k = (LIT_BASIS_SLOTS + s) * 4;
+        if (weights[k] === 0 && weights[k + 1] === 0 && weights[k + 2] === 0) continue;
+        const o = i * LIT_SPOT_WORDS, rg = spots[s][o];
+        er += half(rg) * weights[k]; eg += half(rg >>> 16) * weights[k + 1]; eb += half(spots[s][o + 1]) * weights[k + 2];
     }
     er += weights[AMBIENT_SLOT * 4]; eg += weights[AMBIENT_SLOT * 4 + 1]; eb += weights[AMBIENT_SLOT * 4 + 2];
     const word = meta[m], rho = [word & 255, (word >>> 8) & 255, (word >>> 16) & 255].map(v => srgbToLinear(v / 255) / Math.PI);
@@ -290,14 +294,13 @@ export function receiverLuminance(set, i, weights, spots = null) {
  * pre-exposed, scene-referred radiance, blendReceiver() line for line.
  * Integer textures hold the packed words; weights are a uniform array. */
 const glslVec3 = v => `vec3(${v.map(x => Number(x).toPrecision(9)).join(', ')})`;
-export function litBlendFragmentGlsl({ spots = true, windowSlot = -1 } = {}) {
+export function litBlendFragmentGlsl({ spotCapacity = LIT_SPOT_SLOTS, useBasis = true, windowSlot = -1 } = {}) {
     return `precision highp float;
 precision highp int;
 precision highp usampler2D;
 uniform usampler2D uMeta;
-uniform usampler2D uBasisA;
-uniform usampler2D uBasisB;
-${spots ? 'uniform usampler2D uSpotA;\nuniform usampler2D uSpotB;' : ''}
+${useBasis ? 'uniform usampler2D uBasisA;\nuniform usampler2D uBasisB;' : ''}
+uniform highp usampler2DArray uSpots;
 uniform vec4 uWeights[${LIT_WEIGHT_VEC4S}];
 uniform int uCount;
 const vec3 LUMA = vec3(0.2126729, 0.7151522, 0.0721750);
@@ -313,27 +316,30 @@ vec3 accumulate(uvec4 words, int base) {
   }
   return e;
 }
-vec3 spotPair(uvec4 words, int slot) {
-  vec2 a = unpackHalf2x16(words.x), b = unpackHalf2x16(words.z);
-  return vec3(a, unpackHalf2x16(words.y).x) * uWeights[${LIT_BASIS_SLOTS} + slot].rgb
-       + vec3(b, unpackHalf2x16(words.w).x) * uWeights[${LIT_BASIS_SLOTS} + slot + 1].rgb;
-}
 void main() {
   ivec2 at = ivec2(gl_FragCoord.xy);
   int index = at.y * ${LIT_TEXTURE_WIDTH} + at.x;
   if (index >= uCount) { gl_FragColor = vec4(0.0); return; }
   uvec4 meta = texelFetch(uMeta, at, 0);
   vec4 albedo = unorm4(meta.x);
+  vec3 e = vec3(0.0);
+${useBasis ? `
   vec3 t = unorm4(meta.y).rgb;
   float ty = dot(t, LAYER_LUMA);
   vec3 tint = ty > 0.0 ? t / ty : vec3(1.0);
   float scale = unpackHalf2x16(meta.z).x;
   uvec4 basisA = texelFetch(uBasisA, at, 0), basisB = texelFetch(uBasisB, at, 0);
-  vec3 e = accumulate(basisA, 0) + accumulate(basisB, 16);
+  e = accumulate(basisA, 0) + accumulate(basisB, 16);
 ${windowSlot >= 0 ? `  float uw = float((${windowSlot < 16 ? 'basisA' : 'basisB'}[${(windowSlot >> 2) & 3}] >> ${8 * (windowSlot & 3)}u) & 255u) / 255.0;
   e += min(uw * uw * scale, uWeights[${WINDOW_SLOT}].w) / max(scale, 1e-30) * uWeights[${WINDOW_SLOT}].rgb;` : ''}
-  e *= tint * scale;
-  ${spots ? 'e += spotPair(texelFetch(uSpotA, at, 0), 0) + spotPair(texelFetch(uSpotB, at, 0), 2);' : ''}
+  e *= tint * scale;` : ''}
+  for (int slot = 0; slot < ${spotCapacity}; slot++) {
+    vec3 weight = uWeights[${LIT_BASIS_SLOTS} + slot].rgb;
+    if (any(notEqual(weight, vec3(0.0)))) {
+      uvec2 words = texelFetch(uSpots, ivec3(at, slot), 0).xy;
+      e += vec3(unpackHalf2x16(words.x), unpackHalf2x16(words.y).x) * weight;
+    }
+  }
   e += uWeights[${AMBIENT_SLOT}].rgb;
   vec3 a = albedo.rgb;
   vec3 rho = mix(a / 12.92, pow((a + 0.055) / 1.055, vec3(2.4)), step(vec3(0.04045), a)) / ${Math.PI.toPrecision(9)};
@@ -350,42 +356,45 @@ export const LIT_BLEND_VERTEX_GLSL = 'void main() { gl_Position = vec4(position.
 
 /* ---- TSL (WebGPU compute) -------------------------------------------------------
  * `T` is the 'three/tsl' namespace (as lit-exposure.mjs's litDisplayNode).
- * meta/basis/spots are read-only uvec4 storage nodes, weights a read-only
+ * meta/basis are read-only uvec4 and spots a read-only uvec2 storage node, weights a read-only
  * vec4 storage node, `write(index, rgb)` returns the store node; rgb is the
  * receiver's pre-exposed linear radiance, as the GLSL pass writes it. */
-export function litBlendComputeNode(T, { count, meta, basis, spots = null, weights, windowSlot = -1, write, workgroup = 64 }) {
+export function litBlendComputeNode(T, { count, meta, basis, spots, spotCapacity = LIT_SPOT_SLOTS, weights, windowSlot = -1, write, workgroup = 64 }) {
     const { Fn, If, float, vec3, instanceIndex, unpackUnorm4x8, unpackHalf2x16, dot, max, select } = T;
     const LUMA = vec3(...LIT_LAYER_LUMA), LANES = ['x', 'y', 'z', 'w'];
     return Fn(() => {
         const i = instanceIndex;
         If(i.lessThan(count), () => {
             const m = meta.element(i).toVar('litMeta');
-            const t = unpackUnorm4x8(m.y).rgb.toVar('litTintRaw');
-            const ty = dot(t, LUMA);
-            const tint = select(ty.greaterThan(0), t.div(max(ty, float(1e-12))), vec3(1)).toVar('litTint');
-            const scale = unpackHalf2x16(m.z).x;
             const e = vec3(0).toVar('litE');
-            for (let half = 0; half < 2; half++) {
-                const words = basis.element(i.mul(2).add(half)).toVar(`litBasis${half}`);
-                for (let j = 0; j < 4; j++) {
-                    const u = unpackUnorm4x8(words[LANES[j]]), q = u.mul(u), k = half * 16 + j * 4;
-                    e.addAssign(weights.element(k).xyz.mul(q.x).add(weights.element(k + 1).xyz.mul(q.y))
-                        .add(weights.element(k + 2).xyz.mul(q.z)).add(weights.element(k + 3).xyz.mul(q.w)));
+            if (basis) {
+                const t = unpackUnorm4x8(m.y).rgb.toVar('litTintRaw');
+                const ty = dot(t, LUMA);
+                const tint = select(ty.greaterThan(0), t.div(max(ty, float(1e-12))), vec3(1)).toVar('litTint');
+                const scale = unpackHalf2x16(m.z).x;
+                for (let half = 0; half < 2; half++) {
+                    const words = basis.element(i.mul(2).add(half)).toVar(`litBasis${half}`);
+                    for (let j = 0; j < 4; j++) {
+                        const u = unpackUnorm4x8(words[LANES[j]]), q = u.mul(u), k = half * 16 + j * 4;
+                        e.addAssign(weights.element(k).xyz.mul(q.x).add(weights.element(k + 1).xyz.mul(q.y))
+                            .add(weights.element(k + 2).xyz.mul(q.z)).add(weights.element(k + 3).xyz.mul(q.w)));
+                    }
                 }
-            }
-            if (windowSlot >= 0) {
-                const word = basis.element(i.mul(2).add(windowSlot < 16 ? 0 : 1))[LANES[(windowSlot >> 2) & 3]];
-                const uw = T.float(word.shiftRight(8 * (windowSlot & 3)).bitAnd(255)).div(255);
-                const w = weights.element(WINDOW_SLOT);
-                e.addAssign(w.xyz.mul(T.min(uw.mul(uw).mul(scale), w.w).div(max(scale, float(1e-30)))));
-            }
-            e.mulAssign(tint.mul(scale));
-            if (spots) for (let pair = 0; pair < 2; pair++) {
-                const words = spots.element(i.mul(2).add(pair)).toVar(`litSpots${pair}`);
-                for (let s = 0; s < 2; s++) {
-                    const rg = unpackHalf2x16(words[LANES[s * 2]]), b = unpackHalf2x16(words[LANES[s * 2 + 1]]).x;
-                    e.addAssign(vec3(rg.x, rg.y, b).mul(weights.element(LIT_BASIS_SLOTS + pair * 2 + s).xyz));
+                if (windowSlot >= 0) {
+                    const word = basis.element(i.mul(2).add(windowSlot < 16 ? 0 : 1))[LANES[(windowSlot >> 2) & 3]];
+                    const uw = T.float(word.shiftRight(8 * (windowSlot & 3)).bitAnd(255)).div(255);
+                    const w = weights.element(WINDOW_SLOT);
+                    e.addAssign(w.xyz.mul(T.min(uw.mul(uw).mul(scale), w.w).div(max(scale, float(1e-30)))));
                 }
+                e.mulAssign(tint.mul(scale));
+            }
+            for (let slot = 0; slot < spotCapacity; slot++) {
+                const weight = weights.element(LIT_BASIS_SLOTS + slot).xyz;
+                If(dot(weight, weight).greaterThan(0), () => {
+                    const words = spots.element(i.add(count * slot)).toVar(`litSpot${slot}`);
+                    const rg = unpackHalf2x16(words.x), b = unpackHalf2x16(words.y).x;
+                    e.addAssign(vec3(rg.x, rg.y, b).mul(weight));
+                });
             }
             e.addAssign(weights.element(AMBIENT_SLOT).xyz);
             const linearAlbedo = T.sRGBTransferEOTF(unpackUnorm4x8(m.x).rgb).toVar('litAlbedo');

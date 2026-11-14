@@ -160,7 +160,7 @@ def _capture(pos, uv, faces, P_splat, tex_size, spp, device):
     return rad, rs
 
 
-def make(root, revision="synthetic-pack-r1", seed=0, spp=256, device=None):
+def make(root, revision="synthetic-pack-r1", seed=0, spp=256, device=None, site_id="victoria", exterior_splats=True):
     from PIL import Image
 
     from . import encode as ENC
@@ -168,7 +168,7 @@ def make(root, revision="synthetic-pack-r1", seed=0, spp=256, device=None):
 
     rng = np.random.default_rng(seed)
     root = Path(root)
-    site = root / "victoria"
+    site = root / site_id
     pack = site / revision
     pack.mkdir(parents=True)
     (site / "ACTIVE").write_text(revision)
@@ -183,7 +183,7 @@ def make(root, revision="synthetic-pack-r1", seed=0, spp=256, device=None):
     Image.fromarray(tex).save(buf, "PNG")
     _glb(pack / "mesh.glb", pos, uv, faces, buf.getvalue())
     # exterior splats behind the window opening, bright and cool
-    m = 1500
+    m = 1500 if exterior_splats else 0
     t = rng.uniform(1.5, 4.0, m)
     hx, hz = rng.uniform(HOLE[0] + 0.05, HOLE[1] - 0.05, m), rng.uniform(HOLE[2] + 0.05, HOLE[3] - 0.05, m)
     O = np.array([X / 2, Y / 2, 1.2])
@@ -200,7 +200,7 @@ def make(root, revision="synthetic-pack-r1", seed=0, spp=256, device=None):
     for name in ("mesh.glb", "apartment.ply", "apartment.mobile.ply", "points.ply", "frame.json", "collision.glb"):
         p = pack / name
         assets[name] = {"path": name, "bytes": p.stat().st_size, "sha256": BND.sha256_file(p)}
-    cp = {"schemaVersion": 1, "siteId": "victoria", "revision": revision, "registrationVersion": 1,
+    cp = {"schemaVersion": 1, "siteId": site_id, "revision": revision, "registrationVersion": 1,
           "sceneAvailable": True, "assets": assets}
     (pack / "content-pack.json").write_text(json.dumps(cp, indent=2))
     (site / (revision + ".provenance.json")).write_text(json.dumps({"interior": {"scan": {"ceilingM": Z}}}))
@@ -213,5 +213,10 @@ def make(root, revision="synthetic-pack-r1", seed=0, spp=256, device=None):
               for i, p in enumerate([[0.8, 0.7, 2.44], [3.2, 0.7, 2.44], [3.2, 2.3, 2.44], [0.8, 2.3, 2.44]])]
     eq = {"schema": "home-equipment-registration-1", "version": 1, "revision": 1, "digest": "0" * 64,
           "binding": bind, "references": {"walls": walls}, "equipment": mounts}
+    if site_id == "echo":
+        eq["schema"] = "home-echo-virtual-lighting-1"
+        eq["scope"] = {"site_id": "echo"}
+        del eq["digest"]
+        eq["digest"] = BND.canonical_digest(eq)
     (root / "equipment.json").write_text(json.dumps(eq))
     return site, pack, root / "equipment.json"

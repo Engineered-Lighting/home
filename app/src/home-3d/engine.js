@@ -324,7 +324,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         photoFloorSupport: cutawayEligible,
         ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
-    const overlay = markersM.createOverlay(apartmentRoot);
+    const overlay = markersM.createOverlay(apartmentRoot, { siteId });
     /* The collision proxy's scanned floor and ceiling heights (not its
      * bounding box, which stray triangles stretch), once per collision
      * object, for the cut-away pick filters. */
@@ -468,6 +468,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         try { layer.dispose(); } catch (_) { /* Other layers and renderer cleanup still run. */ }
         finally { uiLayers.delete(layer); presentationUiLayers.delete(layer); }
     };
+    function captureWithoutLiveBody(draw) {
+        const hidden = apartmentRoot.children.filter(child => child.visible && child.userData.excludeFromApartmentCapture);
+        for (const child of hidden) child.visible = false;
+        try { return draw(); }
+        finally { for (const child of hidden) child.visible = true; }
+    }
     const equipmentCutaway = bindEquipmentCutawayRegistration({
         overlay, sceneIdentity, manifest: pinnedPack,
         enabled: cutawayEligible && !window.HomeLiveSceneShadow?.active,
@@ -996,6 +1002,14 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         siteId,
         contentRevision,
         sceneIdentity,
+        async loadEchoVirtualLighting(savedModel) {
+            if (siteId !== 'echo' || sim || !pinnedPack?.sceneAvailable || disposed) return null;
+            const [source, frame] = await Promise.all([sib('echo-virtual-lighting.mjs'), readSceneFrame()]);
+            if (disposed) return null;
+            return source.createEchoVirtualLightingDocument({
+                pack: pinnedPack, frame, savedModel, digest: window.HomeEquipmentRegistration?.digest,
+            });
+        },
         getEquipmentCutawayRegistrationStatus: () => equipmentCutaway.status(),
         async prepareDeskTargetSurface(binding) {
             await modes.preload(['mesh']);
@@ -1004,6 +1018,35 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         deskTargetSurfaceReference(binding) { return deskSurfacePicking.reference(binding); },
         deskTargetSurfaceHit(clientX, clientY, binding) {
             return deskSurfacePicking.surfaceHit(clientX, clientY, binding);
+        },
+        pickEchoSpotlightBeam(clientX, clientY) {
+            if (siteId !== 'echo' || modes.mode !== 'mesh' || !litWanted || litMode !== 'mesh') return null;
+            const volumes = overlay.virtualFixtureBeamPickObjects();
+            if (!volumes.length) return null;
+            const intervals = new Map();
+            for (const hit of picking.pick(volumes, clientX, clientY, { doubleSided: true })) {
+                if (!intervals.has(hit.object)) intervals.set(hit.object, []);
+                intervals.get(hit.object).push(hit.distance);
+            }
+            if (!intervals.size) return null;
+
+            // Use the rendered mesh and the same near and cutaway filters as
+            // the depth pass. The aim target still uses the registered proxy.
+            const mesh = modes.getMesh();
+            const near = Math.max(camera.near, modes.getMeshNearCut());
+            const policy = modes.debugInfo?.().dollhouseCutaway;
+            const point = new THREE.Vector3();
+            const blocker = mesh?.visible && picking.pick([mesh], clientX, clientY).find(hit => {
+                if (-point.copy(hit.point).applyMatrix4(camera.matrixWorldInverse).z < near) return false;
+                return cutawayM.dollhouseKeep(apartmentRoot.worldToLocal(point.copy(hit.point)).toArray(), policy) >= .5;
+            });
+            const opaqueDistance = blocker ? blocker.distance : Infinity;
+            let distance = Infinity, id = null;
+            for (const [volume, hits] of intervals) {
+                const candidate = overlay.visibleSpotlightBeamDistance(volume, picking.raycaster.ray, hits, opaqueDistance);
+                if (candidate < distance) { distance = candidate; id = volume.userData.fixture_id; }
+            }
+            return id;
         },
         /* Under the dollhouse cut-away the viewer looks down into the room, so
          * a tap on visible floor must not land on the collision ceiling above
@@ -1147,7 +1190,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
                 // The same per-frame splat work as frame(): sort for this camera.
                 modes.tickSplat?.(camera, performance.now() / 1000);
-                const frame = await nodeRenderer.capture({ scene, camera, scale, signal });
+                // The node renderer queues its draw before awaiting the readback.
+                const frame = await captureWithoutLiveBody(() => nodeRenderer.capture({ scene, camera, scale, signal }));
                 return disposed || signal?.aborted ? null : frame;
             }
             if (disposed || signal?.aborted || renderer.getContext().isContextLost()) return null;
@@ -1159,8 +1203,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             // Render and copy in one task: the default framebuffer need not be
             // preserved between frames. This does not advance the camera clock.
             modes.tickSpark?.(camera, performance.now() / 1000);
-            xrayLook?.prepass();
-            renderer.render(scene, camera);
+            captureWithoutLiveBody(() => {
+                xrayLook?.prepass();
+                renderer.render(scene, camera);
+            });
             const source = renderer.domElement;
             const width = Math.max(1, Math.round(source.width * Math.min(1, Math.max(0.01, scale))));
             const height = Math.max(1, Math.round(source.height * Math.min(1, Math.max(0.01, scale))));

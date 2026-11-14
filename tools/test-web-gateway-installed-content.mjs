@@ -12,12 +12,19 @@ import { fileURLToPath } from 'node:url';
 import Core from '../app/src/home-equipment-registration.js';
 import { initRegistration, readActiveBinding, REGISTRATION_ROUTE } from '../web-gateway/equipment-registration.mjs';
 import { installPack, authoredDocument } from './fixtures/apartment-home-shell-fixtures.mjs';
+import { authoredLightingLayer } from './fixtures/apartment-lit-layer-fixtures.mjs';
 
 test('real gateway authenticates installed content and exposes registration without enabling writes', { timeout: 45000 }, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'home-installed-content-'));
   const packs = path.join(root, 'packs'), privateRoot = path.join(root, 'private'), pack = installPack(packs, 'victoria');
-  fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1, packs: [{ manifest: pack.manifest, active: true }] }));
+  const echo = installPack(packs, 'echo');
+  fs.writeFileSync(path.join(packs, 'index.json'), JSON.stringify({ schemaVersion: 1,
+    packs: [pack, echo].map(item => ({ manifest: item.manifest, active: true })) }));
   initRegistration(privateRoot, authoredDocument(readActiveBinding(packs), Core), { contentPacksDir: packs });
+  const echoLayer = authoredLightingLayer(echo);
+  const echoDirectory = path.join(packs, echo.site, echo.revision + '.lighting');
+  fs.mkdirSync(echoDirectory);
+  for (const [name, bytes] of Object.entries(echoLayer.files)) fs.writeFileSync(path.join(echoDirectory, name), bytes);
   const layer = path.join(packs, 'victoria', pack.revision + '.lighting'); fs.mkdirSync(layer);
   const hash = bytes => createHash('sha256').update(bytes).digest('hex');
   const count = Number(pack.files['points.ply'].toString().match(/element vertex (\d+)/)[1]);
@@ -78,6 +85,13 @@ test('real gateway authenticates installed content and exposes registration with
   const binaryHead = await request(layerBase + 'points-basis-u8.bin', { method: 'HEAD', headers: auth });
   assert.equal(binaryHead.status, 200); assert.equal((await binaryHead.arrayBuffer()).byteLength, 0);
   assert.equal((await request(layerBase + 'points-basis-u8.bin', { method: 'POST', headers: auth })).status, 405);
+  assert.equal((await request(echoLayer.base + 'lighting-manifest.json')).status, 401);
+  const echoManifest = await request(echoLayer.base + 'lighting-manifest.json', { headers: auth });
+  assert.equal(echoManifest.status, 200);
+  assert.equal((await echoManifest.json()).site_id, 'echo');
+  const echoBinary = await request(echoLayer.base + 'points-basis-u8.bin', { headers: auth });
+  assert.equal(echoBinary.status, 200);
+  assert.deepEqual(Buffer.from(await echoBinary.arrayBuffer()), echoLayer.files['points-basis-u8.bin']);
   // fetch owns its Host header; use a real loopback HTTP request to exercise
   // the gateway's dedicated-origin branch rather than a silently ignored header.
   const forbiddenHost = await new Promise((resolve, reject) => {

@@ -481,10 +481,10 @@ class PreviewManualTest(unittest.TestCase):
         self.assertIsNone(self.fixtures()[name]["hand"])
         self.assertEqual(self.preview.manual_resume({"fixture_id": "F9"})[0], 400)
 
-    def snapshot(self, status, presence, frame=True):
+    def snapshot(self, status, presence, frame=True, epoch=1):
         """Perception with nobody on it: fresh and empty, fresh but too dark to tell (degraded), or stale."""
         self.seq += 1
-        self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": 1, "seq": self.seq,
+        self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": epoch, "seq": self.seq,
                                      "frame": {**base.BINDING, "capture_mono": self.now} if frame else None,
                                      "status": status, "presence": presence, "eligibility_revision": 1,
                                      "eligible_track_id": None, "tracks": []})
@@ -507,6 +507,81 @@ class PreviewManualTest(unittest.TestCase):
             self.now += .5
             self.snapshot("fresh", "empty")
         self.assertIsNone(self.fixtures()["F3"]["hand"])
+
+    def read_in(self, epoch):
+        """A yes for the reader in this camera epoch (base.read's is epoch 1's)."""
+        at, seq = self.now, round(self.now * 100)
+        frame = base.FrameRef("run", epoch, seq, "synthetic", "rgb", base.PlaneRef(seq, at, at, 640, 360), None, None,
+                              None, base.BINDING["transform_id"], base.BINDING["scan_revision"], at, at, at)
+        self.preview.offer_inference(base.InferenceReply(
+            str(at), "synthetic", "run", epoch, "t1", 2, 1, (frame,),
+            {"status": "valid", "facts": {"people_visible": "one", "activity_hypothesis": "reading"}},
+            {"safe": True, "status": "confident", "window_start_mono": at, "window_end_mono": at},
+            {}, {}, at, self.now, at + 10, {}))
+
+    def outage(self, seconds=4.0, epoch=2):
+        """The camera stops: stale snapshots, and after 3 s perception's new camera epoch (den-live drops the track,
+        the binding and the episode)."""
+        for _ in range(round(seconds / .5)):
+            self.now += .5
+            self.snapshot("stale", "unknown", frame=False, epoch=epoch)
+
+    def test_a_camera_outage_never_ends_a_hold(self):
+        """The spine, 2026-11-14: manual always wins, so an outage with an epoch bump, then the same person seated
+        again, leaves every hold in place: their own light, their glow, and their reading light (still the task's)."""
+        with self.subTest("their own light and glow"):
+            self.own_light_and_glow()
+            self.outage()
+            self.assertIsNone(self.preview.episode)
+            self.frames(3, epoch=2)   # seated again, a new episode
+            self.assertIsNotNone(self.preview.episode)
+            self.assertEqual(self.fixtures()["F3"]["hand"]["parts"], ["downward", "spot"])
+        with self.subTest("their reading light and glow"):
+            self.setUp()
+            name = self.light()
+            self.dim(name)
+            self.change(name, {"radials": [{"number": 1, "brightness": .3}]}, {"radials": [{"number": 1, "brightness": .1}]})
+            self.outage()
+            self.frames(3, epoch=2)
+            self.assertEqual(self.fixtures()[name]["hand"]["parts"], ["radials", "spot"])
+            self.read_in(2)   # back at the book: the hold carries on with the new episode, and serves its task
+            self.frames(2, epoch=2)
+            self.assertIsNotNone(self.preview.task_until())
+            self.assertEqual(self.fixtures()[name]["hand"]["parts"], ["radials", "spot"])
+            self.assertTrue(self.preview.latest_decision["proposal"]["learned"]["served_by_hand"])
+            self.assertLess(self.preview.latest["ambient"]["goal_scale"], 1.0)   # dimmed (to the glow it learned here)
+            self.assertEqual(self.lit(), [])
+            for _ in range(4):   # and standing up, seen on a fresh frame, is still its end
+                self.now += .5
+                self.track(seated=False, epoch=2)
+            self.assertIsNone(self.fixtures()[name]["hand"])
+
+    def test_a_reading_light_kept_through_a_phone_break_goes_when_the_episode_is_lost_without_a_task(self):
+        """The spine's rule's other half: a new episode ends the task's light when the task had already ended (here a
+        phone break under a light the owner turned on during an unlit read), or when the den was seen empty."""
+        for _ in range(2):
+            name = self.light()
+            self.change(name, {"spotlight": {"on": True}}, {"spotlight": {"on": False}})
+            self.stand()
+        self.seat()
+        self.read()
+        self.frames(3)
+        self.on()
+        self.frames(11)   # the phone break: the task ends, the light stays theirs
+        self.assertIsNotNone(self.fixtures()["F3"]["hand"])
+        self.outage()
+        self.assertIsNone(self.fixtures()["F3"]["hand"])
+        with self.subTest("the den seen empty between episodes"):
+            self.setUp()
+            name = self.light()
+            self.dim(name)
+            self.change(name, {"downward": {"on": False}}, {"downward": {"on": True, "brightness": .4}})
+            for _ in range(4):
+                self.now += .5
+                self.snapshot("fresh", "empty")
+            self.assertIsNotNone(self.fixtures()[name]["hand"])   # empty for 2 s: not yet VACANT_S
+            self.frames(3, epoch=2)   # someone seated again, a new track: a new episode after an empty den
+            self.assertIsNone(self.fixtures()[name]["hand"])
 
     def test_a_camera_gap_or_a_dark_room_ends_no_hold(self):
         """Review R2: a camera outage, a too-dark den or stale snapshots say nothing about who's there. The owner's own

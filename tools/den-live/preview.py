@@ -706,21 +706,43 @@ class Preview:
 
     def _cue_room(self, flag, now):
         """The room's glow: a new cue whenever the task light comes or goes, or den-live's situation changes to another
-        it can name. The glow the owner taught for that situation is fixed for the cue; a hand hold on glow zones or a
-        downlight ends with it (their next reason to act)."""
+        it can name. The glow the owner taught for that situation is fixed for the cue.
+
+        A hand hold on glow zones or a downlight ends at its next reason to act: once the room's situation, as den-live
+        sees it on a fresh frame, isn't the one the owner set it in (the task light came or went, they stood or sat, a
+        new part of the day). Nothing seen, nothing ends: a camera gap that darkens den-live's own light is no reason."""
         kind, key = self._situation(now)
+        learnable = kind in self.core.situation.LEARNABLE
         previous = self.room_cue
-        cue = previous is None or previous["flag"] != flag or (
-            kind in self.core.situation.LEARNABLE and key != previous["key"])
+        cue = previous is None or previous["flag"] != flag or (learnable and key != previous["key"])
         if cue:
             directing = self.on and not self.stopped
-            learned = self.learning.room(key) if directing and kind in self.core.situation.LEARNABLE else None
+            learned = self.learning.room(key) if directing and learnable else None
             level = self.settings["ambient_level"]
             goal = min(learned["level"], 1.0) / level if learned and level > 0 else None
             self.room_cue = {"flag": flag, "key": key, "goal": goal, "cct_k": learned and learned["cct_k"],
                              "learned": learned}
-            if previous is not None:
-                for hold in [hold for hold in self.hands if hold[1] != "spot"]:
+        if self.track is not None and learnable:
+            standing = not self.track["seated"]
+            for hold in [hold for hold in self.hands if hold[1] != "spot"]:
+                hand = self.hands[hold]
+                if hand["cue"] is None:
+                    hand["cue"] = (flag, key)   # the situation it was set in, as soon as den-live can name it
+                    continue
+                if hand["episode"] is not None and self.episode is not hand["episode"] and not standing:
+                    if hand.get("vacated"):
+                        self._end_hand(hold)   # the den was seen empty between the episodes
+                        continue
+                    if self.episode is None:
+                        continue
+                    # A camera gap or a re-identified track: the hold carries on with the new episode, and waits for
+                    # the situation it was set in to come back (a task's next yes) before it can end.
+                    hand.update(episode=self.episode, settled=False)
+                if not hand.get("settled", True):
+                    if hand["cue"] == (flag, key):
+                        hand["settled"] = True
+                    continue
+                if hand["cue"] != (flag, key):
                     self._end_hand(hold)
         self.ambient_flag = flag
         self.ambient.direct(flag, self.settings, now, goal=self.room_cue["goal"], cct_k=self.room_cue["cct_k"])
@@ -738,20 +760,46 @@ class Preview:
         new episode only (it's their reading light through a phone break). Every hold ends when fresh frames have shown
         the den empty for VACANT_S, on Off or Stop, and on Home's Resume. A reply that only renews the task, a new part
         of the day, a camera gap or a dark room ends nothing."""
+        standing = self.track is not None and not self.track["seated"]
         for hold, hand in list(self.hands.items()):
+            if self.vacant_since is not None:
+                hand["vacated"] = True   # fresh frames have shown the den empty since this hold began
+            elif self.track is not None and self.episode is hand["episode"]:
+                hand["vacated"] = False
             if (self.track is None and self.vacant_since is not None
                     and now - max(self.vacant_since, hand["since_mono"]) >= VACANT_S):
                 why = "vacant"
             elif hold[1] != "spot":
-                continue   # the glow's parts end at the next cue (_cue_room)
-            elif hand["task_light"]:
-                new = self.episode is not hand["episode"] or self.track_binding != hand["binding"]
-                why = "new_episode" if new else None if task or hand["ends"] == "episode_end" else "task_ended"
+                continue   # the glow's parts end at the next change of the room's situation (_cue_room)
             else:
-                why = "task_started" if task and not hand["task"] else None
-            hand["task"] = task
+                why = self._spot_hold_end(hand, task, standing)
             if why:
                 self._end_hand(hold)
+
+    def _spot_hold_end(self, hand, task, standing):
+        """Why a spot's hold ends now, or None. Manual always wins, so a camera gap never ends one (the spine,
+        2026-11-14): a new camera epoch or a re-identified track drops den-live's episode, and the hold waits for the
+        person and carries on with their next episode. The episode ending ends the task's light only on evidence:
+        they're seen standing, fresh frames showed the den empty, or the task had already ended when it was lost."""
+        if self.episode is not hand["episode"]:
+            if hand["task_light"] and standing:
+                return "stood_up"
+            if hand["task_light"] and (hand.get("vacated") or (hand["task_seen"] and not hand["task"])):
+                return "new_episode"
+            if self.episode is None:
+                return None   # nobody's episode for now (a gap, or on their feet): it waits
+            hand.update(episode=self.episode, binding=self.track_binding, task_seen=False)
+        if not hand["task_seen"]:
+            # Back with a new episode: the task they were at (if any) carries on, so its next yes isn't a new start.
+            if task:
+                hand["task_seen"], hand["task"] = True, True
+            return None
+        if hand["task_light"]:
+            why = None if task or hand["ends"] == "episode_end" else "task_ended"
+        else:
+            why = "task_started" if task and not hand["task"] else None
+        hand["task"] = task
+        return why
 
     def _end_hand(self, hold):
         del self.hands[hold]
@@ -781,7 +829,13 @@ class Preview:
         for part in manual.parts(event["after"]):
             previous = self.hands.get((name, part))
             hand = {"event_id": event["event_id"], "since_mono": previous["since_mono"] if previous else now,
-                    "episode": self.episode, "binding": self.track_binding, "task": self.task_until() is not None,
+                    "episode": previous["episode"] if previous else self.episode,
+                    "binding": previous["binding"] if previous else self.track_binding,
+                    "task": previous["task"] if previous else self.task_until() is not None,
+                    "task_seen": previous["task_seen"] if previous else True,
+                    "vacated": bool(previous and previous.get("vacated")),
+                    # A glow part's situation: the room's (task light, situation key) once den-live has seen it.
+                    "cue": previous.get("cue") if previous else None,
                     "task_light": False, "lit": False, "ends": "next_cue"}
             if part == "spot":
                 lighting = self._lighting(row)

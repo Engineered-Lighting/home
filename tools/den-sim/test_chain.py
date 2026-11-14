@@ -1,0 +1,315 @@
+"""Test 6 (detector label) and test 7's hop 6 controls on chain.py's own functions (plan, "Done means"):
+
+- rows_hold: recorded rows read ADAPTER only under hop 6's conditions. An edited, empty or truncated rows
+  file, an empty usable part, rows of other frames, a frame over 1.0 s, a lost weight pin, a count, a name
+  that isn't a model, rows recorded for another take or check, and rows never checked against the model (or
+  checked and failed) each read MISSING with why, never nobody;
+- found_line: the joints RTMPose-m placed are counted, and a person with none reads box only;
+- weight_tools: the weights are read from detector-run.json whenever it parses, so rows that fail another
+  condition never read as changed weights;
+- no_track: a person box with no track never reads nobody, and only person observations are counted;
+- person_words: hop 15's row says a distance, which half of the couch test failed, the spot and the engagement;
+- first_confirmed: hop 10's occupancy at the first confirmed Track line, and none for a tentative one;
+- decision_view, no_beam and no_reader: hop 17's words for what lit, each refusal, the fixtures that cost more or tied,
+  and why no beam, a missing head and an off that cost less among them;
+- ending: the click ends on its last Decision, so one that lit nothing after a beam stops at 17 with the beam gone off;
+- need_row: hop 13 reads MISSING when person.py stopped before need's states reached anything;
+- the click path calls no fake_detector, and no older lighting brain.
+
+Each has a control that must make it fail. The parts on real rows need DEN_SIM_SET=<a prepared set>, and only
+read it: they work on hard-linked copies whose changed files are replaced, never written through.
+
+    python -B -X utf8 tools\\den-sim\\test_chain.py
+"""
+import json
+import os
+import re
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+import chain  # noqa: E402  installs chain.py's socket refusal in this process too
+
+SET = Path(os.environ["DEN_SIM_SET"]).resolve() if os.environ.get("DEN_SIM_SET") else None
+NEEDS_SET = unittest.skipUnless(SET and (SET / "display.json").exists(), "needs DEN_SIM_SET=<a prepared set>")
+PINS = chain.detect.lock()["weights"]
+
+
+def linked_copy(source, target):
+    for path in source.rglob("*"):
+        dest = target / path.relative_to(source)
+        if path.is_dir():
+            dest.mkdir(parents=True, exist_ok=True)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            os.link(path, dest)
+
+
+def replace(path, text):
+    path.unlink()
+    path.write_text(text, encoding="utf-8", newline="\n")
+
+
+@NEEDS_SET
+class RowsHold(unittest.TestCase):
+    def setUp(self):
+        display = json.loads((SET / "display.json").read_text(encoding="utf-8"))["scenes"]
+        self.tmp = tempfile.TemporaryDirectory(prefix="den-sim-rows-")
+        self.take = Path(self.tmp.name) / "take"
+        linked_copy(SET / next(d["take"] for d in display if d["label"] == "Reading on the couch"), self.take)
+        self.hop = json.loads((self.take / "prepare-receipt.json").read_text(encoding="utf-8"))["hops"]["6"]
+        check = next(self.take.glob("check-*.json"))
+        self.rows = chain.usable_rows(self.take, json.loads(check.read_text(encoding="utf-8")))
+        self.lines = (self.take / "detections.jsonl").read_text(encoding="utf-8").splitlines()
+        self.digests = dict(take_digest=json.loads((self.take / "prepare-receipt.json").read_text(encoding="utf-8"))["take_digest"],
+                            check_sha256=chain.sha256_file(check))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def why(self, rows=None, hop=None, **digests):
+        held, why = chain.rows_hold(self.take, self.rows if rows is None else rows, self.hop if hop is None else hop, PINS, **{**self.digests, **digests})
+        self.assertEqual(held is None, why is not None)
+        self.assertNotIn("nobody", why or "")
+        return why
+
+    def recorded(self):
+        """As if prepare had recorded the files as they are now: the digest conditions pass, the rest must hold."""
+        hop = json.loads(json.dumps(self.hop))
+        for key, name in (("rows", "detections.jsonl"), ("run", "detector-run.json")):
+            hop[key]["sha256"] = chain.sha256_file(self.take / name)
+        return hop
+
+    def edit_run(self, change):
+        run = json.loads((self.take / "detector-run.json").read_text(encoding="utf-8"))
+        change(run)
+        replace(self.take / "detector-run.json", json.dumps(run))
+
+    def test_the_recorded_rows_hold(self):
+        held, why = chain.rows_hold(self.take, self.rows, self.hop, PINS, **self.digests)
+        self.assertIsNone(why)
+        self.assertEqual(len(held["rows"]), len(self.rows))
+        self.assertGreater(held["with_person"], 0)
+        self.assertEqual(held["names"], ["rtmpose-m", "yolo26s"])
+        self.assertEqual(chain.found_line(held), "YOLO26s found a person on %d of %d usable frames, and RTMPose-m placed joints on %d of them"
+                         % (held["with_person"], len(self.rows), held["with_joints"]))
+
+    def test_a_person_with_no_joints_reads_box_only(self):
+        """Person under 0.5: YOLO26s's box, no crop, so no joints. The sentence says box only, never joints placed."""
+        bare = [json.loads(line) for line in self.lines]
+        for row in bare:
+            for d in row["detections"]:
+                d["keypoints"] = None
+        replace(self.take / "detections.jsonl", "\n".join(json.dumps(row) for row in bare) + "\n")
+        held, why = chain.rows_hold(self.take, self.rows, self.recorded(), PINS, **self.digests)
+        self.assertIsNone(why)
+        self.assertEqual((held["with_joints"], held["with_person"] > 0), (0, True))
+        self.assertEqual(chain.found_line(held), "YOLO26s found a person on %d of %d usable frames, and RTMPose-m placed no joints on any of them: box only"
+                         % (held["with_person"], len(self.rows)))
+        self.assertIn("placed joints", chain.found_line({**held, "with_joints": 1}), "control: one frame with joints says so")
+
+    def test_rows_of_other_frames_read_missing(self):
+        """As many rows as usable frames, one of them for a frame outside the usable part: the rgb_seq sets differ."""
+        moved = [json.loads(line) for line in self.lines]
+        moved[3]["frame"]["rgb_seq"] = max(int(row["rgb_seq"]) for row in self.rows) + 1000
+        replace(self.take / "detections.jsonl", "\n".join(json.dumps(row) for row in moved) + "\n")
+        self.assertEqual(len(moved), len(self.rows))
+        self.assertEqual(self.why(hop=self.recorded()), "the rows cover %d of the %d usable frames" % (len(self.rows) - 1, len(self.rows)))
+
+    def test_rows_recorded_for_another_take_or_check_read_missing(self):
+        self.assertEqual(self.why(take_digest="0" * 64), "detector-run.json was recorded for another take")
+        self.assertEqual(self.why(check_sha256="0" * 64), "detector-run.json was recorded against another check than this take's")
+        self.assertIsNone(self.why(), "control: this take's own digests hold")
+
+    def test_the_weights_are_read_whenever_detector_run_json_parses(self):
+        """Rows that fail another condition never read as changed weights (condition 4): only a real change does."""
+        replace(self.take / "detections.jsonl", "\n".join([self.lines[0] + " ", *self.lines[1:]]) + "\n")
+        self.assertEqual(self.why(), "detections.jsonl is not the one prepare recorded")
+        weights = chain.weight_tools(self.take, PINS)
+        self.assertEqual([w["path"] for w in weights], ["weights yolo26s.pt", "weights rtmpose-m-body7.onnx", "weights artifact.json"])
+        self.assertTrue(all(w["actual"] == w["expected"] for w in weights), weights)
+        self.edit_run(lambda run: run["counts"].update(over_limit=1))
+        self.assertTrue(all(w["actual"] == w["expected"] for w in chain.weight_tools(self.take, PINS)), "an over-limit count is no weight change")
+        self.edit_run(lambda run: run["weights"].update({"rtmpose-m-body7.onnx": "0" * 64}))
+        changed = [w["path"] for w in chain.weight_tools(self.take, PINS) if w["actual"] != w["expected"]]
+        self.assertEqual(changed, ["weights rtmpose-m-body7.onnx"], "control: a changed digest is told")
+        replace(self.take / "detector-run.json", "{not json")
+        self.assertEqual(chain.weight_tools(self.take, PINS), [], "a file that can't be read gives none: hop 6 is MISSING for it already")
+
+    def test_an_edited_empty_or_truncated_rows_file_reads_missing(self):
+        replace(self.take / "detections.jsonl", "\n".join([self.lines[0] + " ", *self.lines[1:]]) + "\n")
+        self.assertEqual(self.why(), "detections.jsonl is not the one prepare recorded")
+        replace(self.take / "detections.jsonl", "")
+        self.assertEqual(self.why(), "detections.jsonl is not the one prepare recorded")
+        self.assertEqual(self.why(hop=self.recorded()), "detections.jsonl holds no rows")
+        replace(self.take / "detections.jsonl", "\n".join(self.lines[:-1]) + "\n")
+        self.assertEqual(self.why(), "detections.jsonl is not the one prepare recorded")
+        self.assertEqual(self.why(hop=self.recorded()), "the rows cover %d of the %d usable frames" % (len(self.rows) - 1, len(self.rows)))
+        replace(self.take / "detections.jsonl", "\n".join(self.lines)[:-40] + "\n")
+        self.assertEqual(self.why(hop=self.recorded()), "detections.jsonl or detector-run.json is not what detect.py writes")
+
+    def test_an_empty_usable_part_reads_missing(self):
+        self.assertEqual(self.why(rows=[]), "the check's usable part is empty, so no rows can cover it")
+
+    def test_a_frame_over_one_second_of_compute_reads_missing(self):
+        late = [json.loads(line) for line in self.lines]
+        late[5]["available_ts"] = late[5]["frame"]["capture_ts"] + 1.2
+        replace(self.take / "detections.jsonl", "\n".join(json.dumps(row) for row in late) + "\n")
+        self.assertRegex(self.why(hop=self.recorded()), r"^1 frames took over 1 s of compute")
+        replace(self.take / "detections.jsonl", "\n".join(self.lines) + "\n")
+        self.edit_run(lambda run: run["counts"].update(over_limit=1))
+        self.assertRegex(self.why(hop=self.recorded()), r"^1 frames took over 1 s of compute")
+
+    def test_a_lost_pin_a_count_and_a_name_that_is_no_model_read_missing(self):
+        self.edit_run(lambda run: run["weights"].update({"yolo26s.pt": "0" * 64}))
+        self.assertEqual(self.why(), "detector-run.json is not the one prepare recorded")
+        self.assertEqual(self.why(hop=self.recorded()), "detector-run.json does not hold both pinned weight digests")
+        self.edit_run(lambda run: run["weights"].update({"yolo26s.pt": PINS["yolo26s.pt"], "rtmpose-m-body7.onnx": "0" * 64}))
+        self.assertEqual(self.why(hop=self.recorded()), "detector-run.json does not hold both pinned weight digests", "the pose weights too")
+        self.edit_run(lambda run: run["weights"].update({"rtmpose-m-body7.onnx": PINS["rtmpose-m-body7.onnx"]}))
+        self.edit_run(lambda run: run["weights"].update({"yolo26s.pt": PINS["yolo26s.pt"]}) or run["counts"].update(with_person=run["counts"]["with_person"] - 1))
+        self.assertEqual(self.why(hop=self.recorded()), "the rows' counts are not detector-run.json's")
+        self.edit_run(lambda run: run["counts"].update(with_person=run["counts"]["with_person"] + 1))
+        replace(self.take / "detections.jsonl", "\n".join(self.lines).replace('"boxes":"yolo26s"', '"boxes":"fake-scripted-1"') + "\n")
+        self.assertEqual(self.why(hop=self.recorded()), "the rows name fake-scripted-1, not a real model")
+
+    def test_rows_never_checked_against_the_model_read_missing(self):
+        self.assertEqual(self.why(hop={**self.hop, "checked": None}), "prepare did not check these rows against the model")
+        self.assertEqual(self.why(hop={**self.hop, "checked": {**self.hop["checked"], "ok": False}}), "prepare did not check these rows against the model",
+                         "checked, and the model did not reproduce them")
+        self.assertEqual(self.why(hop={}), "prepare recorded no detector rows for this take")
+
+
+class NoTrack(unittest.TestCase):
+    def test_a_person_box_with_no_track_never_reads_nobody(self):
+        person = [{"kind": "person_box", "validity": "rejected:no_room_position:depth_absent"}] * 12
+        furniture = [{"kind": "object_box", "validity": "rejected:no_room_position:depth_discontinuity"}] * 30 + [{"kind": "object_box", "validity": "valid"}] * 40
+        said = chain.no_track(12, 82, person + furniture, "UNSCORED: 12 open slots\nleft out: 0 not a person, 12 rejected, 0 with no position\n")
+        self.assertEqual(said, "the detector saw a person on 12 of 82 usable frames, and no track formed: person observations "
+                               "rejected:no_room_position:depth_absent 12. left out: 0 not a person, 12 rejected, 0 with no position")
+        self.assertNotIn("depth_discontinuity", said, "the couch's and the book's boxes are not why no track formed")
+        self.assertIn("valid 1.", chain.no_track(12, 82, person + [{"kind": "keypoints", "validity": "valid"}], "x\ny\n"), "control: a person's keypoints count")
+        never = re.compile(r"\bnobody\b|saw no one")
+        self.assertIsNone(never.search(said))
+        self.assertIsNotNone(never.search("the detector saw nobody, nothing was asked"), "control: the nobody sentence is caught")
+
+
+class PersonWords(unittest.TestCase):
+    """Hop 15's row in words: a distance, yes or no and which half failed, the spot and the engagement. The rule itself
+    is test_person.py's."""
+
+    def test_which_half_failed_and_no_coordinate(self):
+        card = dict(track_id="trk-1", seat_distance_m=0.12, on_couch=True, failed=[], region="sofa-book", engagement="engaged", held=False)
+        self.assertEqual(chain.person_words(card), "trk-1 0.12 m from the seat point, on the couch: yes, spot sofa-book, engagement engaged")
+        off = dict(card, seat_distance_m=1.04, on_couch=False, failed=["position", "height"], region="handheld", engagement="none")
+        self.assertEqual(chain.person_words(off), "trk-1 1.04 m from the seat point, on the couch: no, the position half and height half failed, spot handheld, engagement none")
+        self.assertIn("not tested, the bundle was not safe", chain.person_words(dict(card, on_couch=None, held=True)))
+        self.assertNotEqual(chain.person_words(off), chain.person_words(dict(off, failed=["height"])), "control: the half named follows the result")
+
+
+class Occupancy(unittest.TestCase):
+    """Hop 10: one occupancy event at the first confirmed Track line, dated by the newest capture_ts it names."""
+
+    def test_the_first_confirmed_line_dated_by_its_observations(self):
+        obs = [{"obs_id": "o%d" % n, "capture_ts": 100.0 + n} for n in range(6)]
+        lines = [{"track_id": "trk-1", "state": "tentative", "last_obs_ids": ["o0"]},
+                 {"track_id": "trk-1", "state": "confirmed", "last_obs_ids": ["o1", "o2"]},
+                 {"track_id": "trk-1", "state": "confirmed", "last_obs_ids": ["o4"]}]
+        self.assertEqual(chain.first_confirmed(lines, obs), (102.0, "trk-1"), "the newest observation the first confirmed line names")
+        self.assertEqual(chain.first_confirmed(lines[:1], obs), (None, None), "control: a tentative track is nobody")
+        self.assertEqual(chain.first_confirmed([dict(lines[1], last_obs_ids=["o9"])], obs), (None, None), "a line naming an observation that isn't there can't be dated")
+
+
+class Decided(unittest.TestCase):
+    """Hop 17's words, from a Decision: what lit, each refusal in den-core's own words, and why no beam."""
+
+    def view(self, lit=None, skipped=(), targets=("trk-1",), costs=None, why="reading_look: no beam for trk-1.", decision_id="decide-1-1"):
+        scene = {c: {"on": c == lit, "level": 0.7874 if c == lit else 0.0} for c in chain.CHANNELS}
+        applied = {c: {"steps": [{"kind": "move"}, {"kind": "fade_in"}] if c == lit else []} for c in chain.CHANNELS}
+        chosen = lit or "off"
+        candidates = [{"track_id": "trk-1", "cost": cost, "scene": {} if c == "off" else {c: {"on": True}}, "why": "chosen" if c == chosen else "rejected"}
+                      for c, cost in (costs or {}).items()]
+        decision = {"decision_id": decision_id, "trigger": "person_state change", "requested_scene": scene, "applied_scene": applied,
+                    "targets": {t: {"value": 300, "note": "modeled lux, assumed lumens"} for t in targets}, "predicted": {"surfaces": {"sofa-book": 272.6 if lit else 0.0}},
+                    "skipped": [{"channel": c, "track_id": "trk-1", "reason": r} for c, r in skipped], "candidates": candidates, "why": why}
+        return chain.decision_view(decision, lambda reason: reason.split(":")[0].replace("_", " "))
+
+    def test_what_lit_each_refusal_and_why_no_beam(self):
+        lit = self.view(lit="F2.spot", skipped=[("F1.spot", "in_front_of_reader")])
+        self.assertEqual((lit["lit"], lit["level"], lit["predicts"], lit["asked"], lit["steps"], lit["off"]), (["F2.spot"], [0.7874], 272.6, 300, {"F2.spot": ["move", "fade_in"]}, None))
+        refused = self.view(skipped=[("F1.spot", "in_front_of_reader"), ("F2.spot", "too_far"), ("F3.spot", "pan_tilt_infeasible:tilt_limit"), ("F4.spot", "beam_through_head")])
+        self.assertEqual(chain.no_beam(refused), "every fixture refused: F1 in front of reader, F2 too far, F3 pan tilt infeasible, F4 beam through head")
+        self.assertEqual(chain.no_beam(self.view(targets=())), "no beam: no beam for trk-1", "control: no reader at a spot is not a refusal")
+        self.assertEqual(chain.no_reader([{"track_id": "trk-1", "engagement": "none", "on_couch": True}]), "nobody is reading (trk-1: engagement none, on the couch yes)")
+
+    def test_no_head_and_off_cheaper_are_not_every_fixture_refusing(self):
+        # No head: every fixture says no_head, and the why is the missing head, said once.
+        headless = self.view(skipped=[(c, "no_head") for c in chain.CHANNELS])
+        self.assertEqual((headless["off"], chain.no_beam(headless)), ("the person state of trk-1 has no head", "no beam: the person state of trk-1 has no head"))
+        # Two fixtures refused and two allowed, off cheaper than both: off won, and the refusals follow.
+        mixed = self.view(skipped=[("F3.spot", "too_far"), ("F4.spot", "beam_through_head")], costs={"off": 1.0, "F1.spot": 1.0001, "F2.spot": 1.0002})
+        self.assertEqual(chain.no_beam(mixed), "no beam: off cost less than every fixture allowed (F1, F2); refused: F3 too far, F4 beam through head")
+        self.assertEqual(mixed["costlier"], ["F1.spot", "F2.spot"])
+        # Every fixture allowed, off cheaper than each, and no refusal at all: off won, never a missing head.
+        cheap = self.view(costs={"off": 1.0, "F1.spot": 1.1, "F2.spot": 1.2, "F3.spot": 1.3, "F4.spot": 1.4})
+        self.assertEqual(chain.no_beam(cheap), "no beam: off cost less than every fixture allowed (F1, F2, F3, F4)")
+        self.assertTrue(chain.no_beam(self.view(skipped=[(c, "too_far") for c in chain.CHANNELS])).startswith("every fixture refused: "), "control: all four refused")
+
+    def test_allowed_fixtures_that_cost_more_or_tied(self):
+        view = self.view(lit="F1.spot", skipped=[("F4.spot", "too_far")], costs={"off": 1.0, "F1.spot": 0.03, "F2.spot": 0.03, "F3.spot": 0.2})
+        self.assertEqual((view["costlier"], view["tied"]), (["F3.spot"], ["F2.spot"]))
+        self.assertEqual(self.view(lit="F1.spot", costs={"off": 1.0, "F1.spot": 0.03, "F2.spot": 0.031})["tied"], [], "control: a cost above is not a tie")
+
+    def test_the_click_ends_on_its_last_decision(self):
+        cards = [{"track_id": "trk-1", "engagement": "none", "on_couch": True}]
+        first = self.view(lit="F1.spot", why="reading_look: F1.spot lit for trk-1 at level 1.0.")
+        self.assertEqual(chain.ending([first], cards), (". 1 Decision: reading_look: F1.spot lit for trk-1 at level 1.0.", None))
+        # A later Decision that turns every spot off: the click stops at 17 with the beam gone off, never on the earlier one.
+        dark = self.view(why="base: every spot off.", decision_id="decide-2-2")
+        said, why = chain.ending([first, dark], cards)
+        self.assertEqual(why, "the beam went off: nobody is reading (trk-1: engagement none, on the couch yes)")
+        self.assertEqual(said, ". 2 Decisions: decide-1-1 lit F1.spot (reading_look: F1.spot lit for trk-1 at level 1.0.), then the last lit nothing: base: every spot off.")
+        # A reader still there, every fixture now refused: the refusals are why.
+        refused = self.view(skipped=[(c, "in_front_of_reader") for c in chain.CHANNELS], decision_id="decide-2-2")
+        self.assertEqual(chain.ending([first, refused], cards)[1], "the beam went off: every fixture refused: F1 in front of reader, F2 in front of reader, "
+                                                                 "F3 in front of reader, F4 in front of reader")
+        # Control: lit again after the dark one, the click goes on to the beam.
+        self.assertIsNone(chain.ending([first, dark, first], cards)[1])
+        self.assertEqual(chain.ending([], cards)[1], "nobody is reading (trk-1: engagement none, on the couch yes)")
+        self.assertEqual(chain.ending([refused], cards)[1], chain.no_beam(refused), "never lit: no beam, not gone off")
+
+    def test_need_reads_missing_when_person_py_stopped_first(self):
+        word, said = chain.need_row(dict(missing="the room model's current revision holds no seat surface sofa"))
+        self.assertEqual((word, said), ("MISSING", "need v0 did not run to a person state: person.py stopped first: the room model's current revision holds no seat surface sofa."))
+        card = dict(track_id="trk-1", replies=5, need_replies=5, need_states=["starting", "engaged"])
+        self.assertEqual(chain.need_row(dict(missing=None, tracks=[card]))[0], "ADAPTER", "control: person.py ran, so need did")
+
+
+class NoBrain(unittest.TestCase):
+    def test_the_click_path_runs_no_older_brain(self):
+        """Step 6: the older lighting brain, its adapter and its asserted health are off the click path."""
+        code = {path.relative_to(HERE).as_posix(): path.read_text(encoding="utf-8") for path in sorted(HERE.rglob("*"))
+                if path.suffix in (".py", ".mjs", ".js", ".json") and not path.name.startswith("test")}
+        gone = re.compile(r"brain_run|person_to_aim|BrainPublisher|activity_loop|deep_stack|\bjev\b|lighting_brain\.brain\b")
+        self.assertFalse((HERE / "brain_run.py").exists())
+        self.assertEqual([name for name, text in code.items() if gone.search(text)], [])
+        self.assertTrue(gone.search("from activity_loop import ActivityLoop\n"), "control: a planted import of the older brain's loop is found")
+
+
+class NoFake(unittest.TestCase):
+    def test_the_click_path_calls_no_fake_detector(self):
+        code = {path.relative_to(HERE).as_posix(): path.read_text(encoding="utf-8") for path in sorted(HERE.rglob("*"))
+                if path.suffix in (".py", ".mjs", ".js", ".json") and not path.name.startswith("test")}
+        self.assertTrue({"chain.py", "brain.mjs", "run.mjs", "scene/prepare.py"} <= set(code))
+        calls = re.compile(r"fake_detector|--fake(?![\w-])")   # replay's --fake flag, not ask_one.py's --fake-vllm, a test's vLLM
+        self.assertEqual([name for name, text in code.items() if calls.search(text)], [])
+        self.assertTrue(calls.search("import fake_detector\n"), "control: a planted import is found")
+        self.assertTrue(calls.search("'--fake', rows"), "control: a planted --fake is found")
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

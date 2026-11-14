@@ -272,8 +272,10 @@ test('a settled hand change goes to den-live once, with the snapshot Home was dr
     // Before from_seq, and before den-live has shown the hand, a snapshot without it ends nothing.
     snap(3, null); snap(4, null);
     assert.deepEqual(released, []);
-    snap(5, { event_id: 'home-1', parts: ['spot'], since_mono: 1, ends: 'task_change' });
-    snap(6, { event_id: 'home-1', parts: ['spot'], since_mono: 1, ends: 'task_change' });
+    snap(5, { event_id: 'home-1', parts: ['spot'], since_mono: 1, ends: 'task_change', warning: null });
+    assert.equal(player.handHolds()[0].warning, null);
+    snap(6, { event_id: 'home-1', parts: ['spot'], since_mono: 1, ends: 'task_change', warning: 'beam_through_head' });
+    assert.equal(player.handHolds()[0].warning, 'beam_through_head', 'the held spot is kept, and Home warns');
     assert.deepEqual(released, []);
     snap(7, null);
     assert.deepEqual(released, [fixture], 'den-live released it at its next reason to act');

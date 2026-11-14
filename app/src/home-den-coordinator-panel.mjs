@@ -106,11 +106,14 @@ export function planLines(plan) {
 }
 
 const changes = n => `${n} ${n === 1 ? 'change' : 'changes'}`;
-/* What it learned: per situation and light, the scene and how many of your changes it rests on. */
+/* What it learned: per situation and light, the scene and how many of your changes it rests on. A situation's spot and
+ * room are the virtual lights' (learnedFromYouLines), never bulbs. */
+const VIRTUAL_LEARNED = new Set(['spot', 'room']);
 export function learnedLines(learned) {
     const lines = [];
     for (const [key, lights] of Object.entries(learned && typeof learned === 'object' ? learned : {}).sort(([a], [b]) => a.localeCompare(b))) {
-        for (const [light, row] of Object.entries(lights && typeof lights === 'object' ? lights : {}).sort(([a], [b]) => a.localeCompare(b))) {
+        for (const [light, row] of Object.entries(lights && typeof lights === 'object' ? lights : {}).filter(([name]) => !VIRTUAL_LEARNED.has(name))
+            .sort(([a], [b]) => a.localeCompare(b))) {
             const n = Number.isFinite(row?.n) ? row.n : 0;
             lines.push(`${situationWords(key)} · ${lightName(light)}: ${sceneWords(row)} (${changes(n)})`);
         }
@@ -119,7 +122,7 @@ export function learnedLines(learned) {
 }
 
 /* What the virtual spot and the room glow learned from your hand (den-live's learned_from_you, den-manual-1):
- * lux_scale is the light against the coordinator's own choice, offset_m metres from the page. */
+ * lux_scale is the light against the coordinator's own choice, offset_m metres from the page ([x, y, z], or null). */
 function spotLearnedWords(spot) {
     if (spot.off === true) return 'spot off';
     const offset = Array.isArray(spot.offset_m) ? Math.hypot(...spot.offset_m.filter(Number.isFinite))
@@ -145,9 +148,11 @@ export function learnedFromYouLines(fromYou) {
     }
     return lines;
 }
-/* The Learned list: the bulbs' lines, then what the virtual lights learned from your hand. */
+/* The Learned list: the bulbs' lines, then what the virtual lights learned from your hand: from learned_from_you, or
+ * from the spot and room den-live also keeps in each situation of learned. */
 export function allLearnedLines(state) {
-    const fromYou = learnedFromYouLines(state?.learned_from_you), bulbs = learnedLines(state?.learned);
+    const source = state?.learned_from_you && typeof state.learned_from_you === 'object' ? state.learned_from_you : state?.learned;
+    const fromYou = learnedFromYouLines(source), bulbs = learnedLines(state?.learned);
     return fromYou.length && bulbs[0] === 'Nothing yet' ? fromYou : [...bulbs, ...fromYou];
 }
 
@@ -164,6 +169,13 @@ export function manualWords(holds) {
     const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
     const learning = holds.some(hold => hold.learning === 'pending' || hold.learning === 'recorded');
     return `You're in control of ${list}${learning ? ' · the coordinator will learn from this' : ''}`;
+}
+
+/* A held spot whose beam crosses a head (den-live's hand.warning). den-live never cuts a held spot: Home only says so. */
+const BEAM_WARNING = { beam_through_head: 'crosses your eyes', beam_through_another_head: "crosses someone's head" };
+export function handWarningWords(holds) {
+    return (holds || []).filter(hold => hold.warning).map(hold =>
+        `${hold.label || hold.fixture_id}'s beam ${BEAM_WARNING[hold.warning] || words(hold.warning)}`).join(' · ');
 }
 
 /* The settings den-live changed, as a POST body: only the ones that differ from what it has. */
@@ -233,10 +245,11 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
     const manualRow = element('p', 'home-den-live-coordinator-manual');
     manualRow.dataset.denCoordinatorManual = '1'; manualRow.setAttribute('role', 'status'); manualRow.hidden = true;
     const manualText = element('span', 'home-den-live-coordinator-manual-text');
+    const manualWarning = element('span', 'home-den-live-coordinator-manual-warning');
     const handBackButton = element('button', 'home-den-live-coordinator-button home-den-live-coordinator-inline', 'Resume');
     handBackButton.type = 'button'; handBackButton.dataset.denCoordinatorHandBack = '1';
     handBackButton.setAttribute('aria-label', 'Resume: hand the lights back to the coordinator');
-    manualRow.append(manualText, handBackButton);
+    manualRow.append(manualText, manualWarning, handBackButton);
     const wrapper = element('div', 'home-den-live-coordinator-wrap');
     wrapper.append(manualRow, root);
     body.append(...(lookOnly ? [] : [controls]), facts, error, whyHead, why, planHead, plan, learnedHead, learned,
@@ -388,6 +401,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         const handHeld = new Set(manual.map(hold => hold.fixture_id));
         manualRow.hidden = !manual.length;
         setText(manualText, manualWords(manual));
+        setText(manualWarning, handWarningWords(manual));
         const shown = state && { ...state, on: shownOn, stopped: shownStop };
         setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown));
         setText(error, controlProblem || problem);
@@ -478,6 +492,6 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         refresh: render,
         status: () => ({ kind, on: spots ? spots.control()?.on ?? null : state ? state.on === true : null, situation: state ? situationWords(state.situation) : null,
             polls, posts, problem: controlProblem || problem, hidden: root.hidden, open: root.open, buttons: !lookOnly,
-            manual: manualRow.hidden ? null : manualText.textContent }),
+            manual: manualRow.hidden ? null : manualText.textContent, warning: manualWarning.textContent || null }),
     };
 }

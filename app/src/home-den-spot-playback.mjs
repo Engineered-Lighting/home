@@ -249,14 +249,18 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         if (changed) { controlVersion += 1; onChange(); }
     }
     /* The fixtures a person holds, each with what den-live made of the change: learning is pending (not answered yet),
-     * recorded, not_recorded (with why_not), unsupported (an older den-live), failed, or none (this page sends none). */
+     * recorded, not_recorded (with why_not), unsupported (an older den-live), failed, or none (this page sends none);
+     * and warning, den-live's hand.warning while the held spot's beam crosses a head. */
     function handHolds() {
         let holds = [];
         try { holds = overlay?.virtualFixtureHandHolds?.() || []; } catch (_) { holds = []; }
         return holds.map(row => {
             const entry = manual.get(row.fixture_id);
             const learning = !post ? 'none' : !entry || entry.state === 'sending' ? 'pending' : entry.state;
-            return { ...row, learning, why_not: entry?.why_not ?? null };
+            // den-live's hand.warning in the snapshot drawn now: the held spot's beam crosses a head.
+            const hand = applied?.fixtures?.find(fixture => fixture.fixture_id === row.fixture_id)?.hand;
+            const warning = hand && typeof hand === 'object' && text(hand.warning) ? hand.warning.slice(0, 60) : null;
+            return { ...row, learning, why_not: entry?.why_not ?? null, warning };
         });
     }
     /* Resume, or the coordinator turning on: hand every held fixture back, and tell den-live. */

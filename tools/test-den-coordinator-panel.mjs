@@ -5,7 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    SETTINGS, allLearnedLines, changedSettings, learnedFromYouLines, learnedLines, lightName, manualWords, percent, planLines, reasonWords, situationWords, summaryWords, whyLines,
+    SETTINGS, allLearnedLines, changedSettings, handWarningWords, learnedFromYouLines, learnedLines, lightName, manualWords, percent, planLines, reasonWords, situationWords, summaryWords, whyLines,
 } from '../app/src/home-den-coordinator-panel.mjs';
 
 // The shapes den-live's coordinator_live.py serves, as tools/den-core's Coordinator makes them.
@@ -67,6 +67,20 @@ test('the bulb plan and what it learned', () => {
     assert.deepEqual(allLearnedLines({ learned, learned_from_you: { 'task/day': fromYou['task/day'] } }),
         [...learnedLines(learned), 'A close-up task, day: spot off. Learned from you (1 change)']);
     assert.deepEqual(allLearnedLines({}), ['Nothing yet']);
+    // den-live also keeps each situation's spot and room in learned, beside the bulbs: never read as bulbs.
+    const both = { 'task/day': { ...fromYou['task/day'], 'light.ceiling': { on: false, n: 1 } } };
+    assert.deepEqual(learnedLines(both), ['A close-up task, day · ceiling: off (1 change)']);
+    assert.deepEqual(allLearnedLines({ learned: both }), ['A close-up task, day · ceiling: off (1 change)',
+        'A close-up task, day: spot off. Learned from you (1 change)']);
+    assert.deepEqual(allLearnedLines({ learned: both, learned_from_you: { 'task/day': fromYou['task/day'] } }),
+        allLearnedLines({ learned: both }), 'one copy, whichever den-live sends');
+    assert.equal(learnedFromYouLines({ 'reading/evening': { spot: { lux_scale: 1, offset_m: null, n: 1 } } })[0],
+        'reading, evening: spot as it chose. Learned from you (1 change)');
+    // A held spot whose beam crosses a head: den-live never cuts it, and Home says so.
+    assert.equal(handWarningWords([{ label: 'Desk spot', warning: 'beam_through_head' }, { fixture_id: 'F1', warning: null }]),
+        "Desk spot's beam crosses your eyes");
+    assert.equal(handWarningWords([{ label: 'Desk spot', warning: 'beam_through_another_head' }]), "Desk spot's beam crosses someone's head");
+    assert.equal(handWarningWords([{ label: 'Desk spot' }]), '');
     assert.equal(lightName('light.den_desk_lamp'), 'den desk lamp');
     assert.equal(percent(255), '100%'); assert.equal(percent(null), '');
 });

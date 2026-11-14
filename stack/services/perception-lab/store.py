@@ -397,6 +397,37 @@ class Store:
                                 (self.settings.site_id,)).fetchall()
         return [self.get_session(r[0]) for r in ids]
 
+    def indeterminate_sessions(self, limit=20):
+        """Sessions whose execution is unknown, oldest first (bounded). Each
+        one refuses every new recording on its camera until it is settled."""
+        with self.lock:
+            ids=self.db.execute("SELECT id FROM sessions WHERE site_id=? AND state='indeterminate' AND id NOT IN (SELECT session_id FROM session_erasures) "
+                                "ORDER BY created_at LIMIT ?",(self.settings.site_id,min(max(limit,1),100))).fetchall()
+        return [self.get_session(r[0]) for r in ids]
+
+    def latest_event(self, sid, kind):
+        """(created_at, payload) of the session's latest event of one kind, or None."""
+        with self.lock:
+            row=self.db.execute("SELECT created_at,payload FROM events WHERE session_id=? AND kind=? ORDER BY id DESC LIMIT 1",(sid,kind)).fetchone()
+        return (row[0],json.loads(row[1])) if row else None
+
+    def settle_indeterminate(self, sid, expected_revision, reason, evidence):
+        """indeterminate → stopped for exactly the revision whose workers were
+        proven released, with that evidence in the same transaction. Records,
+        media and labels are kept. False when the row has changed since."""
+        if len(encode(evidence))>8192:
+            raise LabError("reconciliation receipt exceeds bound",413,"too_large")
+        with self.transaction() as db:
+            row=db.execute("SELECT state,revision FROM sessions WHERE id=? AND site_id=?",(sid,self.settings.site_id)).fetchone()
+            if row is None or row[0]!="indeterminate" or row[1]!=expected_revision:
+                return False
+            self._event(db,sid,"workers.reconciled",evidence)
+            db.execute("UPDATE sessions SET state='stopped',reason=?,ended_at=?,revision=revision+1 WHERE id=?",(reason,self.clock(),sid))
+            self._event(db,sid,"recording.stopped",{"reason":reason})
+        # Same as any stop: reconcile storage after the terminal state commits.
+        self._reconcile_quietly("session_stop")
+        return True
+
     def command_result(self, sid, request_id, payload, result=None):
         identifier(request_id)
         digest=hashlib.sha256(encode(payload).encode()).hexdigest()

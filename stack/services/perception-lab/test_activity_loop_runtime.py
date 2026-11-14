@@ -87,6 +87,27 @@ class DeepStackTests(unittest.TestCase):
         loop.tick()
         self.assertEqual(loop.snapshot()['stopped_reason'], 'operator_stop')
 
+    def test_worker_outcomes_retry_and_never_read_as_an_operator_stop(self):
+        # A reconciled cleanup or a busy/slow worker stops the row with a
+        # worker reason; the stack backs off and reopens, the loop keeps going.
+        self.deep.start()
+        for reason in ('worker_cleanup_reconciled', 'worker_busy', 'worker_preparation_timeout',
+                       'insufficient_worker_lease', 'paired_start_failed', 'worker_preparation_uncertain'):
+            sid = self.deep.sid
+            self.store.transition(sid, 'stopped', reason)
+            self.deep.tick()
+            self.assertIsNone(self.deep.sid)
+            self.assertEqual(self.deep.last_error, reason)
+            self.assertTrue(self.deep.wanted)
+            self.assertFalse(self.deep.observe()['ended_externally'])
+            self.now[0] = self.deep.retry_at
+            self.deep.tick()
+            self.assertNotEqual(self.deep.sid, sid)
+        # A Stop during preparation ('cancelled') by someone else is still a Stop.
+        self.store.transition(self.deep.sid, 'stopped', 'cancelled')
+        self.deep.tick()
+        self.assertTrue(self.deep.observe()['ended_externally'])
+
     def test_observes_arm_b_answers_usage_health_and_room_frame_placement(self):
         self.deep.start(); sid = self.deep.sid; self.viewing(sid)
         started = self.store.get_session(sid)['started_at']

@@ -35,6 +35,31 @@ class ClientTests(unittest.TestCase):
             client.start(rid, 'b'*32)
         self.assertEqual(len(transport.requests), 2)
 
+    def test_adopted_request_reads_its_receipt_and_an_unknown_one_is_not_found(self):
+        from worker_lifecycle_client import RequestNotFound
+        rid, sid = '12345678-1234-4234-8234-123456789abc', 'a' * 32
+        transport = Transport(dict(version=1, request_id=rid, session_id=sid, site_id='echo', variant='pose',
+                                   state='failed', engine_epoch='la-live-test', reason='preflight_rejected'))
+        client = LifecycleClient('https://192.168.0.100:9443', lambda: 'x'*32, None, 'echo',
+                                 connection_factory=lambda: transport)
+        with self.assertRaises(ValueError):
+            client.status(rid)                 # never bound in this process
+        client.adopt(rid, sid, 'pose')         # a previous process's durable binding
+        self.assertEqual(transport.requests, [])
+        self.assertEqual(client.status(rid)['state'], 'failed')
+        with self.assertRaises(ValueError):
+            client.adopt(rid, 'b' * 32, 'pose')
+        transport.receipt['session_id'] = 'b' * 32
+        with self.assertRaises(ValueError):
+            client.status(rid)                 # the receipt must stay bound to the session
+        transport.status, transport.receipt = 404, {'reason': 'request_not_found'}
+        with self.assertRaises(RequestNotFound):
+            client.status(rid)
+        transport.receipt = {'reason': 'route_not_found'}
+        with self.assertRaises(ValueError) as other:
+            client.status(rid)
+        self.assertNotIsInstance(other.exception, RequestNotFound)
+
     def test_only_provisioned_private_origins(self):
         with self.assertRaises(ValueError):
             LifecycleClient('https://example.org', lambda: 'x'*32, None, 'echo')
@@ -82,6 +107,15 @@ class JetsonGateReasonTests(unittest.TestCase):
             self.assertEqual(status['reason'], 'preflight_rejected')
             with patch.dict(client.lifecycle.launcher.gates, {status['engine_epoch']: 'arbitrary text'}):
                 self.assertEqual(client.status('12345678-1234-1234-1234-123456789abc')['reason'], 'preflight_rejected')
+            self.assertTrue(client.lifecycle.close())
+
+    def test_a_request_with_no_local_lease_is_not_found(self):
+        import tempfile
+        from worker_lifecycle_client import RequestNotFound
+        with tempfile.TemporaryDirectory() as directory:
+            client, _ = self.client(directory, ValueError('Memory headroom unavailable'))
+            with self.assertRaises(RequestNotFound):
+                client.status('87654321-4321-4321-8321-cba987654321')
             self.assertTrue(client.lifecycle.close())
 
 

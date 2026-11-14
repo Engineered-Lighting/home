@@ -1,6 +1,6 @@
 ---
 title: Home draws the den spot's glide and fades the way the fixture makes them
-target: deploy
+target: web
 type: changed
 ---
 

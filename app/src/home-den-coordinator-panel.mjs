@@ -117,9 +117,15 @@ export function learnedLines(learned) {
     return lines.length ? lines : ['Nothing yet'];
 }
 
-export function summaryWords(state) {
+export function summaryWords(state, manual = []) {
     if (!state) return 'Lighting coordinator';
-    return `Lighting coordinator · ${state.on ? 'On' : 'Off'}${state.stopped ? ' · Stop holds' : ''} · ${situationWords(state.situation)}`;
+    return `Lighting coordinator · ${state.on ? 'On' : 'Off'}${state.stopped ? ' · Stop holds' : ''} · ${situationWords(state.situation)}`
+        + (manual.length ? ` · ${manualWords(manual)}` : '');
+}
+
+/* The fixtures a person holds (home-den-spot-playback.mjs handHolds): "Manual: Desk spot, Sofa spot", or ''. */
+export function manualWords(holds) {
+    return holds?.length ? `Manual: ${holds.map(hold => hold.label || hold.fixture_id).join(', ')}` : '';
 }
 
 /* The settings den-live changed, as a POST body: only the ones that differ from what it has. */
@@ -252,7 +258,11 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         else if (state) void post('switch', { on: !state.on }, state.on ? 'Turning it off' : 'Turning it on');
     });
     stopButton.addEventListener('click', () => { void control('stop'); });
-    resumeButton.addEventListener('click', () => { void control('resume'); });
+    // Resume hands back the fixtures a person holds, and releases a Stop when one holds.
+    resumeButton.addEventListener('click', () => {
+        if (spots?.handHolds?.().length) { spots.handBack(); render(); }
+        if (spots?.control()?.stopped) void control('resume');
+    });
     deskButton.addEventListener('click', () => {
         const on = !deskOn();
         void post('desk', { on }, on ? 'Starting the desk test' : 'Stopping the desk test');
@@ -329,16 +339,20 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         const shownOn = spots ? controlState?.on === true && !spots.holds().off : state?.on === true;
         const shownStop = spots ? controlState?.stopped === true || !!spots.holds().stop : state?.stopped === true;
         const applied = spots?.current();
+        const manual = spots?.handHolds?.() || [];
+        const handHeld = new Set(manual.map(hold => hold.fixture_id));
         const shown = state && { ...state, on: shownOn, stopped: shownStop };
-        setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown));
+        setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown, manual));
         setText(error, controlProblem || problem);
         if (spots) {
-            fillList(why, applied?.fixtures.map(row => `${row.fixture_id} · ${reasonWords(row.reason)}${row.target_basis ? ` · ${words(row.target_basis)}` : ''}${row.last_move_trace_id ? ` · Trace ${row.last_move_trace_id}` : ''}`)
+            fillList(why, applied?.fixtures.map(row => handHeld.has(row.fixture_id) ? `${row.fixture_id} · Manual: in your hands until Resume`
+                : `${row.fixture_id} · ${reasonWords(row.reason)}${row.target_basis ? ` · ${words(row.target_basis)}` : ''}${row.last_move_trace_id ? ` · Trace ${row.last_move_trace_id}` : ''}`)
                 || ['No fresh spot snapshot']);
             why.title = '';
             stopButton.disabled = false;
-            resumeButton.hidden = controlState?.stopped !== true;
-            resumeButton.disabled = kind !== 'running';
+            // Resume shows while a Stop holds, or while a person holds a fixture (handing it back needs no den-live).
+            resumeButton.hidden = controlState?.stopped !== true && !manual.length;
+            resumeButton.disabled = controlState?.stopped === true ? kind !== 'running' : false;
             switchButton.disabled = !controlState || !shownOn && kind !== 'running';
         }
         if (!state) {
@@ -350,6 +364,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         const lines = [];
         if (kind === 'unreachable') lines.push('den-live is not answering; this is what it last said');
         if (shownStop) lines.push('A Stop holds the spots until Resume');
+        if (manual.length) lines.push(`${manualWords(manual)}: yours until Resume, or 10 min of the coordinator running`);
         if (!spots && deskOn()) lines.push(`Desk test on until ${new Date(state.desk_until * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`);
         if (ha.fresh === false) {
             lines.push(`Home Assistant ${Number.isFinite(ha.age_s) ? `hasn't answered for ${Math.round(ha.age_s)} s` : "hasn't answered yet"}`

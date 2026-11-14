@@ -227,3 +227,28 @@ test('a moving row reaches the overlay with its glide on Home\'s clock, and the 
     assert.deepEqual(ambientOf({ level: .5, cct_k: 1000 }), { level: .5, cct_k: 2200 });
     assert.equal(localGlide({ ...glide, shape: 'linear' }, 0), null, 'only the board\'s own curve is drawn');
 });
+
+test('the coordinator turning on hands back what a person holds, and each snapshot says whether it directs', () => {
+    const { player, overlay } = setup();
+    let handed = 0, options = null;
+    overlay.virtualFixtureHandHolds = () => [{ fixture_id: fixture, label: 'Desk spot', reason: 'aim', remaining_s: 600 }];
+    overlay.releaseVirtualFixtureHands = () => { handed += 1; return 1; };
+    overlay.applyCoordinatorSpots = (_rows, _generation, extra) => { options = extra; return true; };
+    assert.deepEqual(player.handHolds().map(hold => hold.label), ['Desk spot']);
+    player.observeControl({ on: true, stopped: false, stop_counter: 0 });
+    assert.equal(handed, 0, 'the first word about the control is no change');
+    player.observeControl({ on: false, stopped: false, stop_counter: 0 });
+    assert.equal(handed, 0, 'turning off keeps what a person holds');
+    player.observeControl({ on: true, stopped: false, stop_counter: 0 });
+    assert.equal(handed, 1, 'Off then On hands it back');
+    player.receive(lit);
+    assert.equal(options.directing, true);
+    player.receive(stopped);
+    assert.equal(options.directing, false, 'a Stop holds: a hand hold waits');
+    assert.equal(handed, 1);
+    assert.equal(player.handBack(), 1, 'Resume hands it back');
+    // An overlay without hand holds (Echo, or an older engine) reads as none.
+    overlay.virtualFixtureHandHolds = undefined; overlay.releaseVirtualFixtureHands = undefined;
+    assert.deepEqual(player.handHolds(), []);
+    assert.equal(player.handBack(), 0);
+});

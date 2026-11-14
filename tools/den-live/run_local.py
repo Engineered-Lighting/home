@@ -353,6 +353,16 @@ def labels_only(*, root, app, open_page=webbrowser.open, until=None, page_room="
         out.close()
 
 
+DEVICE_WORDS = {"cpu": "the CPU", "cuda:0": "the GPU"}
+
+
+def detector_line(devices, why):
+    """Where the detector's two models run, in words: one line, never a coordinate."""
+    boxes, pose = (DEVICE_WORDS.get(devices.get(key), "an unknown device") for key in ("boxes", "pose"))
+    where = "YOLO26s and RTMPose-m on %s" % boxes if boxes == pose else "YOLO26s on %s, RTMPose-m on %s" % (boxes, pose)
+    return "Detector: %s%s." % (where, "" if not why else "; " + why[:120])
+
+
 def start_body(perceiver, out, detector, body_input):
     """Attach the link now. Its first qualified bundle schedules worker setup without a wait."""
     link = body_link.BodyLink(detector, stream=out, clock=out.body_clock)
@@ -426,6 +436,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
         except perceive.Stop as exc:
             raise Stop(str(exc)) from None
         perceiver.detector = detector
+        if detector.devices:   # where YOLO26s and RTMPose-m run: the GPU's, or the CPU and why
+            say(detector_line(detector.devices, detector.gpu_why))
         body_available = bool(body and body_input is not None and revision is not None and registered_on == revision)
         try:
             out = people_stream.PeopleStream(port=stream_port, labels=labels, body_available=body_available)
@@ -500,11 +512,27 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
             cleanup()
 
 
+NOT_READ = {"effective": "unknown", "why": "den-live doesn't read Frigate here: the Qwen ask isn't set up"}
+
+
+def occupancy_health(asker):
+    """health.occupancy {effective, why}: Frigate's own word for the den (its occupancy sensor, as the ask's reader has
+    it: on, off or unknown, with on held 2 minutes as den_lighting does), never Qwen's gate. Without the ask, den-live
+    reads no Frigate, and says so."""
+    reader = getattr(asker, "occupancy", None)
+    try:
+        return reader.health() if reader is not None else dict(NOT_READ)
+    except Exception as exc:  # a type name only; the read never stops the loop
+        return {"effective": "unknown", "why": "Frigate's word couldn't be read (%s)" % type(exc).__name__}
+
+
 def evidence_observer(asker, lighting, person_log=None):
     """Deliver current typed tracking before any reply tied to that snapshot. person_log (a person_state.Log) gets the
-    same snapshot the coordinator gets, the ask's eligibility on it, and never stops the loop."""
+    same snapshot the coordinator gets, the ask's eligibility on it, and never stops the loop. Each event's health
+    gets occupancy (occupancy_health): Frigate's own word, for Home's Frigate card."""
     def observe(event, snapshot):
         current = snapshot
+        event.setdefault("health", {})["occupancy"] = occupancy_health(asker)
         try:
             if asker is not None:
                 try:

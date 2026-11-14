@@ -11,7 +11,7 @@ import uuid
 from pathlib import Path
 
 from contracts import PERCEPTION_S
-from preview_evidence import Episode, field, finite, pose, seated as published_seated
+from preview_evidence import Episode, field, finite, head as published_head, pose, seated as published_seated
 from preview_trace import PreviewTrace
 
 
@@ -198,9 +198,7 @@ class Preview:
             self.track_seq = seq
             frame = field(snapshot, "frame")
             captured = field(frame, "capture_mono")
-            earliest = field(frame, "capture_earliest_mono")
-            base = min(captured, earliest) if finite(captured) and finite(earliest) else captured
-            deadline = base + POSE_AGE_S if finite(base) else -math.inf
+            deadline = captured + POSE_AGE_S if finite(captured) else -math.inf
             tracks = field(snapshot, "tracks", ())
             if field(snapshot, "status") != "fresh" or not finite(captured) or not captured <= now < deadline:
                 # No new frame (a camera gap: perception's stale snapshots) or a late one: nothing to learn here.
@@ -213,7 +211,7 @@ class Preview:
                 eligibility = field(snapshot, "eligibility_revision")
                 if self.eligibility is not None and eligibility != self.eligibility:
                     self.episode = self.shift = self.target_basis = None
-                self._track(tracks[0], captured, deadline, base + GAP_HOLD_S, now)
+                self._track(tracks[0], captured, deadline, captured + GAP_HOLD_S, now)
                 # The ask names the eligible track only on a frame that may start an ask. A bad frame publishes None
                 # with the same eligibility revision, and the person stays eligible for the reply already in flight.
                 eligible = field(snapshot, "eligible_track_id")
@@ -240,7 +238,7 @@ class Preview:
         if self.captured is not None and captured <= self.captured:
             return
         body = self.core.body
-        head = field(track, "coarse_head_room_m") or body.head(joints)
+        head = published_head(track) or body.head(joints)   # contract 2's head_point_m, perception's
         if head and not body.head(joints):
             joints["nose"] = [*head, 1.0]
         self.captured = captured

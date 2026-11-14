@@ -20,8 +20,15 @@ With --only and --against it runs the same steps on those frames, writes nothing
 with the recorded rows: its box and its joints within 1 px, its score and each joint's within 0.001.
 That is prepare's check that the model reproduces its rows.
 
-It refuses when the interpreter's distributions are not requirements.lock's: a version, one missing, or
-one the lock doesn't list. The weights are held to the lock's digests at load.
+It refuses when the interpreter's distributions are not its lock's: a version, one missing, or one the lock
+doesn't list (names compared as PEP 503 normalises them). A venv with CUDA torch (+cu128) is held to
+requirements-cuda.lock, LA's; any other to requirements.lock, this PC's. The weights are held to the lock's digests
+at load.
+
+The device: hop 6 here runs on the CPU. The live loop's worker (tools/den-live/detect_worker.py) asks for "auto":
+each model on CUDA (cuda:0, FP32, the same pinned weights) when torch sees a CUDA device with MIN_FREE_GPU_BYTES free,
+else on the CPU; a model that fails to load or warm up on CUDA falls back to the CPU on its own, and why is kept.
+torch's caching allocator is capped at GPU_CAP_BYTES, because LA's GPU is vLLM's first.
 
 Python sockets are refused. Ultralytics' settings and caches, and anything that would go to %TEMP%, go under
 --state, never AppData. Exit 0 when done, 2 when refused, with one line on stderr.
@@ -32,6 +39,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import statistics
 import sys
 import time
@@ -40,6 +48,11 @@ from pathlib import Path
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 LOCK = HERE / "requirements.lock"
+LOCK_CUDA = HERE / "requirements-cuda.lock"   # LA's: Linux x86_64, CUDA 12.8 torch and onnxruntime-gpu
+CUDA_TORCH = "+cu128"                          # the torch build that's held to LOCK_CUDA
+GPU = "cuda:0"
+MIN_FREE_GPU_BYTES = 3 * 1024 ** 3   # CUDA only with this much of the GPU free at load
+GPU_CAP_BYTES = 2 * 1024 ** 3        # torch's caching allocator's cap: the two models need well under 1 GB
 SCHEMA = "den-detector-run-1"
 WORKERS = tuple("stack/services/perception-lab/" + name for name in (
     "ultralytics_worker.py", "rtmpose_worker.py", "reasoning.py", "worker_artifacts.py",   # the two workers and their imports
@@ -67,6 +80,17 @@ def guard():
         if event in NETWORK:
             raise PermissionError(f"den-detect has no network ({event})")
     sys.addaudithook(refuse)
+
+
+def canonical(name):
+    """A distribution's name as PEP 503 normalises it: pip, uv and importlib spell some names differently."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def lock_for(have):
+    """The lock a venv is held to: requirements-cuda.lock for one with CUDA torch (LA's), else requirements.lock."""
+    torch = next((version for name, version in have.items() if canonical(name) == "torch"), "")
+    return lock(LOCK_CUDA if torch.endswith(CUDA_TORCH) else LOCK)
 
 
 def lock(path=LOCK):
@@ -112,14 +136,34 @@ def contain(state):
         (state / name).mkdir(parents=True, exist_ok=True)
     os.environ.update(YOLO_OFFLINE="true", YOLO_AUTOINSTALL="false", YOLO_CONFIG_DIR=str(state / "ultralytics"),
                       TEMP=str(state / "tmp"), TMP=str(state / "tmp"), MPLCONFIGDIR=str(state / "matplotlib"),
-                      XDG_CACHE_HOME=str(state / "cache"), TORCH_HOME=str(state / "cache" / "torch"))
+                      XDG_CACHE_HOME=str(state / "cache"), TORCH_HOME=str(state / "cache" / "torch"),
+                      CUDA_CACHE_PATH=str(state / "cache" / "cuda"), TRITON_CACHE_DIR=str(state / "cache" / "triton"))
     os.chdir(state)
     import tempfile
     tempfile.tempdir = str(state / "tmp")
 
 
+def gpu_usable():
+    """(True, None) when torch sees a CUDA device with MIN_FREE_GPU_BYTES free, else (False, why in words). On True,
+    torch's caching allocator is capped at GPU_CAP_BYTES of it."""
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            return False, "no CUDA device" if CUDA_TORCH not in torch.__version__ else "CUDA torch, but no usable device"
+        free, total = torch.cuda.mem_get_info(0)
+        if free < MIN_FREE_GPU_BYTES:
+            return False, "only %.1f GB of the GPU free (%.0f GB needed)" % (free / 1e9, MIN_FREE_GPU_BYTES / 1e9)
+        torch.cuda.set_per_process_memory_fraction(min(1.0, GPU_CAP_BYTES / total), 0)
+        return True, None
+    except Exception as exc:  # a type name only
+        return False, "CUDA didn't start (%s)" % type(exc).__name__
+
+
 class Detector:
-    def __init__(self, tools_root, models, pins):
+    def __init__(self, tools_root, models, pins, device="cpu"):
+        """device: "cpu", or "auto" for each model on CUDA when it's usable (gpu_usable), each falling back to the CPU
+        on its own. self.devices says where each runs ({"boxes": ..., "pose": ...}); self.gpu_why, why one isn't on
+        the GPU (None when both are, or when the CPU was asked for)."""
         self.root = Path(tools_root).resolve()
         sys.path[:0] = [str(self.root / "stack/services/perception-lab"), str(self.root / "tools/den-observe"), str(self.root / "tools/den-take")]
         import numpy
@@ -142,22 +186,51 @@ class Detector:
         if manifest.get("sha256") != pins["rtmpose-m-body7.onnx"]:
             raise Refused("refused at load: artifact.json names other pose weights than requirements.lock")
         started = time.perf_counter()
+        self.devices, self.gpu_why = {"boxes": "cpu", "pose": "cpu"}, None
+        cuda = False
+        if device == "auto":
+            cuda, self.gpu_why = gpu_usable()
+        black = numpy.zeros((HEIGHT, WIDTH, 3), numpy.uint8)
+        crop = [{"id": "warmup:0", "frame_id": "warmup", "detector_version": "yolo26s", "xyxy": [200.0, 20.0, 440.0, 340.0]}]
+
+        def boxes(on):
+            worker = UltralyticsWorker({"runtime_version": "8.4.0", "task": "detect", "checkpoint": "yolo26s", "precision": "fp32",
+                                        "sha256": pins["yolo26s.pt"], "license": "AGPL-3.0 Ultralytics; weights outside git",
+                                        "device_id": "this-pc-cpu" if on == "cpu" else "gpu-0", "engine_epoch": "den-detect",
+                                        "profile_id": "yolo26s-%s-fp32" % ("cpu" if on == "cpu" else "cuda"),
+                                        "model_version": "yolo26s-8.4.0", "device": on, "format": "pt",
+                                        "preprocessing": self.preprocessing}, lambda *_: True)
+            worker.load(models / "yolo26s.pt")
+            if on != "cpu":   # a CUDA failure shows at the first call: try it here, where the CPU can take over
+                worker.infer(black, frame_id="warmup", request_id="warmup")
+            return worker
+
+        def pose(on):
+            worker = RTMPoseWorker(manifest if on == "cpu" else dict(manifest, device=on, device_id="gpu-0",
+                                                                     profile_id="rtmpose-m-body7-cuda-fp32-v1"), lambda *_: True)
+            worker.load(models / "rtmpose-m-body7.onnx")
+            if on != "cpu":
+                worker.infer(black, crop, frame_id="warmup", request_id="warmup")
+            return worker
+
         try:
-            self.yolo = UltralyticsWorker({"runtime_version": "8.4.0", "task": "detect", "checkpoint": "yolo26s", "precision": "fp32",
-                                           "sha256": pins["yolo26s.pt"], "license": "AGPL-3.0 Ultralytics; weights outside git",
-                                           "device_id": "this-pc-cpu", "engine_epoch": "den-detect", "profile_id": "yolo26s-cpu-fp32",
-                                           "model_version": "yolo26s-8.4.0", "device": "cpu", "format": "pt", "preprocessing": self.preprocessing},
-                                          lambda *_: True)
-            self.yolo.load(models / "yolo26s.pt")
-            self.pose = RTMPoseWorker(manifest, lambda *_: True)
-            self.pose.load(models / "rtmpose-m-body7.onnx")
+            for key, make in (("boxes", boxes), ("pose", pose)):
+                worker = None
+                if cuda:
+                    try:
+                        worker = make(GPU)
+                        self.devices[key] = GPU
+                    except Exception as exc:  # the CPU takes over this model; a type name only
+                        self.gpu_why = "%s fell back to the CPU (%s)" % ("YOLO26s" if key == "boxes" else "RTMPose-m",
+                                                                          type(exc).__name__)
+                if worker is None:
+                    worker = make("cpu")
+                setattr(self, "yolo" if key == "boxes" else "pose", worker)
         except ValueError as exc:     # the workers' own load checks: a missing file, a digest or a version
             raise Refused(f"refused at load: {exc}") from None
         self.load_ms = (time.perf_counter() - started) * 1000
-        black = numpy.zeros((HEIGHT, WIDTH, 3), numpy.uint8)
         self.run(black, "warmup")
-        self.pose.infer(black, [{"id": "warmup:0", "frame_id": "warmup", "detector_version": "yolo26s", "xyxy": [200.0, 20.0, 440.0, 340.0]}],
-                        frame_id="warmup", request_id="warmup")   # the pose model's first call is a warm-up too
+        self.pose.infer(black, crop, frame_id="warmup", request_id="warmup")   # the pose model's first call is a warm-up too
         self.warm_ms = (time.perf_counter() - started) * 1000 - self.load_ms
 
     def run(self, bgr, frame_id):
@@ -253,9 +326,12 @@ def installed():
 
 
 def unlocked(pinned, have):
-    """Where the interpreter and the lock's versions disagree: a version, one missing, or one the lock doesn't name."""
+    """Where the interpreter and the lock's versions disagree: a version, one missing, or one the lock doesn't name.
+    Names are compared as PEP 503 normalises them."""
+    pinned = {canonical(name): version for name, version in pinned.items()}
+    have = {canonical(name): version for name, version in have.items()}
     return [f"{name} {have.get(name) or 'missing'} (the lock: {pinned.get(name) or 'not listed'})"
-            for name in sorted(set(pinned) | set(have), key=str.lower) if have.get(name) != pinned.get(name)]
+            for name in sorted(set(pinned) | set(have)) if have.get(name) != pinned.get(name)]
 
 
 def main(argv=None):

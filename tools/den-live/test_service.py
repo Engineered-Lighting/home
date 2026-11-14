@@ -498,7 +498,7 @@ class ServiceLive(unittest.TestCase):
         kept = sorted(p.name for p in (service.state / 'live').iterdir())
         self.assertEqual(kept, ['METHOD-den-track-floor.md', 'detector.log'], 'nothing but what run_local keeps')
         self.assertFalse(any(p.suffix == '.npz' for p in service.state.rglob('*')), 'no frame kept')
-        shapes = (r'^Floor: ', r'^Registration den-virtual@\S+; the camera', r'^Starting the detector',
+        shapes = (r'^Floor: ', r'^Registration den-virtual@\S+; the camera', r'^Starting the detector', r'^Detector: YOLO26s (?:and RTMPose-m )?on the (?:GPU|CPU)',
                   r'^The measured body output is awaiting night-depth and head-exclusion qualification\.$',
                   r"^The Qwen ask is off: [A-Za-z '(),:0-9_./<>-]+\.$",
                   r"^The lighting coordinator is off: [A-Za-z '(),:0-9_./<>-]+\.$",
@@ -600,7 +600,7 @@ class Unit(unittest.TestCase):
         self.lines = [line.strip() for line in self.text.splitlines() if line.strip() and not line.startswith('#')]
 
     def test_the_units_settings(self):
-        for line in ('DynamicUser=yes', 'StateDirectory=den-live', 'MemoryMax=3G', 'CPUQuota=150%', 'Restart=always', 'RestartSec=10',
+        for line in ('DynamicUser=yes', 'StateDirectory=den-live', 'MemoryMax=6G', 'CPUQuota=150%', 'Restart=always', 'RestartSec=10',
                      'RestartPreventExitStatus=3', 'NoNewPrivileges=yes', 'ProtectSystem=strict', 'ProtectHome=yes', 'PrivateTmp=yes',
                      'IPAddressDeny=any', 'IPAddressAllow=localhost',
                      'LoadCredential=room-model.jsonl:/etc/den-live/private/room-model.jsonl',
@@ -609,6 +609,17 @@ class Unit(unittest.TestCase):
             self.assertIn(line, self.lines)
         self.assertEqual(sorted(rs.CREDENTIALS.values()), sorted(l.split('=', 1)[1].split(':')[0] for l in self.lines if l.startswith('LoadCredential=')))
         self.assertEqual(rs.EXIT_REFUSED, 3)
+
+    def test_the_unit_lets_the_detector_reach_the_gpu_and_no_other_device(self):
+        """The detector runs on LA's GPU when CUDA can: the unit sees the NVIDIA nodes, and with DevicePolicy=closed no
+        other device but the pseudo ones. PrivateDevices=yes would hide the GPU."""
+        self.assertIn('PrivateDevices=no', self.lines)
+        self.assertNotIn('PrivateDevices=yes', self.lines)
+        self.assertIn('DevicePolicy=closed', self.lines)
+        allowed = [line.split('=', 1)[1] for line in self.lines if line.startswith('DeviceAllow=')]
+        self.assertIn('/dev/nvidiactl rw', allowed)
+        self.assertIn('/dev/nvidia-uvm rw', allowed)
+        self.assertTrue(all('nvidia' in value and value.endswith(' rw') for value in allowed), allowed)
 
     def test_the_stream_binds_loopback_only(self):
         self.assertEqual(people_stream.PeopleStream.__init__.__kwdefaults__['host'], '127.0.0.1')

@@ -102,14 +102,23 @@ class Occupancy(threading.Thread):
         with self.lock:
             return self._evidence(self.clock())
 
-    def _evidence(self, now):
+    def health(self):
+        """{effective, why}: the word the ask's gate sees now, for the people stream's health.occupancy (Home's Frigate
+        card). It reads without moving the gate's revision, which only the ask's own evidence() does."""
+        with self.lock:
+            word, why, _age = self._word(self.clock())
+            return {"effective": word, "why": why}
+
+    def _word(self, now):
         age = None if self.last_ok is None else max(0.0, now - self.last_ok)
         if age is None or age > self.stale_s or self.raw is None:
-            word, why = "unknown", "Frigate unread: %s" % (self.problem or "no reply")
-        elif self.raw == "on" or (self.last_on is not None and now - self.last_on <= self.hold_s):
-            word, why = "on", None
-        else:
-            word, why = "off", "Frigate sees nobody"
+            return "unknown", "Frigate unread: %s" % (self.problem or "no reply"), age
+        if self.raw == "on" or (self.last_on is not None and now - self.last_on <= self.hold_s):
+            return "on", None, age
+        return "off", "Frigate sees nobody", age
+
+    def _evidence(self, now):
+        word, why, age = self._word(now)
         if (word == "on") != (self.effective == "on"):
             self.revision += 1
         self.effective = word

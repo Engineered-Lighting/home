@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import ask
 import coordinator_live
-from contracts import FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
+from contracts import PERCEPTION_S, FrameRef, InferenceReply, PlaneRef, TrackEvidence, TrackingSnapshot
 import preview
 import run_local
 import run_service
@@ -59,7 +59,7 @@ class PreviewTest(unittest.TestCase):
                                clock=lambda: self.now, **{"threaded": False, "append": self.encoded.append, **overrides})
 
     def track(self, *, seated=True, epoch=1, more=False, turned=False, posed=True, association="confident", revision=2,
-              age=0.0, eligible=True, eligibility=1):
+              age=0.0, eligible=True, eligibility=1, head=None, frame_extra=None):
         self.seq += 1
         if epoch != self.rule_epoch:   # a new epoch is a new tracker, and with it a new seated
             self.rule, self.rule_epoch = seated_rule.Published(), epoch
@@ -67,7 +67,9 @@ class PreviewTest(unittest.TestCase):
         track = {"track_id": "t1", "state": "confirmed", "position_basis": "stereo", "association_status": association,
                  "association_revision": revision, "current_obs_ids": ("pose",), "supported_pose": pose,
                  "seated": self.rule.update("t1", revision, self.now, pose)}   # perception's one answer
-        frame = {**BINDING, "capture_mono": self.now - age}
+        if head is not None:
+            track["head_point_m"] = {"xyz": head, "n": 3}
+        frame = {**BINDING, "capture_mono": self.now - age, **(frame_extra or {})}
         self.preview.offer_snapshot({"service_run_id": "run", "camera_epoch": epoch, "seq": self.seq, "frame": frame,
                                      "status": "fresh", "presence": "present", "eligibility_revision": eligibility,
                                      "eligible_track_id": "t1" if seated and not more and eligible else None,
@@ -128,6 +130,25 @@ class PreviewTest(unittest.TestCase):
 
     def row(self):
         return self.preview.latest["fixtures"]["F3"]
+
+    def test_the_head_is_perceptions_head_point_and_the_pose_ages_from_capture_mono_alone(self):
+        """Contract 2 (§10, for 04): the preview reads head_point_m, perception's one head, in place of the
+        coarse_head_room_m nothing made (its own median of the face joints only without one); and the pose's age runs
+        from the frame's capture_mono alone: capture_earliest_mono is no longer read."""
+        self.track(head=(1.25, 1.05, 1.3))
+        self.assertEqual(self.preview.track["head"], (1.25, 1.05, 1.3))
+        self.now += .5
+        self.track()
+        self.assertEqual(tuple(self.preview.track["head"]), (1.2, 1.1, 1.18), "without one, the face's own median")
+        self.now += .5
+        self.track(head=(1.4, 1.05, 1.3), frame_extra={"capture_earliest_mono": self.now - 10})
+        self.assertEqual((self.preview.captured, self.preview.track["head"]), (self.now, (1.4, 1.05, 1.3)),
+                         "an old capture_earliest_mono no longer makes a current frame late")
+        taken = self.now
+        self.now += .5
+        self.track(head=(1.5, 1.05, 1.3), age=PERCEPTION_S + .01)
+        self.assertEqual((self.preview.captured, self.preview.track["head"]), (taken, (1.4, 1.05, 1.3)),
+                         "a pose past PERCEPTION_S from its capture_mono isn't taken")
 
     def test_fresh_pose_cannot_extend_reply_and_renewal_uses_move(self):
         self.light()

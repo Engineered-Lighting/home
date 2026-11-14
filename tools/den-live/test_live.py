@@ -181,19 +181,22 @@ class PersonStateLog(unittest.TestCase):
     FRAME_KEYS = {'service_run_id', 'camera_epoch', 'frame_id', 'capture_mono', 'arrival_mono', 'capture_ts',
                   'transform_id', 'scan_revision', 'depth_calibration_sha256'}
     TRACK_KEYS = {'track_id', 'state', 'xy_m', 'sigma_m', 'position_basis', 'current_obs_ids', 'association',
-                  'supported_pose', 'seated'}
+                  'supported_pose', 'seated', 'body_facing', 'head_point_m', 'wrists_m', 'posture'}
     WORDS = {'den-person-state-1', 'confirmed', 'coasting', 'stereo', 'plane', 'coast', 'confident', 'ambiguous',
              'supported', 'hips', 'head', 'fresh', 'stale', 'starting', 'offline', 'refused', 'degraded', 'present',
-             'empty', 'unknown'}
+             'empty', 'unknown', 'sitting'}
 
     @staticmethod
     def snapshot(run='a' * 32, seq=7):
-        from contracts import FrameRef, PlaneRef, SeatedState, TrackEvidence, TrackingSnapshot
+        from contracts import BodyFacing, FrameRef, HeadPoint, PlaneRef, SeatedState, TrackEvidence, TrackingSnapshot
         frame = FrameRef(run, 2, 41, 'camera-session', 'rgb', PlaneRef(9, 1.0, 1.0, 640, 360), None, None, 'c' * 64,
                          'den-oak@2026-11-13.1', 'scan-r4', 1234.56789, 1234.6789, 1_800_000_000.123456)
         pose = {'left_hip': ((1.0, 2.0, 0.5), 'supported'), 'nose': ((1.0, 2.1, 1.12345), 'supported')}
         track = TrackEvidence(f'{run}-e2-trk-1', 'confirmed', (1.23456, -0.5), 0.1234, 'stereo', ('o-den-oak-1234567-0',),
-                              'confident', 3, 1230.5, pose, near='on the sofa', seated=SeatedState(True, 1231.25, 'hips'))
+                              'confident', 3, 1230.5, pose, near='on the sofa', seated=SeatedState(True, 1231.25, 'hips'),
+                              body_facing=BodyFacing(271.23456, 8.04, 1234.56789, 4),
+                              head_point_m=HeadPoint((1.0, 2.1, 1.12345), 3), wrists_m={'left_wrist': (0.9, 2.3, 0.6543)},
+                              posture='sitting')
         return TrackingSnapshot(run, 2, seq, frame, 'fresh', 'too dark', 'present', (track,), track.track_id, 4)
 
     def test_each_snapshot_is_one_numbers_only_line_with_the_contracts_fields_and_an_anchor(self):
@@ -232,6 +235,10 @@ class PersonStateLog(unittest.TestCase):
         self.assertEqual(set(track), self.TRACK_KEYS)
         self.assertEqual(track['association'], {'status': 'confident', 'revision': 3, 'since_mono': 1230.5})
         self.assertEqual(track['seated'], {'state': True, 'since_mono': 1231.25, 'basis': 'hips'})
+        self.assertEqual(track['body_facing'], {'deg': 271.2, 'sd_deg': 8.0, 'as_of_mono': 1234.568, 'n': 4})
+        self.assertEqual(track['head_point_m'], {'xyz': [1.0, 2.1, 1.123], 'n': 3})
+        self.assertEqual(track['wrists_m'], {'left_wrist': [0.9, 2.3, 0.654]})
+        self.assertEqual(track['posture'], 'sitting')
         self.assertEqual((track['xy_m'], track['supported_pose']['nose']), ([1.235, -0.5], [[1.0, 2.1, 1.123], 'supported']))
         self.assertEqual((line['frame']['capture_mono'], line['frame']['depth_calibration_sha256']), (1234.568, 'c' * 64))
         self.assertEqual((line['eligibility_revision'], line['seq']), (9, 7))
@@ -331,6 +338,39 @@ class PersonStateLog(unittest.TestCase):
         log.write(nobody(309, status='stale'))
         self.assertEqual(seqs()[-1], 309, 'the next second')
 
+    def test_each_event_says_frigates_occupancy_as_den_live_reads_it(self):
+        """health.occupancy {effective, why}, for Home's Frigate card: the ask's own reader's word; without the ask,
+        den-live reads no Frigate and says so; a reader that fails says that, and the loop goes on."""
+        import occupancy
+        event = {'tracks': [], 'health': {'fps_in': 3.0}}
+        rl.evidence_observer(None, None)(event, self.snapshot())
+        self.assertEqual(event['health'], {'fps_in': 3.0, 'occupancy': {
+            'effective': 'unknown', 'why': "den-live doesn't read Frigate here: the Qwen ask isn't set up"}})
+        reader = occupancy.Occupancy(lambda: 'on', clock=lambda: 5.0)
+        reader.poll_once()
+
+        class Asker:
+            snapshot = None
+
+            def __init__(self, reader):
+                self.occupancy = reader
+
+            def observe(self, event, snapshot):
+                return event
+
+            def pop_reply(self):
+                return None
+        event = {'tracks': []}
+        rl.evidence_observer(Asker(reader), None)(event, self.snapshot())
+        self.assertEqual(event['health']['occupancy'], {'effective': 'on', 'why': None})
+
+        class Broken:
+            def health(self):
+                raise OSError('no')
+        event = {'tracks': []}
+        rl.evidence_observer(Asker(Broken()), None)(event, self.snapshot())
+        self.assertEqual(event['health']['occupancy'], {'effective': 'unknown', 'why': "Frigate's word couldn't be read (OSError)"})
+
     def test_a_log_that_cant_write_never_stops_the_loop(self):
         import person_state
         blocked = scratch('den-live-person-state-') / 'not-a-folder'
@@ -418,7 +458,14 @@ class Perceiving(unittest.TestCase):
         self.assertLess(math.dist(last['xy_m'], truth(READING)), 0.3, last['xy_m'])
         self.assertEqual(last['state'], 'confirmed')
         self.assertEqual(set(last), {'track_id', 'state', 'xy_m', 'sigma_m', 'heading_deg', 'age_s', 'near', 'service_run_id',
-                                     'camera_epoch', 'association_revision'}, 'no joints, no image, no name')
+                                     'camera_epoch', 'association_revision', 'seated', 'posture', 'who'},
+                         'no joints, no image, no name')
+        # Home's caption: perception's seated and posture, and a who slot nothing fills yet. The reader sits.
+        self.assertEqual((last['seated'], last['posture'], last['who']), (True, 'sitting', None))
+        self.assertEqual(p.snapshot.tracks[0].posture, 'sitting', 'one answer: the evidence and the marker agree')
+        self.assertTrue(all(t['posture'] in ('sitting', 'standing', 'walking', 'unclear') for e in events for t in e['tracks']))
+        self.assertTrue(all(t['seated'] == (t['posture'] == 'sitting') for e in events for t in e['tracks']))
+        self.assertIsNotNone(events[-1]['capture_ts'], "the event's capture_ts: its frame's capture time")
         self.assertEqual((last['service_run_id'], last['camera_epoch']), (p.run_id, 1))
         self.assertIsNone(last['near'], 'no labels, no phrase')
         self.assertEqual(events[-1]['schema'], 'den-live-people-1')
@@ -580,21 +627,46 @@ class Perceiving(unittest.TestCase):
         self.assertTrue(all(e['tracks'] == [] for e in events), 'but no marker')
         self.assertGreater(p.counts['weak_only_hidden'], 0)
 
-    def test_a_heading_older_than_three_seconds_is_left_off(self):
+    def test_the_arrow_is_body_facing_and_goes_with_the_pose(self):
+        """Contract 2: the people projection's heading_deg is the track's body_facing (den-track's body_heading on the
+        stereo shoulders and hips, over the last second), and it goes once the pose expires, PERCEPTION_S after the
+        last sample: den-track's own heading and its old 3.0 s hold are no longer the arrow. The head point and the
+        wrists are the stereo joints of this frame only."""
+        from contracts import PERCEPTION_S
         frames, late = bundles(READING), {'on': False}
 
         def no_pose_later(row):
             if late['on']:
                 for d in row['detections']:
-                    d['keypoints'] = None   # still a person box at 0.92: the track goes on, its heading doesn't update
+                    d['keypoints'] = None   # still a person box at 0.92: the track goes on, its facing doesn't update
             return row
         p = self.perceiver(READING, change=no_pose_later)
-        events = self.run_take(p, frames[:30])
-        self.assertIsNotNone(events[-1]['tracks'][0]['heading_deg'], 'the control: a fresh heading is sent')
-        late['on'] = True
-        events = self.run_take(p, frames[30:])
-        self.assertTrue(events[-1]['tracks'], 'the reader is still shown')
-        self.assertIsNone(events[-1]['tracks'][0]['heading_deg'])
+        seen = []
+        for i, bundle in enumerate(frames):
+            late['on'] = i >= 30
+            event = self.run_take(p, [bundle])
+            if event and event[-1]['tracks'] and p.snapshot.tracks:
+                seen.append((i, p.snapshot.frame.capture_mono, event[-1]['tracks'][0]['heading_deg'], p.snapshot.tracks[0]))
+        posed = [(capture, heading, track) for i, capture, heading, track in seen if i < 30 and track.body_facing]
+        self.assertTrue(posed, 'the control: a facing is published while the reader is posed')
+        for capture, heading, track in posed:
+            self.assertEqual(heading, round(track.body_facing.deg, 1))
+            self.assertLessEqual(track.body_facing.sd_deg, 30.0)
+            self.assertTrue(0 <= track.body_facing.deg < 360 and track.body_facing.n >= 1)
+            self.assertLessEqual(track.body_facing.as_of_mono, capture)
+        self.assertTrue(any(t.head_point_m and t.head_point_m.n >= 2 for _, _, t in posed), 'a head point from the face')
+        last_sample = posed[-1][2].body_facing.as_of_mono
+        after = [(capture, heading, track) for i, capture, heading, track in seen if i >= 30]
+        self.assertTrue(after and after[-1][2], 'the reader is still shown')
+        for capture, heading, track in after:
+            self.assertEqual((track.head_point_m, dict(track.wrists_m)), (None, {}), 'no pose, no head point, no wrists')
+            if capture - last_sample <= PERCEPTION_S:
+                self.assertEqual(heading, round(track.body_facing.deg, 1), 'held while the pose is current')
+            else:
+                self.assertIsNone(heading, 'gone once the pose expires')
+                self.assertIsNone(track.body_facing)
+        self.assertGreater(after[-1][0] - last_sample, PERCEPTION_S, 'the take runs past the expiry')
+        self.assertTrue(any(c - last_sample <= PERCEPTION_S and h is not None for c, h, _ in after), 'and holds before it')
 
     def test_frames_that_are_all_dropped_still_publish_why(self):
         """The review's case: a detector that fails on every frame. The loop publishes an idle event each idle_s with
@@ -1136,7 +1208,7 @@ class Live(unittest.TestCase):
         self.assertTrue(seen.get('sse'))
         # No coordinate is printed: every line is one of the shapes run_local prints, whose only numbers are counts, rates
         # and times. The control: a line holding a position would match none of them.
-        shapes = (r'^Starting the detector', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
+        shapes = (r'^Starting the detector', r'^Detector: YOLO26s (?:and RTMPose-m )?on the (?:GPU|CPU)', r'^Registration den-virtual@\S+; the camera', r'^Live: open http://127\.0\.0\.1:\d+/ ',
                   r'^camera ok(?:: camera clock moved back)? \| [\d.-]+ frames a second \| \d+ people \| '
                   r'[\d.-]+( s)? behind \| \d+ dropped a minute \| \d+ frames(?:, \d+ out of order)?(?:, \d+ too late)?$')
         self.assertIsNone(result['body'])

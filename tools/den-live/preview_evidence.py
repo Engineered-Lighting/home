@@ -42,6 +42,14 @@ def seated(track, captured):
 SAMPLE = {"yes": "playing", "no": "idle", "unknown": "unknown"}   # contract 3's verdict, as need's sample words
 
 
+def head(track):
+    """Contract 2's head_point_m, as perception published it on the track: its xyz, or None."""
+    xyz = field(field(track, "head_point_m"), "xyz")
+    if isinstance(xyz, (tuple, list)) and len(xyz) == 3 and all(map(finite, xyz)):
+        return tuple(xyz)
+    return None
+
+
 def activity(facts):
     """need's sample from a reply's facts: contract 3's one verdict (den_live_scene.close_up_verdict, the same function
     Home's Qwen line reads), as playing, idle or unknown."""

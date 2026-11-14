@@ -34,6 +34,27 @@ same (`If-None-Match`). Its metadata is the full bundle's, plus `bundle_schema: 
   `python -I -B tools/den-camera/slim_bundle_bench.py <bundle.npz>`.
 - **Ship it** with "Ship a release" below, which is written for this release.
 
+## The body clock (`pilot-20261114-body`)
+
+den-live's measured figure (`den-live-body-2`) only uses a frame whose capture age the camera vouches for. Without
+that it shows nothing: it can't tell a fresh pair from a stale one across hosts whose clocks aren't synchronized. This
+release is `pilot-20261114-slim` plus the receipt from `pilot-20261112-body-clock` (`BodyClockProfile`,
+`BodyClockState`), moved to the slim path den-live reads:
+
+- **Only with a commissioned profile.** `--body-clock-profile <file> --body-clock-profile-uid <uid>` names a
+  protected `den-body-clock-profile-1` JSON (mode 0600, owned by the service account). It is checked against the SDK,
+  device, fps and depth correction at each camera session. Without it, or when it doesn't match, every answer is the
+  slim release's, byte for byte (`test_body_receipt_release.py` runs the slim release's wire tests on it).
+- **Sampled with the slim bundle.** When a frame's slim bundle is published, the camera samples the SDK clock against
+  its own monotonic clock. With two consistent samples and exposures that fit the profile's bounds, the frame's slim
+  and (once published) full bundles carry the same receipt. Equal bytes, the previous frame, a new session, a clock
+  step or suspend, and a pair already a second old get none.
+- **The receipt.** An authenticated 200 for `/frame-slim.npz` or `/frame.npz` carries `X-Den-Body-Capture-Age`
+  (`den-body-pair-age-1`): the frame key, the profile's `evidence_id`, and upper bounds on the RGB and depth exposure
+  ages at this answer and on their separation. A 304 carries none. den-live subtracts the larger age from the time it
+  began the GET, so the network's delay only makes it more conservative.
+- **The Lab's pin stays at `pilot-20261111-depth`.**
+
 ## Depth correction
 
 The camera multiplies `depth_mm` by a measured factor only while the device holds the EEPROM calibration

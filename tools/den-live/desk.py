@@ -17,6 +17,7 @@ attach() goes on a Preview after it's built and before its first trace row, with
 the trace's own storage in one lock (the preview's writer and the sender's lanes share the day files), hands each
 fsynced row to the sender, and adds `devices` to every snapshot the preview publishes.
 """
+import argparse
 import collections
 import json
 import math
@@ -207,3 +208,41 @@ def attach(preview, desk, fixed, *, threaded=True):
     def session():
         return ha_link.HaSession(fixed["ha_url"], fixed["token"], cafile=fixed.get("ha_ca_file"))
     return Desk(preview, desk, session, threaded=threaded).start()
+
+
+def check(desk_file, geometry_file):
+    """desk.py --check: (exit code, one line). The desk file against the preview's geometry export, on this PC, before
+    the install. Words only: never the device reference or the profile's numbers."""
+    try:
+        geometry = json.loads(Path(geometry_file).read_text(encoding="utf-8-sig"))
+        fixtures = {row["fixture_id"]: row for row in geometry["fixtures"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        return 2, "The geometry export doesn't read."
+    if geometry.get("physical_commands") is not False:
+        return 2, "That geometry isn't the preview's virtual export (physical_commands must be false)."
+    try:
+        data = json.loads(Path(desk_file).read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return 2, "The desk file doesn't read."
+    try:
+        mapping = parse(data, fixtures)
+    except DeskError as exc:
+        return 2, "The desk file doesn't check: %s." % exc
+    return 0, "The desk file checks: %s's commands go to its board, %s; measured profile %s; readback %s." % (
+        mapping["fixture_id"], "lit" if mapping["light"] else "dark (light false: the dark rehearsal)",
+        mapping["profile"]["label"],
+        ", ".join(sorted(mapping["readback"])) if mapping["readback"] else "none")
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Check a desk.json (den-c12-desk-1) before installing it.")
+    parser.add_argument("--check", type=Path, required=True, help="the private desk.json")
+    parser.add_argument("--geometry", type=Path, required=True, help="the private preview geometry export from Home")
+    args = parser.parse_args(argv)
+    code, line = check(args.check, args.geometry)
+    print(line)
+    return code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

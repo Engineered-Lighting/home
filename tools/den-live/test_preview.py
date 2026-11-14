@@ -52,11 +52,6 @@ class PreviewTest(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.path = tmp.name
-        # This room's F3 sits at the reader's side, so the slide reach (a head 25 cm along the sofa) is always under
-        # its beam: the rules run without the reach, which has a test of its own.
-        reach = patch.object(preview, "SLIDE_REACH_M", 0.0)
-        reach.start()
-        self.addCleanup(reach.stop)
         self.now = 100.0
         self.seq = 0
         self.encoded = []
@@ -787,7 +782,6 @@ class DirectionTest(PreviewTest):
         self.assertTrue(all(b <= a for a, b in zip(levels, levels[1:])))
         self.assertEqual(self.moves(since)[-1]["effective"]["spot_level"], 0)
 
-    @patch.object(preview, "GAP_DRIFT_M_S", 0.0)   # it ticks without frames: not a test of a gap's drift
     def test_a_planned_end_is_dark_at_its_deadline(self):
         self.preview.configure({"phone_patience_s": 3})
         self.lit_by_direction()
@@ -804,7 +798,6 @@ class DirectionTest(PreviewTest):
             self.preview.tick()
         self.assertFalse(self.row()["on"], "dark at the patience's end, not after it")
 
-    @patch.object(preview, "GAP_DRIFT_M_S", 0.0)   # the hold's end, apart from a gap's drift (its own test)
     def test_stop_and_expiry_stay_instant(self):
         self.lit_by_direction()
         self.preview.stop({})
@@ -991,48 +984,9 @@ class DirectionTest(PreviewTest):
         self.assertFalse(self.preview._clear(dict(row, current=at_head), person, .12), "pointed at the head")
         self.assertFalse(self.preview._clear(row, dict(person, head=None), .12), "no head, no clearance")
 
-    def test_the_clearance_looks_where_the_head_is_going(self):
-        """A reader sliding along the sofa reaches a held beam up to a frame and the camera's lag before a frame shows
-        it: the clearance also checks the head carried on by its velocity over the frame's age and one more frame."""
-        self.lit_by_direction()
-        row = self.preview.rows["F3"]
-        person = dict(self.preview.track)
-        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
-                                         row["horizontal_world_reference"])
-        to = [person["head"][i] - row["aim_origin_m"][i] for i in range(3)]
-        along = sum(aim[i] * to[i] for i in range(3))
-        off = [to[i] - along * aim[i] for i in range(3)]
-        gap = math.sqrt(sum(c * c for c in off))
-        toward = [-c / gap for c in off]   # straight at the beam's centre ray
-        self.assertTrue(self.preview._clear(row, dict(person, head_v=None), .12), "still, it clears")
-        speed = (gap - .05) / preview.HEAD_LEAD_S   # it would be 5 cm from the beam one frame on
-        self.assertFalse(self.preview._clear(row, dict(person, head_v=[c * speed for c in toward]), .12),
-                         "heading into the beam, it doesn't")
-        self.assertTrue(self.preview._clear(row, dict(person, head_v=[-c * speed for c in toward]), .12),
-                        "heading away, it does")
-
-    @patch.object(preview, "GAP_DRIFT_M_S", 0.03)   # this room's beam is 16.4 cm from the head: a margin that reaches it
-    def test_a_camera_gap_ends_early_when_the_beam_is_near_the_head(self):
-        """Through a camera gap the beam is judged from the last frame, the head carried on its path for the gap's age,
-        with GAP_DRIFT_M_S more margin for each second: a beam close to the head ends the hold early, one far from it
-        holds to GAP_HOLD_S."""
-        self.lit_by_direction()
-        row, person = self.preview.rows["F3"], self.preview.track
-        aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
-                                         row["horizontal_world_reference"])
-        to = [person["head"][i] - row["aim_origin_m"][i] for i in range(3)]
-        along = sum(aim[i] * to[i] for i in range(3))
-        gap = math.sqrt(sum((to[i] - along * aim[i]) ** 2 for i in range(3)))   # 16.4 cm here
-        seen = self.gap(preview.GAP_HOLD_S - .1)
-        dark_at = next(k for k, lit in enumerate(seen) if not lit) * .1 + .1
-        allowed = (gap - direction.AIM_KEEP_M) / preview.GAP_DRIFT_M_S
-        self.assertLess(dark_at, preview.GAP_HOLD_S - .1, "the hold ends early")
-        self.assertGreater(dark_at, allowed - 1.6, "not before the margin has grown past the beam")
-        self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head")
-
     def test_a_cut_fixture_waits_before_it_is_admitted_again(self):
         self.lit_by_direction()
-        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None:
+        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None:
                           False):
             self.now = round(self.now + .25, 6)
             self.track()
@@ -1044,16 +998,6 @@ class DirectionTest(PreviewTest):
         self.frames(1.0)
         self.assertGreater(self.now - cut, preview.CUT_HOLD_S)
         self.assertNotEqual(self.preview.rows["F3"]["reason"], "cut_hold", "admitted again after it")
-
-    def test_the_head_velocity_is_fitted_over_frames(self):
-        """Two noisy frames read a still head as moving; the velocity is fitted over HEAD_V_FRAMES frames."""
-        still = [(t * .4, (1.0 + (.02 if k % 2 else -.02), 1.0, 1.2)) for k, t in enumerate(range(4))]
-        v = preview.fitted_velocity(still)
-        self.assertLess(math.sqrt(sum(c * c for c in v)), .06, "a still head with 2 cm of jitter")
-        moving = [(t * .4, (1.0 + .23 * t * .4, 1.0, 1.2)) for t in range(4)]
-        self.assertAlmostEqual(preview.fitted_velocity(moving)[0], .23, places=6)
-        fast = [(t * .4, (1.0 + 3 * t * .4, 1.0, 1.2)) for t in range(4)]
-        self.assertAlmostEqual(math.sqrt(sum(c * c for c in preview.fitted_velocity(fast))), preview.HEAD_SPEED_MAX_M_S)
 
     def test_no_facing_on_a_glide_with_the_head_by_the_line_cuts_at_once(self):
         """A lit fixture is never refused for facing, but a missing facing mustn't hide a beam through the head: with no
@@ -1073,7 +1017,7 @@ class DirectionTest(PreviewTest):
         norm = math.sqrt(sum(c * c for c in side))
         head = tuple(along[i] + .05 * side[i] / norm for i in range(3))   # 5 cm from the line to the page
         no_facing = patch.object(direction.FacingFilter, "update", lambda filt, t, facing, seated: None)
-        beam_ok = patch.object(preview.Preview, "_beam_clear", lambda owner, row, person, clearance=None, horizon=None: True)
+        beam_ok = patch.object(preview.Preview, "_beam_clear", lambda owner, row, person: True)
         with no_facing, beam_ok:   # the eye rule alone, not the beam-as-it-points check
             self.assertEqual(self.preview._eye("F3", row, dict(person, head=head, facing=None), True).reason,
                              "beam_through_head")
@@ -1083,22 +1027,12 @@ class DirectionTest(PreviewTest):
         self.assertIsNone(self.row()["fade"], "not eased")
         self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head")
 
-    def test_the_clearance_reaches_along_the_sofa(self):
-        """A seated reader can slide along the sofa faster than the camera can follow: a beam must also clear the head
-        moved SLIDE_REACH_M to either side, across the facing."""
-        self.lit_by_direction()
-        row, person = self.preview.rows["F3"], dict(self.preview.track, head_v=None)
-        self.assertTrue(self.preview._clear(row, person, .12), "without the reach, clear (16 cm)")
-        with patch.object(preview, "SLIDE_REACH_M", .25):
-            self.assertFalse(self.preview._clear(row, person, .12), "F3 sits at the side: a slide takes the head under it")
-            self.assertTrue(self.preview._clear(row, dict(person, seated=False), .12), "the reach is for a seated reader")
-
     def test_the_clearance_is_to_the_eyes_too(self):
         """den-core's head point is the face joints' median, ears included, about 3 cm behind the eyes: the keep margin
         is also measured to the eyes."""
         self.lit_by_direction()
         row = self.preview.rows["F3"]
-        person = dict(self.preview.track, head_v=None)
+        person = dict(self.preview.track)
         aim = self.core.joints.direction(row["current"][0] / 100, row["current"][1] / 100,
                                          row["horizontal_world_reference"])
         along = sum(aim[i] * (person["head"][i] - row["aim_origin_m"][i]) for i in range(3))
@@ -1130,12 +1064,12 @@ class DirectionTest(PreviewTest):
                     self.now = round(self.now + .1, 6)
                     self.track(seated=False)   # the leave fade, with no candidate chosen (pre-aim off)
                     self.assertEqual(self.row()["fade"]["purpose"], "fade_out")
-                    with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None: False):
+                    with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None: False):
                         self.now = round(self.now + .1, 6)
                         self.track(seated=False)
                 else:
                     with patch.object(preview.Preview, "_eye", refuse), patch.object(
-                            preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None: False):
+                            preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None: False):
                         self.now = round(self.now + .25, 6)
                         self.track()
                 self.assertFalse(self.row()["on"], "cut at once")
@@ -1152,12 +1086,12 @@ class DirectionTest(PreviewTest):
         self.assertIsNotNone(row["glide"])
         landing = row["glide"].target
         with patch.object(preview.Preview, "_clear",
-                          lambda owner, row, person, clearance, joints=None, horizon=None: joints is not None):
+                          lambda owner, row, person, clearance, joints=None: joints is not None):
             self.now = round(self.now + .1, 6)
             self.track()
         self.assertIsNotNone(self.preview.rows["F3"]["glide"], "still flying: the sweep isn't what lights")
         with patch.object(preview.Preview, "_clear",
-                          lambda owner, row, person, clearance, joints=None, horizon=None: tuple(joints or ()) != tuple(landing)):
+                          lambda owner, row, person, clearance, joints=None: tuple(joints or ()) != tuple(landing)):
             self.now = round(self.now + .1, 6)
             self.track()
         self.assertEqual(self.preview.rows["F3"]["reason"], "beam_through_head", "its landing aim fails: cut")
@@ -1196,7 +1130,7 @@ class DirectionTest(PreviewTest):
         a standby's hand-over all point a little off that line): the light is cut at once, not eased."""
         self.lit_by_direction()
         self.assertTrue(self.row()["on"])
-        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None: False):
+        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None: False):
             self.now = round(self.now + .25, 6)
             self.track()
         self.assertFalse(self.row()["on"])
@@ -1213,7 +1147,7 @@ class DirectionTest(PreviewTest):
         nudged = (row["current"][0] + 300, row["current"][1])   # 3 degrees off: still in the beam
         row["current"] = nudged
         since = len(self.encoded)
-        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None, horizon=None:
+        with patch.object(preview.Preview, "_clear", lambda owner, row, person, clearance, joints=None:
                           tuple(row["current"] if joints is None else joints) != nudged):
             self.read()
             self.frames(.5)
@@ -1233,8 +1167,8 @@ class DirectionTest(PreviewTest):
         def gone(owner, row, person):
             return row is owner.rows[lit] and owner._lighting(row) and not row["exiting"] or outgrown(owner, row, person)
 
-        def standby_near_head(owner, row, person, clearance, joints=None, horizon=None):
-            return row is not owner.rows[spare] and clear(owner, row, person, clearance, joints, horizon)
+        def standby_near_head(owner, row, person, clearance, joints=None):
+            return row is not owner.rows[spare] and clear(owner, row, person, clearance, joints)
         with patch.object(preview.Preview, "_outgrown", gone), patch.object(preview.Preview, "_clear", standby_near_head):
             self.frames(1.0)
         self.assertNotEqual(self.preview.rows[lit]["reason"], "handed_on")
@@ -1452,7 +1386,6 @@ class DirectionTest(PreviewTest):
         self.preview._exit("F3", row, self.now, "task_released", handoff=True)
         self.assertLessEqual(row["ramp"].duration, direction.EXIT_MAX_S)
 
-    @patch.object(preview, "GAP_DRIFT_M_S", 0.0)   # it ticks without frames: not a test of a gap's drift
     def test_a_dark_move_then_a_bloom_is_one_timed_move(self):
         self.timed_board(pre_aim=False)
         self.seat()

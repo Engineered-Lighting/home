@@ -74,7 +74,7 @@ class PinnedFirmwareTests(unittest.TestCase):
         self.assertEqual(c12_replay.verify_vectors(self.codec, self.vectors), 28)
         rows, replies = golden_trace()
         counts, groups = c12_replay.verify_trace(jsonl(rows), self.codec, collect_sim=True)
-        self.assertEqual(counts, {"encoded_only": 5, "refused": 0, "state": 0})
+        self.assertEqual(counts, {"encoded_only": 5, "refused": 0, "state": 0, "send": 0, "device": 0, "wire": 0})
         frames = groups[("synthetic-run", "F3")]
         self.assertEqual([frame.expected_reply for frame in frames], replies)
         self.assertEqual([frame.payload_hex for frame in frames], [row["frame"]["payload_hex"] for row in rows])

@@ -135,6 +135,29 @@ class ReplayV2Test(unittest.TestCase):
         replayed = c12_replay.replay_simulator(simulator, preview_trace.SIMULATOR_SHA256, groups)
         self.assertEqual(replayed, counts["encoded_only"])
 
+    def test_a_directed_session_passes_the_pinned_codec(self):
+        """The light direction's commands (a rise's level train, one lit glide, a quick exit) are ordinary FC13 frames:
+        every row of a directed session passes the pinned codec, its sequences in order and none refused."""
+        h = test_preview.DirectionTest("test_every_snapshot_is_one_home_accepts")
+        h.setUp()
+        self.addCleanup(h.doCleanups)
+        h.lit_by_direction()
+        h.frames(4, shift=-.3)
+        h.now += .25
+        h.track(seated=False, shift=-.3)
+        h.frames(1, seated=False, shift=-.3)
+        rows = [h.preview.trace.header, *h.encoded]
+        moves = [row for row in rows[1:] if row["action"] == "aim_move"]
+        self.assertTrue(any(row["requested"]["travel"] == "lit" for row in moves), "a lit glide")
+        self.assertGreater(sum(row["requested"]["cue"] == "fade_in" for row in moves), 4, "a level train")
+        self.assertEqual([row for row in rows[1:] if row["status"] != "encoded_only"], [], "nothing refused")
+        counts, groups = self.verify(rows, collect_sim=True)
+        self.assertEqual(counts["encoded_only"], len(rows) - 1)
+        simulator = os.environ.get("C12_TEST_SIM")
+        if simulator:
+            self.assertEqual(c12_replay.replay_simulator(simulator, preview_trace.SIMULATOR_SHA256, groups),
+                             counts["encoded_only"])
+
     def first_lit(self):
         return next(i for i, row in enumerate(self.rows) if row.get("action") == "aim_move"
                     and row.get("status") == "encoded_only" and row["effective"]["spot_level"])

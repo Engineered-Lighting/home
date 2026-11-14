@@ -71,7 +71,7 @@ class PinnedFirmwareTests(unittest.TestCase):
         cls.codec, cls.vectors = c12_replay.firmware_codec(archive)
 
     def test_vectors_and_golden_trace(self):
-        self.assertEqual(c12_replay.verify_vectors(self.codec, self.vectors), 28)
+        self.assertEqual(c12_replay.verify_vectors(self.codec, self.vectors), 37)   # 62ea043's fc13.json
         rows, replies = golden_trace()
         counts, groups = c12_replay.verify_trace(jsonl(rows), self.codec, collect_sim=True)
         self.assertEqual(counts, {"encoded_only": 5, "refused": 0, "state": 0, "send": 0, "device": 0, "wire": 0})

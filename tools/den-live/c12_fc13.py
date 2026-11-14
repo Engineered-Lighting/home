@@ -1,4 +1,10 @@
-"""Pure encoder for the C12 v2-a FC13 contract (contract_version 1)."""
+"""Pure encoder for the C12 v2 FC13 contract (contract_version 1), pinned to firmware 62ea043.
+
+The timed MOVE (from v2-b): an aim_move intent's optional `timed: {min_duration_ms, fade_ms, fade_curve}` sets flag
+bit 4 and puts the two u16s in bytes 10-13 in place of the velocity, with the fade's curve in bits 5-6 (zcl-fc13.md).
+It's refused with a velocity, a fade without set_spot, and a curve without a fade. Firmware before v2-b answers it
+bad_payload, so a sender sends it only to a board that advertises it (c12.get_profile's capabilities.timed_move).
+"""
 
 import hashlib
 import json
@@ -14,6 +20,9 @@ KEEP_LIT = 0x01
 STOP = 0x02
 RESUME = 0x03
 DEFAULT_VALID_MS = 1000
+TIMED = 0x10
+FADE_CURVES = ("linear", "ease_out", "ease_in_out")   # flag bits 5-6, as c12.move names them
+FADE_CURVE_SHIFT = 5
 
 
 class Refusal(ValueError):
@@ -90,6 +99,27 @@ def _velocity(intent, profile, mode, moving):
     return pan, tilt
 
 
+def _timed(intent, velocity, flags):
+    """(min_duration_ms, fade_ms, curve name or None) of a timed MOVE, or None when it isn't one."""
+    timed = intent.get("timed")
+    if timed is None:
+        return None
+    if not isinstance(timed, dict) or not set(timed) <= {"min_duration_ms", "fade_ms", "fade_curve"}:
+        raise Refusal("invalid_timed")
+    min_ms = _integer(timed.get("min_duration_ms", 0), 0, 65535, "min_duration_ms")
+    fade_ms = _integer(timed.get("fade_ms", 0), 0, 65535, "fade_ms")
+    curve = timed.get("fade_curve")
+    if curve is not None and curve not in FADE_CURVES:
+        raise Refusal("invalid_fade_curve")
+    if any(velocity):
+        raise Refusal("timed_with_velocity")
+    if fade_ms and not flags & 0x08:
+        raise Refusal("fade_without_set_spot")
+    if curve not in (None, "linear") and not fade_ms:
+        raise Refusal("fade_curve_without_fade")
+    return min_ms, fade_ms, (curve or "linear") if fade_ms else None
+
+
 def _move(intent, profile, seq, source, current_joints, remaining_ms):
     mode = _integer(profile.get("motion_mode"), 0, 3, "motion_mode")
     if mode == 0:
@@ -133,9 +163,15 @@ def _move(intent, profile, seq, source, current_joints, remaining_ms):
         flags |= 0x02
     if vel_pan or vel_tilt:
         flags |= 0x04
-    payload = struct.pack("<HBhhBHhhH", seq, flags, pan, tilt, spot_level, spot_mired,
-                          vel_pan, vel_tilt, valid_ms)
-    return payload, {
+    timed = _timed(intent, (vel_pan, vel_tilt), flags)
+    if timed is None:
+        payload = struct.pack("<HBhhBHhhH", seq, flags, pan, tilt, spot_level, spot_mired,
+                              vel_pan, vel_tilt, valid_ms)
+    else:
+        min_ms, fade_ms, curve = timed
+        flags |= TIMED | ((FADE_CURVES.index(curve) << FADE_CURVE_SHIFT) if curve else 0)
+        payload = struct.pack("<HBhhBHHHH", seq, flags, pan, tilt, spot_level, spot_mired, min_ms, fade_ms, valid_ms)
+    effective = {
         "source": source, "pan_cdeg": pan, "tilt_cdeg": tilt, "spot_level": spot_level,
         "spot_mired": spot_mired, "flags": flags, "velocity_cdeg_s": [vel_pan, vel_tilt],
         "valid_ms": valid_ms, "level": spot_level / 254, "cct_k": 1_000_000 / spot_mired,
@@ -143,6 +179,10 @@ def _move(intent, profile, seq, source, current_joints, remaining_ms):
         "motion_style": ("lit" if lit else "dark") if moving else "stationary",
         "fade_supported": False, "dim_supported": False,
     }
+    if timed is not None:
+        effective.update(timed=True, min_duration_ms=timed[0], fade_ms=timed[1], fade_curve=timed[2],
+                         fade_supported=True)
+    return payload, effective
 
 
 def encode(intent, profile, *, seq, current_joints=None, token=None, remaining_ms=None):

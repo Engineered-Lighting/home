@@ -25,7 +25,7 @@ For a run spanning UTC days, pass both day files in order. For sofa acceptance, 
 python -B tools/den-live/c12_replay.py <day-1.jsonl> [<day-2.jsonl>] --firmware-zip <private-zip>
 ```
 
-Add `--sim <native-c12v2_sim>` and `--sim-sha256 <build-digest>` to replay through the compiled P2 application. The build the trace names is `preview_trace.SIMULATOR_SHA256`, and a header naming another build is refused.
+Add `--sim <native-c12v2_sim>` and `--sim-sha256 <build-digest>` to replay through the compiled board application. The build the trace names is `preview_trace.SIMULATOR_SHA256`, and a header naming another build is refused. **The pin is firmware `62ea043`** (the timed MOVE): the codec bundle `c12-firmware-62ea043.zip` (`git archive` of that commit, sha256 `7bc09b7a…5b6f1deb`) and the host simulator built with MSVC from its `sketches/c12_v2_core` and `tests/v2` trees (sha256 `9daa2b2f…3fa577bf4`). Their manifest, `MANIFEST-62ea043.md`, sits beside the bundle. A fresh simulator has no record, so it answers every valid MOVE `needs_commissioning`, and each run replays byte for byte. **For a desk run, add `--sim-record <file>`:** the board's 192-byte record as hex (`c12.get_profile`'s `record_hex`). The simulator is then commissioned as that board, so each MOVE must be `accepted` and the board's own answers match.
 
 For trace-3's send rows, pass every run a board took part in, in time order. The replay's five send checks:
 1. Every send row names an earlier encoded row of its run and fixture, and only the run's desk fixture is sent to. A run with `desk: null` sends nothing.
@@ -43,7 +43,15 @@ For trace-3's send rows, pass every run a board took part in, in time order. The
 - **Drops:** a move whose `valid_ms` ran out before its call is never sent. A keep-lit's `lit_seq` is the wire `seq` of the latest accepted lit move, and a keep-lit for any other move is dropped.
 - **Hooks for the preview:** `on_release(fixture, move_trace_id, reason)` fires for a refused or expired move, and after two failed keep-lits in a row. `on_board_stop(fixture, reason)` fires for a Stop den-live didn't send: a move refused `stopped`, or a latch read more than 2 s after den-live's own Resume answer. `copy_stop_into(preview)` turns that into Home's Stop. Wiring the release into the preview is a later step.
 
-`fake_c12_ha.py` is a fake of that Home Assistant for the tests. Its integration reads the board's `last_seq` when it starts, sends only Stop while it can't, resends a move once with the same `seq`, and drives the v2-a host simulator (when `C12_TEST_SIM` is set) or a model of the P3 board with its 3 s lease. Run `python -B -m unittest discover -s tools/den-live -p test_c12_send.py` from the repo root.
+**Fitted to the real `c12` integration** (the firmware chat's P5, at its commit `4b9b1c7`):
+- `velocity_cdeg_s` goes only when den-live's own MOVE has velocity, because the integration sets `has_velocity` whenever the field is given.
+- An answer of `send_failed` has bytes but nothing on the air, so its send row says `sent: false`. `seq_unknown`, `dropped_expired` and `dropped_stopped` send nothing. All of them are refusals that release the row.
+- From firmware v2-b a STOP with seq 0 means "no seq": the replay's check 4 and `desk_report.py` never take it as the count, and the integration's count skips 0.
+- Nothing reports 0xFC13's attributes yet, so the readback's entities can be old. The Stop copy takes a latch only when Home Assistant saw it change after den-live's own last Resume. The latch in a Stop's or Resume's answer is read fresh by the integration.
+
+**The timed MOVE** (firmware `62ea043`, flag bit 4). An aim_move intent may carry `timed: {min_duration_ms, fade_ms, fade_curve}` (curves `linear`, `ease_out`, `ease_in_out`). `c12_fc13.encode` then sets bit 4 and puts the two u16s in bytes 10-13, with the curve in bits 5-6. Its bytes are the firmware's own `timed_fade` and `bloom_ease_in_out` vectors. It's refused with a velocity, a fade without `set_spot`, and a curve without a fade, and its effective fields echo `timed`, `min_duration_ms`, `fade_ms` and `fade_curve`. `preview_trace` passes a move's `timed` through. **The sender sends bit 4 only to a board that advertises it:** the desk reads `c12.get_profile`'s `capabilities` when it starts. Until `timed_move` is true, a timed MOVE is dropped unsent (`dropped_unsupported`), and a `bad_payload` answer to one takes the capability back. Firmware before v2-b, such as Light 1's v2-a, has no capabilities, so nothing timed reaches it.
+
+`fake_c12_ha.py` is a fake of that Home Assistant for the tests. Its integration reads the board's `last_seq` when it starts, sends only Stop while it can't, resends a move once with the same `seq`, and drives the pinned host simulator (when `C12_TEST_SIM` is set, commissioned with the firmware's vector record) or a model of the P3 board with its 3 s lease. Run `python -B -m unittest discover -s tools/den-live -p test_c12_send.py` from the repo root.
 
 ## The desk switch
 

@@ -1,6 +1,6 @@
 """Encode offline fixture commands for C12 endpoint 18, cluster 0xFC13.
 
-Wire layout pinned to C12 cf1c325, contracts/c12v2/zcl-fc13.md. This module
+Wire layout pinned to C12 62ea043, contracts/c12v2/zcl-fc13.md. This module
 has no transport. The caller owns the control latch, active MOVE and clocks,
 and serializes calls to one trace writer per preview epoch. The wire encoder
 is shared with the C12 lane.
@@ -24,10 +24,11 @@ MAX_PREVIEW_VALID_MS = 1500
 # FC13 sender (c12_send.py) adds a send row (`kind: send`) after each call or drop, and the run header names the desk
 # mapping: {fixture_id, device, light}, or null for a virtual-only run, which may send nothing.
 SCHEMA = "c12-fixture-trace-3"
-FIRMWARE_COMMIT = "cf1c325"
-# The v2-a host simulator the replay is checked with: c12v2_sim.exe, built on 2026-11-12 from the firmware's
-# tests/v2/c12v2_sim.cpp (C12 lane). Contract 5, item 5: its SHA-256 was on disk nowhere until here.
-SIMULATOR_SHA256 = "cf5ffec355c7b280bdcdce29480ff91b9080fc7b03c1fb35ced9d95823f4fc64"
+FIRMWARE_COMMIT = "62ea043"
+# The host simulator the replay is checked with: c12v2_sim.exe, built on 2026-11-14 with MSVC from the firmware's
+# trees at 62ea043 (sketches/c12_v2_core 0a0cca97, tests/v2 93d58825; tests/v2/c12v2_sim.cpp 84baad99). MSVC stamps
+# the build time in, so a rebuild needs a new pin. Its manifest is beside the codec bundle (MANIFEST-62ea043.md).
+SIMULATOR_SHA256 = "9daa2b2f1517a6386ed3d7c5aaee0e2710d3142699d4e682219b05f3fa577bf4"
 BINDING_FIELDS = ("transform_id", "equipment_revision", "equipment_digest")
 SUBJECT_FIELDS = ("track_id", "camera_epoch", "association_revision", "request_id")
 
@@ -65,6 +66,8 @@ def _frame(fixture_id, action, seq, decision_id, move_token, move):
                   valid_for_ms=valid_ms, source=move.get("source", "coordinator"),
                   motion_style="dark" if travel == "none" else travel, lit_during_move=travel == "lit",
                   velocity_cdeg_s=move.get("velocity_cdeg_s", (0, 0)))
+    if move.get("timed") is not None:   # the timed MOVE (62ea043): a sender sends it only to a board that has it
+        intent["timed"] = move["timed"]
     profile = {
         "frame": wire.FRAME, "range_cdeg": dict(zip(("pan", "tilt"), ranges)), "host_inset_cdeg": 0,
         "motion_mode": move.get("motion_mode", 1), "lit_motion": move.get("lit_motion", True),
@@ -75,7 +78,8 @@ def _frame(fixture_id, action, seq, decision_id, move_token, move):
     effective = frame["effective"]
     effective.update(target_cdeg=list(target), display_cct_k=intent["cct_k"],
                      travel="none" if effective["motion_style"] == "stationary" else effective["motion_style"],
-                     fade_s=None, dim_level=None, effective_valid_ms=effective["valid_ms"] or wire.DEFAULT_VALID_MS)
+                     fade_s=effective["fade_ms"] / 1000 if effective.get("fade_ms") else None, dim_level=None,
+                     effective_valid_ms=effective["valid_ms"] or wire.DEFAULT_VALID_MS)
     return frame
 
 

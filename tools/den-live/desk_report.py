@@ -124,7 +124,7 @@ def report(rows):
             kind = classify_seq(last, seq)
             if cmd != STOP and (kind == "stale" or (kind == "duplicate" and owner.get(seq) != trace_id)):
                 stale += 1
-            if kind == "new":
+            if kind == "new" and not (cmd == STOP and seq == 0):   # from v2-b, STOP seq 0 is "no seq"
                 last, owner[seq] = seq, trace_id
     answered_stale = sum(t["move answered stale_seq"] for t in runs.values())
     if stale or answered_stale:

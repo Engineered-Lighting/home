@@ -612,6 +612,20 @@ class AskTest(unittest.TestCase):
         self.assertEqual(self.accepted, [])
         self.assertEqual(self.log_lines()[-1]["invalid_reason"], "evidence_changed")
 
+    def test_a_passer_by_keeps_the_readers_episode_but_starts_no_ask(self):
+        """Plan 04, step 3: a second person never ends the reader's episode (its eligibility revision holds), no ask
+        starts while two are seen, nobody is labeled, and the asks go on once the reader is alone again."""
+        self.run_for(4)
+        revision, sent = self.asker.eligibility_revision, self.asks_sent()
+        self.assertGreater(sent, 0)
+        for _ in range(12):
+            event = self.tick(people=2)
+            self.assertTrue(all("activity" not in track for track in event["tracks"]))
+        self.assertEqual((self.asker.eligibility_revision, self.asks_sent()), (revision, sent))
+        self.run_for(4)
+        self.assertEqual(self.asker.eligibility_revision, revision)
+        self.assertGreater(self.asks_sent(), sent)
+
     def test_a_late_completion_cannot_cross_a_camera_restart(self):
         while self.asks_sent() == 0:
             self.tick()

@@ -54,7 +54,7 @@ class Fixture:
         self.channel = BodyChannel()
         self.detector = SimpleNamespace(next_id=0, on_body=None, send_alone=self.send)
         self.perceiver.detector = self.detector
-        self.rendered = []
+        self.rendered, self.times = [], []   # what reached Home, and when on the lease clock
         self.link = BodyLink(self.detector, stream=SimpleNamespace(publish_body=self.publish), clock=self.clock,
                              min_interval_s=0)
         self.perceiver.body = self.link
@@ -94,6 +94,7 @@ class Fixture:
 
     def publish(self, scope, **fields):
         self.rendered.append((scope, fields))
+        self.times.append(self.clock())
         return True
 
     def observe(self, *args, **kwargs):
@@ -381,6 +382,47 @@ class RgbBodyTests(unittest.TestCase):
             f.frame(n, depth=both, first=first, second=pixels_b if second else None)
             self.assertNotEqual(f.last.observation, "person", "frame %d, seen %s" % (n, (first, second)))
         self.assertEqual([fields for _, fields in f.rendered[start:] if fields.get("frame")], [], "no figure")
+
+    def test_after_a_split_the_duplicate_ends_quietly_and_leaving_clears_after_the_hold(self):
+        """The split again, run on: den-track ends the left-behind track (max_coast_s) with the figure going on, and
+        nothing reaches Home but the person's own frames. Then the person leaves during a second split's overlap: the
+        last figure holds its 2 s lease, then clears for nobody seen, never as two people."""
+        from stream import BODY_LEASE_S
+
+        f = self.f
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        for n in range(55, 70):
+            f.frame(n)
+        for n in (70, 71):
+            f.frame(n, empty=True, depth=f.depth)
+        f.place(1.5)
+        start, counts = len(f.rendered), []
+        for n in range(72, 112):   # 8 s: past the left-behind track's 6 s coast
+            counts.append(len(f.frame(n)["tracks"]))
+        self.assertIn(2, counts, "split")
+        self.assertEqual(counts[-1], 1, "the left-behind track has ended")
+        after = f.rendered[start:]
+        self.assertEqual([fields.get("reason") for _, fields in after if not fields.get("frame")], ["scope_changed"])
+        self.assertTrue(all(fields["frame"]["track_id"] == after[-1][1]["frame"]["track_id"]
+                            for _, fields in after[2:] if fields.get("frame")))
+        # A second split, and the person leaves before the left-behind track ends.
+        for n in (112, 113):
+            f.frame(n, empty=True, depth=f.depth)
+        f.place(0.0)
+        for n in range(114, 120):
+            f.frame(n)
+        last_figure = max(i for i, (_, fields) in enumerate(f.rendered) if fields.get("frame"))
+        left_at = f.clock()
+        for n in range(120, 140):
+            f.frame(n, empty=True)
+        cleared = [(fields["reason"], at) for (_, fields), at in zip(f.rendered[last_figure + 1:], f.times[last_figure + 1:])
+                   if "reason" in fields]
+        self.assertTrue(cleared, "the figure goes once the person has left")
+        self.assertNotIn("ambiguous", [reason for reason, _ in cleared])
+        self.assertGreaterEqual(cleared[0][1], left_at + BODY_LEASE_S - 0.25, "held its lease first")
 
     def test_the_split_replayed_through_den_track_keeps_one_figure(self):
         """LA's split, through den-track: the owner shown, two frames with no detection (sitting down), then seen 1.5 m

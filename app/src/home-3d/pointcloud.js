@@ -195,7 +195,10 @@ export function createLitPointsMaterial(base, { texture, width }) {
         || !fragment.includes('vec4(vLitColor')) throw new Error('lit_points_shader_changed');
     const mat = new THREE.ShaderMaterial({
         name: 'apartment-points-lit',
-        uniforms: { ...base.uniforms, uLitColor: { value: texture }, uLitWidth: { value: width } },
+        // Every uniform object is shared but the jitter: the relit cloud holds still, as the Lit frame does while the
+        // camera rests. The classic cloud's ±1 cm shimmer kept every lit frame changing (2026-11-15: Echo's relit Cloud
+        // never settled once #453 let it draw).
+        uniforms: { ...base.uniforms, uJitterAmp: { value: 0 }, uLitColor: { value: texture }, uLitWidth: { value: width } },
         vertexShader: vertex,
         fragmentShader: fragment,
         transparent: base.transparent,

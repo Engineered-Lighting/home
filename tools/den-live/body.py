@@ -29,7 +29,10 @@ BACKGROUND_FILE, KEPT_MAX_S = "body-background.npz", 24 * 3600.0
 CUT_MM, NEAR_LIMB_MM, EDGE_MM = 120, 40, 60
 NEAR_MM, FAR_MM = 300, 5000
 GATE_M, MIN_BODY_PX = 0.9, 300
-SPACING_M, MAX_POINTS = 0.013, 16384
+# One measured pixel per SPACING_M cube. At the desk and sofa, 2-3 m away, depth pixels are 6-7 mm apart: 13 mm kept
+# about one pixel in four and the figure read as wisps (3.5k points at the desk); 8 mm keeps about one in two and twice
+# the points (7.5k), all real pixels, well under MAX_POINTS.
+SPACING_M, MAX_POINTS = 0.008, 16384
 TORSO_SEED_PX, TORSO_DEPTH_MM = 8, 80
 MIN_TORSO_SEEDS = 2
 SHOULDERS = ("left_shoulder", "right_shoulder")

@@ -147,6 +147,16 @@ class BodyTest(unittest.TestCase):
                 expected = np.rint(world(cols, rows, fixture[1][rows, cols]) * 1000)
                 np.testing.assert_array_equal(actual["position_mm"], expected)
 
+    def test_the_figure_keeps_over_a_quarter_of_the_persons_pixels_at_desk_distance(self):
+        """2 m from the camera, as at the desk: depth pixels are 5 mm apart here. 13 mm kept about one in six and the
+        figure read as wisps; 8 mm keeps more than a quarter of them, every one a real pixel."""
+        fixture = scene("standing")
+        maker = self.learned(fixture)
+        frame, why = self.render(maker, fixture)
+        self.assertIsNone(why)
+        body_pixels = int(((fixture[1] < fixture[0]) & ~fixture[2]).sum())
+        self.assertGreater(frame["points"]["count"], 0.25 * body_pixels)
+
     def test_head_depth_cannot_affect_points_or_normals(self):
         fixture = scene("reclined")
         depth = fixture[1].copy()

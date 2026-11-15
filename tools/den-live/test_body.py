@@ -573,10 +573,40 @@ class DepthHeldTest(unittest.TestCase):
         fixture = phone_in_hand()
         maker = self.learned(fixture)
         c = 292
-        phone = {"label": "cell phone", "score": 0.8, "polygon": [[c + 90, 168], [c + 110, 168], [c + 110, 196], [c + 90, 196]]}
-        self.held_frame(maker, fixture, [phone])
-        frame, _ = self.held_frame(maker, fixture, [phone])
-        self.assertEqual(frame["object"], {"label": "cell phone", "confidence": 0.8, "source": "detector"})
+        cup = {"label": "cup", "score": 0.8, "polygon": [[c + 90, 168], [c + 110, 168], [c + 110, 196], [c + 90, 196]]}
+        self.held_frame(maker, fixture, [cup])
+        frame, _ = self.held_frame(maker, fixture, [cup])
+        self.assertEqual(frame["object"], {"label": "cup", "confidence": 0.8, "source": "detector"})
+
+    def test_a_held_phone_or_remote_is_held_unnamed(self):
+        """A held phone is about 20 px in the RGB frame: the seg model never calls it "cell phone" there, and calls it
+        "remote" on some frames, a few cm from the wrist at 0.36-0.67 (the sofa benchmark, 2026-11-14). For that pair the
+        mask's pixels are the object's points, but the name isn't sent: Home shows "Held object", never REMOTE."""
+        fixture = phone_in_hand()
+        c = 292
+        box = [[c + 90, 168], [c + 110, 168], [c + 110, 196], [c + 90, 196]]
+        for labels in (["remote", "remote"], ["cell phone", "cell phone"], ["remote", "cell phone"]):
+            maker = self.learned(fixture)
+            frames = [self.held_frame(maker, fixture, [{"label": label, "score": 0.6, "polygon": box}])[0]
+                      for label in labels]
+            self.assertFalse((self.kinds(frames[0]) == B.KIND_OBJECT).any(), "%s: one frame isn't a hold yet" % labels)
+            self.assertIsNone(frames[1]["object"], "%s: unnamed" % labels)
+            points = decode(frames[1])
+            held = points["kind"].ravel() == B.KIND_OBJECT
+            self.assertGreater(int(held.sum()), 10, "%s: the object's own points" % labels)
+            rows, cols = np.divmod(points["key"].ravel(), B.WIDTH)
+            self.assertTrue(((rows[held] >= 168) & (rows[held] < 196) & (cols[held] >= c + 90)
+                             & (cols[held] < c + 110)).all(), "%s: inside the mask" % labels)
+
+    def test_a_named_phone_and_a_depth_hold_count_as_one_unnamed_object(self):
+        fixture = phone_in_hand()
+        maker = self.learned(fixture)
+        c = 292
+        remote = {"label": "remote", "score": 0.6, "polygon": [[c + 90, 168], [c + 110, 168], [c + 110, 196], [c + 90, 196]]}
+        self.held_frame(maker, fixture, [remote])
+        frame, _ = self.held_frame(maker, fixture, [])
+        self.assertIsNone(frame["object"])
+        self.assertTrue((self.kinds(frame) == B.KIND_OBJECT).any(), "the seg frame and the depth frame are two of three")
 
     def test_with_the_pass_off_nothing_is_held_by_depth_either(self):
         fixture = phone_in_hand()

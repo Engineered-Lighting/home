@@ -102,6 +102,19 @@ class LinkTests(unittest.TestCase):
         self.link.clear("ambiguous")
         self.assertEqual(self.events[-1][1], dict(reason="ambiguous"), "two people: at once")
 
+    def test_every_frame_of_a_four_frames_a_second_camera_carries_a_body(self):
+        """The camera sends about 4.2 frames a second: frames 0.24 s apart each get a body when the worker has answered
+        the one before. A 0.3 s gap skipped every other frame, and the figure moved at 2 a second."""
+        self.setup_worker()
+        for frame_id in range(20, 32):
+            self.now += 0.238
+            self.assertTrue(self.submit(frame_id=frame_id), "frame %d" % frame_id)
+            self.detector.reply()
+        self.assertEqual((self.link.counts["sent"], self.link.counts["skipped_rate"]), (12, 0))
+        self.now += 0.1
+        self.assertFalse(self.submit(frame_id=40), "a frame sooner than 0.2 s after the last is still skipped")
+        self.assertEqual(self.link.counts["skipped_rate"], 1)
+
     def test_busy_shared_worker_retries_setup_and_preserves_learning_reset(self):
         with patch.object(self.detector, "send_alone", return_value=False):
             self.assertFalse(self.submit())
@@ -365,6 +378,62 @@ class StreamTests(unittest.TestCase):
             self.assertEqual(read_event(response), ("spot_clock", {"epoch": spot["epoch"], "server_mono": 10.0}))
             self.assertEqual(read_event(response), ("spot_snapshot", spot))
             self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])
+
+
+class SharedSlotTest(unittest.TestCase):
+    """The body and the Qwen ask on the detector process's one optional slot, with den-live's real pieces: BodyLink at
+    its own MIN_INTERVAL_S, ask.Asker, and perceive.DetectorWorker.send_alone (test_ask.SharedSlot). Frames come at LA's
+    pace, about 4.2 a second. Each frame, the last body pass answers, the body is submitted (Perceiver.finish), then
+    the ask observes (Loop._publish)."""
+
+    SPACINGS = [0.22, 0.25, 0.24, 0.23, 0.26, 0.238, 0.245, 0.235]
+
+    def test_the_figure_moves_at_the_cameras_pace_and_the_asks_still_go_out(self):
+        import test_ask
+
+        class RealBody(test_ask.SharedSlot):
+            on_body = None
+
+            def __init__(self, clock):
+                super().__init__(clock, 0.0)
+                self.sent, self.frames_in = None, 0
+                self.link = BodyLink(self, stream=SimpleNamespace(publish_body=lambda scope, **event: True), clock=clock)
+
+            def frame(self):
+                self.frames_in += 1
+                if self.worker.optional is not None and self.worker.optional[0] == "body":
+                    self.worker.optional = None   # the reader frees the slot, then hands the reply on
+                    header = self.sent
+                    if header["kind"] == "setup_body":
+                        self.on_body({"body_ready": True, "binding": header["setup"]["binding"]})
+                    else:
+                        self.on_body(dict(body_id=header["id"], request_id=header["request_id"], why=None,
+                                          frame_key=header["frame_key"], binding=header["binding"], frame=FRAME))
+                self.link.submit(self.frames_in, frame_key=["camera", self.frames_in], scope=SCOPE, setup=SETUP,
+                                 capture_mono=self.clock() - 0.1, observation="person", person=PERSON)
+
+            def send_alone(self, header):
+                if header["kind"] == "stills":
+                    return super().send_alone(header)
+                admitted = self.worker.send_alone(header)
+                if admitted:
+                    self.worker.writes.get_nowait()   # the writer thread
+                    self.sent = header
+                return admitted
+
+        case = test_ask.BodyEveryFrameTest("test_body_every_0_2_s_with_frames_0_2_s_apart")
+        case.setUp()
+        slot = RealBody(case.clock)
+        case.asker.detector, slot.on_stills, case.detector = slot, case.asker._stills, slot
+        start, n = case.clock.t, 0
+        while case.clock.t - start < 60.0:
+            case.tick(seconds=self.SPACINGS[n % len(self.SPACINGS)])
+            n += 1
+        outcomes = [line["outcome"] for line in case.log_lines()]
+        # 0.3 s gave 2.1 bodies a second here. Each ask's stills take the slot from one body pass.
+        self.assertGreater(slot.link.counts["frames"] / 60.0, 3.5, slot.link.counts)
+        self.assertNotIn("stills_failed", outcomes)
+        self.assertGreaterEqual(outcomes.count("completed"), 20)
 
 
 if __name__ == "__main__":

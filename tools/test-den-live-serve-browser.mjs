@@ -268,7 +268,9 @@ before(async () => {
   gateway = spawn(process.execPath, [path.join(root, 'web-gateway/server.mjs')], { cwd: root, env, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '', problem;
   for (const stream of [gateway.stdout, gateway.stderr]) stream.on('data', chunk => { logs = (logs + chunk).slice(-8000); });
-  for (let i = 0; i < 55 && gateway.exitCode === null; i++) {
+  // Up to 30 s: a gateway's first start after a checkout switch reads every freshly written file, and on a busy
+  // machine that ran past the old 5.5 s (connect ECONNREFUSED). An exit still fails at once.
+  for (let i = 0; i < 300 && gateway.exitCode === null; i++) {
     try {
       const health = await request('http://127.0.0.1:' + ordinaryPort + '/healthz');
       const shell = await request(origin + '/');

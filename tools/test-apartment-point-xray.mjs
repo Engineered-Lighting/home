@@ -115,6 +115,10 @@ test('the classic shaders and the lit layer are unchanged by the x-ray look', ()
   const lit = Pointcloud.createLitPointsMaterial(base, { texture, width: 1 });
   assert.ok(lit.vertexShader.includes('vLitColor = texelFetch'));
   assert.equal(lit.uniforms.uTime, base.uniforms.uTime);
+  // The relit cloud holds still: its own jitter of 0, while the classic cloud keeps its shimmer.
+  assert.notEqual(lit.uniforms.uJitterAmp, base.uniforms.uJitterAmp);
+  assert.equal(lit.uniforms.uJitterAmp.value, 0);
+  assert.ok(base.uniforms.uJitterAmp.value > 0);
 });
 
 test('x-ray gain keeps exposure independent of window size, within bounds', () => {

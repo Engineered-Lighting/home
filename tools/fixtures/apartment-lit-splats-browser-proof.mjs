@@ -72,7 +72,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
   assert.ok(part === 1 || part === 2, 'part 1 or 2');
   assert.ok(site === 'victoria' || site === 'echo' && part === 2 && RENDERER === 'webgl' && precision === 'exact');
   assert.ok(['exact','native'].includes(precision),'known frame precision contract');
-  assert.ok(phase === 'all' || site === 'echo' && ['mesh', 'receivers'].includes(phase) || precision === 'native' && part === 1
+  assert.ok(phase === 'all' || site === 'echo' && ['mesh', 'receivers-splat', 'receivers-points'].includes(phase) || precision === 'native' && part === 1
     && ['frames', 'controls', 'calibration'].includes(phase), 'known proof phase');
   const runBase=path.join(ROOT,'.tmp/apartment-lit-splats-browser');fs.mkdirSync(runBase,{recursive:true});
   const run=fs.mkdtempSync(path.join(runBase,'part'+part+'-run-'+Date.now()+'-'));
@@ -371,7 +371,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       assert.equal(await lighting.getAttribute('aria-pressed'), 'false');
       await haControls.waitFor({ state: 'visible' });
       const views = [['Mesh', 'mesh', null], ['Photo', 'splat', 'splat'], ['Cloud', 'points', 'points']];
-      for (const [view, mode, receiver] of views.filter(([, , kind]) => phase === 'all' || !!kind === (phase === 'receivers'))) {
+      for (const [view, mode, receiver] of views.filter(([, , kind]) => phase === 'all' || phase === (kind ? 'receivers-' + kind : 'mesh'))) {
         await enterMode(page, view + ' view', mode);
         await stable(page, view + ':off');
         await lighting.click();

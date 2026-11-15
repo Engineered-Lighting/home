@@ -295,6 +295,61 @@ class LinkTests(unittest.TestCase):
                 client.get(path)
 
 
+class FirstCheckPull(unittest.TestCase):
+    """The first check's LA half pulls as den-live does: the slim bundle on one kept connection, else the full one."""
+
+    def pull(self, camera, seconds=2.0):
+        import first_check_remote as fr
+        stop = threading.Event()
+
+        def publish():
+            seq = camera.seq
+            while not stop.wait(0.2):
+                seq += 1
+                camera.publish(seq)
+        threading.Thread(target=publish, daemon=True).start()
+        try:
+            return fr.pull(camera.url, TOKEN, seconds)
+        finally:
+            stop.set()
+
+    def test_a_slim_camera_is_pulled_on_one_kept_connection(self):
+        camera = FakeCamera()
+        self.addCleanup(camera.close)
+        got = self.pull(camera)
+        self.assertEqual((got['link'], got['connections'], camera.connections), ('slim-kept', 1, 1))
+        self.assertGreaterEqual(got['new_frames'], 5)
+        self.assertGreater(got['not_modified'], 0, '304s between frames')
+        self.assertEqual(set(got['statuses']), {'200', '304'})
+        self.assertEqual(len(got['fetch_ms']), got['new_frames'], "one fetch time per new frame, as den-live's")
+        self.assertEqual(set(camera.paths()), {source.SLIM_PATH})
+
+    def test_an_earlier_camera_is_pulled_as_before(self):
+        camera = FakeCamera(slim=False)
+        self.addCleanup(camera.close)
+        got = self.pull(camera, 3.0)   # a fresh connection each time, behind the slim path's one probe
+        self.assertEqual(got['link'], 'full-fresh')
+        self.assertGreaterEqual(got['new_frames'], 5)
+        self.assertEqual(set(got['statuses']), {'200'}, "the slim path's 404 isn't an answer it counts")
+        self.assertEqual(camera.paths()[0], source.SLIM_PATH)
+        self.assertEqual(set(camera.paths()[1:]), {'/frame.npz'})
+
+    def test_a_slim_answer_of_another_schema_falls_back_and_says_so(self):
+        camera = FakeCamera(schema='den-camera-slim-0')
+        self.addCleanup(camera.close)
+        got = self.pull(camera, 1.0)
+        self.assertEqual((got['link'], got['errors'].get('schema')), ('full-fresh', 1))
+
+    def test_the_report_names_the_link(self):
+        import first_check as fc
+        pull = {'seconds': 60, 'fetch_ms': [90.0, 110.0], 'new_frames': 250, 'bytes': [400_000], 'statuses': {'200': 250},
+                'errors': {}, 'link': 'slim-kept'}
+        self.assertEqual(fc.pull_line(pull), 'Frames from LA:   4.2 a second over 60 s; fetch median 100 ms, 95th 110 ms; '
+                                             'median 0.40 MB; no errors; the slim bundle on one kept connection')
+        self.assertIn('not needed', fc.relay_line(pull))
+        self.assertIn('a new connection each time', fc.pull_line(dict(pull, link='full-fresh')))
+
+
 class SourceOverTheLink(unittest.TestCase):
     def run_source(self, camera, seconds, *, every_s=0.2, token=TOKEN):
         take = den_take()

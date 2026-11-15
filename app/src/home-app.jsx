@@ -5796,6 +5796,13 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
   const shellTabRef = useRef(shellTab);
   shellTabRef.current = shellTab;
   const [shellDetent, setShellDetent] = useState("half");
+  // A surface on the room can ask the phone sheet for a height: the den's pipeline lowers it to peek while it's on,
+  // so the room has the screen, and puts it back after.
+  useEffect(() => {
+    const onDetent = event => { const detent = event.detail?.detent; if (APARTMENT_SHEET_DETENTS.includes(detent)) setShellDetent(detent); };
+    window.addEventListener("home-sheet-detent", onDetent);
+    return () => window.removeEventListener("home-sheet-detent", onDetent);
+  }, []);
   const [shellState, setShellState] = useState(null);
   const shellStateRef = useRef(null);
   shellStateRef.current = shellState;

@@ -70,12 +70,12 @@ class Loading(unittest.TestCase):
             weights.write_bytes(b"fictional weights")
             self.assertEqual(held_seg.load(models, "cpu", pinned="0" * 64)[1], "the held-object weights aren't the pinned ones")
             pinned = hashlib.sha256(weights.read_bytes()).hexdigest()
-            loaded = []
+            loaded, model = [], SimpleNamespace(predict=lambda image, **kw: [result()])
             segmenter, why = held_seg.load(models, "cuda:0", pinned=pinned,
-                                           yolo=lambda path, task: loaded.append((Path(path).name, task)) or "model")
+                                           yolo=lambda path, task: loaded.append((Path(path).name, task)) or model)
             self.assertIsNone(why)
             self.assertEqual(loaded, [(held_seg.HELD_WEIGHTS, "segment")])
-            self.assertEqual((segmenter.model, segmenter.device), ("model", "cuda:0"))
+            self.assertEqual((segmenter.model, segmenter.device), (model, "cuda:0"))
 
     def test_the_pin_is_the_published_weights(self):
         self.assertEqual(held_seg.HELD_SHA256, "3da1d83e31caec96f9300eb4064f4f62882c133c7c264d63dfe61a7c197837a4")
@@ -90,6 +90,48 @@ class Loading(unittest.TestCase):
         self.assertEqual([i["label"] for i in got], ["book"])
         self.assertEqual(calls, [{"verbose": False, "device": "cuda:0", "conf": held_seg.SCORE_MIN}])
 
+    def test_a_pass_that_cannot_run_says_so_at_load(self):
+        """On LA a predict that needs a writable ./runs raised on every frame and the frame held nothing, silently."""
+        class Unwritable:
+            def __init__(self, path, task):
+                pass
+
+            def predict(self, image, **kw):
+                raise PermissionError(13, "Permission denied", "runs")
+        with tempfile.TemporaryDirectory() as folder:
+            models = Path(folder)
+            (models / held_seg.HELD_WEIGHTS).write_bytes(b"fictional weights")
+            pinned = hashlib.sha256(b"fictional weights").hexdigest()
+            segmenter, why = held_seg.load(models, "cuda:0", pinned=pinned, yolo=Unwritable, state=models)
+            self.assertIsNone(segmenter)
+            self.assertEqual(why, "the held-object pass failed its first run (PermissionError)")
+            import detect_worker
+            from functools import partial
+            _, fields = detect_worker.held_pass(models, None, load=partial(held_seg.load, pinned=pinned, yolo=Unwritable))
+            self.assertEqual(fields, {"held": False, "held_why": "the held-object pass failed its first run (PermissionError)"})
+
+
+class FailureCount(unittest.TestCase):
+    def test_a_raising_pass_is_counted_by_type_and_said_once_a_minute(self):
+        now = [0.0]
+        failures = held_seg.Failures(clock=lambda: now[0])
+        for _ in range(5):
+            now[0] += 2.0
+            self.assertIsNone(failures.count("PermissionError"))
+        self.assertIsNone(failures.count(None))
+        now[0] += 60.0
+        line = failures.count("PermissionError")
+        self.assertEqual(line, "den-live: in the last 70 s the held-object pass failed 6 times (PermissionError 6); "
+                               "those frames held nothing")
+        now[0] += 61.0
+        self.assertIsNone(failures.count(None), "a quiet minute says nothing")
+
+    def test_the_worker_counts_a_raising_pass_and_logs_it(self):
+        source = (Path(held_seg.__file__).parent / "detect_worker.py").read_text(encoding="utf-8")
+        self.assertIn("kept, failed = (*kept[:3], []), type(exc).__name__", source)
+        self.assertIn("line = held_failures.count(failed)", source)
+        self.assertNotIn("except Exception:  # the pass is on, this frame found nothing", source)
+
 
 class ReadyLine(unittest.TestCase):
     """detect_worker's ready line says whether the held-object pass is on, and why not."""
@@ -99,7 +141,7 @@ class ReadyLine(unittest.TestCase):
         from functools import partial
         with tempfile.TemporaryDirectory() as folder:
             models = Path(folder)
-            fake = lambda path, task: "model"
+            fake = lambda path, task: SimpleNamespace(predict=lambda image, **kw: [result()])
             segmenter, fields = detect_worker.held_pass(models, {"boxes": "cuda:0"}, load=partial(held_seg.load, yolo=fake))
             self.assertIsNone(segmenter)
             self.assertEqual(fields, {"held": False, "held_why": "the held-object weights aren't in the models folder"})

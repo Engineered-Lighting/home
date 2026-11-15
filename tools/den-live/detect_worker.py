@@ -131,13 +131,16 @@ def say(value):
     PROTOCOL.flush()
 
 
-def held_pass(models, devices, *, load=None):
+def held_pass(models, devices, *, load=None, state=None):
     """(the held-object segmenter or None, the ready line's held fields): held_seg.py's YOLO26s-seg beside the tracking
     detector, on the same frame, only with its pinned weights in the models folder, on the boxes model's device. Off,
     every frame and reply is exactly as before; held_why says why, in words."""
     try:
         import held_seg
-        segmenter, why = (load or held_seg.load)(models, (devices or {}).get("boxes") or "cpu")
+        if load is None:
+            segmenter, why = held_seg.load(models, (devices or {}).get("boxes") or "cpu", state=state)
+        else:
+            segmenter, why = load(models, (devices or {}).get("boxes") or "cpu")
     except Exception as exc:  # a type name only
         segmenter, why = None, "the held-object pass didn't load (%s)" % type(exc).__name__
     return segmenter, {"held": segmenter is not None, **({"held_why": why} if why else {})}
@@ -166,7 +169,11 @@ def main(argv=None):
         say({"refused": str(exc)[:200]})
         return 2
     np = detector.np
-    segmenter, held = held_pass(models, detector.devices)
+    segmenter, held = held_pass(models, detector.devices, state=state)
+    held_failures = None
+    if segmenter is not None:
+        import held_seg
+        held_failures = held_seg.Failures()
     say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms), "devices": detector.devices,
          **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {}), **held})
     stream = sys.stdin.buffer
@@ -221,11 +228,15 @@ def main(argv=None):
                                   keypoints_version=detector.pose.manifest["model_version"])
             say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1), **identity})
             if segmenter is not None:   # after the row is on its way: tracking's timing is its own
+                failed = None
                 try:
                     import cv2
                     kept = (*kept[:3], segmenter(np.ascontiguousarray(rgb[:, :, ::-1]), row, cv2))
-                except Exception:  # the pass is on, this frame found nothing: never the frame's end
-                    kept = (*kept[:3], [])
+                except Exception as exc:  # the pass is on, this frame holds nothing: counted, never the frame's end
+                    kept, failed = (*kept[:3], []), type(exc).__name__
+                line = held_failures.count(failed)
+                if line:
+                    print(line, file=sys.stderr, flush=True)
         except Exception as exc:  # one bad frame is a reply, not the end; a type name only, never its text
             reply = {"id": header.get("id"), "error": type(exc).__name__, **identity}
             if type(exc).__name__ == "RowError":   # den-observe's schema reasons: fixed words, no frame data

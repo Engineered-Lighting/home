@@ -44,6 +44,8 @@ stream_url=http://127.0.0.1:8111/api/den-live/v1/homes/den/state
 yolo_sha=646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b
 pose_sha=5c0a4bf67953e6d2ac43ce15e77dc9d5d354ae18430a47d2c5963a7bc5683e3c
 manifest_sha=1bd8ad0a3828efc9d5b86b603ceee0639d3e7d674db98dfc3d85baa291740585
+# YOLO26s-seg, the held-object pass: held_seg.py's pin, not den-detect's lock
+held_sha=3da1d83e31caec96f9300eb4064f4f62882c133c7c264d63dfe61a7c197837a4
 wheel=rtmlib-0.0.16-py3-none-any.whl
 wheel_sha=ba932b25f7d264d7ec4837545c5e7c392001f48b53e22e514cb1497882389eaa
 work=""
@@ -170,7 +172,8 @@ observe_tree="$(find "${release}/trees" -mindepth 1 -maxdepth 1 -type d -name 'o
 say "Release ${want:0:12}: every file matches its SHA256SUMS."
 
 # ---- 3. the models ---------------------------------------------------------------------------------------------
-for pair in "yolo26s.pt:${yolo_sha}" "rtmpose-m-body7.onnx:${pose_sha}" "artifact.json:${manifest_sha}"; do
+for pair in "yolo26s.pt:${yolo_sha}" "rtmpose-m-body7.onnx:${pose_sha}" "artifact.json:${manifest_sha}" \
+            "yolo26s-seg.pt:${held_sha}"; do
   name="${pair%%:*}"
   sha="${pair#*:}"
   pinned "${release}/models/${name}" "${sha}" || refuse "the release's ${name} isn't the pinned one"
@@ -179,7 +182,7 @@ for pair in "yolo26s.pt:${yolo_sha}" "rtmpose-m-body7.onnx:${pose_sha}" "artifac
   fi
 done
 pinned "${release}/wheels/${wheel}" "${wheel_sha}" || refuse "the release's ${wheel} isn't the pinned one"
-say "Models: YOLO26s and RTMPose-m match their pinned sha256 (646f8bc3, 5c0a4bf6)."
+say "Models: YOLO26s, RTMPose-m and YOLO26s-seg match their pinned sha256 (646f8bc3, 5c0a4bf6, ${held_sha:0:8})."
 
 # ---- 4. the detector's venv ------------------------------------------------------------------------------------
 if [[ -e /dev/nvidiactl ]]; then   # an NVIDIA GPU: the CUDA build (the detector still falls back to the CPU itself)
@@ -237,8 +240,9 @@ devices="$(printf '%s' "${ready}" | "${python}" -c 'import json, sys
 line = json.loads(sys.stdin.read())
 names = {"cpu": "the CPU", "cuda:0": "the GPU"}
 devices = line.get("devices") or {}
-print("YOLO26s on %s, RTMPose-m on %s%s" % (names.get(devices.get("boxes"), "?"), names.get(devices.get("pose"), "?"),
-      "; " + line["gpu_why"][:120] if line.get("gpu_why") else ""))' 2>/dev/null || true)"
+print("YOLO26s on %s, RTMPose-m on %s%s; the held-object pass %s" % (names.get(devices.get("boxes"), "?"),
+      names.get(devices.get("pose"), "?"), "; " + line["gpu_why"][:120] if line.get("gpu_why") else "",
+      "on" if line.get("held") else "off (%s)" % str(line.get("held_why") or "not said")[:80]))' 2>/dev/null || true)"
 say "Detector venv: ${lock##*/}'s versions; the models load: ${devices:-where, not said}."
 
 # ---- 5. the settings -------------------------------------------------------------------------------------------

@@ -12,6 +12,7 @@ import io
 import math
 import time
 import zipfile
+from collections import deque
 
 HEIGHT, WIDTH = 400, 640
 DEPTH_SCALE_RANGE = (0.90, 1.10)   # contracts.py's: this file loads in the detector's venv on its own
@@ -32,6 +33,23 @@ NEAR_LIMBS = (("left_hip", "left_knee", 0.11), ("left_knee", "left_ankle", 0.09)
               ("left_shoulder", "left_elbow", 0.08), ("left_elbow", "left_wrist", 0.07),
               ("right_shoulder", "right_elbow", 0.08), ("right_elbow", "right_wrist", 0.07))
 BODY_JOINTS = frozenset(TORSO).union(name for a, b, _ in NEAR_LIMBS for name in (a, b))
+# What the person holds: a holdable thing's instance mask from the detector worker's segmentation pass (held_seg.py),
+# kept where it meets measured depth within WRIST_REACH_M of a wrist. Its pixels become KIND_OBJECT points, actual depth
+# pixels like every other, with the detector's label, once the same label held in HELD_FRAMES of the last HELD_OF
+# person frames.
+KIND_OBJECT = 5
+HOLDABLE = frozenset(("book", "cell phone", "cup", "bottle", "remote", "laptop", "scissors", "mouse"))
+WRISTS = ("left_wrist", "right_wrist")
+WRIST_REACH_M, OBJECT_MIN_PX, OBJECT_MAX_POINTS = 0.32, 40, 4096
+HELD_FRAMES, HELD_OF = 2, 3
+MAX_POLYGON = 256
+# When the seg pass names nothing at the hand (a phone is about 20 px in the RGB frame, too small for it), what the hand
+# holds by depth alone, as den-live had it on 2026-11-11 (1a4268f7): measured pixels within WRIST_REACH_M of a wrist
+# whose elbow is measured too, that the body's own capsules don't explain (OBJECT_MARGIN_M beyond them), the largest
+# 4-connected region of at least DEPTH_OBJECT_MIN_M2 (phone-sized), while the hands move slower than HAND_STILL_MPS. It
+# holds on the same 2-of-3 rule, unnamed: kind 5 points, and object null for Home's "Held object" marker.
+OBJECT_MARGIN_M, DEPTH_OBJECT_MIN_M2, HAND_STILL_MPS = 0.025, 0.006, 0.3
+UNNAMED = ""   # the hold rule's key for an object held by depth alone
 
 
 def _finite(value):
@@ -164,8 +182,11 @@ def head_mask_available(evidence, *, frame_key, binding):
 class BodyMaker:
     """One registered rectified-left depth camera. State lives only in the worker."""
 
-    def __init__(self, np, cv2, *, left_k, room_from_left):
+    def __init__(self, np, cv2, *, left_k, room_from_left, rgb=None):
         self.np, self.cv2 = np, cv2
+        self.rgb = _rgb_view(np, rgb)   # the RGB camera, for the held object's mask; None leaves it off
+        self.held_seen, self.held_track = deque(maxlen=HELD_OF), None
+        self.hand, self.hand_speed = None, 0.0   # the last frame's wrists and the time, and their smoothed speed
         self.fx, self.fy, self.cx, self.cy = (float(x) for x in left_k[:4])
         self.R, self.t = np.asarray(room_from_left[0], float), np.asarray(room_from_left[1], float)
         if (not all(math.isfinite(x) for x in (self.fx, self.fy, self.cx, self.cy))
@@ -223,9 +244,12 @@ class BodyMaker:
             return 0, HEIGHT, 0, WIDTH
         return v0, v1, u0, u1
 
-    def step(self, depth_mm, *, observation, person=None, frame_key=None, binding=None, now):
-        """Return the ready-frame fields or a clear reason for the parent publisher."""
+    def step(self, depth_mm, *, observation, person=None, frame_key=None, binding=None, now, held=None):
+        """Return the ready-frame fields or a clear reason for the parent publisher. held: this frame's holdable
+        instance masks from the detector worker (held_seg.instances), or None when that pass is off."""
         self.stats = {}
+        if observation != "person":
+            self.held_seen.clear()
         if observation != "empty":
             self.interrupt_learning()
         if observation not in ("empty", "person"):
@@ -291,9 +315,10 @@ class BodyMaker:
             rows, cols = np.mgrid[v0:v1, u0:u1]
             depth[cut_side(cols, rows, cut)] = 0
         return self._person(depth, bg, v0, u0, joints, torso, centre, person, masked=masked,
-                            ceiling=None if cut is None else cut[3])
+                            ceiling=None if cut is None else cut[3], held=held, now=now)
 
-    def _person(self, depth, bg, v0, u0, joints, torso, centre, person, *, masked=None, ceiling=None):
+    def _person(self, depth, bg, v0, u0, joints, torso, centre, person, *, masked=None, ceiling=None, held=None,
+                now=0.0):
         np, cv2 = self.np, self.cv2
         valid = (depth >= NEAR_MM) & (depth <= FAR_MM) & (bg > 0)
         delta = bg - depth
@@ -324,6 +349,24 @@ class BodyMaker:
             component, seeds = self._torso_component(depth, eligible, joints, v0, u0, union=True)
         if component is None or int(component.sum()) < MIN_BODY_PX:
             return None, "insufficient_depth"
+        holding = held is not None and self.rgb is not None
+        held_mask, held_now = None, None
+        if holding:
+            if person["track_id"] != self.held_track:
+                self.held_seen.clear()
+                self.held_track, self.hand, self.hand_speed = person["track_id"], None, 0.0
+            still = self._hands_still(joints, now)
+            held_mask, instance = self._held(depth, valid, delta, component, joints, held, v0, u0)
+            key = instance["label"] if instance else None
+            if instance is None and still:   # the seg pass named nothing here: what the hand holds by depth alone
+                held_mask = self._depth_held(depth, valid, delta, component, joints, v0, u0)
+                key = UNNAMED if held_mask is not None else None
+            self.held_seen.append(key)
+            if key is not None and self.held_seen.count(key) >= HELD_FRAMES:
+                held_now = instance   # None when unnamed: kind 5 points with object null
+                component = component & ~held_mask   # the object's pixels are its own points, not the body's
+            else:
+                held_mask = None
         rows, cols = np.nonzero(component)
         camera = self._camera_points(depth[rows, cols], rows + v0, cols + u0)
         room = camera @ self.R.T + self.t
@@ -344,11 +387,28 @@ class BodyMaker:
         if len(set(supported.values())) < MIN_TORSO_SEEDS:
             return None, "insufficient_depth"
 
+        normals = self._normals(depth, component, rows, cols, camera, v0, u0)
+        keys = (rows + v0) * WIDTH + cols + u0
+        kinds = np.zeros(len(keys), np.uint8)
+        if held_mask is not None:
+            o_rows, o_cols = np.nonzero(held_mask)
+            o_camera = self._camera_points(depth[o_rows, o_cols], o_rows + v0, o_cols + u0)
+            o_room = o_camera @ self.R.T + self.t
+            _, pick = np.unique(np.floor(o_room / SPACING_M).astype(np.int32), axis=0, return_index=True)
+            pick.sort()
+            if len(pick) > OBJECT_MAX_POINTS:
+                pick = pick[np.linspace(0, len(pick) - 1, OBJECT_MAX_POINTS, dtype=int)]
+            o_rows, o_cols, o_camera, o_room = o_rows[pick], o_cols[pick], o_camera[pick], o_room[pick]
+            o_normals = self._normals(depth, held_mask, o_rows, o_cols, o_camera, v0, u0)
+            room = np.concatenate([room, o_room])
+            normals = np.concatenate([normals, o_normals])
+            keys = np.concatenate([keys, (o_rows + v0) * WIDTH + o_cols + u0])
+            kinds = np.concatenate([kinds, np.full(len(o_rows), KIND_OBJECT, np.uint8)])
+            order = np.argsort(keys, kind="stable")   # one row-major key order, as the body's own points have
+            room, normals, keys, kinds = room[order], normals[order], keys[order], kinds[order]
         xyz_mm = np.rint(room * 1000)
         if (xyz_mm < -32768).any() or (xyz_mm > 32767).any():
             return None, "scope_changed"
-        normals = self._normals(depth, component, rows, cols, camera, v0, u0)
-        keys = (rows + v0) * WIDTH + cols + u0
         heading = person.get("facing_deg")
         # Shoulders the head mask removed are still this frame's measured joints: with the hips supported in the
         # cloud they give the heading and the shoulder midpoint, never points.
@@ -360,16 +420,124 @@ class BodyMaker:
         else:
             shoulders = None
         pelvis = self._midpoint(joints, supported, HIPS)
-        self.stats = {"measured": len(keys), "eligible": int(component.sum())}
-        return {"track_id": person["track_id"],
-                "points": {"count": len(keys), "key": _b64(keys.astype("<u4")),
-                           "position_mm": _b64(xyz_mm.astype("<i2")),
-                           "normal": _b64(np.clip(np.rint(normals * 127), -127, 127).astype("i1")),
-                           "kind": _b64(np.zeros(len(keys), np.uint8))},
-                "facing_deg": heading if shoulders is not None and pelvis is not None
-                and _finite(heading) and 0 <= heading < 360 else None,
-                "shoulder_midpoint_m": shoulders.tolist() if shoulders is not None else None,
-                "pelvis_z_m": float(pelvis[2]) if pelvis is not None else None}, None
+        self.stats = {"measured": len(keys), "eligible": int(component.sum()), "object": int((kinds == KIND_OBJECT).sum())}
+        frame = {"track_id": person["track_id"],
+                 "points": {"count": len(keys), "key": _b64(keys.astype("<u4")),
+                            "position_mm": _b64(xyz_mm.astype("<i2")),
+                            "normal": _b64(np.clip(np.rint(normals * 127), -127, 127).astype("i1")),
+                            "kind": _b64(kinds)},
+                 "facing_deg": heading if shoulders is not None and pelvis is not None
+                 and _finite(heading) and 0 <= heading < 360 else None,
+                 "shoulder_midpoint_m": shoulders.tolist() if shoulders is not None else None,
+                 "pelvis_z_m": float(pelvis[2]) if pelvis is not None else None}
+        if holding:   # only with the held-object pass on: without it the frame is exactly as it was
+            frame["object"] = None if held_now is None else {
+                "label": held_now["label"], "confidence": round(float(held_now["score"]), 3), "source": "detector"}
+        return frame, None
+
+    def _hands_still(self, joints, now):
+        """True while the measured wrists move slower than HAND_STILL_MPS (smoothed over frames, as on 2026-11-11)."""
+        np = self.np
+        wrists = {name: joints[name] for name in WRISTS if name in joints}
+        if self.hand is not None and now > self.hand[1]:
+            moved = [float(np.linalg.norm(point - self.hand[0][name])) for name, point in wrists.items() if name in self.hand[0]]
+            if moved:
+                self.hand_speed += (max(moved) / (now - self.hand[1]) - self.hand_speed) * 0.5
+        self.hand = (wrists, now)
+        return self.hand_speed < HAND_STILL_MPS
+
+    def _capsules(self, joints):
+        """The body's own volume from its measured joints, (a, b, radius) in metres: what a held object isn't."""
+        np = self.np
+
+        def mid(a, b):
+            return (joints[a] + joints[b]) / 2 if a in joints and b in joints else None
+        chest, pelvis = mid(*SHOULDERS), mid(*HIPS)
+        capsules = []
+        if chest is not None and pelvis is not None:
+            up = chest - pelvis
+            up = up / max(float(np.linalg.norm(up)), 1e-9)
+            capsules += [(pelvis, chest, 0.17), (chest, chest + up * 0.25, 0.11)]   # the torso, then the neck and head
+        for side in ("left", "right"):
+            shoulder, elbow, wrist, hip, knee, ankle = (joints.get(side + "_" + part) for part in
+                                                        ("shoulder", "elbow", "wrist", "hip", "knee", "ankle"))
+            if shoulder is not None and elbow is not None:
+                capsules.append((shoulder, elbow, 0.06))
+            if elbow is not None and wrist is not None:
+                along = (wrist - elbow) / max(float(np.linalg.norm(wrist - elbow)), 1e-9)
+                capsules += [(elbow, wrist, 0.045), (wrist, wrist + along * 0.09, 0.035)]   # the forearm, then the hand
+            if hip is not None and knee is not None:
+                capsules.append((hip, knee, 0.095))
+            if knee is not None and ankle is not None:
+                capsules.append((knee, ankle, 0.065))
+        return capsules
+
+    def _depth_held(self, depth, valid, delta, component, joints, v0, u0):
+        """What the hand holds by depth alone (the module note), as a pixel mask, or None."""
+        np, cv2 = self.np, self.cv2
+        # A wrist counts only with its elbow: without the forearm's direction the hand itself can't be explained.
+        wrists = [joints[side + "_wrist"] for side in ("left", "right")
+                  if side + "_wrist" in joints and side + "_elbow" in joints]
+        if not wrists:
+            return None
+        rows, cols = np.nonzero(component | (valid & (delta >= NEAR_LIMB_MM)))
+        camera = self._camera_points(depth[rows, cols], rows + v0, cols + u0)
+        pick = np.min([np.linalg.norm(camera - wrist, axis=1) for wrist in wrists], axis=0) <= WRIST_REACH_M
+        for a, b, radius in self._capsules(joints):
+            pick &= _seg_dist(np, camera, a, b) >= radius + OBJECT_MARGIN_M
+        if not pick.any():
+            return None
+        candidates = np.zeros(depth.shape, np.uint8)
+        candidates[rows[pick], cols[pick]] = 1
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(candidates, connectivity=4)
+        if count <= 1:
+            return None
+        region = labels == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        z = depth[region].astype(float)
+        region &= np.abs(depth.astype(float) - np.median(z)) <= EDGE_MM   # its own surface, as the seg path keeps
+        metres = depth[region] / 1000.0
+        if float(np.sum((metres / self.fx) ** 2)) < DEPTH_OBJECT_MIN_M2:
+            return None
+        return region
+
+    def _held(self, depth, valid, delta, component, joints, held, v0, u0):
+        """(this frame's held-object pixel mask, its instance) or (None, None): the person's own pixels, and anything
+        nearer than the empty room, within WRIST_REACH_M of a measured wrist, whose RGB pixel one holdable instance
+        mask covers, within EDGE_MM of those pixels' median depth. The instance covering the most such pixels, with at
+        least OBJECT_MIN_PX of them."""
+        np, cv2 = self.np, self.cv2
+        wrists = [joints[name] for name in WRISTS if name in joints]
+        width, height = self.rgb["size"]
+        instances = []
+        labels = np.zeros((height, width), np.int16)
+        for instance in held if isinstance(held, (list, tuple)) else ():
+            polygon = _polygon(np, instance, width, height)
+            if polygon is not None and len(instances) < 32:
+                instances.append(instance)
+                cv2.fillPoly(labels, [polygon], len(instances))
+        if not wrists or not instances:
+            return None, None
+        rows, cols = np.nonzero(component | (valid & (delta >= NEAR_LIMB_MM)))
+        camera = self._camera_points(depth[rows, cols], rows + v0, cols + u0)
+        near = np.min([np.linalg.norm(camera - wrist, axis=1) for wrist in wrists], axis=0) <= WRIST_REACH_M
+        rows, cols, camera = rows[near], cols[near], camera[near]
+        u, v, ahead = _rgb_pixels(np, self.rgb, camera)
+        inside = ahead & (u >= 0) & (u < width) & (v >= 0) & (v < height)
+        hit = np.zeros(len(rows), np.int64)
+        hit[inside] = labels[v[inside].astype(np.int64), u[inside].astype(np.int64)]
+        if not (hit > 0).any():
+            return None, None
+        best = int(np.argmax(np.bincount(hit[hit > 0])))
+        pick = hit == best
+        # A mask's edge also covers what lies just behind the thing (the chest behind a book): keep the pixels within
+        # EDGE_MM of the masked pixels' median depth, the object's own surface.
+        z = camera[:, 2] * 1000
+        pick &= np.abs(z - np.median(z[pick])) <= EDGE_MM
+        if int(pick.sum()) < OBJECT_MIN_PX:
+            return None, None
+        mask = np.zeros(depth.shape, bool)
+        mask[rows[pick], cols[pick]] = True
+        return mask, instances[best - 1]
 
     def _midpoint(self, joints, supported, pair):
         if all(name in supported for name in pair):
@@ -452,7 +620,7 @@ class BodyChannel:
         self.depth_scale = 1.0
 
     def handle(self, header, kept):
-        """kept is the last detection's (worker id, bundle bytes, pipeline frame key)."""
+        """kept is the last detection's (worker id, bundle bytes, pipeline frame key[, its held-object instances])."""
         if header.get("kind") == "setup_body":
             setup = header.get("setup") or {}
             self.maker, self.binding = None, setup.get("binding")
@@ -466,7 +634,8 @@ class BodyChannel:
                 if type(scale) not in (int, float) or not DEPTH_SCALE_RANGE[0] <= scale <= DEPTH_SCALE_RANGE[1]:
                     raise ValueError("depth scale outside its range")
                 self.depth_scale = float(scale)
-                self.maker = BodyMaker(np, cv2, left_k=setup["left_k"], room_from_left=setup["room_from_left"])
+                self.maker = BodyMaker(np, cv2, left_k=setup["left_k"], room_from_left=setup["room_from_left"],
+                                       rgb=setup.get("rgb"))
                 return {"body_ready": True, "binding": self.binding}
             except Exception as exc:
                 return {"body_refused": type(exc).__name__, "binding": self.binding}
@@ -489,12 +658,64 @@ class BodyChannel:
             start = time.perf_counter()
             frame, why = self.maker.step(depth_of(self.maker.np, kept[1], self.depth_scale), observation=observation,
                                          person=header.get("person"), now=float(header["now"]),
-                                         frame_key=frame_key, binding=binding)
+                                         frame_key=frame_key, binding=binding,
+                                         held=kept[3] if len(kept) > 3 else None)
             return {**reply, "frame": frame, "why": why, "compute_s": round(time.perf_counter() - start, 4),
                     "stats": self.maker.stats}
         except Exception as exc:  # Never put exception text or input data on the pipe.
             self.maker.interrupt_learning()
             return {**reply, "error": type(exc).__name__}
+
+
+def _rgb_view(np, rgb):
+    """The RGB camera from the body setup: {k: [fx, fy, cx, cy, skew], d: 8 rational terms, from_left: [R, t], size:
+    [w, h]}, as den-observe's rig has it; None without one. A malformed one is refused."""
+    if rgb is None:
+        return None
+    k, d, (rotation, translation), size = rgb["k"], rgb["d"], rgb["from_left"], rgb["size"]
+    k = [float(x) for x in k]
+    d = [float(x) for x in d] + [0.0] * (8 - len(d))
+    R, t = np.asarray(rotation, float), np.asarray(translation, float)
+    width, height = int(size[0]), int(size[1])
+    if (len(k) != 5 or not all(math.isfinite(x) for x in k + d) or len(d) != 8 or min(k[0], k[1]) <= 0
+            or R.shape != (3, 3) or t.shape != (3,) or not np.isfinite(R).all() or not np.isfinite(t).all()
+            or not np.allclose(R.T @ R, np.eye(3), atol=1e-4) or not 0 < width <= 4096 or not 0 < height <= 4096):
+        raise ValueError("invalid RGB camera for the held object")
+    return {"k": k, "d": d, "R": R, "t": t, "size": (width, height)}
+
+
+def _rgb_pixels(np, rgb, camera):
+    """(u, v, in front) of rectified-left camera points in the RGB image: den-observe camgeom's project and distort."""
+    p = camera @ rgb["R"].T + rgb["t"]
+    ahead = p[:, 2] > 1e-6
+    z = np.where(ahead, p[:, 2], 1.0)
+    x, y = p[:, 0] / z, p[:, 1] / z
+    k1, k2, p1, p2, k3, k4, k5, k6 = rgb["d"]
+    r2 = x * x + y * y
+    radial = (1 + r2 * (k1 + r2 * (k2 + r2 * k3))) / (1 + r2 * (k4 + r2 * (k5 + r2 * k6)))
+    xd = x * radial + 2 * p1 * x * y + p2 * (r2 + 2 * x * x)
+    yd = y * radial + p1 * (r2 + 2 * y * y) + 2 * p2 * x * y
+    fx, fy, cx, cy, skew = rgb["k"]
+    return fx * xd + skew * yd + cx, fy * yd + cy, ahead
+
+
+def _polygon(np, instance, width, height):
+    """An instance's polygon as int32 RGB pixels, or None: a holdable label, a score in (0, 1], 3 to MAX_POLYGON
+    finite vertices near the image."""
+    if not isinstance(instance, dict) or instance.get("label") not in HOLDABLE:
+        return None
+    score, polygon = instance.get("score"), instance.get("polygon")
+    if (not _finite(score) or not 0 < score <= 1 or not isinstance(polygon, (list, tuple))
+            or not 3 <= len(polygon) <= MAX_POLYGON):
+        return None
+    try:
+        points = np.asarray(polygon, float)
+    except (TypeError, ValueError):
+        return None
+    if (points.shape != (len(polygon), 2) or not np.isfinite(points).all()
+            or (np.abs(points) > 4 * max(width, height)).any()):
+        return None
+    return np.round(points).astype(np.int32)
 
 
 def _seg_dist(np, points, a, b):

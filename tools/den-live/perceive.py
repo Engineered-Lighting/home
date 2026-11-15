@@ -610,6 +610,11 @@ class Perceiver:
                  "room_from_left": [[list(r) for r in rotation], list(translation)]}
         if self.depth_scale != 1.0:   # body.py takes none as 1.0, so at 1.0 the setup is as it always was
             setup["depth_scale"] = self.depth_scale
+        rig = self.camera.rig
+        if all(hasattr(rig, name) for name in ("rgb_k", "rgb_d", "rotation", "translation", "rgb_size")):
+            # The RGB camera, for the held object: body.py finds which depth pixels a holdable mask covers.
+            setup["rgb"] = {"k": list(rig.rgb_k), "d": list(rig.rgb_d), "size": list(rig.rgb_size),
+                            "from_left": [[list(r) for r in rig.rotation], list(rig.translation)]}
         self.body.prepare(scope, binding, person["track_id"] if person else None)
         return dict(frame_key=value.frame_key, scope=scope, setup=setup, capture_mono=value.capture_earliest_mono,
                     observation=value.observation, person=person)

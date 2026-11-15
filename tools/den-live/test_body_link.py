@@ -295,6 +295,20 @@ class StreamTests(unittest.TestCase):
         self.addCleanup(self.stream.close)
         self.base = f"http://127.0.0.1:{self.stream.port}{BASE}den/"
 
+    def test_the_held_object_rides_along_only_when_the_frame_has_it(self):
+        held = {"label": "book", "confidence": 0.91, "source": "detector"}
+        self.assertTrue(self.stream.publish_body(SCOPE, frame={**FRAME, "object": held}, capture_mono=99.9))
+        with urllib.request.urlopen(self.base + "body", timeout=3) as response:
+            read_event(response)
+            name, event = read_event(response)
+            self.assertEqual((name, event["object"]), ("body", held))
+        self.now += 0.1
+        self.assertTrue(self.stream.publish_body(SCOPE, frame=FRAME, capture_mono=100.0))
+        with urllib.request.urlopen(self.base + "body", timeout=3) as response:
+            read_event(response)
+            name, event = read_event(response)
+            self.assertNotIn("object", event, "without the held-object pass, the frame is exactly as before")
+
     def test_capture_deadline_and_clear_replay_with_independent_markers(self):
         self.stream.publish({"seq": 42, "tracks": [{"track_id": "anonymous"}]})
         spot = {"epoch": "synthetic-preview", "valid_until_mono": 15, "seq": 10}

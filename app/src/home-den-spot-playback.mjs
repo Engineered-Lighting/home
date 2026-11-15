@@ -214,10 +214,13 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             if (text(answer.epoch)) entry.epoch = answer.epoch;   // the run den-live's from_seq counts in
             entry.why_not = typeof answer.why_not === 'string' ? answer.why_not.slice(0, 160) : null;
             entry.learned = answer.learned ?? null;
+        } else if (status === 404 || status === 501) {
+            // A den-live without the route: it can't learn, so the chip never promises it, and nothing is retried.
+            entry.state = 'unsupported';
         } else if ((status === 0 || status >= 500) && attempt < MANUAL_RETRIES) {
             later(() => { void send(body, entry, attempt + 1); }, 1000 * (attempt + 1));
             return;
-        } else entry.state = status === 404 || status === 501 ? 'unsupported' : 'failed';
+        } else entry.state = 'failed';
         onChange();
     }
     /* den-live releases a fixture at its next reason to act: once the snapshot has shown the hand Home reported, the

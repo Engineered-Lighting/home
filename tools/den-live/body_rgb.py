@@ -94,12 +94,17 @@ class RgbBodyInput:
         people = [o for o in observations if o["kind"] in ("keypoints", "person_box")]
         if not people and not tracks:
             return BodyInput(*common, "empty")
-        if len(people) > 1 or len(tracks) > 1:
+        if len(tracks) > 1:   # two people tracked: whose depth is whose can't be told
             return BodyInput(*common, "ambiguous")
-        if len(people) != 1 or len(tracks) != 1 or len(supported) != 1:
+        if len(tracks) != 1 or len(supported) != 1:
             return BodyInput(*common, "unknown")
+        # The one track's own observation this frame. Any other detection doesn't support it: a stray box, a reflection,
+        # a pose the tracker never followed. It isn't this person, and it doesn't blank their figure.
+        own = [o for o in people if o["obs_id"] in supported[0]]
+        if len(own) != 1:
+            return BodyInput(*common, "ambiguous" if len(own) > 1 else "unknown")
 
-        track, pose = tracks[0], people[0]
+        track, pose = tracks[0], own[0]
         status, _ = association.get(track["track_id"], (None, None))
         if status == "ambiguous":
             return BodyInput(*common, "ambiguous")

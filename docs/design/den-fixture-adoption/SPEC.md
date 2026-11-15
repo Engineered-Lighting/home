@@ -33,7 +33,8 @@ until the bench sittings pass and the owner says go (§7).
 - Home on `main` (`8a8e8422`), and den-live's integration branch (`7140369c`).
 
 **The clickable mockup** is `mockup.html` beside this file, also published as a private Artifact (the link is in the den
-program's notes). Its room, names and readings are invented. It has no camera frames, faces, addresses, tokens or
+program's notes). It draws the fixtures as the earlier orbs; #456's cylinder replaces that look, and every meaning
+carries over. Its room, names and readings are invented. It has no camera frames, faces, addresses, tokens or
 coordinates.
 
 ## 0. Words
@@ -402,7 +403,7 @@ its room light stands in for the Reading bulb.`
 **Adopt into F3** is one save: the socket `robotic · adopted · physical off`, with its board, name and yaw (B11).
 
 **Done:**
-- the orb at F3 takes its kind;
+- the fixture at F3 takes its kind;
 - the label reads `F3 · Sofa spot · virtual`;
 - one line points ahead:
   - before the transport is on: `Next: your go opens the transport. Then F3's own switch, here.`
@@ -558,19 +559,19 @@ whatever is asked.
   board checks (§4.10);
 - until attribute reporting is set up (W2, before fixture 2), health shows **as Home Assistant last saw it**.
 
-| State | Source | Room (orb) | Row | Recovery |
+| State | Source | Room (the fixture) | Row | Recovery |
 |---|---|---|---|---|
-| **Virtual** (off) | stored | The orb, with the coordinator's plan drawn | `F3 · Sofa spot · task light · virtual` | Its go (§4.10) |
+| **Virtual** (off) | stored | The cylinder, with the coordinator's plan drawn | `F3 · Sofa spot · task light · virtual` | Its go (§4.10) |
 | **Tests** | stored | As above | `· tests · moves dark` | — |
 | **On, before its aim check** | stored | As above | `· on · moving dark until its aim check` | The aim check |
 | **Live** | stored | As above | `· live` | — |
-| **Aim check out of date** | stored | Orb, with a small amber dot | `· aim check out of date · dark until it passes` | Set by a new yaw, a measured beam width, or a recorded re-commissioning. `physical` is never touched: the coordinator's rows stay dark until the check passes again. |
-| **Held by hand** | den-live | The solid ice ring (the orb WIP's held mark) | `in your hands · Return to auto` | Home's existing hand holds. The board flags an EP 9 or hand MOVE. A change to the radials or downlight (EP 1–8) isn't flagged by the board: Home detects it as it does for a Hue bulb. |
+| **Aim check out of date** | stored | The cylinder, with a small amber dot | `· aim check out of date · dark until it passes` | Set by a new yaw, a measured beam width, or a recorded re-commissioning. `physical` is never touched: the coordinator's rows stay dark until the check passes again. |
+| **Held by hand** | den-live | The solid ice collar (#456's held mark) | `in your hands · Return to auto` | Home's existing hand holds. The board flags an EP 9 or hand MOVE. A change to the radials or downlight (EP 1–8) isn't flagged by the board: Home detects it as it does for a Hue bulb. |
 | **Stopped** | den-live | The core dims, with a small square under it | `Stopped · Resume`. At off, or with the transport off: `Stopped · resume it in Home Assistant` | **Resume is always the owner's press.** den-live sends it at tests and on. Stop survives a reboot. |
 | **Offline** | den-live | A hollow dashed ring, no glow | `Offline since 21:40 · check its power` (on a wall switch: `· or the wall switch`) | den-live retries the board check every 30 s, and when it rejoins. If it left the network, pair it again: **Reconnect to F3** (§4.3). |
-| **Re-commissioned** | den-live | Orb, with a small amber dot | `New profile from the bench · dark until its aim check` | Same board number, new `profile_id`. den-live plans it from the new record; the aim check no longer matches, so the coordinator's rows stay dark, and moves follow the switch. **Record it** (the owner's press) saves the new `profile_id` and marks the aim check out of date. No re-adoption. |
+| **Re-commissioned** | den-live | The cylinder, with a small amber dot | `New profile from the bench · dark until its aim check` | Same board number, new `profile_id`. den-live plans it from the new record; the aim check no longer matches, so the coordinator's rows stay dark, and moves follow the switch. **Record it** (the owner's press) saves the new `profile_id` and marks the aim check out of date. No re-adoption. |
 | **Not the board adopted here** | den-live | Diamond | `F3's board isn't the one adopted here` | A different board number. Only Stop goes. Take down and re-adopt. |
-| **Fault** | den-live | The amber attention diamond on the orb | The fault in words, from `contracts/c12v2/zcl-fc13.md` | A motion fault (13–19): dark and holding, **Resume** after the owner checks it. A light fault: dark until a power cycle. Over temperature: the spot is out until it cools 2 °C below the trip. Anything else: a bench visit. |
+| **Fault** | den-live | The amber attention diamond on the cylinder | The fault in words, from `contracts/c12v2/zcl-fc13.md` | A motion fault (13–19): dark and holding, **Resume** after the owner checks it. A light fault: dark until a power cycle. Over temperature: the spot is out until it cools 2 °C below the trip. Anything else: a bench visit. |
 | **Motors changed or out of range** | den-live | Diamond | `Needs a bench visit` | The one app's recovery screen |
 | **Firmware too old** | den-live | Diamond | `Firmware too old for Home` | At the bench |
 | **Updating** | den-live | Hollow ring | `Updating · dark and still` | Wait |
@@ -600,15 +601,15 @@ Attribute reporting isn't configured yet, so den-live reads rather than waits fo
 
 ### 6.1 Each socket drawn by kind
 
-The fixture-orb design chat owns the look. This spec owns what each look must say. Robotic and Hue have to be told
+The fixture design (#456, the frosted-glass cylinder) owns the look. This spec owns what each look must say. Robotic and Hue have to be told
 apart at a glance, in both themes, and at phone size.
 
 | Kind | In the room | Label (Lighting view, hover or tap; always in the Controls list) |
 |---|---|---|
-| **Robotic** | The orb: a small core, the glow tinted by its channels and grown by its light, the beam when lit, and the WIP's marks (dashed warm ring = aimed and waiting dark; solid ice ring = in your hands) | `F3 · Sofa spot · task light 70%`, then its switch state: `virtual` (off), `tests · moves dark`, `on · moving dark until its aim check`, or `live` |
-| **Hue** | **A bulb's glow:** no core, no beam, a softer and wider warm disc at the socket, sized by the bulb's level. While Bulbs is off, the bulb plan is a shadow: the disc becomes a dashed outline at the size it *would* be. | `F1 · Corner bulb · fill · would set 35%` |
+| **Robotic** | #456's frosted-glass cylinder: its radial zones and base glow when lit, a small glow where the spot's beam starts, the beam when lit, and its flat collars (dashed warm = aimed and waiting dark; solid ice = in your hands) | `F3 · Sofa spot · task light 70%`, then its switch state: `virtual` (off), `tests · moves dark`, `on · moving dark until its aim check`, or `live` |
+| **Hue** | **A bulb's glow:** no body, no beam, a softer and wider warm disc at the socket, sized by the bulb's level. While Bulbs is off, the bulb plan is a shadow: the disc becomes a dashed outline at the size it *would* be. | `F1 · Corner bulb · fill · would set 35%` |
 | **Empty** | A small dotted ring at the socket | `F2 · empty · swap in progress` |
-| **Offline or fault** | The robotic orb, its core grey and no glow, with a hollow ring or the attention diamond | `F4 · offline` |
+| **Offline or fault** | The robotic cylinder, unlit and greyed, with a hollow grey ring or the attention diamond | `F4 · offline` |
 
 **Role** is the label's last part. It comes from den-live's `sockets{F: {kind, state, role}}` in
 `den-virtual-spots-1`. Home never infers it.
@@ -696,7 +697,7 @@ four (H4).
 ### 6.7 Where "virtual" shows
 
 **Only at `physical: off`:**
-1. the robotic orb's label tag;
+1. the robotic fixture's label tag;
 2. each robotic row in the Controls list and in the coordinator's Sockets section;
 3. the Controls header's `Virtual until the go` badge;
 4. the adoption's last screen;
@@ -780,7 +781,7 @@ private-data scan, and no push or merge without the spine.
 | **H1** | **The boards store** (compare-and-swap, private folder, never exported; history and bench facts only, written after the socket save). **The gateway's `GET` and `PUT …/sockets`,** through the den-live route as its own kind: signed in only for both, with CSRF on the save, carrying `last_request_id`. **The yaw in Home's renderer:** the shared turn of `horizontal_world_reference`, robotic sockets only. **Readback entities** from the device registry, written into the socket entry at adoption. | Boards store: fields, a 409 on conflict, never retried, nothing exported. Sockets route: look-only and Serve get 403 on `GET` and `PUT`; refused without CSRF; a 409 passes through with the current document; an unknown outcome is settled by a `GET`. Yaw: a robotic socket's reference turns by its yaw, counter-clockwise from above; a hue socket and an approximate `direction_unit` are unchanged; **the geometry export's `horizontal_world_reference` is unchanged by any yaw.** |
 | **H2** | **The read path in the gateway, through a server-side Home Assistant client with its own allowlist:** states, the device registry (filtered to `EngineeredLight` / `c12-v2`), `c12.get_profile` and `c12.stop` only. The legacy page proxy stays off, or refuses domain `c12`. Attribute reads before adoption, and den_lighting's status for the bulb map. At most one read a second per board. **No direct `c12.move` or `c12.keep_lit`.** The Stop fallback. **Stop, Resume and the manual route forwarded to den-live in every mode.** | A fake Home Assistant for each `get_profile` result (old firmware, a frame other than 1, a duplicate board number, re-pairing); the rate cap. Move and keep-lit are never called, directly or through the page proxy. Stop, Resume and manual writes reach den-live in each gateway mode. The Stop fallback stops every board in the boards store, reading nothing from den-live, when den-live doesn't answer within 1 s, or answers that its record doesn't read. |
 | **H3** | **The flow** (§4.0–4.9): a pure model (`home-den-adoption-model.mjs`: steps, draft, failure transitions) and the sheet. Behind `HOME_WEB_DEN_ADOPTION`, off by default. | Model: every step's success and failure path; resuming a draft; "put the bulb back" after the swap starts; the board check at binding; a stopped board at power-on; den-live not answering on save. Browser, desktop and phone, with a fake Home Assistant and den-live: the flow sends nothing but reads and the pulse; look-only has no buttons; text through `textContent`. |
-| **H4** | **The mixed den** (coordinator A5): drawing by kind, role and switch state (with the orb chat's look), the Controls list, the coordinator panel's Sockets section and actuation line, and **spot playback plus `applyCoordinatorSpots` taking partial row sets scoped by `sockets{}`**. **A carried hand hold is re-keyed across a new run by its `event_id`.** | Every mix with every subset of sockets as the robotic ones. Roles only from `sockets{}`. 1 + 3 and rehearse on and off draw end to end, through both guards; with no `sockets{}`, all four as today. A hold carried into a new run is still shown, and released when den-live ends it. Offline, fault and empty drawing. `virtual` only at off. Phone sizes in both themes. |
+| **H4** | **The mixed den** (coordinator A5): drawing by kind, role and switch state (with #456's cylinder), the Controls list, the coordinator panel's Sockets section and actuation line, and **spot playback plus `applyCoordinatorSpots` taking partial row sets scoped by `sockets{}`**. **A carried hand hold is re-keyed across a new run by its `event_id`.** | Every mix with every subset of sockets as the robotic ones. Roles only from `sockets{}`. 1 + 3 and rehearse on and off draw end to end, through both guards; with no `sockets{}`, all four as today. A hold carried into a new run is still shown, and released when den-live ends it. Offline, fault and empty drawing. `virtual` only at off. Phone sizes in both themes. |
 | **H5** | **Fixture health** from den-live's snapshot (§5): each state in words, **Record it** for a re-commissioned board, Reconnect, take down. | Each state from a fake snapshot, including `as Home Assistant last saw it`. Re-pairing keeps the adoption. Record it saves the published `profile_id` and marks the aim check out of date, without touching `physical`. Stopped at off reads `resume it in Home Assistant`. |
 | **H6** | **Go live** (§4.10–4.13): the card and its locks, the socket's switch (holds up, taps down), the dark test moves, the Stop drill and the aim-check screen, all through den-live's D1 routes. Built before the go, with buttons disabled until lock 2 opens. | Every button disabled unless its locks are open. Hold-to-confirm. One command in flight; nothing retried; Resume never automatic; Stop always enabled. The aim result from a fake den-live reply, with no frame in it. |
 

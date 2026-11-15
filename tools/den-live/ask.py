@@ -418,17 +418,20 @@ class Asker:
                                     eligibility_revision=self.eligibility_revision)
             if self.completed is not None:
                 self._accept_completion(now)
-            pending, again = self.inflight, None
+            pending, again, forget = self.inflight, None, None
             if pending is not None and pending["stage"] == "stills":
-                if pending["admitted_mono"] is not None and now - pending["admitted_mono"] >= STILLS_TIMEOUT_S:
+                waiting = pending["admitted_mono"] is None   # the process hasn't taken it: it was busy
+                if not waiting and now - pending["admitted_mono"] >= STILLS_TIMEOUT_S:
                     self._fail_stills(now, pending, "stills_timeout")
                 elif not self._bound(now, pending):
+                    forget = pending["ask_id"] if waiting and pending["busy"] else None
                     self._done(now, pending)
                     self._record(pending, outcome="not_sent", why="the evidence changed")
-                elif pending["admitted_mono"] is None:
-                    # The detector's process was busy when the stills were asked for: ask again on this frame, on any
-                    # frame (one bad frame keeps a pending request), until STILLS_WAIT_S has passed.
+                elif waiting:
+                    # Ask again on this frame, on any frame (one bad frame keeps a pending request), until STILLS_WAIT_S
+                    # has passed. The process holds its next free slot for it (perceive.DetectorWorker.send_alone).
                     if now - pending["decided_mono"] >= STILLS_WAIT_S:
+                        forget = pending["ask_id"]
                         self._fail_stills(now, pending, "stills_worker_busy")
                     else:
                         again = pending
@@ -437,6 +440,8 @@ class Asker:
                    and self._paced(now, values, level, trigger))
             request = self._prepare(now, track, occupancy, level, trigger) if may else None
             event = self._decorate(event, now, eligible is not None, why, level, crowded)
+        if forget is not None:
+            self._forget_stills(forget)
         if request is not None or again is not None:
             self._request_stills(request or again)
         return event
@@ -514,13 +519,15 @@ class Asker:
     def _request_stills(self, request):
         """Outside the lock, from observe's thread only: ask the detector's process for the stills. It takes one
         optional job at a time and the live body's pass shares that slot, so it may say it's busy. The ask then waits,
-        and observe asks again on the next frame, for up to STILLS_WAIT_S, instead of giving up its 2 s turn."""
+        and observe asks again on the next frame, for up to STILLS_WAIT_S, instead of giving up its 2 s turn; the
+        process keeps its next free slot for this request meanwhile."""
         with self.lock:   # set first: the reply can come on the reader's thread before send_alone returns
             request["admitted_mono"] = self.clock()
         try:
             admitted = self.detector.send_alone({"kind": "stills", "id": request["ask_id"], "frames": request["keys"]})
-        except Exception:   # the process stopped: a later frame won't help
+        except Exception:   # the process stopped: a later frame won't help, and it never took the request
             with self.lock:
+                request["admitted_mono"] = None
                 self._fail_stills(self.clock(), request, "stills_worker_stopped")
             return
         if admitted is False:   # nothing was queued, so no reply can have come
@@ -528,6 +535,16 @@ class Asker:
                 request["admitted_mono"] = None
                 request["busy"] += 1
                 self.counts["stills_busy"] += 1
+
+    def _forget_stills(self, ask_id):
+        """Outside the lock: the ask gave up a stills request the process refused, so the process stops holding its
+        next free slot for it (it would anyway after perceive.STILLS_PRECEDENCE_S)."""
+        forget = getattr(self.detector, "forget_stills", None)
+        if forget is not None:
+            try:
+                forget(ask_id)
+            except Exception:   # a process that stopped holds nothing
+                pass
 
     def _bound(self, now, ask):
         """With the lock held: whether the ask still belongs to the current episode. It's judged on the person binding,

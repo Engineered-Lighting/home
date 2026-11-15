@@ -358,6 +358,10 @@ class FakeDetector:
     def __init__(self):
         self.on_stills, self.requests, self.answer = None, [], True
         self.busy, self.refused, self.stopped = 0, 0, False   # busy: how many stills requests to refuse next
+        self.forgotten = []   # the stills ids the ask gave up after a refusal (perceive.DetectorWorker.forget_stills)
+
+    def forget_stills(self, stills_id):
+        self.forgotten.append(stills_id)
 
     def send_alone(self, header):
         if self.stopped:
@@ -618,7 +622,7 @@ class AskTest(unittest.TestCase):
 
     def test_a_process_busy_past_the_wait_gives_the_ask_up_without_a_back_off(self):
         self.first_stills_request(busy=100)
-        decided = self.asker.inflight["decided_mono"]
+        decided, ask_id = self.asker.inflight["decided_mono"], self.asker.inflight["ask_id"]
         while self.asker.inflight is not None:
             self.tick()
         self.assertGreaterEqual(self.clock.t - decided, ask.STILLS_WAIT_S)
@@ -631,6 +635,7 @@ class AskTest(unittest.TestCase):
         self.assertEqual(line["stills_busy"], self.detector.refused)
         self.assertIsNone(line["stills_wait_s"])
         self.assertGreaterEqual(self.detector.refused, 4, "asked on every frame of the wait")
+        self.assertEqual(self.detector.forgotten, [ask_id], "the process stops holding its slot for it")
 
     def test_the_stills_timeout_runs_from_when_the_process_took_the_request(self):
         self.detector.answer = False
@@ -648,15 +653,18 @@ class AskTest(unittest.TestCase):
         while not self.asker.counts["stills_failed"]:
             self.tick()
         self.assertIsNone(self.asker.inflight)
-        self.assertEqual(self.log_lines()[-1]["why"], "stills_worker_stopped")
+        line = self.log_lines()[-1]
+        self.assertEqual(line["why"], "stills_worker_stopped")
+        self.assertIsNone(line["stills_wait_s"], "a stopped process never took the request")
 
     def test_the_evidence_changing_while_waiting_ends_the_ask_without_another_try(self):
         self.first_stills_request(busy=100)
-        refused = self.detector.refused
+        refused, ask_id = self.detector.refused, self.asker.inflight["ask_id"]
         self.tick(people=2)   # a second person: the binding ends
         self.assertIsNone(self.asker.inflight)
         self.assertEqual(self.detector.refused, refused, "no try for evidence that's gone")
         self.assertEqual(self.log_lines()[-1]["outcome"], "not_sent")
+        self.assertEqual(self.detector.forgotten, [ask_id])
 
     def test_the_gate_is_checked_again_before_posting(self):
         for _ in range(12):
@@ -884,6 +892,149 @@ class DetectorChannelTest(unittest.TestCase):
         poses = perceive.track_poses(observations, tracks, [{"o1"}, set()])
         self.assertEqual(set(poses), {"e1-trk-1"})
         self.assertEqual(poses["e1-trk-1"], {"left_hip": [[0, 0, 0.5], "supported"]})
+
+
+def slot_worker(clock):
+    """perceive.DetectorWorker with no process: its own send_alone, its one optional slot and its writes queue."""
+    worker = object.__new__(perceive.DetectorWorker)
+    worker.dispatch_lock, worker.pending, worker.optional, worker.stills_waiting = threading.Lock(), None, None, None
+    worker.writes, worker.clock = queue.Queue(maxsize=1), clock
+    worker.proc = type("P", (), {"poll": staticmethod(lambda: None)})()
+    return worker
+
+
+class StillsFirstTest(unittest.TestCase):
+    """The process's one optional slot: a refused stills request holds the next free one against the body's pass."""
+
+    def setUp(self):
+        self.clock = Clock()
+        self.worker = slot_worker(self.clock)
+
+    def send(self, kind, stills_id=7):
+        header = {"kind": kind, "id": stills_id, "frames": []} if kind == "stills" else {"kind": kind}
+        admitted = self.worker.send_alone(header)
+        if admitted:
+            self.worker.writes.get_nowait()   # the writer thread
+        return admitted
+
+    def answer(self):
+        self.worker.optional = None   # the reader, on the job's reply
+
+    def test_a_refused_stills_request_comes_before_the_next_body(self):
+        self.assertTrue(self.send("body"))
+        self.assertFalse(self.send("stills"))       # the body's pass took the slot first on this frame
+        self.answer()
+        self.clock.t += 0.25
+        self.assertFalse(self.send("body"), "the next frame's body waits")
+        self.assertFalse(self.send("setup_body"))
+        self.assertTrue(self.send("stills"))
+        self.answer()
+        self.assertTrue(self.send("body"), "taken, it holds nothing")
+
+    def test_the_hold_ends_after_its_time_and_a_retry_never_extends_it(self):
+        self.assertTrue(self.send("body"))
+        self.assertFalse(self.send("stills"))
+        self.clock.t += 0.6
+        self.assertFalse(self.send("stills"))       # still refused: the body hasn't answered
+        self.answer()
+        self.clock.t += perceive.STILLS_PRECEDENCE_S - 0.6
+        self.assertTrue(self.send("body"), "held from the first refusal only")
+
+    def test_forgetting_frees_the_slot_for_the_body_and_only_for_that_request(self):
+        self.assertTrue(self.send("body"))
+        self.assertFalse(self.send("stills", 7))
+        self.answer()
+        self.worker.forget_stills(8)
+        self.assertFalse(self.send("body"))
+        self.worker.forget_stills(7)
+        self.assertTrue(self.send("body"))
+
+    def test_a_new_stills_request_is_held_from_its_own_refusal(self):
+        self.assertTrue(self.send("body"))
+        self.assertFalse(self.send("stills", 7))
+        self.clock.t += 0.9
+        self.assertFalse(self.send("stills", 8))   # the ask gave 7 up without saying so
+        self.answer()
+        self.clock.t += 0.5
+        self.assertFalse(self.send("body"), "8 is held 1 s from its own refusal")
+
+    def test_the_hold_matches_the_asks_wait(self):
+        self.assertEqual(perceive.STILLS_PRECEDENCE_S, ask.STILLS_WAIT_S)
+
+
+class SharedSlot:
+    """The live order on one optional slot (perceive.DetectorWorker.send_alone, the real one): on each frame the body's
+    pass is submitted first when it's due (Perceiver.finish, before Loop._publish runs the ask) and answers before the
+    next frame; BodyLink, refused, sends on a later frame. The stills are answered at once, before the next row."""
+
+    def __init__(self, clock, body_s):
+        self.worker, self.clock, self.body_s = slot_worker(clock), clock, body_s
+        self.on_stills, self.requests, self.last_body = None, [], None
+        self.alone_last, self.alone = None, 0   # the body's passes with no ask: what it's owed
+        self.body_frames = 0
+
+    def frame(self):
+        if self.alone_last is None or self.clock() - self.alone_last >= self.body_s:
+            self.alone_last, self.alone = self.clock(), self.alone + 1
+        if self.worker.optional is not None and self.worker.optional[0] == "body":
+            self.worker.optional = None   # the last frame's body pass answered
+        if self.last_body is None or self.clock() - self.last_body >= self.body_s:
+            if self.worker.send_alone({"kind": "body"}):
+                self.worker.writes.get_nowait()
+                self.last_body = self.clock()
+                self.body_frames += 1
+
+    def send_alone(self, header):
+        admitted = self.worker.send_alone(header)
+        if admitted:
+            self.worker.writes.get_nowait()
+            self.requests.append(header)
+            self.worker.optional = None
+            self.on_stills({"stills_id": header["id"], "frames": header["frames"],
+                            "jpegs": [base64.b64encode(b"\xff\xd8" + bytes([i + 1]) * 30).decode()
+                                      for i in range(len(header["frames"]))]})
+        return admitted
+
+    def forget_stills(self, stills_id):
+        self.worker.forget_stills(stills_id)
+
+
+class BodyEveryFrameTest(unittest.TestCase):
+    """With the body's pass due on every frame it takes the slot ahead of the ask each time. The asks still go out."""
+
+    def setUp(self):
+        AskTest.setUp(self)
+        self.detector = SharedSlot(self.clock, 0.3)
+        self.asker.detector, self.detector.on_stills = self.detector, self.asker._stills
+        observe = self.asker.observe
+
+        def frame_then_observe(event, snapshot):
+            self.detector.frame()
+            return observe(event, snapshot)
+        self.asker.observe = frame_then_observe
+
+    tick, drain, log_lines, asks_sent = AskTest.tick, AskTest.drain, AskTest.log_lines, AskTest.asks_sent
+
+    def check(self, body_s, spacings):
+        self.detector.body_s = body_s
+        start, n = self.clock.t, 0
+        while self.clock.t - start < 60.0:
+            self.tick(seconds=spacings[n % len(spacings)])
+            n += 1
+        outcomes = [line["outcome"] for line in self.log_lines()]
+        turn = 2.0 + 2 * max(spacings)   # the 2 s turn, the frame it's decided on and the one it's taken on
+        self.assertNotIn("stills_failed", outcomes)
+        self.assertGreaterEqual(outcomes.count("completed"), int((60.0 - 3.0) / turn))
+        self.assertGreaterEqual(self.detector.body_frames, 0.75 * self.detector.alone, "the body isn't starved")
+
+    def test_body_every_0_2_s_with_frames_0_2_s_apart(self):
+        self.check(0.2, [0.2])
+
+    def test_body_every_0_3_s_with_frames_0_32_to_0_55_s_apart(self):
+        self.check(0.3, [0.32, 0.41, 0.55, 0.38, 0.47, 0.35])
+
+    def test_body_every_0_3_s_with_frames_0_24_s_apart(self):
+        self.check(0.3, [0.24])
 
 
 class StillsTest(unittest.TestCase):

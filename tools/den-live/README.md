@@ -568,7 +568,7 @@ den-live asks Qwen what someone in the den is doing, but only once Frigate has n
   - If `backoff_status` is set but the monitor's file is missing, unreadable or over 10 minutes old, it counts as step 1.
 - The gate is checked again just before each question is posted.
 
-**The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. After a failure it waits 30 s.
+**The pace.** One ask at a time, no sooner than 2 s after the last one, and at most 30 a minute. Only a failed question to Qwen (its POST) waits 30 s. An ask whose stills weren't made waits just the usual 2 s from when it ended.
 
 **Asking on a change** (`event_asks`; latency A4). It's **off by default** until AGENTS.md's den-live section allows asks sooner than 2 s apart, in the owner's own words. With it on, it asks sooner than the 2 s when:
 - a new episode starts: you sit down, or the gate reopens;
@@ -584,7 +584,12 @@ The stream's `activity {word, close_up, verdict}` carries it, and the coordinato
 
 **What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
 - Two or three stills, chosen newest first and spanning at most 1 s back from the newest frame (`ask.STILLS_SPAN_S`, contract 3), so the first ask after a cue shows the cue. They come from a continuously supported subject window, none from before the seated episode began (`since_mono`) or the association became confident, made into JPEGs in the detector's process (`stills.py`). The reply's gate carries that `seated_since_mono`, the instant the lighting preview's episode starts from too.
-- **When the detector's process is busy.** It takes one optional job at a time, and the live body's pass shares that slot, so a stills request can be refused. The ask then waits and asks again on each next frame, for up to 1 s (`ask.STILLS_WAIT_S`), rather than giving up its 2 s turn. Past that it's `stills_worker_busy`, with no back-off. The 2 s stills timeout runs from when the process takes the request.
+- **When the detector's process is busy.** It takes one optional job at a time, and the live body's pass shares that slot. On each frame the body's pass is sent before the ask runs, so it can take the slot first.
+  - A refused stills request makes the process keep its next free slot for that request, so the body's pass skips a frame (`perceive.DetectorWorker.send_alone`).
+  - The ask asks again on each next frame, for up to 1 s (`ask.STILLS_WAIT_S`, the same as `perceive.STILLS_PRECEDENCE_S`). That costs the body about one pass per ask.
+  - Past that, the ask ends as `stills_worker_busy`, and the process stops keeping the slot.
+  - If the process has stopped, the ask ends at once as `stills_worker_stopped`.
+  - The 2 s stills timeout runs from when the process takes the request.
 - **One bad frame** (contract 2's consumer rule): a stale snapshot or an unsafe frame is no new ask, and drops nothing. The stills, `eligibility_revision`, the earlier answer, a pending stills request and a reply in flight are kept, until the person binding (`service_run_id`, `camera_epoch`, `track_id`, `association_revision`) or the gate changes. A second person, or a gap of `PERCEPTION_S` or more, still resets.
 - Today's Lab question, with three changes:
   - "hobby" and "craft" are added;

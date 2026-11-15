@@ -82,6 +82,7 @@ from contracts import (DEPTH_SCALE_RANGE, FIGURE_S, PERCEPTION_S, RGB_PAIR_S, Fr
 
 SCHEMA = "den-live-people-1"
 FRESH_S = PERCEPTION_S
+STILLS_PRECEDENCE_S = 1.0   # ask.STILLS_WAIT_S: how long a refused stills request holds the slot against the body
 FLOOR_PAD_M = 1.0
 # den-track's METHOD.md at its pin: the floor_m slot's exact text, which the method copy replaces (as the den
 # simulation's chain.py hop 8 does, 85744f2c on claude/den-sim-connected).
@@ -209,6 +210,8 @@ class DetectorWorker:
         self.writer_stop = threading.Event()
         self.pending = None
         self.optional = None
+        self.stills_waiting = None   # (stills id, refused at): a refused stills request, first for the next free slot
+        self.clock = time.monotonic
         self.dispatch_lock = threading.Lock()
         self.writer = threading.Thread(target=self._write, daemon=True, name="den-live-detector-writer")
         self.writer.start()
@@ -273,19 +276,40 @@ class DetectorWorker:
             self.replies.put(None)
 
     def send_alone(self, header):
-        """Queue optional work without waiting for the pipe or a busy detector."""
+        """Queue optional work without waiting for the pipe or a busy detector: False if it's busy.
+        The Qwen ask's stills come first. On each frame the body's pass is submitted (Perceiver.finish) before the
+        ask runs (Loop._publish), so with the body due on every frame a stills request would never find the slot free.
+        A refused stills request therefore holds the next free slot against the body's pass, which gets False (BodyLink
+        skips that frame), until the ask asks again and is taken, gives up (forget_stills), or STILLS_PRECEDENCE_S
+        passes."""
         with self.dispatch_lock:
             if self.proc.poll() is not None:
                 raise Stop("the detector process stopped")
-            if self.pending is not None or self.optional is not None:
+            stills, now = header["kind"] == "stills", self.clock()
+            waiting = self.stills_waiting
+            if waiting is not None and now - waiting[1] >= STILLS_PRECEDENCE_S:
+                waiting = self.stills_waiting = None
+            if not stills and waiting is not None:
                 return False
-            try:
-                self.writes.put_nowait((header, None))
-            except queue.Full:
-                return False
-            kind = "stills" if header["kind"] == "stills" else "body"
-            self.optional = (kind, time.monotonic())
-            return True
+            if self.pending is None and self.optional is None:
+                try:
+                    self.writes.put_nowait((header, None))
+                except queue.Full:
+                    pass
+                else:
+                    if stills:
+                        self.stills_waiting = None
+                    self.optional = ("stills" if stills else "body", time.monotonic())
+                    return True
+            if stills and (waiting is None or waiting[0] != header["id"]):
+                self.stills_waiting = (header["id"], now)   # from its first refusal: a retry never extends it
+            return False
+
+    def forget_stills(self, stills_id):
+        """The ask gave up a stills request it never got in (ask.py): the body's pass may have the slot again."""
+        with self.dispatch_lock:
+            if self.stills_waiting is not None and self.stills_waiting[0] == stills_id:
+                self.stills_waiting = None
 
     def _line(self, timeout_s, what):
         try:

@@ -513,13 +513,17 @@ export async function attachXrayLook(points, base, { renderer, scene, camera, si
     quad.renderOrder = -1000;
     quad.raycast = () => {};
     scene.add(quad);
-    const ownLayers = points.layers.mask;
+    const ownLayers = points.layers.mask, hiddenMask = (1 << HIDDEN_LAYER) | 0;
     let active = false;
     const setActive = (on) => {
         active = on;
         group.visible = on;
         quad.visible = on && points.visible;
-        if (on) points.layers.set(HIDDEN_LAYER); else points.layers.mask = ownLayers;
+        // Only the look's own bits move. Other layers on the cloud stay: Lighting draws the relit cloud on
+        // LIT_FRAME_LAYER (lit-frame.mjs setReceivers), and resetting the whole mask every frame dropped it, so the
+        // relit cloud drew in no pass at all (2026-11-14: "my entire point cloud disappears").
+        if (on) points.layers.mask = (points.layers.mask & ~ownLayers) | hiddenMask;
+        else points.layers.mask = (points.layers.mask & ~hiddenMask) | ownLayers;
     };
     const look = {
         ms: features.ms, cells: features.cells, floorZ: features.floorZ, target,

@@ -12,6 +12,7 @@ yes, 2026-11-14). release.py ships them and install.sh puts them in the service'
 pin. Without the file, or with another, the pass stays off and every frame is exactly as before.
 """
 import hashlib
+import time
 from pathlib import Path
 
 from body import HOLDABLE, MAX_POLYGON
@@ -32,8 +33,10 @@ def sha256(path):
     return digest.hexdigest()
 
 
-def load(models, device, *, pinned=HELD_SHA256, yolo=None):
-    """(the segmenter, None) or (None, why it's off). why is words only."""
+def load(models, device, *, pinned=HELD_SHA256, yolo=None, state=None):
+    """(the segmenter, None) or (None, why it's off). why is words only. One warm-up pass runs here, so a pass that
+    can't run says so at load (held false and why) instead of finding nothing on every frame. state: the worker's
+    state folder, where Ultralytics may keep its run folder; it never writes elsewhere."""
     if pinned is None:
         return None, "no held-object weights are pinned"
     path = Path(models) / HELD_WEIGHTS
@@ -43,17 +46,49 @@ def load(models, device, *, pinned=HELD_SHA256, yolo=None):
         return None, "the held-object weights aren't the pinned ones"
     if yolo is None:
         from ultralytics import YOLO as yolo
-    return Segmenter(yolo(str(path), task="segment"), device), None
+    segmenter = Segmenter(yolo(str(path), task="segment"), device, state=state)
+    try:
+        import numpy as np
+        segmenter.predict(np.zeros((360, 640, 3), np.uint8))
+    except Exception as exc:  # a type name only
+        return None, "the held-object pass failed its first run (%s)" % type(exc).__name__
+    return segmenter, None
 
 
 class Segmenter:
-    def __init__(self, model, device):
+    def __init__(self, model, device, *, state=None):
         self.model, self.device = model, device
+
+    def predict(self, image):
+        return self.model.predict(image, verbose=False, device=self.device, conf=SCORE_MIN)[0]
 
     def __call__(self, image, row, cv2):
         """Holdable instances near a wrist in this frame (instances()), from one segmentation pass on image."""
-        result = self.model.predict(image, verbose=False, device=self.device, conf=SCORE_MIN)[0]
-        return instances(result, row, cv2)
+        return instances(self.predict(image), row, cv2)
+
+
+class Failures:
+    """The held-object pass's failures by type name, said to the worker's log once a minute when any happened, as the
+    row guards are: a pass that raises on every frame shows up, never just as frames with nothing held."""
+
+    def __init__(self, clock=time.monotonic, every_s=60.0):
+        self.clock, self.every_s = clock, every_s
+        self.since, self.names = clock(), {}
+
+    def count(self, name=None):
+        """name: the type name of this frame's failure, or None for a frame that ran. A line to log, or None."""
+        if name is not None:
+            self.names[name] = self.names.get(name, 0) + 1
+        now = self.clock()
+        if now - self.since < self.every_s:
+            return None
+        line = None
+        if self.names:
+            line = "den-live: in the last %.0f s the held-object pass failed %d times (%s); those frames held nothing" % (
+                now - self.since, sum(self.names.values()),
+                ", ".join("%s %d" % (key, value) for key, value in sorted(self.names.items())))
+        self.since, self.names = now, {}
+        return line
 
 
 def _wrists(row):

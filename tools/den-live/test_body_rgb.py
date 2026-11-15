@@ -89,6 +89,7 @@ class Fixture:
         return True
 
     def observe(self, *args, **kwargs):
+        self.seen = args[:3]   # this frame's bundle, metadata and depth, for a test to call the provider again
         self.last = self.provider(*args, **kwargs)
         return self.last
 
@@ -283,11 +284,31 @@ class RgbBodyTests(unittest.TestCase):
             f.frame(n)
         self.assertEqual(f.last.observation, "person")
         f.frame(16, rival=True)
-        self.assertEqual(f.last.observation, "ambiguous")
+        self.assertEqual(f.last.observation, "person", "a stray box that supports no track doesn't blank the figure")
         f.frame(17, missing_ear=True)
         self.assertEqual(f.last.observation, "unknown")
         f.frame(18, session="fixture-camera-restarted")
         self.assertNotEqual(f.last.observation, "person")
+
+    def test_only_two_tracks_or_two_detections_on_one_track_are_ambiguous(self):
+        f = self.f
+        for n in range(16):
+            f.frame(n)
+        value = f.last
+        bundle, meta, depth = f.seen
+        pose = dict(value.pose, obs_id="pose-a")
+        track = dict(value.track, track_id="t1", state="confirmed")
+        call = lambda **kw: f.provider(bundle, meta, depth, frame_key=value.frame_key, mode="rgb",
+                                       association={"t1": ("confident", 0.0), "t2": ("confident", 0.0)}, **kw)
+        stray = {"obs_id": "stray", "kind": "person_box"}
+        self.assertEqual(call(observations=[pose, stray], tracks=[track], supported=[{"pose-a"}]).observation, "person")
+        second = dict(track, track_id="t2")
+        self.assertEqual(call(observations=[pose, stray], tracks=[track, second],
+                              supported=[{"pose-a"}, {"stray"}]).observation, "ambiguous")
+        twin = dict(pose, obs_id="pose-b")
+        self.assertEqual(call(observations=[pose, twin], tracks=[track], supported=[{"pose-a", "pose-b"}]).observation,
+                         "ambiguous", "two detections on one track")
+        self.assertEqual(call(observations=[stray], tracks=[track], supported=[{"pose-a"}]).observation, "unknown")
 
     def test_normal_service_passes_registration_bound_profile_without_an_injected_callback(self):
         f = self.f

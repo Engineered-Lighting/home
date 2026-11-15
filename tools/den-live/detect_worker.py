@@ -131,6 +131,18 @@ def say(value):
     PROTOCOL.flush()
 
 
+def held_pass(models, devices, *, load=None):
+    """(the held-object segmenter or None, the ready line's held fields): held_seg.py's YOLO26s-seg beside the tracking
+    detector, on the same frame, only with its pinned weights in the models folder, on the boxes model's device. Off,
+    every frame and reply is exactly as before; held_why says why, in words."""
+    try:
+        import held_seg
+        segmenter, why = (load or held_seg.load)(models, (devices or {}).get("boxes") or "cpu")
+    except Exception as exc:  # a type name only
+        segmenter, why = None, "the held-object pass didn't load (%s)" % type(exc).__name__
+    return segmenter, {"held": segmenter is not None, **({"held_why": why} if why else {})}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--tools-root", required=True)
@@ -153,16 +165,9 @@ def main(argv=None):
         say({"refused": str(exc)[:200]})
         return 2
     np = detector.np
-    # The held-object pass (held_seg.py): YOLO26s-seg beside the tracking detector, on the same frame, only with its
-    # pinned weights in the models folder. Off, every frame and reply is exactly as before.
-    try:
-        import held_seg
-        segmenter, held_why = held_seg.load(models, (detector.devices or {}).get("boxes") or "cpu")
-    except Exception as exc:  # a type name only
-        segmenter, held_why = None, "the held-object pass didn't load (%s)" % type(exc).__name__
+    segmenter, held = held_pass(models, detector.devices)
     say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms), "devices": detector.devices,
-         **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {}),
-         "held": segmenter is not None, **({"held_why": held_why} if held_why else {})})
+         **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {}), **held})
     stream = sys.stdin.buffer
     kept, bodies, ring, image_module = None, None, stills.Ring(), None
     guards = Guards()

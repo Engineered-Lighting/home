@@ -659,7 +659,9 @@ class InstallScript(unittest.TestCase):
         weights, wheel = release.lock_pins((HERE.parent / 'den-detect' / 'requirements.lock').read_text(encoding='utf-8'))
         pins = dict(re.findall(r'^(\w+_sha)=([0-9a-f]{64})$', text, re.M))
         self.assertEqual(pins, {'yolo_sha': weights['yolo26s.pt'], 'pose_sha': weights['rtmpose-m-body7.onnx'],
-                                'manifest_sha': weights['artifact.json'], 'wheel_sha': wheel})
+                                'manifest_sha': weights['artifact.json'], 'wheel_sha': wheel,
+                                'held_sha': release.HELD_SHA256})   # the held-object weights: held_seg.py's own pin
+        self.assertIn('"yolo26s-seg.pt:${held_sha}"', text)
         self.assertIn('wheel=%s' % release.WHEEL, text)
 
     def prelude(self, tail):
@@ -808,6 +810,21 @@ class ReleaseScan(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_BINARIES, "needs the detector venv's models and rtmlib's wheel")
+class HeldWeights(unittest.TestCase):
+    """The held-object weights go in by held_seg.py's pin, not den-detect's lock, and only the pinned file."""
+
+    def test_only_the_pinned_file_goes_in(self):
+        folder = scratch('den-live-held-')
+        self.assertEqual(release.held_binaries(folder, pinned=None), {}, 'nothing pinned: nothing shipped')
+        with self.assertRaisesRegex(sc.Stop, "isn't in the detector's models folder"):
+            release.held_binaries(folder)
+        (folder / release.HELD_WEIGHTS).write_bytes(b'fictional weights')
+        with self.assertRaisesRegex(sc.Stop, "isn't the pinned one"):
+            release.held_binaries(folder)
+        pinned = hashlib.sha256(b'fictional weights').hexdigest()
+        self.assertEqual(release.held_binaries(folder, pinned=pinned), {'models/' + release.HELD_WEIGHTS: b'fictional weights'})
+
+
 class ReleaseBuild(unittest.TestCase):
     def test_the_tarball_holds_what_it_should_and_its_sha_is_right(self):
         out = scratch('den-live-release-')
@@ -820,8 +837,9 @@ class ReleaseBuild(unittest.TestCase):
         for name in ('tools/den-live/run_service.py', 'tools/den-live/detect_worker.py', 'tools/den-detect/requirements.lock',
                      'tools/den-detect/detect.py', 'tools/den-sim/refs.json', 'stack/services/den-live/den-live.service',
                      'stack/services/den-live/install.sh', 'RELEASE.json', 'SHA256SUMS', 'wheels/' + release.WHEEL,
-                     *('models/' + m for m in release.MODEL_FILES)):
+                     *('models/' + m for m in release.MODEL_FILES), 'models/' + release.HELD_WEIGHTS):
             self.assertIn(name, files)
+        self.assertEqual(hashlib.sha256(files['models/' + release.HELD_WEIGHTS]).hexdigest(), release.HELD_SHA256)
         sums = dict(reversed(line.split('  ', 1)) for line in files['SHA256SUMS'].decode().splitlines())
         self.assertEqual(set(sums), set(files) - {'SHA256SUMS'})
         self.assertTrue(all(hashlib.sha256(files[n]).hexdigest() == s for n, s in sums.items()))
@@ -833,6 +851,7 @@ class ReleaseBuild(unittest.TestCase):
         weights, wheel = release.lock_pins(files['tools/den-detect/requirements.lock'].decode())
         self.assertTrue(all(hashlib.sha256(files['models/' + m]).hexdigest() == weights[m] for m in release.MODEL_FILES))
         doc = json.loads(files['RELEASE.json'])
+        self.assertEqual(doc['models'][release.HELD_WEIGHTS], release.HELD_SHA256)
         self.assertEqual((doc['source'], doc['files'], doc['wheel'][release.WHEEL]), ('worktree', len(files), wheel))
         scanned = [n for n in files if not n.endswith(release.BINARY) and n not in ('RELEASE.json', 'SHA256SUMS')]
         self.assertIn('models/artifact.json', scanned)

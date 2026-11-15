@@ -6,8 +6,10 @@ is holdable (body.HOLDABLE) and whose mask comes within NEAR_WRIST_PX of a wrist
 WRIST_SCORE_MIN, as polygons in RGB pixels. body.py turns the one that meets measured depth near a wrist into the held
 object's points and label.
 
-The weights load only from the models folder, and only when their sha256 is the one pinned here (HELD_SHA256). Until
-the owner approves the download and the digest is pinned, it stays off, and every frame is exactly as before.
+The weights load only from the models folder, and only when their sha256 is the one pinned here (HELD_SHA256):
+Ultralytics' yolo26s-seg.pt from its v8.4.0 release assets, 23,467,933 bytes, AGPL-3.0 as yolo26s.pt is (the owner's
+yes, 2026-11-14). release.py ships them and install.sh puts them in the service's models folder, both held to this
+pin. Without the file, or with another, the pass stays off and every frame is exactly as before.
 """
 import hashlib
 from pathlib import Path
@@ -15,7 +17,7 @@ from pathlib import Path
 from body import HOLDABLE, MAX_POLYGON
 
 HELD_WEIGHTS = "yolo26s-seg.pt"
-HELD_SHA256 = None            # pinned once the owner approves the download (Ultralytics' release asset)
+HELD_SHA256 = "3da1d83e31caec96f9300eb4064f4f62882c133c7c264d63dfe61a7c197837a4"   # GitHub's published digest
 SCORE_MIN = 0.35
 WRIST_SCORE_MIN = 0.3
 NEAR_WRIST_PX = 80            # in the 640x360 RGB frame: generous, body.py applies the metric reach with depth

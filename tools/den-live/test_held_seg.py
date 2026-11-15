@@ -1,5 +1,6 @@
 """The held-object pass's own rules: which instances it keeps, and when its weights load. A fake Ultralytics result."""
 import hashlib
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -76,8 +77,11 @@ class Loading(unittest.TestCase):
             self.assertEqual(loaded, [(held_seg.HELD_WEIGHTS, "segment")])
             self.assertEqual((segmenter.model, segmenter.device), ("model", "cuda:0"))
 
-    def test_the_shipped_pass_is_off_until_the_owner_approves_the_weights(self):
-        self.assertIsNone(held_seg.HELD_SHA256)
+    def test_the_pin_is_the_published_weights(self):
+        self.assertEqual(held_seg.HELD_SHA256, "3da1d83e31caec96f9300eb4064f4f62882c133c7c264d63dfe61a7c197837a4")
+        local = Path(sys.prefix) / "models" / held_seg.HELD_WEIGHTS   # the detector venv's, where it was downloaded
+        if local.is_file():
+            self.assertEqual(held_seg.sha256(local), held_seg.HELD_SHA256)
 
     def test_a_segmenter_runs_one_pass_and_keeps_its_instances(self):
         calls = []
@@ -85,6 +89,38 @@ class Loading(unittest.TestCase):
         got = held_seg.Segmenter(model, "cuda:0")(np.zeros((360, 640, 3), np.uint8), row(), cv2)
         self.assertEqual([i["label"] for i in got], ["book"])
         self.assertEqual(calls, [{"verbose": False, "device": "cuda:0", "conf": held_seg.SCORE_MIN}])
+
+
+class ReadyLine(unittest.TestCase):
+    """detect_worker's ready line says whether the held-object pass is on, and why not."""
+
+    def test_on_with_the_pinned_file_off_without(self):
+        import detect_worker
+        from functools import partial
+        with tempfile.TemporaryDirectory() as folder:
+            models = Path(folder)
+            fake = lambda path, task: "model"
+            segmenter, fields = detect_worker.held_pass(models, {"boxes": "cuda:0"}, load=partial(held_seg.load, yolo=fake))
+            self.assertIsNone(segmenter)
+            self.assertEqual(fields, {"held": False, "held_why": "the held-object weights aren't in the models folder"})
+            (models / held_seg.HELD_WEIGHTS).write_bytes(b"fictional weights")
+            pinned = hashlib.sha256(b"fictional weights").hexdigest()
+            segmenter, fields = detect_worker.held_pass(models, {"boxes": "cuda:0"},
+                                                        load=partial(held_seg.load, pinned=pinned, yolo=fake))
+            self.assertEqual((fields, segmenter.device), ({"held": True}, "cuda:0"))
+            _, fields = detect_worker.held_pass(models, None, load=partial(held_seg.load, yolo=fake))
+            self.assertEqual(fields, {"held": False, "held_why": "the held-object weights aren't the pinned ones"})
+            _, fields = detect_worker.held_pass(models, None, load=partial(held_seg.load, pinned=None, yolo=fake))
+            self.assertEqual(fields, {"held": False, "held_why": "no held-object weights are pinned"})
+
+    def test_a_load_that_raises_is_off_with_its_type_name_only(self):
+        import detect_worker
+
+        def broken(models, device):
+            raise RuntimeError("text that never reaches the line")
+        segmenter, fields = detect_worker.held_pass(Path("."), None, load=broken)
+        self.assertIsNone(segmenter)
+        self.assertEqual(fields, {"held": False, "held_why": "the held-object pass didn't load (RuntimeError)"})
 
 
 if __name__ == "__main__":

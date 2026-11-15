@@ -55,6 +55,8 @@ ROOT = HERE.parents[1]
 BRANCH_PATHS = ("tools/den-live", "tools/den-detect", "tools/den-sim/refs.json", "stack/services/den-live")
 TARBALL = "den-live-release.tar.gz"
 MODEL_FILES = ("yolo26s.pt", "rtmpose-m-body7.onnx", "artifact.json")
+# The held-object pass's weights (held_seg.py), pinned there, not in den-detect's lock: tracking's models stay its own.
+from held_seg import HELD_SHA256, HELD_WEIGHTS  # noqa: E402
 PLAN_PINS = {"yolo26s.pt": "646f8bc3", "rtmpose-m-body7.onnx": "5c0a4bf6"}   # plan step 4's pins, as the lock holds them
 WHEEL = "rtmlib-0.0.16-py3-none-any.whl"
 WHEEL_SHA = re.compile(r"The rtmlib wheel's sha256 is ([0-9a-f]{64})")
@@ -282,6 +284,7 @@ def binaries(lock_text, models_dir, wheel_path):
         if hashlib.sha256(data).hexdigest() != weights[name]:
             raise Stop("%s in %s isn't the pinned one" % (name, models_dir))
         out["models/" + name] = data
+    out.update(held_binaries(models_dir))
     try:
         data = Path(wheel_path).read_bytes()
     except OSError:
@@ -290,6 +293,20 @@ def binaries(lock_text, models_dir, wheel_path):
         raise Stop("rtmlib's wheel at %s isn't the pinned one" % wheel_path)
     out["wheels/" + WHEEL] = data
     return out
+
+
+def held_binaries(models_dir, pinned=HELD_SHA256):
+    """{"models/yolo26s-seg.pt": bytes} held to held_seg.py's pin, or {} while none is pinned."""
+    if pinned is None:
+        return {}
+    path = Path(models_dir) / HELD_WEIGHTS
+    try:
+        data = path.read_bytes()
+    except OSError:
+        raise Stop("%s isn't in the detector's models folder, %s" % (HELD_WEIGHTS, models_dir)) from None
+    if hashlib.sha256(data).hexdigest() != pinned:
+        raise Stop("%s in %s isn't the pinned one" % (HELD_WEIGHTS, models_dir))
+    return {"models/" + HELD_WEIGHTS: data}
 
 
 def default_wheel(repo=ROOT):
@@ -351,7 +368,8 @@ def build(*, out_dir, source="HEAD", token=None, site=None, models_dir=None, whe
     pins = {key: sc.tree_path(Path("trees"), key)[1] for key in rl.TREES}
     contents["RELEASE.json"] = (json.dumps({
         "schema": SCHEMA, "source": source, "commit": commit, "pins": pins, "files": len(contents) + 2,   # with this and SHA256SUMS
-        "models": {name: hashlib.sha256(contents["models/" + name]).hexdigest() for name in MODEL_FILES},
+        "models": {name: hashlib.sha256(contents["models/" + name]).hexdigest()
+                   for name in (*MODEL_FILES, *((HELD_WEIGHTS,) if "models/" + HELD_WEIGHTS in contents else ()))},
         "wheel": {WHEEL: hashlib.sha256(contents["wheels/" + WHEEL]).hexdigest()},
         "scan": {"text_files": texts, "known_pinned_lines": known}}, indent=1, sort_keys=True) + "\n").encode("utf-8")
     contents["SHA256SUMS"] = "".join("%s  %s\n" % (hashlib.sha256(contents[name]).hexdigest(), name)

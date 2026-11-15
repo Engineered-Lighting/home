@@ -61,6 +61,11 @@ MAX_POLYGON = 256
 # holds on the same 2-of-3 rule, unnamed: kind 5 points, and object null for Home's "Held object" marker.
 OBJECT_MARGIN_M, DEPTH_OBJECT_MIN_M2, HAND_STILL_MPS = 0.025, 0.006, 0.3
 UNNAMED = ""   # the hold rule's key for an object held by depth alone
+# The seg model's names that a held phone takes: about 20 px in the RGB frame, it is never "cell phone" there, and it
+# is "remote" on some frames, a few cm from the wrist at 0.36-0.67, where no score floor parts it from the books (the
+# sofa benchmark, 2026-11-14). For these the mask still gives the object's points, but they hold on the unnamed key:
+# object null, and Home's "Held object", never a wrong name.
+UNNAMED_LABELS = frozenset(("cell phone", "remote"))
 
 
 def _finite(value):
@@ -372,12 +377,14 @@ class BodyMaker:
             still = self._hands_still(joints, now)
             held_mask, instance = self._held(depth, valid, delta, component, joints, held, v0, u0)
             key = instance["label"] if instance else None
+            if key in UNNAMED_LABELS:
+                key = UNNAMED   # the mask's pixels, not its name
             if instance is None and still:   # the seg pass named nothing here: what the hand holds by depth alone
                 held_mask = self._depth_held(depth, valid, delta, component, joints, v0, u0)
                 key = UNNAMED if held_mask is not None else None
             self.held_seen.append(key)
             if key is not None and self.held_seen.count(key) >= HELD_FRAMES:
-                held_now = instance   # None when unnamed: kind 5 points with object null
+                held_now = None if key == UNNAMED else instance   # unnamed: kind 5 points with object null
                 component = component & ~held_mask   # the object's pixels are its own points, not the body's
             else:
                 held_mask = None

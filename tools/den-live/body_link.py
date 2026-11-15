@@ -5,7 +5,11 @@ import threading
 from body_clock import lease_clock
 from stream import BODY_LEASE_S
 
-MIN_INTERVAL_S = 0.3
+# The least time between two body jobs. Under the camera's own frame interval (about 0.24 s at 4.2 frames a second), so
+# every tracked frame can carry a body: 0.3 s skipped every other frame and held the figure to 2 a second. The worker
+# answers a body before the next frame (one pipe, in order). A frame still at the detector, or a Qwen stills request
+# waiting for the process's one optional slot (perceive.DetectorWorker.send_alone), skips its body (busy).
+MIN_INTERVAL_S = 0.2
 # A frame's misses for the same person: the last published frame keeps its own lease through them, so one frame
 # without a pose or enough depth doesn't blank the figure. Anything that changes the scene (empty, ambiguous, a new
 # scope or track, the detector stopping) clears at once.

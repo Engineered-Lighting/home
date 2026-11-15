@@ -32,8 +32,6 @@ const require = createRequire(import.meta.url), { chromium } = require('playwrig
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..'), SRC = path.join(ROOT, 'app/src');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const WAIT_MS = 45000;
-// TEMPORARY CI DIAGNOSTIC (#455): every settle attempt and stage, with seconds since start. Revert after the run.
-const TRACE_T0 = Date.now();
 let failureSummary = null;
 process.on('exit', () => { if (failureSummary) console.log('Lit splats browser failure: ' + failureSummary); });
 const RENDERER = process.env.HOME_LIT_SPLATS_RENDERER || 'webgl';
@@ -110,8 +108,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
   const protectedHashes = Object.fromEntries(protectedFiles.map(file => [file, hash(fs.readFileSync(file))]));
   const sources = publicSources(SRC), receipt = { schema: 'home-apartment-lit-splats-authored-browser-1', authored_room: true, authored_layer: true,
     real_renderer: true, frame_precision:precision, proof_phase:phase, household_data: false, physical_commands: 0, screenshots: false, checks: [], forbidden: [], missing_code: [], errors: [], requests: [] };
-  const trace = row => { const entry = { t: +((Date.now() - TRACE_T0) / 1000).toFixed(1), ...row }; (receipt.trace ||= []).push(entry); process.stderr.write('TRACE ' + JSON.stringify(entry) + String.fromCharCode(10)); };
-  const check = (stage, detail = {}) => { trace({ check: stage }); return receipt.checks.push({ stage, ...detail }); };
+  const check = (stage, detail = {}) => receipt.checks.push({ stage, ...detail });
   // Opt-in stills of the authored room for local review; never part of the pass criteria.
   const still = async (page, name) => { if (process.env.HOME_LIT_SPLATS_STILLS === '1') await page.screenshot({ path: path.join(run, name + '.png') }); };
   let server, browser, origin, handler, timer;
@@ -119,7 +116,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
   signal?.addEventListener('abort', abort, { once: true });
   const deadline = new Promise((_, reject) => { timer = setTimeout(() => {
     browser?.close().catch(() => {}); server?.closeAllConnections(); reject(Error('145s lit splats browser deadline'));
-  }, 170000); });   // TEMPORARY: 170 s, under the runner's 180 s
+  }, 145000); });
 
   async function openPage(context, query) {
     const page = await context.newPage(); page.setDefaultTimeout(15000);
@@ -218,7 +215,6 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
         await page.evaluate(() => window.__APT_ENGINE.modes.whenSparkIdle()); await frames(page, 4);
         const next = await capture(page, name);
         const diff = await frameDiff(page, name, name + ':a');
-        trace({ stable: name, i, max: diff.max, mean: +(diff.mean || 0).toFixed(3), over8: +(diff.over8 || 0).toFixed(4) });
         const equal = nativeWebgl ? diff.max <= NATIVE_QUANTIZATION.max && diff.mean <= NATIVE_QUANTIZATION.mean
           : RENDERER === 'webgl' ? diff.max === 0 : diff.mean <= NOISE.mean && diff.over8 <= NOISE.over8;
         if (equal) return next;
@@ -374,7 +370,7 @@ export async function runLitSplatsBrowserProof({ part, signal, precision='exact'
       });
       assert.equal(await lighting.getAttribute('aria-pressed'), 'false');
       await haControls.waitFor({ state: 'visible' });
-      const views = [['Mesh', 'mesh', null], ['Cloud', 'points', 'points'], ['Photo', 'splat', 'splat']];   // TEMPORARY: Cloud first
+      const views = [['Mesh', 'mesh', null], ['Photo', 'splat', 'splat'], ['Cloud', 'points', 'points']];
       for (const [view, mode, receiver] of views.filter(([, , kind]) => phase === 'all' || !!kind === (phase === 'receivers'))) {
         await enterMode(page, view + ' view', mode);
         await stable(page, view + ':off');

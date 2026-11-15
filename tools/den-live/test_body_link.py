@@ -223,7 +223,8 @@ class PipelineTests(unittest.TestCase):
                                 roommodel=SimpleNamespace(RegistrationRefused=ValueError),
                                 observe=SimpleNamespace(observe=lambda *_, **__: [observation]),
                                 records=SimpleNamespace(frames_from_observations=lambda *args: ([], None),
-                                                        track_record=lambda *args: track_record))
+                                                        track_record=lambda *args: track_record,
+                                                        track_name=lambda number: "one"))
         perceiver = Perceiver.__new__(Perceiver)
         perceiver.t, perceiver.camera, perceiver.detector = tools, camera, detector
         perceiver.home, perceiver.scope = "den", SCOPE
@@ -240,7 +241,7 @@ class PipelineTests(unittest.TestCase):
         perceiver.snapshot = TrackingSnapshot(perceiver.run_id, 3, 1, None, "starting", None, "unknown", ())
         perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})
         perceiver.core, perceiver.strong = SimpleNamespace(step=lambda *args: [(track, "confirmed")]), set()
-        perceiver.together = set()
+        perceiver.together, perceiver.supports = set(), {}
         perceiver.clock = SimpleNamespace(add=lambda *_: None, offset=lambda: 0)
         perceiver._transit = lambda *_: None
         perceiver.require_source_correction, perceiver.source_correction = False, None

@@ -521,9 +521,11 @@ class Perceiver:
         room = self.track_method.room
         self.core = self.t.records.tracker_core.TrackerCore(self.track_method.tracker, exits=room["exits_m"], floor=room["floor_m"])
         self.strong = set()   # tracks a pose or a person box at PERSON_MIN or more has ever supported
-        # Pairs of tracks a detection each supported on one frame this epoch: two people. A split's two tracks never
-        # are (one detection supports one track), so the body tells a left-behind duplicate from someone missed.
-        self.together = set()
+        # Pairs of tracks that are two people, for the body: a track seen while the other had been seen since it was
+        # born, tentative tracks too. A split's left-behind track was last seen before its successor's first detection
+        # (one detection supports one track), so the two never pair; someone missed for a frame, or a detector that
+        # finds one of two touching people at a time, does. supports: each track's (first, last) detection this epoch.
+        self.together, self.supports = set(), {}
         self.last_capture = None
         self.pending_capture = None   # the capture time of the frame prepare handed on, until finish takes it
         self.body_input = None
@@ -633,6 +635,16 @@ class Perceiver:
             status = "refused" if self.problem == self.correction_changed else "stale"   # refused: register again
         self._clear_body("stale" if camera_state.get("status") == "ok" else "unavailable")
         return self._snapshot(self.event(None, [], camera_state, now_mono), status=status)
+
+    def _sightings(self, sighted, capture_mono):
+        """Record this frame's detected tracks, and pair each with every track detected since it was born."""
+        for track_id in sighted:
+            first, _ = self.supports.get(track_id, (capture_mono, None))
+            self.supports[track_id] = (first, capture_mono)
+        for track_id in sighted:
+            born = self.supports[track_id][0]
+            self.together.update(tuple(sorted((track_id, other))) for other, (_, last) in self.supports.items()
+                                 if other != track_id and last >= born)
 
     def _clear_body(self, reason):
         if self.body is not None:
@@ -872,10 +884,12 @@ class Perceiver:
                   and (o.get("kind") == "keypoints" or (o.get("kind") == "person_box" and (o.get("score") or 0) >= PERSON_MIN))}
         frames, _counts = self.t.records.frames_from_observations(observations, self.track_method.tracker)
         detections = frames[0]["detections"] if frames else []
-        tracks, supported, association = [], [], {}
+        tracks, supported, association, sighted = [], [], {}, []
         for track, state in self.core.step(capture_mono, detections):
             if strong.intersection(track.obs_ids):
                 self.strong.add(track.id)
+            if track.obs_ids:   # any track a detection supports, shown or not yet: who was seen, and when
+                sighted.append("%s-e%d-%s" % (self.run_id, self.sessions, self.t.records.track_name(track.id)))
             if state not in OUT_STATES:
                 continue
             if track.id not in self.strong:
@@ -891,8 +905,7 @@ class Perceiver:
             supported.append(set(track.obs_ids))
             # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
             association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
-        seen_now = sorted(marker["track_id"] for marker, ids in zip(tracks, supported) if ids)
-        self.together.update((a, b) for i, a in enumerate(seen_now) for b in seen_now[i + 1:])
+        self._sightings(sighted, capture_mono)
         now_mono += time.monotonic() - start_lift
         if now_mono >= capture_mono + FRESH_S:
             return self._drop("expired", now_mono, "tracking result expired")

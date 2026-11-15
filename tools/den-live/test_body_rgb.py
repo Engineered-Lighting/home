@@ -383,6 +383,52 @@ class RgbBodyTests(unittest.TestCase):
             self.assertNotEqual(f.last.observation, "person", "frame %d, seen %s" % (n, (first, second)))
         self.assertEqual([fields for _, fields in f.rendered[start:] if fields.get("frame")], [], "no figure")
 
+    def owner_then_newcomer(self):
+        """The owner (A) alone, figure shown; then B touching them, 0.6 m over. (A and B's depth, B's keypoints.)"""
+        import numpy as np
+
+        f = self.f
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        _, depth_b, pixels_b = f.person_at(0.6)
+        a, b = np.frombuffer(f.depth, "<u2"), np.frombuffer(depth_b, "<u2")
+        both = np.where((a > 0) & ((b == 0) | (a <= b)), a, b).astype("<u2").tobytes()
+        for n in range(55):
+            f.frame(n, empty=True)
+        for n in range(55, 70):
+            f.frame(n)
+        self.assertTrue(any(fields.get("frame") for _, fields in f.rendered))
+        return both, pixels_b
+
+    def test_a_newcomer_seen_once_with_the_owner_is_someone_else(self):
+        """B arrives and both are detected on B's first frame, while B's track is still tentative (not shown). Then A
+        is missed: A's track goes unseen beside B's, but the two were seen together, so no figure, never A's depth
+        flooded into B's."""
+        f = self.f
+        both, pixels_b = self.owner_then_newcomer()
+        f.frame(70, depth=both, second=pixels_b)
+        start = len(f.rendered)
+        for n in range(71, 80):
+            f.frame(n, depth=both, first=False, second=pixels_b)
+            self.assertNotEqual(f.last.observation, "person", "frame %d" % n)
+        self.assertEqual([fields for _, fields in f.rendered[start:] if fields.get("frame")], [], "no figure")
+
+    def test_a_detector_that_finds_one_of_two_at_a_time_never_draws_one_figure(self):
+        """B arrives touching A, and the detector finds one of them per frame, never both. Once den-track shows both
+        tracks, each was seen after the other was born: two people, so no figure and no flipping between them."""
+        f = self.f
+        both, pixels_b = self.owner_then_newcomer()
+        start = None
+        for i, n in enumerate(range(70, 90)):
+            a_turn = i % 2 == 1
+            event = f.frame(n, depth=both, first=a_turn, second=None if a_turn else pixels_b)
+            if start is None and len(event["tracks"]) > 1:
+                start = len(f.rendered)
+            if start is not None:
+                self.assertNotEqual(f.last.observation, "person", "frame %d" % n)
+        self.assertIsNotNone(start, "den-track shows both")
+        self.assertEqual([fields for _, fields in f.rendered[start:] if fields.get("frame")], [], "no figure")
+
     def test_after_a_split_the_duplicate_ends_quietly_and_leaving_clears_after_the_hold(self):
         """The split again, run on: den-track ends the left-behind track (max_coast_s) with the figure going on, and
         nothing reaches Home but the person's own frames. Then the person leaves during a second split's overlap: the

@@ -12,8 +12,9 @@ is kept anywhere. It prints:
   gateway's own folder) is active;
 - tailscale serve status: what port 443 forwards to, and whether --proxy-protocol=1 is on (the look-only rule needs it);
 - the den's content-pack revisions on LA by folder name, its active one, and whether step 2's pack is there;
-- a 60 s pull of /frame.npz from LA, as den-live's source pulls it: frames a second, median and 95th fetch time,
-  median bytes;
+- a 60 s pull from LA, as den-live's source pulls it: /frame-slim.npz on one kept connection (304s between frames),
+  or, from a camera without the slim path, /frame.npz on a new connection each time. Frames a second, median and 95th
+  fetch time, median bytes, and which link it was;
 - LA's cores and 1-minute load, and whether the Lab's LA worker (lab-la-detector-trial.service, a systemctl --user
   unit of LA's main user) is active;
 - what the install needs: Python 3.12 with venv, OpenCV's libGL and libglib, port 8111 free.
@@ -43,6 +44,8 @@ GATEWAY, CHECKOUT = "home-web-gateway", "~/code/home"
 LAB_WORKER = "lab-la-detector-trial.service"
 SECONDS = 60
 RELAY_FPS, RELAY_FETCH_MS = 4.0, 300.0
+LINKS = {"slim-kept": "the slim bundle on one kept connection",
+         "full-fresh": "the full bundle, a new connection each time (the camera has no slim path)"}
 
 
 # ---- reading what LA said ------------------------------------------------------------------------------------------
@@ -159,8 +162,10 @@ def pull_line(pull):
     trouble = ["%d answered %s" % (v, k) for k, v in sorted(n["other"].items())] + ["%d %s" % (v, k) for k, v in sorted(n["errors"].items())]
     if not n["frames"]:
         return "Frames from LA:   none in %d s%s" % (round(n["seconds"]), (": " + ", ".join(trouble)) if trouble else "")
-    return ("Frames from LA:   %.1f a second over %d s; fetch median %.0f ms, 95th %.0f ms; median %.2f MB; %s"
-            % (n["fps"], round(n["seconds"]), n["median_ms"], n["p95_ms"], n["median_mb"], ", ".join(trouble) or "no errors"))
+    link = LINKS.get((pull or {}).get("link"))
+    return ("Frames from LA:   %.1f a second over %d s; fetch median %.0f ms, 95th %.0f ms; median %.2f MB; %s%s"
+            % (n["fps"], round(n["seconds"]), n["median_ms"], n["p95_ms"], n["median_mb"], ", ".join(trouble) or "no errors",
+               ("; " + link) if link else ""))
 
 
 def relay_line(pull):

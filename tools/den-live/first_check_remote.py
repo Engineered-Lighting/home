@@ -3,8 +3,8 @@
 first_check.py sends this file's text to `ssh <host> python3 -` on stdin, after one line that sets PAYLOAD (the
 gateway's unit name and checkout, the den's site, the camera's URL and token, the pull's length). So the token goes
 over ssh's stdin, never on a command line, and nothing is copied to LA. It runs read-only commands and one 60 s pull
-of /frame.npz, and prints one JSON line of what it found, raw: first_check.py reads it and prints words. No frame is
-kept: each body is hashed, counted and dropped.
+of frames as den-live pulls them (/frame-slim.npz on one kept connection, else /frame.npz), and prints one JSON line of
+what it found, raw: first_check.py reads it and prints words. No frame is kept: each body is hashed, counted and dropped.
 """
 import hashlib
 import http.client
@@ -18,8 +18,11 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-FRAME_PATH = "/frame.npz"   # den-live's camera paths are /frame.npz and /calibration only (source.ALLOWED_PATHS)
+FRAME_PATH = "/frame.npz"   # den-live's camera paths: /frame-slim.npz, /frame.npz and /calibration (source.ALLOWED_PATHS)
+SLIM_PATH = "/frame-slim.npz"   # den-camera-slim-1, on one kept connection, as source.KeptLink asks for it
+SLIM_SCHEMA = "den-camera-slim-1"
 MAX_BODY = 4 * 1024 * 1024
+CLOSED = (http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError)
 NAME_OK = set(string.ascii_letters + string.digits + "._-")   # a folder name that's safe to print
 
 
@@ -76,15 +79,26 @@ def packs(folder, site):
             "active": active if active and set(active) <= NAME_OK else None}
 
 
-def pull(url, token, seconds, poll_s=0.2, clock=time.monotonic, sleep=time.sleep):
-    """GET /frame.npz every poll_s for seconds, a fresh connection each time, as den-take's client does: each fetch's
-    time, each new bundle's size (a body seen before is the same bundle), the statuses and the errors by type."""
+def pull(url, token, seconds, poll_s=0.2, recheck_s=0.05, clock=time.monotonic, sleep=time.sleep):
+    """As den-live's source pulls, for seconds. A camera with the slim path is asked for /frame-slim.npz on one kept
+    connection with If-None-Match: each new frame's fetch time and size, and the 304s (the frame was still the one it
+    had), asking again recheck_s after a 304 and poll_s after a new frame. A camera release without it (404) is pulled
+    as before: /frame.npz every poll_s, a fresh connection each time, every answer's fetch time. Both give the statuses
+    and the errors by type, and link says which way it pulled."""
     parts = urlsplit(url)
     fetch_ms, sizes, statuses, errors, seen = [], [], {}, {}, set()
+    link = {"connection": None, "etag": None, "name": None, "connections": 0, "not_modified": 0}
     start = clock()
     next_poll = start
     while clock() - start < seconds:
         began = clock()
+        if link["name"] != "full-fresh":
+            status = slim_pull(parts, token, link, fetch_ms, sizes, statuses, errors, seen, began, clock)
+            next_poll = began + (recheck_s if status == 304 else poll_s)
+            delay = next_poll - clock()
+            if delay > 0:
+                sleep(delay)
+            continue
         status = body = None
         try:
             connection = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=5)
@@ -112,8 +126,66 @@ def pull(url, token, seconds, poll_s=0.2, clock=time.monotonic, sleep=time.sleep
             sleep(delay)
         else:
             next_poll = clock()
+    if link["connection"] is not None:
+        link["connection"].close()
     return {"seconds": round(clock() - start, 2), "fetch_ms": fetch_ms, "new_frames": len(seen), "bytes": sizes,
-            "statuses": statuses, "errors": errors}
+            "statuses": statuses, "errors": errors, "link": link["name"] or "none",
+            "connections": link["connections"], "not_modified": link["not_modified"]}
+
+
+def slim_pull(parts, token, link, fetch_ms, sizes, statuses, errors, seen, began, clock):
+    """One ask of /frame-slim.npz on the kept connection: its status, or None. A 404 switches link to the full pull,
+    as den-live's source does; a 200 that doesn't declare den-camera-slim-1 counts as an error and switches too."""
+    headers = {"Authorization": "Bearer " + token}
+    if link["etag"]:
+        headers["If-None-Match"] = link["etag"]
+    for attempt in (0, 1):
+        reused = link["connection"] is not None
+        if not reused:
+            link["connection"] = http.client.HTTPConnection(parts.hostname, parts.port or 80, timeout=5)
+            link["connections"] += 1
+        connection = link["connection"]
+        try:
+            connection.request("GET", SLIM_PATH, headers=headers)
+            response = connection.getresponse()
+            body = response.read(MAX_BODY + 1)
+        except CLOSED as exc:
+            connection.close()
+            link["connection"] = None
+            if reused and attempt == 0:
+                continue   # the camera closed the idle connection first: once more on a new one
+            errors[type(exc).__name__] = errors.get(type(exc).__name__, 0) + 1
+            return None
+        except (OSError, http.client.HTTPException) as exc:
+            connection.close()
+            link["connection"] = None
+            errors[type(exc).__name__] = errors.get(type(exc).__name__, 0) + 1
+            return None
+        break
+    if response.will_close:
+        connection.close()
+        link["connection"] = None
+    status = response.status
+    if status == 404:
+        link["name"] = "full-fresh"
+        return status
+    statuses[str(status)] = statuses.get(str(status), 0) + 1
+    if status == 304:
+        link["not_modified"] += 1
+        return status
+    if status == 200:
+        if response.getheader("X-Den-Bundle-Schema") != SLIM_SCHEMA:
+            errors["schema"] = errors.get("schema", 0) + 1
+            link["name"] = "full-fresh"
+            return status
+        link["name"], link["etag"] = "slim-kept", response.getheader("ETag")
+        if body and len(body) <= MAX_BODY:
+            digest = hashlib.sha1(body).digest()
+            if digest not in seen:
+                seen.add(digest)
+                sizes.append(len(body))
+                fetch_ms.append(round((clock() - began) * 1000, 1))
+    return status
 
 
 def libraries():

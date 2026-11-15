@@ -344,14 +344,14 @@ Before anything is installed, see what LA serves today and whether LA can pull t
 python -B C:\claude\home\.claude\worktrees\den-live\tools\den-live\first_check.py
 ```
 
-It runs read-only commands on LA over one `ssh hav-ubuntu` (`--host` for another), and pulls `/frame.npz` from LA for 60 s. The token travels inside ssh's input, never on a command line. Nothing is copied to LA, and no frame is kept. It prints:
+It runs read-only commands on LA over one `ssh hav-ubuntu` (`--host` for another), and pulls frames from LA for 60 s, as den-live does: `/frame-slim.npz` on one kept connection, or `/frame.npz` from a camera without it. The token travels inside ssh's input, never on a command line. Nothing is copied to LA, and no frame is kept. It prints:
 
 | Line | Means |
 |---|---|
 | `Home checkout:` | LA's Home checkout: branch, commit, date, clean or not, and whether the gateway, `home-web-gateway`, is active |
 | `Tailscale Serve:` | What port 443 forwards to, and whether `--proxy-protocol=1` is on. The look-only view needs Serve forwarding to 5182 with it on, which section 3 sets |
 | `Content packs:` | The den's scan revisions on LA, the active one, and whether step 2's is there |
-| `Frames from LA:` | Frames a second over the 60 s, median and 95th fetch time, median size, and any errors |
+| `Frames from LA:` | Frames a second over the 60 s, median and 95th fetch time, median size, any errors, and the link: the slim bundle on one kept connection, as den-live pulls it, or the full bundle from a camera without the slim path |
 | `LA's CPU:` | Cores, the 1-minute load, and whether the Lab's LA worker (`lab-la-detector-trial`) is active |
 | `For the install:` | Python 3.12 with venv, OpenCV's libGL and libglib, port 8111 free, and whether den-live is installed |
 | `Jetson relay (plan pick 2):` | "not needed", or "needed" when LA gets under 4 frames a second or a median fetch over 300 ms |

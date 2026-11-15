@@ -115,6 +115,7 @@ const MAP = [
   // Lighting's one HDR frame: the display pass, bloom and fixture faces (lit-display.mjs, lit-frame.mjs).
   [/^(?:app\/src\/home-3d\/lit-(?:display|exposure|model)\.mjs|tools\/(?:test-lit-display|fixtures\/lit-frame-proof)\.mjs)$/, ["test-lit-display.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:pointcloud\.js|engine\.js|lit-(?:receivers|view|frame)\.mjs)|tools\/test-apartment-lit-cloud-browser\.mjs)$/, ["test-apartment-lit-cloud-browser.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:bvh-bake|bvh-worker|view)\.mjs|tools\/(?:test-lit-bvh-bake(?:-browser)?\.mjs|fixtures\/lit-bake-scenes\.mjs))$/, ["test-lit-bvh-bake.mjs", "test-lit-bvh-bake-browser.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   // L2: Lit's exposure and tone policy, and Lit on the WebGPU path (?renderer=webgpu-webgl).
   [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"]],
@@ -285,6 +286,7 @@ const SHARD_WEIGHT_S = {
   "test-precompiled-jsx.mjs": 90,
   "test-apartment-room-selection-browser.mjs": 150,
   "test-apartment-slow-scan-browser.mjs": 60,
+  "test-apartment-lit-cloud-browser.mjs": 60,
   "test-den-live-serve-browser.mjs": 120,
   "test-den-live-serve-browser-part2.mjs": 120,
   "test-apartment-overlay-bridge-browser.mjs": 100,

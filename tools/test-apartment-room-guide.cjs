@@ -192,6 +192,21 @@ test('layer rows: unavailable rows explain why, and fixtures have one setter', (
   assert.equal(pooled.find(row => row.id === 'pools').available, true, 'a Repair seam enables its row without other changes');
 });
 
+test('layer rows: the den\'s labelled surfaces get a Room group only with their seam', () => {
+  const seen = [];
+  const seams = { surfaces: { value: true, set: value => seen.push(['surfaces', value]) },
+    'surface-names': { value: false, set: value => seen.push(['names', value]) } };
+  const groups = Guide.layerGroups({ homeId: 'victoria', seams, hasPerception: true });
+  assert.deepEqual(groups.map(group => group.id), ['guide', 'room', 'light', 'body', 'shadows']);
+  const rows = groups.find(group => group.id === 'room').rows;
+  assert.deepEqual(rows.map(row => [row.id, row.label, row.available, row.value]),
+    [['surfaces', 'Labelled surfaces', true, true], ['surface-names', 'All surface names', true, false]]);
+  assert.equal(rows[1].detail, 'else on hover');
+  rows[0].set(false); rows[1].set(true);
+  assert.deepEqual(seen, [['surfaces', false], ['names', true]], 'Layers calls the labels view\'s own setters');
+  assert.ok(!Guide.layerGroups({ homeId: 'echo' }).some(group => group.id === 'room'), 'no Room group without the den\'s labels');
+});
+
 test('About uses only existing facts and states the Den as modeled, not commissioned', () => {
   const echo = Guide.aboutFacts({ homeId: 'echo', source: { kind: 'live_ha_model', label: 'Live Home Assistant model', live: true },
     revision: 42, trackerStatus: 'live' });
@@ -221,7 +236,9 @@ test('toolbar mount passes the single fixture setter and existing facts only', (
   const toolbar = apartment.ast.body.find(node => node.type === 'FunctionDeclaration' && node.id?.name === 'AptUnifiedRoomToolbar');
   const body = text(apartment, toolbar);
   assert.equal((body.match(/onVirtualVisible/g) || []).length, 2, 'the toolbar only forwards the fixture setter as the Layers seam');
-  assert.match(body, /seams=\{hasVirtualFixtures \? \{ fixtures: \{ value: virtualVisible, set: onVirtualVisible \} \} : \{\}\}/);
+  assert.match(body, /seams=\{\{ \.\.\.\(hasVirtualFixtures \? \{ fixtures: \{ value: virtualVisible, set: onVirtualVisible \} \} : \{\}\), \.\.\.surfaceSeams \}\}/);
+  assert.match(body, /window\.HomeDenLabelsView\?\.layers\?\.\(\)/, 'the den labels view owns the surfaces rows');
+  assert.match(body, /"surface-names": \{ value: denLabels\.names, set: \(value\) => setDenLabels\(\{ names: value \}\) \}/);
   assert.doesNotMatch(body, /pinch/i, 'gesture help lives in the guide, not in toolbar copy');
 });
 

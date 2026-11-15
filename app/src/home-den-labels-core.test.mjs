@@ -117,3 +117,66 @@ test('the checklist counts names that end with an item', () => {
     const done = L.checklistDone([label({ name: 'blue painting' }), label({ id: 'l-s-1', name: 'sofa' }), label({ id: 'l-t-1', name: 'TV stand' })]);
     assert.deepEqual([...done].sort(), ['TV', 'painting', 'sofa']);
 });
+
+/* ---------------- the quiet view ---------------- */
+const named = (name, over = {}) => label({ id: `l-${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}-x1`, name, ...over });
+
+test('in use: a label named in a near line, whole words only, longer names first', () => {
+    const labels = [named('sofa'), named('reading table'), named('table'), named('painting'), named('painting 2'), named('desk')];
+    const ids = map => [...map.keys()].sort();
+    assert.deepEqual(ids(L.inUseLabels(labels, { near: ['on the sofa, beside the reading table'] })), ['l-reading-table-x1', 'l-sofa-x1']);
+    assert.deepEqual(ids(L.inUseLabels(labels, { near: ['beside painting 2'] })), ['l-painting-2-x1']);
+    assert.deepEqual(ids(L.inUseLabels(labels, { near: ['at the DESK.'] })), ['l-desk-x1']);
+    assert.deepEqual(ids(L.inUseLabels(labels, { near: ['by the sofabed'] })), [], 'part of a word is not a name');
+    assert.deepEqual(ids(L.inUseLabels(labels, { near: ['at the desk', 'on the sofa'] })), ['l-desk-x1', 'l-sofa-x1'], 'every person counts');
+    assert.equal(L.inUseLabels(labels, {}).size, 0);
+    assert.equal(L.inUseLabels(labels, { near: [null, 7] }).size, 0);
+    assert.deepEqual(L.inUseLabels(labels, { near: ['on the sofa'] }).get('l-sofa-x1'), { named: true, lit: false });
+});
+
+test('in use: a label is lit when a lit spot lands within 10 cm of its box', () => {
+    // The desk: 1.4 m by 0.7 m by 0.75 m high around (1, 2), turned 90°, so its width runs along y.
+    const desk = label({ box: { centre_m: [1, 2, 0.375], size_m: [1.4, 0.7, 0.75], yaw_deg: 90 } });
+    assert.deepEqual(L.inUseLabels([desk], { targets: [[1.3, 2.6, 0.76]] }).get(desk.id), { named: false, lit: true });
+    assert.equal(L.inUseLabels([desk], { targets: [[1.5, 2, 0.5]] }).size, 0, '0.5 m along x is outside a 0.7 m deep desk');
+    assert.equal(L.inUseLabels([desk], { targets: [[1, 2, 0.9]] }).size, 0, '15 cm over the top is too far');
+    assert.equal(L.inUseLabels([desk], { targets: [[1, 2, 0.84]] }).size, 1, '9 cm over the top counts');
+    assert.equal(L.inUseLabels([desk], { targets: [[1, 2], [NaN, 2, 0.5], 'x'] }).size, 0, 'malformed targets are ignored');
+    assert.deepEqual(L.inUseLabels([desk], { near: ['at the desk'], targets: [[1, 2, 0.8]] }).get(desk.id), { named: true, lit: true });
+});
+
+test('corner ticks: twelve edges for a box, four on a wall item\'s face, at most 12 cm or a quarter of an edge', () => {
+    const edges = L.labelEdges(label());
+    assert.equal(edges.length, 12);
+    near(edges[0].tick, 0.12 / 1.4);
+    const verticals = edges.slice(8);
+    for (const e of verticals) { near(e.tick, 0.12 / 0.75); near(e.p[2], 0); near(e.q[2], 0.75); }
+    const small = L.labelEdges(label({ box: { centre_m: [0, 0, 0.1], size_m: [0.2, 0.2, 0.2], yaw_deg: 0 } }));
+    for (const e of small) near(e.tick, 0.25);
+    // A painting on a wall facing -y: its front face is the side towards the room.
+    const painting = label({ name: 'painting', kind: 'picture', on_wall: true, box: { centre_m: [2, 3, 1.5], size_m: [0.8, 0.04, 0.6], yaw_deg: 180 } });
+    const face = L.labelEdges(painting);
+    assert.equal(face.length, 4);
+    for (const e of face) { near(e.p[1], 2.98); near(e.q[1], 2.98); }
+});
+
+test('corner ticks draw in to whole edges', () => {
+    const edges = [{ p: [0, 0, 0], q: [1, 0, 0], tick: 0.1 }];
+    const ticks = L.edgeSegments(edges, 0);
+    assert.deepEqual([...ticks].map(v => Math.round(v * 1000) / 1000), [0, 0, 0, 0.1, 0, 0, 1, 0, 0, 0.9, 0, 0]);
+    const whole = L.edgeSegments(edges, 1);
+    near(whole[3], 0.5); near(whole[9], 0.5);
+    near(L.edgeSegments(edges, 0.5)[3], 0.3);
+    near(L.edgeSegments(edges, 7)[3], 0.5, 1e-6);
+});
+
+test('names sit on the top, then towards either end of the longer side; a wall item\'s on its face', () => {
+    const anchors = L.nameAnchors(label());
+    assert.equal(anchors.length, 3);
+    near(anchors[0][0], 1); near(anchors[0][1], 2); near(anchors[0][2], 0.75);
+    near(anchors[1][0], 1 - 1.4 * 0.34); near(anchors[2][0], 1 + 1.4 * 0.34);
+    const painting = label({ on_wall: true, box: { centre_m: [2, 3, 1.5], size_m: [0.8, 0.04, 0.6], yaw_deg: 180 } });
+    const [only, ...rest] = L.nameAnchors(painting);
+    assert.equal(rest.length, 0);
+    near(only[0], 2); near(only[1], 2.98); near(only[2], 1.8);
+});

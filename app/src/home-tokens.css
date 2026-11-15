@@ -1275,6 +1275,20 @@ div.home-den-labels-tag, .home-den-labels-tag.is-quiet { pointer-events: none; c
   border-color: var(--hg-border, rgba(255,255,255,.1)); }
 .home-den-labels-tag.is-selected { border-color: var(--apt-proposed, #45dfff); box-shadow: 0 0 0 3px rgba(69,223,255,.16); }
 .home-den-labels-tag.is-check { border-color: color-mix(in srgb, var(--hg-warn, #ffb224) 70%, transparent); }
+/* The quiet look's names (outside the tool): plain words with a soft shade and a short tick down to the label, no pill.
+ * Only the label under the pointer, the ones in use, or all when Layers asks; a warm dot marks where a lit spot lands.
+ * The canvas is dark in both themes, so these use the dark values. */
+.home-den-labels-name { position: absolute; left: 0; top: 0; display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 0 0 8px;
+  border: 0; background: none; font: 500 12px/1 'Geist', ui-sans-serif, system-ui, sans-serif; letter-spacing: .01em; white-space: nowrap;
+  color: #ededed; opacity: 0; pointer-events: none; cursor: default; transition: opacity .24s cubic-bezier(.2, .7, .2, 1);
+  text-shadow: 0 0 2px rgba(0,0,0,.9), 0 0 7px rgba(0,0,0,.85), 0 0 14px rgba(0,0,0,.8); }
+.home-den-labels-name::after { content: ""; position: absolute; left: 50%; bottom: 0; width: 1px; height: 6px; background: #b8d8ff; opacity: .55; }
+.home-den-labels-name.is-all { opacity: .78; }
+.home-den-labels-name.is-use { opacity: .95; }
+.home-den-labels-name.is-focus { opacity: 1; color: #fff; transition-duration: .14s; }
+.home-den-labels-dot { display: none; width: 6px; height: 6px; border-radius: 50%; background: #ffddb0; box-shadow: 0 0 7px #ffddb0; }
+.home-den-labels-name.is-lit .home-den-labels-dot { display: inline-block; }
+@media (prefers-reduced-motion: reduce) { .home-den-labels-name { transition: none; } }
 .home-den-labels-near { position: absolute; inset: 0; }
 .home-den-labels-person { position: absolute; left: 0; top: 0; max-width: 280px; padding: 4px 9px; border: 1px solid var(--hg-border, rgba(255,255,255,.1));
   border-radius: 8px; background: var(--apt-glass, rgba(8,9,11,.78)); color: var(--hg-ice, #b8d8ff); font-size: 12px; line-height: 1.35;

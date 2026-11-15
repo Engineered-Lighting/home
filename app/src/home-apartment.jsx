@@ -2380,6 +2380,18 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
   const [popover, setPopover] = useState(null);
   const [guideDialog, setGuideDialog] = useState(null);
   const popoverRef = useRef(null);
+  /* The den's labelled-surfaces rows for Layers. home-den-labels-view.mjs owns them (window.HomeDenLabelsView.layers()
+   * and setLayers(), with an event on each change); they're offered only while that view is mounted in this room. */
+  const subscribeDenLabels = useCallback((notify) => {
+    window.addEventListener("home-den-labels-layers", notify);
+    return () => window.removeEventListener("home-den-labels-layers", notify);
+  }, []);
+  const readDenLabels = () => window.HomeDenLabelsView?.layers?.() ?? null;
+  const denLabels = React.useSyncExternalStore(subscribeDenLabels, readDenLabels, readDenLabels);
+  const setDenLabels = window.HomeDenLabelsView?.setLayers;
+  const surfaceSeams = denLabels?.mounted && typeof setDenLabels === "function"
+    ? { surfaces: { value: denLabels.surfaces, set: (value) => setDenLabels({ surfaces: value }) },
+      "surface-names": { value: denLabels.names, set: (value) => setDenLabels({ names: value }) } } : {};
   window.HomeOverlay.useOverlayLayer({ key: "apartment-room-toolbar", active: !!popover, rootRef: popoverRef,
     trap: false, initialFocus: "first", onEscape: () => setPopover(null) });
   const openGuide = (dialog) => { setPopover(null); setGuideDialog(dialog); };
@@ -2431,7 +2443,7 @@ function AptUnifiedRoomToolbar({ mode, modeLoading, modeError, sourceLabel, sour
       {popover === "layers" && <div ref={popoverRef} role="dialog" aria-label="Room layers">
         <h3 className="apt-ui-heading">Room layers</h3>
         <Guide.LayersPanel homeId={homeId} hasPerception={hasPerception} fixtureCount={fixtureCount}
-          seams={hasVirtualFixtures ? { fixtures: { value: virtualVisible, set: onVirtualVisible } } : {}} />
+          seams={{ ...(hasVirtualFixtures ? { fixtures: { value: virtualVisible, set: onVirtualVisible } } : {}), ...surfaceSeams }} />
         <button type="button" className="apt-ui-button is-small" onClick={() => setPopover(null)}>Close layers</button>
       </div>}
     </div>

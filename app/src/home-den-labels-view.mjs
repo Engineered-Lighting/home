@@ -9,12 +9,23 @@
  * size appears where you clicked (home-den-labels-core.mjs placeBox, flat tops fitted with Home's named-aims fit), and
  * its corner, height, turn and move handles fit it. The first time, a checklist of usual den things leads. Save sends
  * the whole document back (PUT, compare-and-swap on its revision); unsaved changes stay in this browser until then.
- * While the tool is open, a click on the scan labels instead of selecting a light. Nothing here sends a light command. */
+ * While the tool is open, a click on the scan labels instead of selecting a light. Nothing here sends a light command.
+ *
+ * Outside the tool the labels are quiet (the owner's pick of 2026-11-14): each is drawn by its corners alone. The labels
+ * in use say their names: the ones a person's near line names (den-live's words, from these labels) and the one a lit
+ * spot lands on (a warm dot), so the near line isn't said again under the person. Hovering a label with a mouse, or
+ * tapping it on a touch screen (for 4 s), draws it in to a full outline with its name. Lights win the pointer: over a
+ * light nothing here answers, and a tap still opens the light. Layers has two rows for this, kept per browser:
+ * "Labelled surfaces" (on) and "All surface names" (off); home-apartment.jsx binds them through layers()/setLayers(). */
 import * as THREE from 'three';
 import * as L from './home-den-labels-core.mjs';
 
 const config = window.HomeDenLabels;
 const TICK_MS = 500, DRAFT_KEY = 'home.denLabels.draft.v1', CLICK_SLOP_PX = 5, ROOM_TOP = 2.6;
+const LAYERS_KEY = 'home.denLabels.layers.v1', LAYERS_EVENT = 'home-den-labels-layers';
+const REVEAL_MS = 4000, HOVER_EVERY_MS = 50, USE_EVERY_MS = 250;
+// Around each person, the room a name keeps clear of: their body from the seat up, and the caption by their head.
+const PERSON_HALF_M = 0.25, PERSON_BOTTOM_M = 0.35, PERSON_TOP_M = 1.9;
 
 if (config && typeof config.labels === 'string' && typeof config.site === 'string') {
     const cb = new URL(import.meta.url).search || '';
@@ -30,10 +41,36 @@ function start(attachLayer) {
         saved: null, labels: [], dirty: 0, undo: [], sel: null, load: 'idle', loadError: '',
         open: false, pending: null, armed: null, checklist: false, skipped: new Set(),
         save: { state: 'idle', text: '' }, conflict: null, toast: '', toastAt: 0, drag: null, down: null, swallowUntil: 0,
+        // the quiet look: the label under the mouse, the one a tap named and until when, the labels in use, the last look
+        hover: null, pointer: null, pickedAt: 0, tap: null, reveal: null, revealUntil: 0, use: new Map(), useAt: 0, lookKey: '', frameAt: 0,
     };
     const ui = {};
     const tagEls = new Map(), handleEls = new Map(), nearEls = new Map();
     let raf = 0, scan = null, request = null;
+
+    /* ---------------- Layers: the two rows, kept per browser ---------------- */
+    let layers = readLayers(), layersView = null;
+    function readLayers() {
+        try {
+            const value = JSON.parse(localStorage.getItem(LAYERS_KEY) || 'null');
+            if (value && typeof value.surfaces === 'boolean' && typeof value.names === 'boolean') return { surfaces: value.surfaces, names: value.names };
+        } catch (_) { /* a private window: the defaults */ }
+        return { surfaces: true, names: false };
+    }
+    function publishLayers() {
+        layersView = Object.freeze({ mounted: !!S.engine, surfaces: layers.surfaces, names: layers.names });
+        window.dispatchEvent(new Event(LAYERS_EVENT));
+    }
+    function setLayers(patch) {
+        const next = { surfaces: typeof patch?.surfaces === 'boolean' ? patch.surfaces : layers.surfaces,
+            names: typeof patch?.names === 'boolean' ? patch.names : layers.names };
+        if (next.surfaces === layers.surfaces && next.names === layers.names) return;
+        layers = next;
+        try { localStorage.setItem(LAYERS_KEY, JSON.stringify(layers)); } catch (_) { /* kept for this page only */ }
+        if (!layers.surfaces) { S.hover = null; S.reveal = null; }
+        publishLayers(); render();
+    }
+    publishLayers();
 
     /* ---------------- engine and mount ---------------- */
     function denEngine() {
@@ -61,7 +98,10 @@ function start(attachLayer) {
         window.addEventListener('pointerdown', onDown, true);
         window.addEventListener('pointerup', onUp, true);
         window.addEventListener('click', onClick, true);
+        window.addEventListener('pointermove', onMove, { capture: true, passive: true });
+        window.addEventListener('pointerout', onOut, true);
         load();
+        publishLayers();
         raf = requestAnimationFrame(frame);
     }
     function unmount() {
@@ -78,12 +118,16 @@ function start(attachLayer) {
         window.removeEventListener('pointerdown', onDown, true);
         window.removeEventListener('pointerup', onUp, true);
         window.removeEventListener('click', onClick, true);
+        window.removeEventListener('pointermove', onMove, { capture: true });
+        window.removeEventListener('pointerout', onOut, true);
         S.layer?.dispose(); S.root?.remove();
         tagEls.clear(); handleEls.clear(); nearEls.clear();
         S.engine = S.layer = S.root = S.host = S.view = null;
         S.open = false; S.pending = null; S.drag = null; S.sel = null; S.undo = [];
         S.saved = null; S.labels = []; S.dirty = 0; S.conflict = null; S.base = null;
         S.save = { state: 'idle', text: '' }; S.load = 'idle'; scan = null;
+        S.hover = S.pointer = S.tap = S.reveal = null; S.use = new Map(); S.lookKey = ''; S.frameAt = 0;
+        publishLayers();
     }
 
     /* ---------------- the document ---------------- */
@@ -245,14 +289,43 @@ function start(attachLayer) {
      * a layer Home puts over the canvas while the pointer is down, so the press decides, and the click that follows a
      * pick is swallowed before Home sees it: a click with the tool open labels, and never selects a light. */
     function onDown(ev) {
-        S.down = S.open && signedIn && ev.button === 0 && ev.target === S.engine?.renderer?.domElement
-            ? { x: ev.clientX, y: ev.clientY, id: ev.pointerId } : null;
+        const onScan = ev.button === 0 && ev.target === S.engine?.renderer?.domElement;
+        S.down = S.open && signedIn && onScan ? { x: ev.clientX, y: ev.clientY, id: ev.pointerId } : null;
+        // The quiet look: a touch tap names a label; a mouse press starts a drag, which hovers nothing.
+        S.tap = onScan && quiet() && ev.pointerType !== 'mouse' ? { x: ev.clientX, y: ev.clientY, id: ev.pointerId } : null;
+        if (ev.pointerType === 'mouse') S.pointer = null;
     }
     function onUp(ev) {
+        const tap = S.tap; S.tap = null;
+        if (tap && ev.pointerId === tap.id && Math.hypot(ev.clientX - tap.x, ev.clientY - tap.y) <= CLICK_SLOP_PX) {
+            // Not swallowed: Home still sees the tap, so a tap on a light opens the light (and names nothing).
+            S.reveal = pickQuiet(ev.clientX, ev.clientY);
+            S.revealUntil = performance.now() + REVEAL_MS;
+        }
         const down = S.down; S.down = null;
         if (!down || ev.pointerId !== down.id || Math.hypot(ev.clientX - down.x, ev.clientY - down.y) > CLICK_SLOP_PX) return;
         S.swallowUntil = performance.now() + 500;
         pickAt(ev.clientX, ev.clientY);
+    }
+    function onMove(ev) {
+        if (ev.pointerType !== 'mouse') return;
+        S.pointer = !ev.buttons && ev.target === S.engine?.renderer?.domElement ? { x: ev.clientX, y: ev.clientY, fresh: true } : null;
+    }
+    function onOut(ev) { if (ev.pointerType === 'mouse' && !ev.relatedTarget) S.pointer = null; }
+    /* The label a quiet hover or tap is on: lights win (Home's own light pick targets), and a label behind the scan
+     * (a wall in the way) doesn't answer. */
+    function pickQuiet(x, y) {
+        const e = S.engine;
+        if (!e || !S.layer || !layers.surfaces || !quiet()) return null;
+        try {
+            const lights = [...(e.overlay?.pickObjects?.() || []), ...(e.overlay?.virtualFixturePickObjects?.() || [])];
+            if (lights.length && e.picking.pick(lights, x, y).length) return null;
+            const hit = (e.picking.pick(S.layer.meshes(), x, y) || [])[0];
+            if (!hit) return null;
+            const surface = e.displaySurfaceHit?.(x, y) || null;
+            if (surface && hit.distance > scanDistance(surface.point) + 0.05) return null;
+            return hit.object.userData.labelId ?? null;
+        } catch (_) { return null; }
     }
     function onClick(ev) {
         if (!S.swallowUntil || performance.now() > S.swallowUntil) return;
@@ -404,10 +477,33 @@ function start(attachLayer) {
 
     function toast(text) { S.toast = text; S.toastAt = performance.now(); render(); }
 
+    /* ---------------- the quiet look ---------------- */
+    // Quiet unless the Labels tool is open, or the labels need checking against a new scan (then they stay amber boxes).
+    function quiet() { return !!S.engine && !(S.open && signedIn) && !checkThese(); }
+    const focusId = () => S.hover || S.reveal;
+    function lookKey() { return `${layers.surfaces}|${focusId()}|${[...S.use].map(([id, u]) => id + (u.lit ? '*' : '')).join(',')}`; }
+    function applyLook() {
+        const states = new Map(), focus = focusId();
+        for (const l of S.labels) states.set(l.id, !layers.surfaces ? 'off' : l.id === focus ? 'focus' : S.use.has(l.id) ? 'use' : 'rest');
+        S.layer?.set(S.labels, { quiet: states });
+        S.lookKey = lookKey();
+    }
+    /* The labels in use: named by a person's near line, or under a lit spot of the applied snapshot. */
+    function readUse() {
+        let markers = [], spot = null;
+        try { markers = window.HomeDenLiveView?.markers?.() || []; } catch (_) { markers = []; }
+        try { spot = window.HomeDenLiveView?.status?.()?.spot ?? null; } catch (_) { spot = null; }
+        const near = markers.map(m => m?.near).filter(text => typeof text === 'string');
+        const targets = spot && spot.on === true && spot.stopped !== true && Array.isArray(spot.fixtures)
+            ? spot.fixtures.filter(f => f?.on === true && Array.isArray(f.target_m)).map(f => f.target_m) : [];
+        return L.inUseLabels(S.labels, { near, targets });
+    }
+
     function render() {
         if (!S.root) return;
         const check = checkThese();
-        S.layer?.set(S.labels, { selectedId: S.open ? S.sel : null, check, faint: !signedIn });
+        if (quiet()) applyLook();
+        else S.layer?.set(S.labels, { selectedId: S.open ? S.sel : null, check, faint: !signedIn });
         if (!signedIn) return;
         S.root.classList.toggle('is-open', S.open);
         ui.toggle.hidden = S.open;
@@ -579,26 +675,35 @@ function start(attachLayer) {
         return { x: canvas.left - root.left + (v.x + 1) / 2 * canvas.width, y: canvas.top - root.top + (1 - v.y) / 2 * canvas.height,
             behind: v.z > 1 || v.z < -1 };
     }
-    function frame() {
-        raf = requestAnimationFrame(frame);
-        if (!S.engine || !S.root?.isConnected) return;
+    function tagFor(l) {
+        let el = tagEls.get(l.id);
+        if (!el) {
+            el = document.createElement(signedIn ? 'button' : 'div');
+            if (signedIn) { el.type = 'button'; el.dataset.act = 'select'; el.dataset.id = l.id; }
+            ui.tags.appendChild(el); tagEls.set(l.id, el);
+        }
+        return el;
+    }
+    function cameraDistance(point) {
+        const v = new THREE.Vector3(...point);
+        S.engine.apartmentRoot.localToWorld(v);
+        return v.distanceTo(S.engine.camera.position);
+    }
+    /* The Labels tool's tags (and every label while they need checking): the selected one first, then the nearest; one
+     * that would overlap another steps up, at most twice. */
+    function drawTags() {
         const check = checkThese(), show = signedIn || !check;
-        // Tags: the selected one first, then the nearest; one that would overlap another steps up, at most twice.
-        const placed = [], live = new Set(), cam = S.engine.camera.position;
-        const order = show ? S.labels.map(l => ({ l, dist: (() => { const v = new THREE.Vector3(...l.box.centre_m);
-            S.engine.apartmentRoot.localToWorld(v); return v.distanceTo(cam); })() }))
+        const placed = [], live = new Set();
+        const order = show ? S.labels.map(l => ({ l, dist: cameraDistance(l.box.centre_m) }))
             .sort((a, b) => (b.l.id === S.sel) - (a.l.id === S.sel) || a.dist - b.dist) : [];
         for (const { l } of order) {
             live.add(l.id);
-            let el = tagEls.get(l.id);
-            if (!el) {
-                el = document.createElement(signedIn ? 'button' : 'div');
-                if (signedIn) { el.type = 'button'; el.dataset.act = 'select'; el.dataset.id = l.id; }
-                ui.tags.appendChild(el); tagEls.set(l.id, el);
-            }
+            const el = tagFor(l);
             const html = `<span class="home-den-labels-k">${esc(L.KIND_LABEL[l.kind])}</span>${esc(l.name)}`;
             if (el._html !== html) { el.innerHTML = html; el._html = html; el._w = 0; }
-            el.className = `home-den-labels-tag${l.id === S.sel && S.open ? ' is-selected' : ''}${check ? ' is-check' : ''}${S.open ? '' : ' is-quiet'}`;
+            const cls = `home-den-labels-tag${l.id === S.sel && S.open ? ' is-selected' : ''}${check ? ' is-check' : ''}${S.open ? '' : ' is-quiet'}`;
+            if (el.className !== cls) { el.className = cls; el._w = 0; }
+            if (el.hasAttribute('aria-hidden')) { el.removeAttribute('tabindex'); el.removeAttribute('aria-hidden'); }
             const s = toScreen([l.box.centre_m[0], l.box.centre_m[1], l.box.centre_m[2] + l.box.size_m[2] / 2 + 0.04]);
             if (!el._w) { el.style.display = ''; el._w = el.offsetWidth; el._h = el.offsetHeight; }
             let y = s.y, shown = !s.behind;
@@ -611,6 +716,80 @@ function start(attachLayer) {
             el.style.display = shown ? '' : 'none';
         }
         for (const [id, el] of tagEls) if (!live.has(id)) { el.remove(); tagEls.delete(id); }
+    }
+    /* The quiet look's bookkeeping each frame: when a tap's name runs out, which labels are in use (4 a second), what the
+     * mouse is over (at most every 50 ms while it moves), and easing the layer. */
+    function quietFrame(now, dt) {
+        if (S.reveal && now > S.revealUntil) S.reveal = null;
+        if (now - S.useAt >= USE_EVERY_MS) { S.useAt = now; S.use = readUse(); }
+        if (!S.pointer) S.hover = null;
+        else if (S.pointer.fresh && now - S.pickedAt >= HOVER_EVERY_MS) { S.pointer.fresh = false; S.pickedAt = now; S.hover = pickQuiet(S.pointer.x, S.pointer.y); }
+        if (S.layer && lookKey() !== S.lookKey) applyLook();
+        S.layer?.tick(dt, { reduced: !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches });
+    }
+    /* The screen box around each person (their body and the caption by their head), which names keep clear of. */
+    function personBoxes() {
+        let markers = [];
+        try { markers = window.HomeDenLiveView?.markers?.() || []; } catch (_) { markers = []; }
+        const boxes = [];
+        for (const m of markers) {
+            if (!Array.isArray(m?.xy_m)) continue;
+            const pts = [];
+            for (const dx of [-PERSON_HALF_M, PERSON_HALF_M]) for (const dy of [-PERSON_HALF_M, PERSON_HALF_M]) for (const z of [PERSON_BOTTOM_M, PERSON_TOP_M]) {
+                const s = toScreen([m.xy_m[0] + dx, m.xy_m[1] + dy, z]);
+                if (!s.behind) pts.push(s);
+            }
+            if (pts.length) boxes.push({ x0: Math.min(...pts.map(p => p.x)), x1: Math.max(...pts.map(p => p.x)),
+                y0: Math.min(...pts.map(p => p.y)), y1: Math.max(...pts.map(p => p.y)) });
+        }
+        return boxes;
+    }
+    /* The quiet look's names: the one under the pointer (or tapped), the ones in use, and every name only when Layers asks.
+     * Plain words, no pill; each tries the middle of its top, then towards either end, stepping up at most twice, and
+     * keeps clear of the people. A name that's no longer wanted fades where it was. */
+    function drawNames() {
+        const focus = focusId(), live = new Set(), wanted = [];
+        for (const l of S.labels) {
+            live.add(l.id);
+            const mode = !layers.surfaces ? null : l.id === focus ? 'focus' : S.use.has(l.id) ? 'use' : layers.names ? 'all' : null;
+            const el = tagFor(l);
+            const html = `<i class="home-den-labels-dot" aria-hidden="true"></i><span>${esc(l.name)}</span>`;
+            if (el._html !== html) { el.innerHTML = html; el._html = html; el._w = 0; }
+            const cls = `home-den-labels-name${mode ? ` is-shown is-${mode}` : ''}${S.use.get(l.id)?.lit ? ' is-lit' : ''}`;
+            if (el.className !== cls) { el.className = cls; el._w = 0; }
+            if (!el.hasAttribute('aria-hidden')) { el.tabIndex = -1; el.setAttribute('aria-hidden', 'true'); }
+            if (mode) wanted.push({ l, el, rank: mode === 'focus' ? 0 : mode === 'use' ? 1 : 2, dist: cameraDistance(l.box.centre_m) });
+        }
+        for (const [id, el] of tagEls) if (!live.has(id)) { el.remove(); tagEls.delete(id); }
+        const people = personBoxes(), placed = [];
+        const overlaps = (r, p, gap = 0) => r.x0 < p.x1 + gap && r.x1 + gap > p.x0 && r.y0 < p.y1 && r.y1 > p.y0;
+        for (const { l, el, rank } of wanted.sort((a, b) => a.rank - b.rank || a.dist - b.dist)) {
+            if (!el._w) { el.style.display = ''; el._w = el.offsetWidth; el._h = el.offsetHeight; }
+            let spot = null;
+            // The pointed-at name may sit over a person rather than not show at all.
+            for (const avoidPeople of rank === 0 ? [true, false] : [true]) {
+                for (const anchor of L.nameAnchors(l)) {
+                    const s = toScreen([anchor[0], anchor[1], anchor[2] + 0.02]);
+                    if (s.behind) continue;
+                    for (let step = 0, y = s.y; step < 3; step++, y -= el._h + 3) {
+                        const r = { x0: s.x - el._w / 2, x1: s.x + el._w / 2, y0: y - el._h, y1: y };
+                        if (placed.some(p => overlaps(r, p, 4)) || (avoidPeople && people.some(p => overlaps(r, p)))) continue;
+                        spot = { x: s.x, y }; placed.push(r); break;
+                    }
+                    if (spot) break;
+                }
+                if (spot) break;
+            }
+            if (spot) el.style.transform = `translate(${Math.round(spot.x - el._w / 2)}px, ${Math.round(spot.y - el._h)}px)`;
+            el.style.display = spot ? '' : 'none';
+        }
+    }
+    function frame(now = performance.now()) {
+        raf = requestAnimationFrame(frame);
+        if (!S.engine || !S.root?.isConnected) return;
+        const dt = S.frameAt ? Math.min(0.1, Math.max(0, (now - S.frameAt) / 1000)) : 0;
+        S.frameAt = now;
+        if (quiet()) { quietFrame(now, dt); drawNames(); } else drawTags();
         drawNear();
         const l = S.open && signedIn ? byId(S.sel) : null, want = new Set();
         if (l) for (const spec of handleSpecs(l)) {
@@ -634,7 +813,8 @@ function start(attachLayer) {
      * and the people layer keeps it (window.HomeDenLiveView.markers()). The same words go to Qwen as "Seated …". */
     function drawNear() {
         let markers = [];
-        try { markers = window.HomeDenLiveView?.markers?.() || []; } catch (_) { markers = []; }
+        // In the quiet look the near line's words are said by the labels it names instead (drawNames).
+        if (!quiet()) try { markers = window.HomeDenLiveView?.markers?.() || []; } catch (_) { markers = []; }
         const live = new Set();
         for (const m of markers) {
             if (!m?.near || !Array.isArray(m.xy_m)) continue;
@@ -675,11 +855,19 @@ function start(attachLayer) {
     window.addEventListener('pagehide', unmount);
     sync();
 
-    /* Read-only, for Home's browser tests. */
+    /* status/labels/looks are read-only, for Home's browser tests; layers/setLayers are the Layers rows' seam (a stable
+     * snapshot that changes only with an event, for React's useSyncExternalStore). */
     window.HomeDenLabelsView = Object.freeze({
         status: () => ({ mounted: !!S.engine, open: S.open, load: S.load, labels: S.labels.length, dirty: S.dirty,
             revision: S.saved?.revision ?? null, selected: S.sel, armed: S.armed, checklist: S.checklist, check: checkThese(),
-            save: { ...S.save }, conflict: !!S.conflict, drawn: S.layer ? S.layer.count() : 0 }),
+            save: { ...S.save }, conflict: !!S.conflict, drawn: S.layer ? S.layer.count() : 0,
+            quiet: quiet(), hover: S.hover, tapped: S.reveal, inUse: Object.fromEntries(S.use), layers: { ...layers } }),
         labels: () => clone(S.labels),
+        looks: () => S.layer?.looks() ?? {},
+        names: () => [...tagEls].filter(([, el]) => el.classList.contains('is-shown') && el.style.display !== 'none')
+            .map(([id, el]) => ({ id, text: el.textContent, lit: el.classList.contains('is-lit'), mode: ['focus', 'use', 'all'].find(m => el.classList.contains(`is-${m}`)) })),
+        layers: () => layersView,
+        setLayers,
+        event: LAYERS_EVENT,
     });
 }

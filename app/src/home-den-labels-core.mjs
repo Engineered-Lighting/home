@@ -228,3 +228,83 @@ export function checklistDone(labels) {
         return names.some(m => m === n || m.startsWith(n + ' ') || m.endsWith(' ' + n));
     }));
 }
+
+/* ---------------- the quiet view (the owner's pick of 2026-11-14) ----------------
+ * Outside the Labels tool each label is drawn by its corners alone: a short tick from each end of each edge. A label in
+ * use shows its name; hovering (a tap on a phone) draws the ticks in to whole edges. A wall item (a picture, a door, a
+ * window) is drawn by its front face only. */
+export const TICK_M = 0.12;
+
+/** The edges a label is drawn with, in the scan's frame, each with `tick`: the share of the edge one corner's tick
+ *  covers (at most 12 cm, at most a quarter of a short edge). Twelve edges for a box, four for a wall item's face. */
+export function labelEdges(label) {
+    const { box } = label, [w, d, h] = box.size_m, z0 = box.centre_m[2] - h / 2, z1 = z0 + h;
+    const at = (sx, sy, z) => [...toWorld(box, sx * w / 2, sy * d / 2), z];
+    const edges = [];
+    if (label.on_wall) {
+        const p = [at(-1, 1, z0), at(1, 1, z0), at(1, 1, z1), at(-1, 1, z1)];
+        for (let i = 0; i < 4; i++) edges.push([p[i], p[(i + 1) % 4]]);
+    } else {
+        for (const sy of [-1, 1]) for (const z of [z0, z1]) edges.push([at(-1, sy, z), at(1, sy, z)]);
+        for (const sx of [-1, 1]) for (const z of [z0, z1]) edges.push([at(sx, -1, z), at(sx, 1, z)]);
+        for (const sx of [-1, 1]) for (const sy of [-1, 1]) edges.push([at(sx, sy, z0), at(sx, sy, z1)]);
+    }
+    return edges.map(([p, q]) => {
+        const len = Math.hypot(q[0] - p[0], q[1] - p[1], q[2] - p[2]);
+        return { p, q, tick: len > 0 ? Math.min(0.5, Math.min(TICK_M, len / 4) / len) : 0.5 };
+    });
+}
+
+/** Line-segment positions (x, y, z per point, two points per segment) for edges drawn `k` of the way from their corner
+ *  ticks (0) to whole edges (1). Each edge is two segments, one from each end, which meet in the middle at 1. */
+export function edgeSegments(edges, k, out = new Float32Array(edges.length * 12)) {
+    const t = Math.min(1, Math.max(0, k));
+    let o = 0;
+    for (const { p, q, tick } of edges) {
+        const f = tick + (0.5 - tick) * t;
+        for (const [a, b] of [[p, q], [q, p]]) {
+            out[o++] = a[0]; out[o++] = a[1]; out[o++] = a[2];
+            out[o++] = a[0] + (b[0] - a[0]) * f; out[o++] = a[1] + (b[1] - a[1]) * f; out[o++] = a[2] + (b[2] - a[2]) * f;
+        }
+    }
+    return out;
+}
+
+/** True when a point [x, y, z] lies in a label's box, grown by margin metres on every side. */
+export function insideBox(box, point, margin = 0) {
+    if (!Array.isArray(point) || point.length < 3 || !point.slice(0, 3).every(Number.isFinite)) return false;
+    const [lx, ly] = toLocal(box, point[0], point[1]), [w, d, h] = box.size_m;
+    return Math.abs(lx) <= w / 2 + margin && Math.abs(ly) <= d / 2 + margin && Math.abs(point[2] - box.centre_m[2]) <= h / 2 + margin;
+}
+
+/**
+ * The labels in use now: id → { named, lit }.
+ *   near: the people's near lines (den-live builds them from these labels: "on the sofa, beside the reading table").
+ *         A label is named when its whole name appears in one; longer names are matched first and take their words, so
+ *         "painting 2" doesn't also name "painting", and "reading table" doesn't name "table".
+ *   targets: where lit spots land ([x, y, z], the scan's frame). A label is lit when one lies within 10 cm of its box.
+ */
+export function inUseLabels(labels, { near = [], targets = [] } = {}, margin = 0.1) {
+    const words = text => ` ${String(text).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+    const lines = (Array.isArray(near) ? near : []).filter(line => typeof line === 'string' && line).map(words);
+    const out = new Map();
+    for (const label of [...(labels || [])].sort((a, b) => b.name.length - a.name.length)) {
+        const name = words(label.name);
+        let named = false;
+        if (name.trim()) for (let i = 0; i < lines.length; i++) {
+            if (lines[i].includes(name)) { named = true; lines[i] = lines[i].replace(name, ' '); }
+        }
+        const lit = (Array.isArray(targets) ? targets : []).some(target => insideBox(label.box, target, margin));
+        if (named || lit) out.set(label.id, { named, lit });
+    }
+    return out;
+}
+
+/** Where a label's name may sit, in order: the middle of its top, then towards either end of its longer side, so a name
+ *  can step out from under the person or their caption. A wall item's name sits on its face's top edge. */
+export function nameAnchors(label) {
+    const { box } = label, [w, d, h] = box.size_m, top = box.centre_m[2] + h / 2;
+    const at = (lx, ly) => [...toWorld(box, lx, ly), top];
+    if (label.on_wall) return [at(0, d / 2)];
+    return w >= d ? [at(0, 0), at(-w * 0.34, 0), at(w * 0.34, 0)] : [at(0, 0), at(0, -d * 0.34), at(0, d * 0.34)];
+}

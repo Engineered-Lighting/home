@@ -113,7 +113,8 @@ export function fixtureModelInput(fixtureRoot) {
     const robotic = fixtureRoot.getObjectByName('robotic-spotlight')?.userData;
     const spotOnly = fixtureRoot.userData?.spot_only === true;
     const down = !spotOnly && fixtureRoot.getObjectByName('downward-zone'), emitter = !spotOnly && fixtureRoot.getObjectByName('downward-emitter');
-    const orb = !spotOnly && fixtureRoot.getObjectByName('fixture-orb');
+    // The fixture's drawn body: its centre is the radial zones' source centreline.
+    const body = !spotOnly && fixtureRoot.getObjectByName('symbolic-fixture-housing');
     const zones = [];
     for (let number = 1; !spotOnly && number <= 6; number++) {
         const channel = fixtureRoot.getObjectByName('radial-zone-' + number)?.userData?.channel;
@@ -124,7 +125,7 @@ export function fixtureModelInput(fixtureRoot) {
         spot: robotic && Array.isArray(robotic.beam_origin_m) && Array.isArray(robotic.direction_unit)
             ? { origin: robotic.beam_origin_m, direction: robotic.direction_unit, channel: robotic.channel } : null,
         down: down && emitter ? { origin: local(emitter), channel: down.userData.channel } : null,
-        center: orb ? local(orb) : fixtureRoot.position.toArray(),
+        center: body ? local(body) : fixtureRoot.position.toArray(),
         zones,
     };
 }

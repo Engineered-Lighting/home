@@ -368,7 +368,8 @@ test(`WebGPU renderer foundation matches the WebGL engine in ${proofModes.map(mo
       assert.deepEqual(candidate.pageErrors, [], backend + ' page errors');
       assert.equal(candidate.backend, backend === 'webgpu' ? 'webgpu' : 'webgpu-webgl2', 'the requested backend is the one running: ' + candidate.gpu);
       assert.deepEqual(candidate.webgpu.ports.problems, [], 'every drawn GLSL site used its port');
-      for (const id of ['scan-display-floor-1', 'equipment-receiver', 'equipment-orb-halo', 'equipment-beam', 'equipment-glow']) {
+      // The fixture body draws with built-in materials only; the beam's flat source glow isn't drawn beside the spot's.
+      for (const id of ['scan-display-floor-1', 'equipment-receiver', 'equipment-beam']) {
         assert.ok(candidate.webgpu.ports.builds[id] > 0, id + ' was built from its port');
       }
       assert.equal(candidate.webgpu.lost, null);

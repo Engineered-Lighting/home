@@ -203,7 +203,11 @@ export function createOverlay(apartmentRoot, { siteId } = {}) {
         stem.rotation.x = Math.PI / 2;       // cylinder Y -> object Z (up)
         stem.scale.y = Math.max(0.001, h);
         stem.position.z = -h / 2;
-        group.add(core, ghost, glow, pick, stem);
+        // The drawn marker, apart from its pick and tag: hidden where a fixture's orb stands (syncOrbPlaces).
+        const body = new THREE.Group();
+        body.name = 'marker-body';
+        body.add(core, ghost, glow, stem);
+        group.add(body, pick);
         // Echo lights draw their DIRECTION glyph instead of the sphere; the
         // pick sphere, stem and floor pool are unchanged.
         const glyph = createEchoGlyph(device);
@@ -258,7 +262,17 @@ export function createOverlay(apartmentRoot, { siteId } = {}) {
             cone.name = 'legacy-camera-frustum';
             group.add(cone);
         }
-        return { group, core, ghost, glow, pick, device, state: null, glyph, tag };
+        return { group, body, core, ghost, glow, pick, device, state: null, glyph, tag };
+    }
+
+    /* One glyph per fixture (the owner, 2026-11-14). Where a virtual fixture is drawn, the registration markers it
+     * stands for, its socket's box and its own record's ball, draw nothing: no body, see-through copy, glow or floor
+     * hairline, wherever a measured mount offset puts them. Their picks and tags stay. The survey editor hides the
+     * fixtures, so there every marker draws as before. */
+    function syncOrbPlaces() {
+        const drawn = new Set(virtualFixtures.root.visible
+            ? virtualFixtures.readback().fixtures.flatMap(item => [item.fixture_id, item.mount_id]) : []);
+        for (const m of markersById.values()) m.body.visible = !(m.device.equipment_record && drawn.has(m.device.id));
     }
 
     /* The in-room HTML labels (room overlay) name these equipment ids, so
@@ -300,6 +314,7 @@ export function createOverlay(apartmentRoot, { siteId } = {}) {
             markersById.set(d.id, m);
             devicesGroup.add(m.group);
         }
+        syncOrbPlaces();
     }
 
     /* Immutable named survey planes. Reference traces and measurement lines
@@ -1177,7 +1192,7 @@ export function createOverlay(apartmentRoot, { siteId } = {}) {
         overlayRoot, dispose, devicesGroup, camerasGroup, personGroup, zonesGroup, targetsGroup,
         equipmentReferenceGroup, setEquipmentRegistration,
         virtualFixturesGroup: virtualFixtures.root,
-        setVirtualFixtures: virtualFixtures.setDocument,
+        setVirtualFixtures(document, options) { const read = virtualFixtures.setDocument(document, options); syncOrbPlaces(); return read; },
         setVirtualFixtureState: virtualFixtures.setFixtureState,
         coordinatorSpotScope: virtualFixtures.coordinatorSpotScope,
         get denSpotSnapshotOwned() { return virtualFixtures.coordinatorSpotScope() !== null; },
@@ -1187,7 +1202,7 @@ export function createOverlay(apartmentRoot, { siteId } = {}) {
         releaseVirtualFixtureHands: virtualFixtures.releaseHands,
         virtualFixtureHandHolds: virtualFixtures.handHolds,
         onVirtualFixtureHand: virtualFixtures.onHandChange,
-        setVirtualFixturesVisible: virtualFixtures.setVisible,
+        setVirtualFixturesVisible(visible) { virtualFixtures.setVisible(visible); syncOrbPlaces(); },
         virtualFixturesReadback: virtualFixtures.readback,
         virtualFixturePickObjects: virtualFixtures.pickObjects,
         virtualFixtureAimPickObjects: virtualFixtures.aimPickObjects,

@@ -123,6 +123,13 @@ test('Echo display, pick and beam originate at the saved position and accept onl
         const world = name => fixture.getObjectByName(name).getWorldPosition(new THREE.Vector3()).toArray();
         assert.deepEqual(world('fixture-orb-core'), position);
         assert.deepEqual(world('virtual-fixture-pick'), position);
+        // a spot-only fixture is a small glass orb, never the den's cylinder; lit, it blooms
+        assert.equal(fixture.getObjectByName('symbolic-fixture-housing'), undefined);
+        assert.equal(fixture.getObjectByName('fixture-orb-core').material.type, 'MeshMatcapMaterial');
+        assert.equal(fixture.getObjectByName('fixture-orb-bloom').visible, true);
+        assert.equal(echo.setFixtureState(id, { spotlight: { on: false } }).ok, true);
+        assert.equal(fixture.getObjectByName('fixture-orb-bloom').visible, false);
+        assert.equal(echo.setFixtureState(id, { spotlight: { on: true } }).ok, true);
         const beam = fixture.getObjectByName('robotic-spotlight').userData;
         assert.deepEqual(beam.beam_origin_m, position);
         assert.ok(Math.abs(beam.reach_m - position[2]) < 1e-6);

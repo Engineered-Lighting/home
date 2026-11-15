@@ -72,7 +72,7 @@ Tapping a caption opens it (on a phone, a bottom sheet). The rows are:
 These appear in the Lighting view, or while the card is open. Each spot gets a tag at its can:
 - **Lit:** level and CCT.
 - **Pre-aim:** `aimed, dark, ready`.
-- **Refused:** the reason in `--apt-blocked`, with a dashed ring at the can.
+- **Refused:** the reason in `--apt-blocked`, with a ring at the can. Not a dashed one: the fixture's dashed warm collar means aimed and dark, waiting (apartment-unified SPEC, Fixtures).
 
 A tether line runs from the lit spot to its subject's ring.
 

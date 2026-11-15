@@ -925,3 +925,57 @@ test('manual always wins: with the coordinator on, a drag aim, the pan slider, a
   assert.equal(HAND_SETTLE_MS, 800);
   preview.dispose();
 });
+
+test('the fixture marks a spot aimed and waiting dark with a dashed warm collar, and a held fixture with a solid ice collar', () => {
+  const registration = registrationFor();
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding, later: () => 0, cancel: () => {} });
+  preview.setDocument(registration, { coordinator: true });
+  const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
+  const mark = id => preview.root.getObjectByName('equipment-virtual-fixture:' + id).getObjectByName('fixture-mark');
+  const collar = (id, kind) => mark(id).getObjectByName('fixture-mark-' + kind);
+  const row = (id, patch = {}) => ({ fixture_id: id, on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
+    target_m: [1, 1, .8], reason: 'waiting_for_task', motion_phase: 'settled', ...patch });
+  const [aimed, lit, idle] = ids;
+  const apply = () => preview.applyCoordinatorSpots(ids.map(id => row(id, id === aimed ? { reason: 'pre_aim' }
+    : id === lit ? { on: true, level: .7, reason: 'task' } : {})), generation);
+  assert.equal(apply(), true);
+  assert.deepEqual([mark(aimed).visible, mark(aimed).userData.mark], [true, 'aimed'], 'aimed and dark: the dashed collar');
+  assert.deepEqual([collar(aimed, 'aimed').visible, collar(aimed, 'held').visible, collar(aimed, 'aimed').material.color.getHex()], [true, false, 0xffb066]);
+  assert.deepEqual([mark(lit).visible, mark(idle).visible], [false, false], 'lit, or dark and not aimed: no collar');
+  assert.equal(preview.applyCoordinatorSpots(ids.map(id => row(id, id === aimed ? { reason: 'standby' } : {})), generation), true);
+  assert.equal(mark(aimed).userData.mark, 'aimed', 'standby is aimed at the page and dark too');
+  // a person's hand: the solid ice collar, the colour Home gives people, kept across snapshots until it is handed back
+  assert.equal(preview.holdForHand(idle, { reason: 'change' }), true);
+  assert.deepEqual([mark(idle).visible, mark(idle).userData.mark, collar(idle, 'held').visible, collar(idle, 'aimed').visible,
+    collar(idle, 'held').material.color.getHex()], [true, 'held', true, false, 0xb8d8ff]);
+  assert.equal(apply(), true);
+  assert.equal(mark(idle).userData.mark, 'held', 'a snapshot passes a held fixture by');
+  // Stop blanks every spot: no aimed collar stays, and the hand's collar does
+  assert.equal(preview.applyCoordinatorSpots(null, generation), true);
+  assert.deepEqual([mark(aimed).visible, mark(idle).userData.mark], [false, 'held']);
+  assert.deepEqual(preview.releaseHands(), [idle]);
+  assert.equal(mark(idle).visible, false, 'handed back: no collar');
+  preview.dispose();
+});
+
+test('the coordinator dimming the room glow fades each fixture’s drawn zones, and Stop’s put-back eases them in', () => {
+  const registration = registrationFor();
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding, later: () => 0, cancel: () => {} });
+  preview.setDocument(registration, { coordinator: true });
+  const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
+  const sector = () => preview.root.children[0].getObjectByName('radial-diffuser-sector-1');
+  const rows = ids.map(id => ({ fixture_id: id, on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
+    reason: 'waiting_for_task', motion_phase: 'settled' }));
+  assert.deepEqual([sector().visible, sector().userData.drawn_level], [true, .75], 'each fixture starts with its own glow');
+  assert.equal(preview.applyCoordinatorSpots(rows, generation, { ambient: { level: 0, cct_k: 2700 } }), true);
+  assert.equal(preview.readback().fixtures[0].state.radials[0].on, false, 'the room glow is off at once');
+  assert.equal(preview.presentationActive(), true, 'and its fade is drawn, not left at the old level');
+  preview.advancePresentation(performance.now() + 2000);
+  assert.deepEqual([sector().visible, sector().userData.drawn_level], [false, 0]);
+  // Stop puts each fixture's own glow back, and that eases in too
+  assert.equal(preview.applyCoordinatorSpots(null, generation), true);
+  assert.equal(preview.presentationActive(), true);
+  preview.advancePresentation(performance.now() + 4000);
+  assert.deepEqual([sector().visible, sector().userData.drawn_level], [true, .75]);
+  preview.dispose();
+});

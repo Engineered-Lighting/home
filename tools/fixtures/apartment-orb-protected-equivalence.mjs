@@ -1,14 +1,22 @@
-// Protected-equivalence fingerprint for the symbolic fixture's orb cosmetics.
-// Everything the orb must not change (readback, descriptors, pick inventory,
+// Protected-equivalence fingerprint for the symbolic fixture's drawn body.
+// Everything the body must not change (readback, descriptors, pick inventory,
 // sources, beam, receivers and their buffers) is recorded by value; only the
-// drawn body, its halo layers and the radial sector tint carriers are skipped.
-// The pinned JSON beside this file was recorded from the cylinder fixture at
-// 4a374e78 with protectedScenario() below.
+// drawn body and its glow layers are skipped. The pinned JSON beside this file
+// was recorded from the cylinder fixture at 4a374e78 with protectedScenario()
+// below, then re-recorded from 8a8e8422 when downward-emitter, downward-source-
+// glow and modeled-aim-source-glow joined the skipped names (its recorded_from).
 import crypto from 'node:crypto';
 
 // Drawn-body nodes the orb may replace. Their own contracts (sector visibility
 // and .1 x level opacity, the opaque core) are asserted directly in tests.
-export const ORB_COSMETIC_NAME = /^(?:symbolic-fixture-housing|tubular-diffuser|diffuser-(?:top|base)|radial-diffuser-sector-[1-6]|fixture-orb(?:-core)?|orb-halo-(?:downward|spotlight))$/;
+// The downlight's drawn ring and short cone (downward-emitter, downward-source-
+// glow) and the spot's flat source glow (modeled-aim-source-glow) joined them
+// when the fixture became a floating orb (the owner, 2026-11-14): they were
+// the lamp-like body around the orb, and the orb's own halo is the glow at the
+// source now. The emitter node and its position stay, because the Lit view
+// reads that position as the downlight's source; tests assert it directly. The
+// beam's cone and the light it lands stay protected.
+export const ORB_COSMETIC_NAME = /^(?:symbolic-fixture-housing|tubular-diffuser|diffuser-(?:top|base)|radial-diffuser-sector-[1-6]|fixture-orb(?:-core)?|orb-halo-(?:downward|spotlight)|downward-(?:emitter|source-glow)|modeled-aim-source-glow)$/;
 
 // Numbers are compared at 9 significant digits: a real protected change is far
 // larger, while the last bit of Math.pow/cos may differ between JS engines.

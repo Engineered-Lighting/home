@@ -104,7 +104,7 @@ for (const photoFloor of [false, true]) {
       }
     }
   }
-  assert.deepEqual([...keys].sort(), ['equipment-orb-halo-1', 'equipment-visible-receiver-1']);
+  assert.deepEqual([...keys].sort(), ['equipment-visible-receiver-1'], 'the fixture body draws with built-in materials only');
   api.dispose();
 }
 

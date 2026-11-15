@@ -1,6 +1,6 @@
 /* Ordinary Apartment presentation of saved equipment proposals.
  * A socket anchor can display a symbolic fixture before its optical offset is
- * measured. The orb and aim preview are display models, never registered
+ * measured. The fixture body and aim preview are display models, never registered
  * fixture geometry, live execution, photometry or a physical command. */
 import * as THREE from 'three';
 const [Spotlight] = await Promise.all([
@@ -22,23 +22,33 @@ const MAX_SPAN = 100;
 // prototype gimbal's travel limits into this display-only exploration control.
 const VIRTUAL_LIMITS = Object.freeze({ pan_min_deg: -180, pan_max_deg: 180,
     tilt_min_deg: -90, tilt_max_deg: 90, limit_role: 'virtual_preview', physical_travel: 'unknown' });
-// Illustrative exterior proportions, not surveyed or manufactured dimensions.
-// The tube is no longer drawn; sources, picks and receivers keep these values.
+// Illustrative exterior proportions, not surveyed or manufactured dimensions. The tube isn't drawn; sources, picks and
+// receivers keep these values (the radial strips' centreline at -TUBE_HEIGHT / 2, the downlight at the tube's foot).
 const TUBE_RADIUS = .04, TUBE_HEIGHT = .16;
 const DISPLAY_PIVOT_Z = -.14;
-// Orb cosmetics only (SPEC: a small orb with a glow tinted by the channels
-// that are on). None of these moves a source, pick, handle or receiver.
-const ORB_CORE_RADIUS = .03, ORB_CORE_COLOR = 0x3d3f43;
-const ORB_HALO_RADIUS = .15, ORB_HALO_FALLOFF = 2.5, ORB_HALO_CHANNEL_OPACITY = .3, ORB_HALO_MIN_RADIUS = .10, ORB_HALO_GROWTH = .16, ORB_HALO_FULL_SUM = 1.4;
-// Halo size follows how much light the socket gives (prototype scene.js
-// _styleFixtures): level = min(1, (spot + down + mean radial) / 1.4) grows
-// the glow from a 10 cm to a 26 cm radius. Drawing only: every layer keeps
-// its opacity contract, and no pick, source or receiver moves.
-export function orbHaloRadius(spot, down, radialLevels) {
-    const level = value => Number.isFinite(value) && value > 0 ? Math.min(1, value) : 0;
-    const radial = radialLevels?.length ? Array.from(radialLevels, level).reduce((sum, value) => sum + value, 0) / radialLevels.length : 0;
-    return ORB_HALO_MIN_RADIUS + ORB_HALO_GROWTH * Math.min(1, (level(spot) + level(down) + radial) / ORB_HALO_FULL_SUM);
-}
+// The drawn fixture (the owner, 2026-11-14): a short cylinder of frosted, almost opaque white glass, 6 in across and
+// 3 in tall: minimal, never a lifelike lamp. The robotic spot under it isn't drawn; its beam is, from a small glow
+// where it starts. The body is centred on the radial strips' centreline, the pick's centre. Lit, the glass glows from
+// inside in the channel's warm white, hottest at the middle, and the light blooms out past it: each radial zone across
+// its 60 degrees of the side, its edges shared softly with its neighbours' so all six on read as one band; the
+// downlight across the base and below it. A flat collar around it marks
+// a fixture a person's hand holds (solid, ice, the colour Home gives people) or a spot aimed and waiting dark
+// (dashed, warm). Echo's spot-only fixtures are a small glass orb. Drawing only: none of this moves a source, pick,
+// handle or receiver.
+const BODY_RADIUS = .0762, BODY_HEIGHT = .0762, BODY_OPACITY = .93, BODY_TINT = 0xf2f4f6, ORB_CORE_RADIUS = .03, ORB_OFF = 0xa3a9b0;
+const MARK_HELD = 0xb8d8ff, MARK_AIMED = 0xffb066;
+const COLLAR = { body: [.098, .108], orb: [.046, .053] }, COLLAR_DASHES = 16;
+// A zone's glow is even across 2 x ZONE_FLAT_DEG and fades over ZONE_EDGE_DEG each side, where its neighbour's rises.
+const ZONE_FLAT_DEG = 22, ZONE_EDGE_DEG = 16;
+// The inner light's colour: the channel's display white, softened toward white; its strength eases up from the level
+// so a dim channel still reads as on.
+const GLOW_WHITENESS = .3, SIDE_GLOW = .8, BASE_GLOW = .75, SPOT_GLOW = .5, SPOT_GLOW_SIZE = .09;
+// The bloom: a soft camera-facing glow where a zone's light leaves the glass (at its middle on the side, just below the
+// base for the downlight), warmer than the glass, so the light reads as filling the air around the fixture.
+const BLOOM_WHITENESS = .15, BLOOM_OPACITY = .42, BLOOM_SIZE = .3, ORB_BLOOM_SIZE = .26, BASE_BLOOM_OPACITY = .38, BASE_BLOOM_SIZE = .34, BASE_BLOOM_DROP = .03;
+const glowWhite = (kelvin, target) => target.setRGB(1, 1, 1).lerp(displayWhite(kelvin), 1 - GLOW_WHITENESS);
+const bloomWhite = (kelvin, target) => target.setRGB(1, 1, 1).lerp(displayWhite(kelvin), 1 - BLOOM_WHITENESS);
+const glowStrength = level => Math.pow(clamp(level, 0, 1), .6);
 const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = .0005, RADIAL_SETTLED_KELVIN = 2;
 // The coordinator's spot (den-live's light direction): its level arrives as the level train's committed steps, about
 // one a 0.1 s tick, and is eased between them over this time; its glide is drawn on the board's S-curve every frame.
@@ -51,6 +61,8 @@ const SPOT_EASE_MS = 120, SPOT_SETTLED_LEVEL = .002;
 // onHandChange's listeners: {phase: 'settled', fixture_id, label, reason, before, after, at_ms}, with only the keys that
 // changed (and {phase: 'start', fixture_id} as the burst starts).
 export const HAND_SETTLE_MS = 800;
+// den-live's reasons for a spot aimed at its target and dark, waiting: the fixture shows them with its dashed collar.
+const AIMED_REASONS = new Set(['pre_aim', 'standby']);
 const RADIAL_OFF_COLOR = new THREE.Color(0x283039);
 // SPEC Aim lifecycle: Set aim moves the warm beam to its new target with a
 // 650 ms sweep (ease-out cubic, as in the prototype), instant under reduced
@@ -187,12 +199,12 @@ function prepare(document, expectedBinding, siteId) {
 function disposeChildren(group) {
     const geometries = new Set(), materials = new Set(), textures = new Set();
     group.traverse(node => {
-        if (node.geometry) geometries.add(node.geometry);
+        if (node.geometry && !node.isSprite) geometries.add(node.geometry);   // a sprite's quad is shared by every sprite
         for (const material of Array.isArray(node.material) ? node.material : node.material ? [node.material] : []) materials.add(material);
     });
     group.clear();
     geometries.forEach(geometry => geometry.dispose());
-    materials.forEach(material => { if (material.map) textures.add(material.map); material.dispose(); });
+    materials.forEach(material => { if (material.map && !material.map.userData.fixture_shared) textures.add(material.map); material.dispose(); });
     textures.forEach(texture => texture.dispose());
 }
 
@@ -294,6 +306,61 @@ function triangleFan(points) {
     return triangles;
 }
 
+/* The fixture's drawn maps, made once and shared by every fixture (disposeChildren keeps them). Glows are white with
+ * the shape in alpha, so a material's colour tints them; the matcap shades the glass with no light in the scene, the
+ * same on the WebGL and WebGPU paths. Fixed noise in the alpha keeps faint glows from banding. */
+const fixtureMaps = new Map();
+let fixtureMapUsers = 0;   // fixture layers alive; the last one to go disposes the maps
+const smooth = (edge0, edge1, value) => { const t = clamp((value - edge0) / (edge1 - edge0), 0, 1); return t * t * (3 - 2 * t); };
+function fixtureMap(kind) {
+    if (fixtureMaps.has(kind)) return fixtureMaps.get(kind);
+    const matcap = kind === 'matcap-glass', size = matcap ? 128 : 256, pixels = new Uint8Array(size * size * 4), opaque = matcap || kind === 'side' || kind === 'cap';
+    let seed = 7;
+    const noise = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 - .5; };
+    for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+        const u = (x + .5) / size * 2 - 1, v = (y + .5) / size * 2 - 1, r = Math.hypot(u, v);
+        let rgb = [1, 1, 1], a = 0;
+        if (matcap) {
+            // u, v: the view-space normal. Frosted glass: a soft light from above and to the left, light gathering
+            // toward the silhouette as glass does, a tall soft sheen down one side of a cylinder and a faint one on
+            // the other, and a thin darker edge so the form holds against a light wall.
+            const nz = Math.sqrt(Math.max(0, 1 - Math.min(1, r * r)));
+            const diffuse = Math.max(0, -.3 * u + .6 * v + .74 * nz), rim = Math.pow(1 - nz, 2.4);
+            const sheen = .1 * Math.exp(-(((u + .46) / .22) ** 2)) * (1 - .3 * Math.abs(v));
+            const value = (.64 + .16 * diffuse + .16 * rim + sheen) * (1 - .22 * smooth(.97, 1, r));
+            rgb = [.98, .987, 1].map(tint => value * tint);
+            a = 1;
+        } else if (kind === 'zone') {
+            // across the zone (u, 0..1 over its 60 degrees and both soft edges) and up the side (v)
+            const degrees = Math.abs(((x + .5) / size - .5) * 2 * (ZONE_FLAT_DEG + ZONE_EDGE_DEG)), up = (y + .5) / size;
+            const across = degrees <= ZONE_FLAT_DEG ? 1 : Math.cos(Math.PI / 2 * (degrees - ZONE_FLAT_DEG) / ZONE_EDGE_DEG) ** 2;
+            a = across * (.3 + .7 * Math.pow(1 - (2 * up - 1) ** 2, 1.4));   // hottest at the middle of the side
+        } else if (kind === 'side') {
+            // the frosted side, lit from above: a touch brighter at the top, a soft shade toward the base
+            const up = (y + .5) / size;
+            rgb = [1, 1, 1].map(() => .8 + .2 * up - .1 * Math.exp(-((up / .12) ** 2)));
+            a = 1;
+        } else if (kind === 'cap') {
+            // a cap: a little lighter at the middle, a soft shade toward its rim
+            rgb = [1, 1, 1].map(() => .84 + .16 * (1 - r * r) - .06 * smooth(.85, 1, r));
+            a = 1;
+        } else if (kind === 'disc') a = (.35 + .65 * Math.pow(1 - r * r, 1.5)) * (1 - smooth(.88, 1, r));
+        else if (kind === 'glow') a = Math.exp(-((r / .32) ** 2)) * (1 - Math.min(1, r * r)) ** 2;
+        const index = (y * size + x) * 4;
+        for (let i = 0; i < 3; i++) pixels[index + i] = Math.round(255 * clamp(rgb[i], 0, 1));
+        pixels[index + 3] = opaque ? 255 : clamp(Math.round(255 * clamp(a, 0, 1) + noise()), 0, 255);
+    }
+    const texture = new THREE.DataTexture(pixels, size, size);
+    texture.magFilter = THREE.LinearFilter;
+    texture.minFilter = matcap ? THREE.LinearFilter : THREE.LinearMipmapLinearFilter;
+    texture.generateMipmaps = !matcap;
+    if (matcap) texture.colorSpace = THREE.SRGBColorSpace;
+    texture.userData = { fixture_shared: true };
+    texture.needsUpdate = true;
+    fixtureMaps.set(kind, texture);
+    return texture;
+}
+
 function featherMap() {
     const pixels = new Uint8Array(32 * 32 * 4);
     for (let y = 0; y < 32; y++) for (let x = 0; x < 32; x++) {
@@ -304,17 +371,6 @@ function featherMap() {
     const texture = new THREE.DataTexture(pixels, 32, 32);
     texture.magFilter = texture.minFilter = THREE.LinearFilter; texture.needsUpdate = true;
     return texture;
-}
-
-// One soft, view-facing falloff shared by every halo layer: brightest toward
-// the camera and fading to the silhouette, so the orb reads as one glow from
-// any orbit angle. The shell sits in front of the core, so it lights it.
-function orbHaloShader(shader) {
-    const varyings = '#include <common>\nvarying vec3 vOrbHaloNormal;\nvarying vec3 vOrbHaloView;';
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', varyings).replace('#include <project_vertex>',
-        '#include <project_vertex>\nvOrbHaloNormal = normalize( normalMatrix * normal );\nvOrbHaloView = - mvPosition.xyz;');
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', varyings).replace('#include <opaque_fragment>',
-        `diffuseColor.a *= pow( clamp( dot( normalize( vOrbHaloNormal ), normalize( vOrbHaloView ) ), 0.0, 1.0 ), ${ORB_HALO_FALLOFF.toFixed(2)} );\n#include <opaque_fragment>`);
 }
 
 function buildFixture(item, state, depth, reducedMotion) {
@@ -337,24 +393,80 @@ function buildFixture(item, state, depth, reducedMotion) {
     const buffer = capacity => new THREE.BufferGeometry().setAttribute('position',
         new THREE.BufferAttribute(new Float32Array(capacity * 3), 3));
     const assembly = new THREE.Group(); assembly.name = 'symbolic-engineered-fixture-assembly'; root.add(assembly);
-    // An abstract light point: no housing or strips are drawn. The opaque,
-    // depth-writing core sits on the radial source centreline, the pick centre.
-    const orb = new THREE.Group(); orb.name = 'fixture-orb'; orb.position.z = item.spotOnly ? 0 : -TUBE_HEIGHT / 2; assembly.add(orb);
-    const core = mesh(orb, 'fixture-orb-core', new THREE.SphereGeometry(ORB_CORE_RADIUS, 24, 16), ORB_CORE_COLOR);
-    core.material.opacity = 1; core.material.transparent = false; core.material.depthWrite = true;
-    core.userData = { orb_part: 'core', visual_dimensions_only: true };
-    // Every channel adds one layer of the same halo, tinted by its display
-    // white and scaled by its level, so the layers sum to one channel-blended
-    // glow. Display-only layers are never hit targets.
-    const haloGeometry = new THREE.SphereGeometry(ORB_HALO_RADIUS, 32, 16);
-    const halo = (parent, name, opacity) => {
-        const layer = mesh(parent, name, haloGeometry, 0xffdfab, opacity, true);
-        layer.material.side = THREE.FrontSide; layer.material.onBeforeCompile = orbHaloShader;
-        layer.material.customProgramCacheKey = () => 'equipment-orb-halo-1';
-        layer.position.z = orb.position.z; layer.raycast = () => {};
-        return layer;
+    // The drawn body, never a hit target (the pick below is): on the den, the white cylinder; on Echo's spot-only
+    // fixtures, a small orb. Flat and opaque; it sits on the radial strips' centreline, the pick's centre.
+    const unpicked = node => { node.raycast = () => {}; return node; };
+    // Drawn in the transparent pass after the beams (renderOrder 21, no depth test), so a beam passing behind the body
+    // doesn't paint over it. The glass writes depth.
+    const flat = (color, extra = {}) => new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide, toneMapped: false,
+        transparent: true, opacity: 1, depthWrite: true, ...extra });
+    const glass = (color, map = null) => new THREE.MeshMatcapMaterial({ matcap: fixtureMap('matcap-glass'), map, color, side: THREE.FrontSide,
+        toneMapped: false, transparent: true, opacity: BODY_OPACITY, depthWrite: true });
+    const bloom = (name, size) => {
+        const node = unpicked(new THREE.Sprite(new THREE.SpriteMaterial({ map: fixtureMap('glow'), color: 0xffffff, transparent: true, opacity: 0,
+            blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true, toneMapped: false })));
+        // drawn just before the glass (30), which then covers it cleanly: only the light around the body shows
+        node.name = name; node.scale.setScalar(size); node.renderOrder = 29; node.visible = false;
+        node.userData = { body_part: 'bloom', visual_dimensions_only: true };
+        return node;
     };
-
+    const glow = (map, extra = {}) => new THREE.MeshBasicMaterial({ map, color: 0xffffff, transparent: true, opacity: 0,
+        blending: THREE.AdditiveBlending, depthWrite: false, depthTest: true, side: THREE.FrontSide, toneMapped: false, dithering: true,
+        polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1, ...extra });
+    let body, core = null, coreBloom = null, baseGlow = null, baseBloom = null, spotGlow = null;
+    if (item.spotOnly) {
+        body = new THREE.Group(); body.name = 'fixture-orb'; assembly.add(body);
+        core = unpicked(new THREE.Mesh(new THREE.SphereGeometry(ORB_CORE_RADIUS, 32, 24), glass(ORB_OFF)));
+        core.name = 'fixture-orb-core'; core.renderOrder = 30; body.add(core);
+        core.userData = { body_part: 'core', visual_dimensions_only: true };
+        coreBloom = bloom('fixture-orb-bloom', ORB_BLOOM_SIZE); body.add(coreBloom);
+    } else {
+        body = new THREE.Group(); body.name = 'symbolic-fixture-housing'; body.position.z = -TUBE_HEIGHT / 2; assembly.add(body);
+        const side = unpicked(new THREE.Mesh(new THREE.CylinderGeometry(BODY_RADIUS, BODY_RADIUS, BODY_HEIGHT, 96, 1, true), glass(BODY_TINT, fixtureMap('side'))));
+        side.name = 'tubular-diffuser'; side.rotation.x = Math.PI / 2; side.renderOrder = 30; body.add(side);
+        side.userData = { enclosure: 'diffuser', visual_dimensions_only: true };
+        for (const [name, z, flip] of [['diffuser-top', BODY_HEIGHT / 2, false], ['diffuser-base', -BODY_HEIGHT / 2, true]]) {
+            const cap = unpicked(new THREE.Mesh(new THREE.CircleGeometry(BODY_RADIUS, 96), glass(BODY_TINT, fixtureMap('cap'))));
+            cap.name = name; cap.position.z = z; if (flip) cap.rotation.x = Math.PI; cap.renderOrder = 30; body.add(cap);
+            cap.userData = { enclosure: 'diffuser', visual_dimensions_only: true };
+        }
+        // a thin bright edge around the top, where frosted glass catches the light
+        const edge = unpicked(new THREE.Mesh(new THREE.RingGeometry(BODY_RADIUS - .0016, BODY_RADIUS + .0002, 128),
+            new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: .55, depthWrite: false, toneMapped: false,
+                polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 })));
+        edge.name = 'fixture-top-edge'; edge.position.z = BODY_HEIGHT / 2 + .0003; edge.renderOrder = 31; body.add(edge);
+        edge.userData = { body_part: 'edge', visual_dimensions_only: true };
+        // the downlight's glow through the base and its bloom below, and the spot's small glow where its beam starts
+        baseBloom = bloom('fixture-downlight-bloom', BASE_BLOOM_SIZE); baseBloom.position.z = -BODY_HEIGHT / 2 - BASE_BLOOM_DROP; body.add(baseBloom);
+        baseGlow = unpicked(new THREE.Mesh(new THREE.CircleGeometry(BODY_RADIUS, 96), glow(fixtureMap('disc'))));
+        baseGlow.name = 'fixture-downlight-glow'; baseGlow.position.z = -BODY_HEIGHT / 2 - .0006; baseGlow.rotation.x = Math.PI;
+        baseGlow.renderOrder = 31; baseGlow.visible = false; body.add(baseGlow);
+        baseGlow.userData = { body_part: 'downlight_glow', visual_dimensions_only: true };
+        // Home's camera is always above the fixtures (its stops are 35 and 60 degrees), where the base hides this point.
+        // So it draws after the glass, ignoring depth, at a modest strength: light seen through the frosted glass.
+        spotGlow = unpicked(new THREE.Sprite(new THREE.SpriteMaterial({ map: fixtureMap('glow'), color: 0xffffff, transparent: true, opacity: 0,
+            blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, toneMapped: false })));
+        spotGlow.name = 'fixture-spot-glow'; spotGlow.position.z = DISPLAY_PIVOT_Z + TUBE_HEIGHT / 2; spotGlow.scale.setScalar(SPOT_GLOW_SIZE);
+        spotGlow.renderOrder = 33; spotGlow.visible = false; body.add(spotGlow);
+        spotGlow.userData = { body_part: 'spot_glow', visual_dimensions_only: true };
+    }
+    // The mark: a flat collar around the body, level with its middle: solid ice when held, dashed and warm when aimed.
+    const [collarIn, collarOut] = COLLAR[item.spotOnly ? 'orb' : 'body'];
+    const dashes = [];
+    for (let i = 0; i < COLLAR_DASHES; i++) {
+        const dash = new THREE.RingGeometry(collarIn, collarOut, 6, 1, i * 2 * Math.PI / COLLAR_DASHES, .6 * 2 * Math.PI / COLLAR_DASHES).toNonIndexed();
+        dashes.push(...dash.attributes.position.array); dash.dispose();
+    }
+    const mark = new THREE.Group(); mark.name = 'fixture-mark'; mark.visible = false; body.add(mark);
+    mark.userData = { body_part: 'mark', mark: null, visual_dimensions_only: true };
+    const collars = Object.fromEntries([['held', new THREE.RingGeometry(collarIn, collarOut, 96), MARK_HELD],
+        ['aimed', new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(dashes, 3)), MARK_AIMED]]
+        .map(([kind, geometry, color]) => {
+            const collar = unpicked(new THREE.Mesh(geometry, flat(color)));
+            collar.name = 'fixture-mark-' + kind; collar.renderOrder = 32; collar.visible = false; mark.add(collar);
+            collar.userData = { body_part: 'mark', visual_dimensions_only: true };
+            return [kind, collar];
+        }));
     const radialViews = state.radials.map(zone => {
         const group = new THREE.Group(); group.name = 'radial-zone-' + zone.number; root.add(group);
         const angle = zone.azimuth_deg * DEG, direction = new THREE.Vector3(Math.cos(angle), Math.sin(angle), 0);
@@ -364,10 +476,14 @@ function buildFixture(item, state, depth, reducedMotion) {
             new THREE.Vector3(-direction.y, direction.x, 0), new THREE.Vector3(0, 0, 1), direction));
         port.visible = false;
         port.userData = { enclosed: true, source_kind: 'led_strip' };
-        // The zone's faint tint carrier is its layer of the orb halo. Name,
-        // channel number, visibility and the .1 x level opacity are unchanged.
-        const sector = halo(group, 'radial-diffuser-sector-' + zone.number, .10);
-        sector.userData = { orb_halo_layer: 'radial', channel_number: zone.number };
+        // The zone's light through the glass: across its 60 degrees of the side, its soft edges shared with its
+        // neighbours'. Shown while the zone gives light; its drawn level (eased with the zone) is userData.drawn_level.
+        const half = (ZONE_FLAT_DEG + ZONE_EDGE_DEG) * DEG;
+        const sector = unpicked(new THREE.Mesh(new THREE.CylinderGeometry(BODY_RADIUS + .0006, BODY_RADIUS + .0006, BODY_HEIGHT, 24, 1, true,
+            angle + Math.PI / 2 - half, 2 * half), glow(fixtureMap('zone'))));
+        sector.name = 'radial-diffuser-sector-' + zone.number; sector.renderOrder = 31; group.add(sector);
+        sector.rotation.x = Math.PI / 2; sector.position.z = -TUBE_HEIGHT / 2;
+        sector.userData = { channel_number: zone.number, drawn_level: 0 };
         const start = new THREE.Vector3(0, 0, -TUBE_HEIGHT / 2), worldStart = start.clone().add(item.anchor);
         const centerHit = receivingPoint(item, worldStart, direction);
         const patchPoints = [], samples = [];
@@ -405,7 +521,12 @@ function buildFixture(item, state, depth, reducedMotion) {
             beam_origin_m: worldStart.toArray(), endpoint_m: centerHit?.position.toArray() || null,
             reach_m: centerHit?.distance || null, receiver_kind: centerHit?.kind || 'unavailable' };
         patch.userData = { ...patch.userData, ...illumination, presentation: 'feathered_outward_wash' };
-        return { port, sector, patch, group, tone: displayWhite(zone.color_temp_kelvin), colorTemp: zone.color_temp_kelvin };
+        let zoneBloom = null;
+        if (!item.spotOnly) {
+            zoneBloom = bloom('fixture-zone-bloom-' + zone.number, BLOOM_SIZE);
+            zoneBloom.position.copy(direction).multiplyScalar(BODY_RADIUS); body.add(zoneBloom);
+        }
+        return { port, sector, patch, group, bloom: zoneBloom, tone: displayWhite(zone.color_temp_kelvin), colorTemp: zone.color_temp_kelvin };
     });
 
     function beam(parent) {
@@ -422,6 +543,9 @@ function buildFixture(item, state, depth, reducedMotion) {
     const downGlow = mesh(downwardGroup, 'downward-source-glow', new THREE.CylinderGeometry(.018, .05, .12, 24, 1, true), 0xfff1db, .035, true);
     downGlow.rotation.x = Math.PI / 2; downGlow.position.z = -TUBE_HEIGHT - .06;
     downGlow.userData.illumination_role = 'short_source_cue';
+    // The cylinder's base shows the downlight: its ring and cone aren't drawn. The emitter's node and position stay,
+    // because the Lit view reads that position as the downlight's source.
+    downwardEmitter.visible = false; downGlow.visible = false;
     const roboticGroup = new THREE.Group(); roboticGroup.name = 'robotic-spotlight'; root.add(roboticGroup);
     const panStage = new THREE.Group(); panStage.name = 'robotic-spotlight-pan-stage'; panStage.position.z = -.12;
     panStage.visible = false; panStage.userData = { enclosed: true }; roboticGroup.add(panStage);
@@ -436,7 +560,7 @@ function buildFixture(item, state, depth, reducedMotion) {
     // Keep selection and direct aiming picks separate. The visible receiver
     // can be grabbed for aiming without becoming a generic selection target.
     const pick = new THREE.Mesh(new THREE.SphereGeometry(.13, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
-    pick.name = 'virtual-fixture-pick'; pick.position.z = orb.position.z; root.add(pick);
+    pick.name = 'virtual-fixture-pick'; pick.position.z = body.position.z; root.add(pick);
     pick.userData = { interaction_role: 'fixture', fixture_id: item.id, mount_id: item.mountId };
     const handle = mesh(root, 'virtual-fixture-aim-handle', new THREE.SphereGeometry(.075, 12, 8), 0xb8dcff, .9, false, false);
     handle.renderOrder = 40; handle.visible = false;
@@ -444,21 +568,38 @@ function buildFixture(item, state, depth, reducedMotion) {
     const handlePick = new THREE.Mesh(new THREE.SphereGeometry(.14, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
     handlePick.name = 'virtual-fixture-aim-pick'; root.add(handlePick);
     handlePick.userData = { interaction_role: 'aim_handle', fixture_id: item.id, mount_id: item.mountId };
-    const downwardHalo = halo(downwardGroup, 'orb-halo-downward', ORB_HALO_CHANNEL_OPACITY);
-    downwardHalo.userData = { orb_halo_layer: 'downward' };
-    const spotlightHalo = halo(roboticGroup, 'orb-halo-spotlight', ORB_HALO_CHANNEL_OPACITY);
-    spotlightHalo.userData = { orb_halo_layer: 'spotlight' };
-    const haloLayers = [];
-    let haloSpot = 0, haloDown = 0;
-    const sizeHalo = () => {
-        const scale = orbHaloRadius(haloSpot, haloDown, shownLevels) / ORB_HALO_RADIUS;
-        for (const layer of haloLayers) if (layer.scale.x !== scale) layer.scale.setScalar(scale);
-    };
-    const paintHalo = (layer, channel) => {
-        if (!haloLayers.includes(layer)) haloLayers.push(layer);
-        layer.visible = channel.on && channel.brightness > 0;
-        layer.material.color.copy(displayWhite(channel.color_temp_kelvin)); layer.material.opacity = ORB_HALO_CHANNEL_OPACITY * channel.brightness;
-    };
+    let spotLevel = 0, spotKelvin = 3000;
+    // The downlight glows through the base, and the spot where its beam starts; Echo's orb takes its spot's light.
+    // Then the mark.
+    function paintBody(downward) {
+        if (baseGlow && downward) {
+            const level = downward.on ? downward.brightness : 0;
+            baseGlow.visible = level > 0;
+            if (level > 0) { glowWhite(downward.color_temp_kelvin, baseGlow.material.color); baseGlow.material.opacity = BASE_GLOW * glowStrength(level); }
+            baseBloom.visible = level > 0;
+            if (level > 0) { bloomWhite(downward.color_temp_kelvin, baseBloom.material.color); baseBloom.material.opacity = BASE_BLOOM_OPACITY * glowStrength(level); }
+        }
+        if (spotGlow) {
+            spotGlow.visible = spotLevel > 0;
+            if (spotLevel > 0) { glowWhite(spotKelvin, spotGlow.material.color); spotGlow.material.opacity = SPOT_GLOW * glowStrength(spotLevel); }
+        }
+        if (core && spotLevel > 0) glowWhite(spotKelvin, core.material.color).multiplyScalar(.85 + .35 * glowStrength(spotLevel));
+        else if (core) core.material.color.setHex(ORB_OFF);
+        if (coreBloom) {
+            coreBloom.visible = spotLevel > 0;
+            if (spotLevel > 0) { bloomWhite(spotKelvin, coreBloom.material.color); coreBloom.material.opacity = BLOOM_OPACITY * glowStrength(spotLevel); }
+        }
+        const kind = mark.userData.mark;
+        mark.visible = kind !== null; collars.held.visible = kind === 'held'; collars.aimed.visible = kind === 'aimed';
+    }
+    /* The mark: 'held' (a person's hand holds the fixture: a solid ice collar), 'aimed' (the coordinator holds the spot
+     * aimed and dark, ready: a dashed warm collar), or null. */
+    function setMark(kind) {
+        const next = kind === 'held' || kind === 'aimed' ? kind : null;
+        if (mark.userData.mark === next) return;
+        mark.userData.mark = next;
+        paintBody(null);
+    }
     let selected = false;
 
     function updateBeam(view, channel, origin, direction, fullAngle, target) {
@@ -477,6 +618,8 @@ function buildFixture(item, state, depth, reducedMotion) {
     function drawBeam(view, channel, origin, direction, fullAngle, reach, hit) {
         const active = channel.on && channel.brightness > 0 && reach > .001;
         view.update(origin, direction, reach, fullAngle, channel);
+        // The spot's glow (orb-halo-spotlight) is the glow at the source: the beam's flat source glow isn't drawn beside it.
+        view.glow.visible = false;
         view.disc.visible = active && !!hit;
         if (!active) return;
         const color = Spotlight.displaySpotlightWhite(channel.color_temp_kelvin), radius = Aiming.beamRadius(reach, fullAngle);
@@ -540,11 +683,14 @@ function buildFixture(item, state, depth, reducedMotion) {
             }
             view.port.material.color.copy(active ? view.tone : RADIAL_OFF_COLOR);
             view.port.material.opacity = active ? .4 + level * .6 : .65;
-            view.sector.visible = active; view.sector.material.color.copy(view.tone); view.sector.material.opacity = .10 * level;
+            view.sector.visible = active; view.sector.userData.drawn_level = level;
+            if (active) { glowWhite(shownKelvins[i], view.sector.material.color); view.sector.material.opacity = SIDE_GLOW * glowStrength(level); }
+            if (view.bloom) {
+                view.bloom.visible = active;
+                if (active) { bloomWhite(shownKelvins[i], view.bloom.material.color); view.bloom.material.opacity = BLOOM_OPACITY * glowStrength(level); }
+            }
             view.patch.visible = active; view.patch.material.color.copy(view.tone); view.patch.material.opacity = .06 * level;
-            if (!haloLayers.includes(view.sector)) haloLayers.push(view.sector);
         }
-        sizeHalo();
     }
     function snapPresentation(nowMs) {
         shownLevels.set(targetLevels); shownKelvins.set(targetKelvins); radialMoving = false; radialAt = nowMs; paintRadials();
@@ -592,14 +738,13 @@ function buildFixture(item, state, depth, reducedMotion) {
     }
     function update(next, target = null, { sweep: sweepAim = false } = {}) {
         const lit = channel => channel.on && channel.brightness > 0 ? channel.brightness : 0;
-        haloSpot = lit(next.spotlight); haloDown = lit(next.downward);
+        spotLevel = lit(next.spotlight); spotKelvin = next.spotlight.color_temp_kelvin;
         updateRadials(next.radials);
         downwardEmitter.material.color.copy(next.downward.on && next.downward.brightness > 0 ? displayWhite(next.downward.color_temp_kelvin) : new THREE.Color(0x283039));
         downwardEmitter.material.opacity = next.downward.on && next.downward.brightness > 0 ? .4 + .6 * next.downward.brightness : .65;
         downwardGroup.userData.channel = copy(next.downward);
-        downGlow.visible = next.downward.on && next.downward.brightness > 0;
         downGlow.material.color.copy(displayWhite(next.downward.color_temp_kelvin)); downGlow.material.opacity = .035 * next.downward.brightness;
-        paintHalo(downwardHalo, next.downward); paintHalo(spotlightHalo, next.spotlight); sizeHalo();
+        paintBody(next.downward);
         const direction = new THREE.Vector3(...Aiming.directionFromAim(next.pan_deg, next.tilt_deg, { horizontal_world_reference: item.reference.toArray() }));
         head.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), direction);
         panStage.rotation.z = Math.atan2(item.reference.y, item.reference.x) - next.pan_deg * DEG;
@@ -627,13 +772,14 @@ function buildFixture(item, state, depth, reducedMotion) {
     }
     update(state);
     return { root, update, updateRadials, advancePresentation, snapPresentation, presentationActive: () => radialMoving || !!sweep,
-        pick, handlePick, spotPool: spotBeam.disc, spotVolume: spotBeam.volume, setSelected(value) { selected = value; handle.visible = value; } };
+        pick, handlePick, spotPool: spotBeam.disc, spotVolume: spotBeam.volume, setMark, setSelected(value) { selected = value; handle.visible = value; } };
 }
 
 export function createEquipmentVirtualFixtures(parent, { binding = null, siteId = 'victoria',
     later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id) } = {}) {
     if (!parent?.isObject3D) throw TypeError('equipment_preview_parent_required');
     const expectedBinding = binding && { ...binding };
+    fixtureMapUsers++;
     const root = new THREE.Group();
     root.name = 'equipment-virtual-fixtures'; root.userData = { ...metadata };
     parent.add(root);
@@ -689,6 +835,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
     function releaseHold(id) {
         const hold = handHolds.get(id);
         if (!hold) return false;
+        views.get(id)?.setMark(null);
         if (hold.timer !== null) cancel(hold.timer);
         handHolds.delete(id);
         // What the hand left becomes the fixture's own glow, to put back when the coordinator stops directing the room.
@@ -831,12 +978,14 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             if (rows && (rows.length !== states.size || new Set(rows.map(row => row.fixture_id)).size !== states.size)) return false;
             if (!rows) {
                 coordinatorPlays.clear();
+                for (const [id, view] of views) if (!handHolds.has(id)) view.setMark(null);
                 directRoom(null);
                 const next = [...states].filter(([id]) => !handHolds.has(id))
                     .map(([id, state]) => [id, nextState(state, { spotlight: { on: false, brightness: 0 } })]);
                 for (const [id, state] of next) {
                     views.get(id).update(state);
                     states.set(id, state);
+                    trackPresentation(views.get(id));   // the room glow put back eases in, like any other change
                 }
                 return true;
             }
@@ -849,6 +998,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
             let moving = false;
             for (const row of rows) {
                 if (handHolds.has(row.fixture_id)) continue;
+                // aimed and dark, ready for the task (den-live's pre_aim, standby): the dashed collar
+                views.get(row.fixture_id)?.setMark(!row.on && AIMED_REASONS.has(row.reason) ? 'aimed' : null);
                 const play = coordinatorPlays.get(row.fixture_id) || { shown: 0, at: nowMs, cct: row.cct_k };
                 play.pan = row.pan_deg; play.tilt = row.tilt_deg;
                 play.target = row.on ? row.level : 0;
@@ -857,6 +1008,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
                 coordinatorPlays.set(row.fixture_id, play);
                 const blank = !row.on && (row.reason === 'stopped' || row.reason === 'off');
                 if (coordinatorFrame(row.fixture_id, nowMs, still || blank)) moving = true;
+                // The room glow (directRoom) eases each fixture's zones: keep drawing until they land.
+                trackPresentation(views.get(row.fixture_id));
             }
             if (moving) presentationActive = true;
             return true;
@@ -884,6 +1037,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         hold.timer = later(() => settleHand(fixtureId, hold), HAND_SETTLE_MS);
         handHolds.set(fixtureId, hold);
         coordinatorPlays.delete(fixtureId);
+        views.get(fixtureId)?.setMark('held');
         return true;
     }
     /* Hand one fixture back (den-live released it), or every one (Resume, the coordinator turning on): the next
@@ -991,7 +1145,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         setVisible(visible) { if (disposed) return; if (typeof visible !== 'boolean') throw TypeError('equipment_preview_visibility_boolean');
             snapPresentation(performance.now()); root.visible = visible; },
         dispose() { if (disposed) return; visibilityDocument?.removeEventListener?.('visibilitychange', visibilityChanged);
-            clear(); depth.dispose(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; root.removeFromParent(); disposed = true; status = 'disposed'; reason = null; },
+            clear(); depth.dispose(); states.clear(); targets.clear(); selectedId = null; scopeIdentity = null; root.removeFromParent(); disposed = true; status = 'disposed'; reason = null;
+            if (--fixtureMapUsers === 0) { for (const texture of fixtureMaps.values()) texture.dispose(); fixtureMaps.clear(); } },
     };
 }
 

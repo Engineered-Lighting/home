@@ -28,7 +28,7 @@ actual = replaceOne(actual, 'import(`./equipment-spotlight-visual.mjs${new URL(i
 for (const name of ['home-den-fixtures.js', 'home-apartment-aiming.js']) actual = replaceOne(actual,
   'import(`../' + name + '${new URL(import.meta.url).search}`)',
   'import(' + JSON.stringify(pathToFileURL(path.join(ROOT, 'app/src', name)).href) + ')');
-const { createEquipmentVirtualFixtures, orbHaloRadius } = await import(dataModule(actual));
+const { createEquipmentVirtualFixtures } = await import(dataModule(actual));
 const { createEquipmentSpotlightDepth } = await import(spotlight);
 const { createPicking } = await import(dataModule(replaceOne(fs.readFileSync(sourceFile('picking.js'), 'utf8'),
   "from 'three'", 'from ' + JSON.stringify(threeURL))));
@@ -68,6 +68,7 @@ function nonRadialSnapshot(root) {
   const rows = [];
   root.traverse(node => {
     for (let ancestor = node; ancestor && ancestor !== root; ancestor = ancestor.parent) if (/^radial-zone-[1-6]$/.test(ancestor.name)) return;
+    if (/^fixture-zone-bloom-[1-6]$/.test(node.name)) return;   // a zone's bloom, in the body, is drawn by its zone
     rows.push({ node, geometry: node.geometry, material: node.material, snapshot: visualSnapshot(node),
       attributes: Object.entries({ ...node.geometry?.attributes, ...(node.geometry?.index ? { index: node.geometry.index } : {}) })
         .map(([name, attribute]) => ({ name, attribute, version: attribute.version,
@@ -183,7 +184,7 @@ test('aim and restore keep their full update and exact target/handle behavior af
   assert.deepEqual(handle.position.clone().add(f.root.position).toArray(), saved.target.point);
 });
 
-const shownLevel = (f, number = 1) => f.root.getObjectByName('radial-diffuser-sector-' + number).material.opacity / .1;
+const shownLevel = (f, number = 1) => f.root.getObjectByName('radial-diffuser-sector-' + number).userData.drawn_level;
 function clock(t, start = 1000) {
   const value = { now: start }; t.mock.method(performance, 'now', () => value.now); return value;
 }
@@ -199,7 +200,7 @@ test('radial targets and metadata are immediate while only drawing eases with 16
   time.now += 640; f.api.advancePresentation(time.now);
   assert.ok(Math.abs(shownLevel(f) - (.2 + .55 * Math.exp(-5))) < 1e-12, 'a stalled frame uses all elapsed time rather than capped engine dt');
   time.now += 800; f.api.advancePresentation(time.now);
-  assert.equal(f.root.getObjectByName('radial-diffuser-sector-1').material.opacity, .1 * .2);
+  assert.equal(shownLevel(f), .2);
   assert.equal(f.api.advancePresentation(time.now + 16), false);
   assertNonRadialUnchanged(untouched);
 });
@@ -215,7 +216,7 @@ test('Off fades visibly to zero while its exact saved brightness and target meta
   assert.ok(Math.abs(shownLevel(f) - .75 / Math.E) < 1e-12); assert.equal(sector.visible, true);
   assert.ok(Math.abs(patch.material.opacity - .06 * .75 / Math.E) < 1e-12);
   time.now += 1600; f.api.advancePresentation(time.now);
-  assert.equal(sector.visible, false); assert.equal(patch.visible, false); assert.equal(sector.material.opacity, 0);
+  assert.equal(sector.visible, false); assert.equal(patch.visible, false); assert.equal(shownLevel(f), 0);
   assert.deepEqual(f.api.interactionDescriptor(f.id), target); assert.deepEqual(withoutRadials(target), withoutRadials(before));
 });
 
@@ -283,7 +284,7 @@ test('a rebuilt or rejected binding retires every previous drawing transition', 
   assert.equal(f.api.setDocument(next).status, 'ready'); assert.equal(oldRoot.parent, null);
   const current = f.api.root.children.find(node => node.userData.fixture_id === f.id);
   assert.notEqual(current, oldRoot);
-  assert.ok(Math.abs(current.getObjectByName('radial-diffuser-sector-1').material.opacity / .1 - .2) < 1e-12);
+  assert.ok(Math.abs(current.getObjectByName('radial-diffuser-sector-1').userData.drawn_level - .2) < 1e-12);
   assert.equal(f.api.advancePresentation(time.now + 1000), false);
   f.api.setFixtureState(f.id, { radials: [{ number: 1, brightness: .9 }] });
   const wrong = clone(next); wrong.binding.frame_digest = 'e'.repeat(64);
@@ -294,8 +295,13 @@ test('a rebuilt or rejected binding retires every previous drawing transition', 
 test('settled frames perform no radial drawing writes and invalid/backward clocks cannot move a target', t => {
   const time = clock(t), f = fixture(t); let writes = 0;
   for (let i = 1; i <= 6; i++) {
-    const color = f.root.getObjectByName('radial-diffuser-sector-' + i).material.color, original = color.copy;
-    t.mock.method(color, 'copy', function (...args) { writes++; return original.apply(this, args); });
+    // every way a zone's drawing is painted: its glow on the glass, its bloom and its wall wash
+    for (const name of ['radial-diffuser-sector-', 'fixture-zone-bloom-', 'radial-receiver-patch-']) {
+      const color = f.root.getObjectByName(name + i).material.color;
+      for (const method of ['copy', 'set', 'setRGB', 'lerp', 'multiplyScalar']) {
+        const original = color[method]; t.mock.method(color, method, function (...args) { writes++; return original.apply(this, args); });
+      }
+    }
   }
   for (let i = 0; i < 100; i++) assert.equal(f.api.advancePresentation(time.now + i * 16), false);
   assert.equal(writes, 0);
@@ -356,8 +362,12 @@ function temperatureFixture(t) {
   return { f, motion, reference };
 }
 function assertShownTemperatures(f, reference, kelvins) {
-  assert.equal(reference.api.setFixtureState(reference.id, { radials: kelvins.map((color_temp_kelvin, i) => ({ number: i + 1, color_temp_kelvin })) }).ok, true);
+  // A side panel's flat colour follows its drawn level too, so the reference draws the same level.
+  const drawn = kelvins.map((_, i) => shownLevel(f, i + 1));
+  assert.equal(reference.api.setFixtureState(reference.id, { radials: kelvins.map((color_temp_kelvin, i) => ({ number: i + 1, color_temp_kelvin,
+    on: drawn[i] > 0, ...(drawn[i] > 0 ? { brightness: drawn[i] } : {}) })) }).ok, true);
   for (let i = 0; i < kelvins.length; i++) for (const name of ['radial-diffuser-sector-', 'radial-receiver-patch-']) {
+    if (name === 'radial-diffuser-sector-' && !(drawn[i] > 0)) continue;   // a dark panel isn't drawn
     const actual = f.root.getObjectByName(name + (i + 1)).material.color.toArray();
     const expected = reference.root.getObjectByName(name + (i + 1)).material.color.toArray();
     assert.ok(actual.every((channel, index) => Math.abs(channel - expected[index]) < 1e-12),
@@ -421,20 +431,28 @@ test('Off fades CCT alongside level and hidden/resume or current reduced motion 
   assert.equal(f.api.advancePresentation(time.now + 16), false);
 });
 
-// Orb cosmetics (APT-Z01): the drawn body changes; nothing a test, Den case or
-// the preview relies on does.
+// The drawn fixture (the owner, 2026-11-14): a cylinder of frosted, almost opaque white glass, 6 in across and 3 in
+// tall, lit from inside, its light blooming out past it. The drawn body changes; nothing a test, Den case or the preview
+// relies on does.
 const fixtureSource = fs.readFileSync(sourceFile('equipment-virtual-fixtures.mjs'), 'utf8');
-const orbParts = root => ({ core: root.getObjectByName('fixture-orb-core'),
-  sectors: [1, 2, 3, 4, 5, 6].map(number => root.getObjectByName('radial-diffuser-sector-' + number)),
-  down: root.getObjectByName('orb-halo-downward'), spot: root.getObjectByName('orb-halo-spotlight') });
-const haloLayers = root => { const parts = orbParts(root); return [...parts.sectors, parts.down, parts.spot]; };
+const BODY = { radius: .0762, height: .0762 };
+const bodyParts = root => ({ housing: root.getObjectByName('symbolic-fixture-housing'), side: root.getObjectByName('tubular-diffuser'),
+  top: root.getObjectByName('diffuser-top'), base: root.getObjectByName('diffuser-base'), mark: root.getObjectByName('fixture-mark'),
+  sectors: [1, 2, 3, 4, 5, 6].map(number => root.getObjectByName('radial-diffuser-sector-' + number)) });
+const glass = root => { const parts = bodyParts(root); return [parts.side, parts.top, parts.base]; };
+const glows = root => ['fixture-downlight-glow', 'fixture-spot-glow'].map(name => root.getObjectByName(name));
+const blooms = root => [...[1, 2, 3, 4, 5, 6].map(number => root.getObjectByName('fixture-zone-bloom-' + number)), root.getObjectByName('fixture-downlight-bloom')];
+const drawnParts = root => { const parts = bodyParts(root), out = [...glass(root), root.getObjectByName('fixture-top-edge'), ...parts.sectors, ...glows(root), ...blooms(root)];
+  parts.mark.traverse(node => { if (node.isMesh) out.push(node); }); return out; };
 const allOff = { radials: [1, 2, 3, 4, 5, 6].map(number => ({ number, on: false })), downward: { on: false }, spotlight: { on: false } };
+const hex = node => node.material.color.getHex();
+const GLASS = 0xf2f4f6;
 
 test('protected proportions, limits, easing and the pick and handle geometry stay exactly as before', t => {
   assert.match(fixtureSource, /^const TUBE_RADIUS = \.04, TUBE_HEIGHT = \.16;$/m);
   assert.match(fixtureSource, /^const DISPLAY_PIVOT_Z = -\.14;$/m);
   assert.match(fixtureSource, /^const RADIAL_FADE_MS = 160, RADIAL_SETTLED_LEVEL = \.0005, RADIAL_SETTLED_KELVIN = 2;$/m);
-  assert.equal(fixtureSource.match(/^const ORB_[A-Z_]+ = .+;$/gm).length, 2, 'orb values are separate cosmetic constants');
+  assert.match(fixtureSource, /^const BODY_RADIUS = \.0762, BODY_HEIGHT = \.0762,/m, 'the drawn body is its own cosmetic constants: 6 in across, 3 in tall');
   const f = fixture(t), descriptor = f.api.interactionDescriptor(f.id);
   assert.deepEqual(f.api.readback().fixtures[0].limits, { pan_min_deg: -180, pan_max_deg: 180, tilt_min_deg: -90, tilt_max_deg: 90,
     limit_role: 'virtual_preview', physical_travel: 'unknown' });
@@ -450,50 +468,63 @@ test('protected proportions, limits, easing and the pick and handle geometry sta
   assert.equal(f.root.getObjectByName('downward-emitter').position.z, -.1605);
 });
 
-test('the drawn body is one opaque depth-writing orb core and one shared halo, with no housing, strips, cylinder or new light', t => {
+test('the drawn body is a frosted glass cylinder, 6 in across and 3 in tall, centred on the pick, lit only from within', t => {
   const f = fixture(t);
+  f.api.root.updateMatrixWorld(true);
   for (const root of f.api.root.children) {
-    const { core, sectors, down, spot } = orbParts(root), names = [];
+    const { housing, side, top, base, sectors } = bodyParts(root), names = [];
     root.traverse(node => { names.push(node.name); assert.equal(node.isLight, undefined, 'no light is added: ' + node.name); });
-    for (const gone of ['symbolic-fixture-housing', 'tubular-diffuser', 'diffuser-top', 'diffuser-base']) assert.equal(names.includes(gone), false, gone + ' is not drawn');
-    const opaque = []; root.traverse(node => { if (node.isMesh && node.material.visible && !node.material.transparent && node.material.depthWrite) opaque.push(node); });
-    assert.deepEqual(opaque.map(node => node.name), ['fixture-orb-core'], 'the only drawn opaque depth-writing fixture mesh is the orb core');
-    assert.equal(opaque[0], core);
-    assert.equal(core.geometry.type, 'SphereGeometry'); assert.ok(core.geometry.parameters.radius < .13, 'core stays inside the pick sphere');
-    assert.equal(core.parent.name, 'fixture-orb'); assert.equal(core.parent.parent.name, 'symbolic-engineered-fixture-assembly');
+    for (const gone of ['fixture-orb', 'fixture-orb-core', 'orb-halo-downward', 'orb-halo-spotlight']) assert.equal(names.includes(gone), false, gone + ' is not drawn');
+    assert.equal(housing.parent.name, 'symbolic-engineered-fixture-assembly');
     const center = root.getObjectByName('virtual-fixture-pick').getWorldPosition(new THREE.Vector3());
-    assert.ok(core.getWorldPosition(new THREE.Vector3()).distanceTo(center) < 1e-12, 'the core is centred on the pick sphere');
-    for (const layer of [...sectors, down, spot]) {
-      assert.equal(layer.geometry, sectors[0].geometry, 'every layer draws the same halo shell');
-      assert.notEqual(layer.geometry.type, 'CylinderGeometry'); assert.equal(layer.geometry.type, 'SphereGeometry');
-      assert.ok(layer.getWorldPosition(new THREE.Vector3()).distanceTo(center) < 1e-12, layer.name + ' is centred on the orb');
-      assert.ok(layer.geometry.parameters.radius > core.geometry.parameters.radius, 'the halo shell lies in front of the core');
-      assert.equal(layer.material.blending, THREE.AdditiveBlending); assert.equal(layer.material.side, THREE.FrontSide);
-      assert.equal(layer.material.depthWrite, false); assert.equal(layer.material.depthTest, true);
-      assert.equal(layer.material.customProgramCacheKey(), 'equipment-orb-halo-1');
+    assert.ok(housing.getWorldPosition(new THREE.Vector3()).distanceTo(center) < 1e-12, 'the body is centred on the pick sphere');
+    assert.deepEqual([side.geometry.type, side.geometry.parameters.radiusTop, side.geometry.parameters.radiusBottom, side.geometry.parameters.height,
+      side.geometry.parameters.openEnded], ['CylinderGeometry', BODY.radius, BODY.radius, BODY.height, true]);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(side.getWorldQuaternion(new THREE.Quaternion()));
+    assert.ok(Math.abs(up.z - 1) < 1e-12, 'the cylinder stands upright');
+    for (const [cap, z] of [[top, BODY.height / 2], [base, -BODY.height / 2]]) {
+      assert.deepEqual([cap.geometry.type, cap.geometry.parameters.radius], ['CircleGeometry', BODY.radius]);
+      assert.ok(Math.abs(cap.getWorldPosition(new THREE.Vector3()).z - center.z - z) < 1e-12, cap.name + ' closes the cylinder');
+      const outward = new THREE.Vector3(0, 0, 1).applyQuaternion(cap.getWorldQuaternion(new THREE.Quaternion()));
+      assert.ok(Math.abs(outward.z - Math.sign(z)) < 1e-12, cap.name + ' faces outward');
     }
+    for (const node of glass(root)) {
+      const material = node.material;
+      assert.equal(material.type, 'MeshMatcapMaterial', node.name + ' is shaded glass, with no light in the scene');
+      assert.ok(material.matcap?.isDataTexture, node.name + ' has its frosted-glass matcap');
+      assert.deepEqual([material.color.getHex(), material.side, material.depthWrite, material.blending], [GLASS, THREE.FrontSide, true, THREE.NormalBlending]);
+      assert.ok(material.opacity > .9 && material.opacity < 1, node.name + ' is almost opaque');
+    }
+    for (const node of drawnParts(root)) assert.ok(node.renderOrder > root.getObjectByName('modeled-aim-volume').renderOrder,
+      node.name + ' draws after the beam, which then never paints over it');
+    // each zone's light covers its own 60 degrees of the side, with soft edges shared with its neighbours
+    const azimuths = [1, 2, 3, 4, 5, 6].map(number => root.getObjectByName('radial-zone-' + number).userData.channel.azimuth_deg);
     sectors.forEach((sector, index) => {
       assert.equal(sector.parent.name, 'radial-zone-' + (index + 1)); assert.equal(sector.userData.channel_number, index + 1);
+      assert.ok(Math.abs(sector.geometry.parameters.thetaLength - 76 * Math.PI / 180) < 1e-12, '60 degrees and 8 more each side to blend');
+      assert.equal(sector.material.blending, THREE.AdditiveBlending); assert.equal(sector.material.depthWrite, false);
+      const mean = new THREE.Vector3(), position = sector.geometry.attributes.position, point = new THREE.Vector3();
+      for (let i = 0; i < position.count; i++) mean.add(point.fromBufferAttribute(position, i).applyMatrix4(sector.matrixWorld).sub(center));
+      const facing = Math.atan2(mean.y, mean.x) * 180 / Math.PI, expected = azimuths[index];
+      assert.ok(Math.abs(((facing - expected + 540) % 360) - 180) < 1e-6, 'zone ' + (index + 1) + ' faces ' + expected + ', not ' + facing);
     });
-    assert.equal(down.parent.name, 'downward-zone'); assert.equal(spot.parent.name, 'robotic-spotlight');
   }
 });
 
-test('halo layers are never hit targets and the pick inventory is unchanged', t => {
+test('body parts are never hit targets and the pick inventory is unchanged', t => {
   const f = fixture(t), objects = f.api.pickObjects(); f.api.root.updateMatrixWorld(true);
   const center = f.root.getObjectByName('virtual-fixture-pick').getWorldPosition(new THREE.Vector3());
   const offset = new THREE.Vector3(-1.2, -.9, -.5), raycaster = new THREE.Raycaster(center.clone().add(offset), offset.clone().negate().normalize());
   assert.ok(raycaster.intersectObject(f.root.getObjectByName('virtual-fixture-pick'), false).length, 'the same oblique ray does hit the pick sphere');
-  for (const layer of haloLayers(f.root)) assert.deepEqual(raycaster.intersectObject(layer, false), [], layer.name);
+  for (const node of drawnParts(f.root)) assert.deepEqual(raycaster.intersectObject(node, false), [], node.name);
   assert.deepEqual(f.api.pickObjects(), objects); assert.equal(objects.length, 5);
 });
 
-test('an all-off socket shows only its dim core and stays selectable', t => {
+test('an all-off socket is plain frosted glass and stays selectable', t => {
   const f = fixture(t), before = f.api.interactionDescriptor(f.id), objects = f.api.pickObjects();
   assert.equal(f.api.setFixtureState(f.id, allOff).ok, true); f.api.setVisible(false); f.api.setVisible(true);
-  const { core } = orbParts(f.root);
-  assert.equal(core.visible, true); assert.deepEqual(core.material.color.toArray(), new THREE.Color(0x3d3f43).toArray());
-  for (const layer of haloLayers(f.root)) assert.equal(layer.visible, false, layer.name + ' is dark');
+  for (const node of glass(f.root)) assert.equal(hex(node), GLASS, node.name + ' keeps its glass');
+  for (const node of [...bodyParts(f.root).sectors, ...glows(f.root), ...blooms(f.root)]) assert.equal(node.visible, false, node.name + ' is dark');
   const after = f.api.interactionDescriptor(f.id);
   assert.deepEqual({ ...after, state: null }, { ...before, state: null }, 'only the modeled channel state changed');
   assert.equal(after.state.spotlight.brightness, before.state.spotlight.brightness);
@@ -502,84 +533,79 @@ test('an all-off socket shows only its dim core and stays selectable', t => {
   assert.equal(f.api.setSelected(null), null); assert.equal(f.api.setSelected(f.id).fixture_id, f.id, 'an off socket is still selectable');
 });
 
-test('every channel and mixed CCT tint the halo through the producer display white', t => {
-  const { f, reference } = temperatureFixture(t), parts = orbParts(f.root);
+test('a lit zone glows through its 60 degrees of the side, the downlight through the base and the spot where its beam starts', t => {
+  const { f, reference } = temperatureFixture(t), parts = bodyParts(f.root), [baseGlow, spotGlow] = glows(f.root);
   assert.equal(f.api.setFixtureState(f.id, allOff).ok, true); f.api.setVisible(false); f.api.setVisible(true);
   for (let number = 1; number <= 6; number++) {
     assert.equal(f.api.setFixtureState(f.id, { radials: [{ number, on: true, brightness: .8, color_temp_kelvin: 2200 + 400 * number }] }).ok, true);
     f.api.setVisible(false); f.api.setVisible(true);
-    assert.equal(parts.sectors[number - 1].visible, true); assert.ok(Math.abs(parts.sectors[number - 1].material.opacity - .08) < 1e-12);
+    const sector = parts.sectors[number - 1], color = sector.material.color, bloom = blooms(f.root)[number - 1];
+    assert.equal(sector.visible, true); assert.equal(shownLevel(f, number), .8);
+    assert.ok(sector.material.opacity > 0 && color.r >= color.b, sector.name + ' glows in a warm white');
+    assert.equal(bloom.visible, true); assert.ok(bloom.material.opacity > 0, 'and its light blooms out past the glass');
+    const azimuth = f.root.getObjectByName('radial-zone-' + number).userData.channel.azimuth_deg * Math.PI / 180;
+    assert.ok(bloom.position.distanceTo(new THREE.Vector3(Math.cos(azimuth), Math.sin(azimuth), 0).multiplyScalar(BODY.radius)) < 1e-12,
+      'from the middle of its own side');
   }
   assertShownTemperatures(f, reference, [2600, 3000, 3400, 3800, 4200, 4600]);
-  assert.equal(new Set(parts.sectors.map(sector => sector.material.color.getHexString())).size, 6, 'mixed CCT stays per channel');
-  assert.equal(parts.down.visible, false); assert.equal(parts.spot.visible, false);
+  assert.equal(new Set(parts.sectors.map(sector => sector.material.color.getHexString())).size, 6, 'mixed CCT stays per zone');
+  for (const node of glass(f.root)) assert.equal(hex(node), GLASS, 'the glass itself is unchanged; the light is inside it');
+  // brighter with its level, and a dim zone still reads as on
+  const strength = level => { f.api.setFixtureState(f.id, { radials: [{ number: 1, brightness: level }] }); f.api.setVisible(false); f.api.setVisible(true);
+    return parts.sectors[0].material.opacity; };
+  assert.ok(strength(.1) > .25 * strength(1), 'a 10% zone is visibly lit'); assert.ok(strength(.5) < strength(1));
+  // the downlight glows through the base
+  assert.equal(baseGlow.visible, false);
   assert.equal(f.api.setFixtureState(f.id, { downward: { on: true, brightness: .5, color_temp_kelvin: 2700 } }).ok, true);
-  assert.equal(parts.down.visible, true); assert.ok(Math.abs(parts.down.material.opacity - .3 * .5) < 1e-12);
-  assert.deepEqual(parts.down.material.color.toArray(), f.root.getObjectByName('downward-emitter').material.color.toArray());
-  assert.equal(f.api.setFixtureState(f.id, { spotlight: { on: true, brightness: 1, color_temp_kelvin: 4500 } }).ok, true);
-  assert.equal(parts.spot.visible, true); assert.ok(Math.abs(parts.spot.material.opacity - .3) < 1e-12);
-  assert.deepEqual(parts.spot.material.color.toArray(), f.root.getObjectByName('robotic-spotlight-emitter').material.color.toArray());
-  assert.notDeepEqual(parts.spot.material.color.toArray(), parts.down.material.color.toArray());
-  assert.equal(f.api.setFixtureState(f.id, { downward: { on: false } }).ok, true);
-  assert.equal(parts.down.visible, false); assert.equal(parts.spot.visible, true);
-});
-
-test('the halo grows with how much light the socket gives; every layer keeps its opacity contract', t => {
-  // Prototype _styleFixtures: level = min(1, (spot + down + mean radial) / 1.4), radius .10 → .26 m.
-  assert.equal(orbHaloRadius(0, 0, [0, 0, 0, 0, 0, 0]), .10);
-  assert.ok(Math.abs(orbHaloRadius(1, 0, [0, 0, 0, 0, 0, 0]) - (.10 + .16 / 1.4)) < 1e-12);
-  assert.ok(Math.abs(orbHaloRadius(1, 1, [1, 1, 1, 1, 1, 1]) - .26) < 1e-12, 'full output reaches 26 cm and no further');
-  assert.ok(orbHaloRadius(.2, 0, []) < orbHaloRadius(.6, 0, []), 'monotone in level');
-  const f = fixture(t), parts = orbParts(f.root), layers = haloLayers(f.root), radius = .15;
-  const scales = () => new Set(layers.map(layer => layer.scale.x));
-  const shown = () => [...scales()][0] * radius;
-  assert.equal(f.api.setFixtureState(f.id, allOff).ok, true); f.api.setVisible(false); f.api.setVisible(true);
-  assert.equal(scales().size, 1, 'every halo layer draws the same shell size');
-  assert.ok(Math.abs(shown() - .10) < 1e-12);
+  assert.equal(baseGlow.visible, true); assert.ok(baseGlow.material.opacity > 0 && baseGlow.material.color.r > baseGlow.material.color.b);
+  const baseBloom = f.root.getObjectByName('fixture-downlight-bloom');
+  assert.equal(baseBloom.visible, true); assert.ok(baseBloom.position.z < -BODY.height / 2, 'blooming below the base');
+  assert.ok(baseGlow.getWorldPosition(new THREE.Vector3()).z < parts.base.getWorldPosition(new THREE.Vector3()).z, 'just outside the base');
+  assert.equal(f.api.setFixtureState(f.id, { downward: { on: false } }).ok, true); assert.equal(baseGlow.visible, false); assert.equal(baseBloom.visible, false);
+  // the spot: a small glow where its beam starts
   assert.equal(f.api.setFixtureState(f.id, { spotlight: { on: true, brightness: 1, color_temp_kelvin: 3000 } }).ok, true);
-  assert.ok(Math.abs(shown() - (.10 + .16 / 1.4)) < 1e-12); assert.ok(Math.abs(parts.spot.material.opacity - .3) < 1e-12, 'spot opacity stays .3 × brightness');
-  assert.equal(f.api.setFixtureState(f.id, { downward: { on: true, brightness: 1, color_temp_kelvin: 2700 },
-    radials: [1, 2, 3, 4, 5, 6].map(number => ({ number, on: true, brightness: 1, color_temp_kelvin: 2700 })) }).ok, true);
-  f.api.setVisible(false); f.api.setVisible(true);
-  assert.equal(scales().size, 1); assert.ok(Math.abs(shown() - .26) < 1e-12, 'a fully lit socket glows at 26 cm');
-  for (const sector of parts.sectors) assert.ok(Math.abs(sector.material.opacity - .1) < 1e-12, 'sector opacity stays .1 × level');
-  assert.ok(Math.abs(parts.down.material.opacity - .3) < 1e-12);
-  assert.deepEqual(f.root.getObjectByName('virtual-fixture-pick').scale.toArray(), [1, 1, 1], 'the pick sphere never scales');
+  f.api.root.updateMatrixWorld(true);
+  assert.equal(spotGlow.visible, true); assert.equal(spotGlow.isSprite, true);
+  assert.ok(spotGlow.getWorldPosition(new THREE.Vector3()).distanceTo(new THREE.Vector3(...f.api.interactionDescriptor(f.id).display_origin_m)) < 1e-12,
+    'at the beam origin, under the cylinder');
+  assert.equal(f.api.setFixtureState(f.id, { spotlight: { on: false } }).ok, true); assert.equal(spotGlow.visible, false);
 });
 
-test('the halo falloff hooks the vendored basic shader exactly once and shares one program', t => {
-  const f = fixture(t), layers = haloLayers(f.root);
-  const shader = { vertexShader: THREE.ShaderLib.basic.vertexShader, fragmentShader: THREE.ShaderLib.basic.fragmentShader };
-  for (const [source, hook] of [[shader.vertexShader, '#include <project_vertex>'], [shader.fragmentShader, '#include <opaque_fragment>'],
-    [shader.vertexShader, '#include <common>'], [shader.fragmentShader, '#include <common>']]) assert.equal(source.split(hook).length - 1, 1, hook);
-  layers[0].material.onBeforeCompile(shader);
-  assert.match(shader.vertexShader, /#include <project_vertex>\nvOrbHaloNormal = normalize\( normalMatrix \* normal \);\nvOrbHaloView = - mvPosition\.xyz;/);
-  assert.match(shader.fragmentShader, /diffuseColor\.a \*= pow\( clamp\( dot\( normalize\( vOrbHaloNormal \), normalize\( vOrbHaloView \) \), 0\.0, 1\.0 \), 2\.50 \);\n#include <opaque_fragment>/);
-  for (const text of [shader.vertexShader, shader.fragmentShader]) assert.equal(text.split('varying vec3 vOrbHaloNormal;').length - 1, 1);
-  assert.equal(new Set(layers.map(layer => layer.material.onBeforeCompile)).size, 1);
-  assert.equal(new Set(layers.map(layer => layer.material.customProgramCacheKey())).size, 1);
-});
-
-test('disposal releases every orb geometry and material', () => {
-  const parent = new THREE.Group(), api = createEquipmentVirtualFixtures(parent, { binding });
+test('disposal releases every body geometry and material; the shared maps go with the last fixture layer', () => {
+  const parent = new THREE.Group(), api = createEquipmentVirtualFixtures(parent, { binding }), other = createEquipmentVirtualFixtures(new THREE.Group(), { binding });
   assert.equal(api.setDocument(authoredDocument(binding, Core)).status, 'ready');
-  const owned = new Set(), released = new Set();
-  for (const root of api.root.children) {
-    const parts = orbParts(root);
-    for (const node of [parts.core, ...haloLayers(root)]) for (const item of [node.geometry, node.material]) {
+  assert.equal(other.setDocument(authoredDocument(binding, Core)).status, 'ready');
+  const owned = new Set(), released = new Set(), shared = new Set(), sharedReleased = new Set();
+  for (const root of api.root.children) for (const node of drawnParts(root)) {
+    // a sprite's quad is three's, shared by every sprite, so it's never the fixture's to dispose
+    for (const item of node.isSprite ? [node.material] : [node.geometry, node.material]) {
       if (!owned.has(item)) item.addEventListener('dispose', () => released.add(item));
       owned.add(item);
     }
+    for (const map of [node.material.map, node.material.matcap]) if (map && !shared.has(map)) {
+      shared.add(map); map.addEventListener('dispose', function once() { sharedReleased.add(map); map.removeEventListener('dispose', once); });
+    }
   }
-  assert.equal(owned.size, 4 * (2 + 1 + 8), 'per fixture: core geometry and material, one shared halo shell, eight layer materials');
+  // per fixture: side, top, base, the top edge, the base glow, six zone glows and two collars (a geometry and a material
+  // each), and the spot glow's and seven blooms' materials
+  assert.equal(owned.size, 4 * (2 * 13 + 8));
+  assert.ok(shared.size >= 5, 'the glass matcap, side, cap, zone, disc and glow maps are shared');
   api.dispose();
   assert.equal(released.size, owned.size); assert.equal(parent.children.length, 0);
   const names = []; api.root.traverse(node => names.push(node.name)); assert.equal(names.some(name => ORB_COSMETIC_NAME.test(name)), false);
+  assert.equal(sharedReleased.size, 0, 'another fixture layer still draws with the shared maps');
+  other.dispose();
+  assert.equal(sharedReleased.size, shared.size, 'the last fixture layer takes the shared maps with it');
+  const again = createEquipmentVirtualFixtures(new THREE.Group(), { binding });
+  assert.equal(again.setDocument(authoredDocument(binding, Core)).status, 'ready');
+  const fresh = again.root.getObjectByName('tubular-diffuser').material.matcap;
+  assert.ok(fresh && !shared.has(fresh), 'a new layer makes fresh maps');
+  again.dispose();
 });
 
 test('orb cosmetics leave readback, descriptors, picks, sources, beam and receiver buffers identical to the cylinder fixture', t => {
   const pinned = JSON.parse(fs.readFileSync(path.join(ROOT, 'tools/fixtures/apartment-orb-protected-equivalence.json'), 'utf8'));
-  assert.match(pinned.recorded_from, /at 4a374e78 \(cylinder fixture\)$/);
+  assert.match(pinned.recorded_from, /at 4a374e78 \(cylinder fixture\); re-recorded at 8a8e8422 with the downlight's drawn ring and cone and the spot's source glow as orb cosmetics$/);
   const parent = new THREE.Group(), api = createEquipmentVirtualFixtures(parent, { binding }); t.after(() => api.dispose());
   const loaded = api.setDocument(authoredDocument(binding, Core));
   assert.equal(loaded.status, 'ready'); assert.equal(loaded.fixture_count, 4);
@@ -587,4 +613,63 @@ test('orb cosmetics leave readback, descriptors, picks, sources, beam and receiv
   assert.deepEqual(actual.paths, pinned.paths, 'the same protected nodes exist in the same places');
   for (const [state, parts] of Object.entries(pinned.states)) assert.deepEqual(actual.states[state], parts, 'protected values unchanged after ' + state);
   assert.deepEqual(Object.keys(actual.states), Object.keys(pinned.states));
+});
+
+test('no lamp is drawn under the cylinder, the beam stays, and a flat collar marks a fixture held or aimed', t => {
+  const f = fixture(t), mark = f.root.getObjectByName('fixture-mark');
+  const emitter = f.root.getObjectByName('downward-emitter'), cone = f.root.getObjectByName('downward-source-glow');
+  // the downlight's ring and cone aren't drawn, but the emitter keeps its place as the Lit view's source
+  assert.deepEqual([emitter.visible, cone.visible], [false, false]);
+  assert.equal(emitter.position.z, -.1605);
+  assert.equal(f.api.setFixtureState(f.id, { spotlight: { on: true, brightness: .8, color_temp_kelvin: 2700 } }).ok, true);
+  assert.equal(cone.visible, false, 'even lit, no cone under the cylinder');
+  assert.equal(f.root.getObjectByName('modeled-aim-source-glow').visible, false, 'the beam’s own flat source glow isn’t drawn beside the spot’s');
+  assert.equal(f.root.getObjectByName('modeled-aim-volume').visible, true, 'the beam stays');
+  // the mark: in the body, hidden until held or aimed; flat horizontal collars outside the cylinder
+  assert.equal(mark.parent.name, 'symbolic-fixture-housing'); assert.equal(mark.visible, false); assert.equal(mark.userData.mark, null);
+  const held = mark.getObjectByName('fixture-mark-held'), aimed = mark.getObjectByName('fixture-mark-aimed');
+  assert.deepEqual([hex(held), hex(aimed)], [0xb8d8ff, 0xffb066], 'ice for a person’s hand, warm for the spot waiting');
+  assert.equal(held.geometry.type, 'RingGeometry'); assert.ok(held.geometry.parameters.innerRadius > BODY.radius, 'the collar stands clear of the body');
+  assert.ok(held.geometry.attributes.position.array.every((value, index) => index % 3 !== 2 || value === 0), 'the collar is level');
+  assert.equal(aimed.geometry.attributes.position.count, 16 * 36, 'the aimed collar is sixteen dashes');
+  assert.ok(aimed.geometry.attributes.position.array.every((value, index) => index % 3 !== 2 || value === 0), 'and level');
+});
+
+test('from Home’s camera stops, always above the fixtures, the spot’s glow shows through the frosted base', t => {
+  // The rig's own stops and lens (rig.js, engine.js): no free fly, so these are every view the den gets.
+  const rig = fs.readFileSync(sourceFile('rig.js'), 'utf8'), engine = fs.readFileSync(sourceFile('engine.js'), 'utf8');
+  const elevations = JSON.parse(/^const ELEVATIONS = (\[[^\]]+\]);/m.exec(rig)[1]);
+  const zooms = JSON.parse(/^export const ZOOM_FACTORS = Object\.freeze\((\[[^\]]+\])\);/m.exec(rig)[1]);
+  const fov = Number(/new THREE\.PerspectiveCamera\((\d+), 1, /.exec(engine)[1]);
+  assert.deepEqual([elevations, fov], [[35, 60], 35]);
+  const f = fixture(t); f.api.root.updateMatrixWorld(true);
+  // the authored room is 4 x 4 m; the rig orbits its middle 0.9 m up, the fitted distance about 10 m
+  const centre = new THREE.Vector3(2, 2, .9), fitDistance = 10, DEG = Math.PI / 180;
+  let framed = 0, behindGlass = 0;
+  for (const elevation of elevations) for (const zoom of zooms) for (let stop = 0; stop < 8; stop++) {
+    const r = fitDistance * zoom, e = elevation * DEG, a = stop * Math.PI / 4;
+    const camera = new THREE.PerspectiveCamera(fov, 16 / 9, .05, 200); camera.up.set(0, 0, 1);
+    camera.position.set(centre.x + r * Math.cos(e) * Math.cos(a), centre.y + r * Math.cos(e) * Math.sin(a), centre.z + r * Math.sin(e));
+    camera.lookAt(centre); camera.updateMatrixWorld(); camera.updateProjectionMatrix();
+    for (const root of f.api.root.children) {
+      const glow = root.getObjectByName('fixture-spot-glow'), point = glow.getWorldPosition(new THREE.Vector3());
+      const ndc = point.clone().project(camera);
+      if (Math.abs(ndc.x) > 1 || Math.abs(ndc.y) > 1 || ndc.z > 1) continue;
+      framed++;
+      assert.ok(camera.position.z > point.z, 'the rig is always above the fixtures');
+      const ray = new THREE.Raycaster(camera.position.clone(), point.clone().sub(camera.position).normalize()), hits = [];
+      for (const node of glass(root)) THREE.Mesh.prototype.raycast.call(node, ray, hits);   // the glass is never a pick, so cast directly
+      if (hits.some(hit => hit.distance < camera.position.distanceTo(point) - 1e-6)) behindGlass++;
+    }
+  }
+  assert.ok(framed > 100, 'the fixtures are in frame at the rig’s stops: ' + framed);
+  assert.ok(behindGlass / framed > .75, `from the rig the base is between the camera and the glow (${behindGlass}/${framed}), so a depth-tested glow would vanish`);
+  // so the glow draws after the glass, ignoring depth, at a modest strength: light seen through the frosted base
+  for (const root of f.api.root.children) {
+    const glow = root.getObjectByName('fixture-spot-glow');
+    assert.equal(glow.visible, true, 'the spot is on');
+    assert.equal(glow.material.depthTest, false);
+    assert.ok(glow.renderOrder > Math.max(...drawnParts(root).filter(node => node !== glow).map(node => node.renderOrder)), 'drawn after the glass and its light');
+    assert.ok(glow.material.opacity > .2 && glow.material.opacity <= .6, 'modest, so it doesn’t wash over the body: ' + glow.material.opacity);
+  }
 });

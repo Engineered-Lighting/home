@@ -584,6 +584,7 @@ The stream's `activity {word, close_up, verdict}` carries it, and the coordinato
 
 **What it sends** (`den_live_scene.py`, prompt `den-live-scene-2`):
 - Two or three stills, chosen newest first and spanning at most 1 s back from the newest frame (`ask.STILLS_SPAN_S`, contract 3), so the first ask after a cue shows the cue. They come from a continuously supported subject window, none from before the seated episode began (`since_mono`) or the association became confident, made into JPEGs in the detector's process (`stills.py`). The reply's gate carries that `seated_since_mono`, the instant the lighting preview's episode starts from too.
+- **When the detector's process is busy.** It takes one optional job at a time, and the live body's pass shares that slot, so a stills request can be refused. The ask then waits and asks again on each next frame, for up to 1 s (`ask.STILLS_WAIT_S`), rather than giving up its 2 s turn. Past that it's `stills_worker_busy`, with no back-off. The 2 s stills timeout runs from when the process takes the request.
 - **One bad frame** (contract 2's consumer rule): a stale snapshot or an unsafe frame is no new ask, and drops nothing. The stills, `eligibility_revision`, the earlier answer, a pending stills request and a reply in flight are kept, until the person binding (`service_run_id`, `camera_epoch`, `track_id`, `association_revision`) or the gate changes. A second person, or a gap of `PERCEPTION_S` or more, still resets.
 - Today's Lab question, with three changes:
   - "hobby" and "craft" are added;
@@ -596,6 +597,7 @@ The stream's `activity {word, close_up, verdict}` carries it, and the coordinato
 - words and numbers only: no image and no reply text;
 - each still's capture and arrival times;
 - when the ask was decided, sent and answered;
+- how long the stills request waited for the detector's process (`stills_wait_s`), and how many times it was busy (`stills_busy`);
 - the model, its token counts and the parsed answer;
 - the labels fields.
 

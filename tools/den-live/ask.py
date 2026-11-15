@@ -52,7 +52,8 @@ SETTINGS_KEYS = {"asks_on": True, "labels_to_qwen": True, "min_interval_s": 2.0,
                                         # AGENTS.md amendment that allows it is the owner's, in their own words
 SLOW_INTERVAL_S = 4.0     # the back-off monitor's step 1
 BACKOFF_S = 30.0          # after a failed ask
-STILLS_TIMEOUT_S = 2.0
+STILLS_TIMEOUT_S = 2.0   # from the request the detector's process took to its stills
+STILLS_WAIT_S = 1.0      # its one optional slot taken (the live body's pass shares it): ask again each frame this long
 POST_TIMEOUT_S = 20.0
 POOL_S = 5.0              # frames the pool keeps; the detector's process keeps about as many (stills.RING)
 UNAVAILABLE_AFTER = 3     # failed asks in a row before the health line says Qwen isn't answering
@@ -310,7 +311,7 @@ class Asker:
         self.ask_seq = 0
         self.session_id = uuid4().hex
         self.counts = {"asked": 0, "answered": 0, "invalid": 0, "unbound": 0, "failed": 0, "stills_failed": 0,
-                       "frames_unavailable": 0, "log_failed": 0}
+                       "stills_busy": 0, "frames_unavailable": 0, "log_failed": 0}
         self.jobs = queue.Queue(maxsize=16)
         detector.on_stills = self._stills
         self.halt = threading.Event()
@@ -417,20 +418,27 @@ class Asker:
                                     eligibility_revision=self.eligibility_revision)
             if self.completed is not None:
                 self._accept_completion(now)
-            pending = self.inflight
+            pending, again = self.inflight, None
             if pending is not None and pending["stage"] == "stills":
-                if now - pending["decided_mono"] >= STILLS_TIMEOUT_S:
+                if pending["admitted_mono"] is not None and now - pending["admitted_mono"] >= STILLS_TIMEOUT_S:
                     self._fail_stills(now, pending, "stills_timeout")
                 elif not self._bound(now, pending):
                     self._done(now, pending)
                     self._record(pending, outcome="not_sent", why="the evidence changed")
+                elif pending["admitted_mono"] is None:
+                    # The detector's process was busy when the stills were asked for: ask again on this frame, on any
+                    # frame (one bad frame keeps a pending request), until STILLS_WAIT_S has passed.
+                    if now - pending["decided_mono"] >= STILLS_WAIT_S:
+                        self._fail_stills(now, pending, "stills_worker_busy")
+                    else:
+                        again = pending
             trigger = self._trigger(frame, track) if eligible is not None else None
             may = (eligible is not None and self.inflight is None and now >= self.next_at and now >= self.backoff_until
                    and self._paced(now, values, level, trigger))
             request = self._prepare(now, track, occupancy, level, trigger) if may else None
             event = self._decorate(event, now, eligible is not None, why, level, crowded)
-        if request is not None:
-            self._request_stills(request)
+        if request is not None or again is not None:
+            self._request_stills(request or again)
         return event
 
     def pop_reply(self):
@@ -498,18 +506,28 @@ class Asker:
             "crowd_revision": self.crowd_revision, "occupancy": occupancy, "backoff_level": level,
             "valid_until_mono": latest.capture_mono + INFERENCE_S,
             "trigger": trigger, "pose": (self.last_pose or (None, None))[1],
+            "admitted_mono": None, "busy": 0,   # when the detector's process took the stills request; its refusals
         }
         self.inflight = request
         return request
 
     def _request_stills(self, request):
+        """Outside the lock, from observe's thread only: ask the detector's process for the stills. It takes one
+        optional job at a time and the live body's pass shares that slot, so it may say it's busy. The ask then waits,
+        and observe asks again on the next frame, for up to STILLS_WAIT_S, instead of giving up its 2 s turn."""
+        with self.lock:   # set first: the reply can come on the reader's thread before send_alone returns
+            request["admitted_mono"] = self.clock()
         try:
             admitted = self.detector.send_alone({"kind": "stills", "id": request["ask_id"], "frames": request["keys"]})
-        except Exception:
-            admitted = False
-        if admitted is False:
+        except Exception:   # the process stopped: a later frame won't help
             with self.lock:
-                self._fail_stills(self.clock(), request, "stills_worker_busy")
+                self._fail_stills(self.clock(), request, "stills_worker_stopped")
+            return
+        if admitted is False:   # nothing was queued, so no reply can have come
+            with self.lock:
+                request["admitted_mono"] = None
+                request["busy"] += 1
+                self.counts["stills_busy"] += 1
 
     def _bound(self, now, ask):
         """With the lock held: whether the ask still belongs to the current episode. It's judged on the person binding,
@@ -552,7 +570,7 @@ class Asker:
                 return
             if reply.get("stills_id") != ask["ask_id"]:
                 return
-            if now - ask["decided_mono"] >= STILLS_TIMEOUT_S:
+            if now - ask["admitted_mono"] >= STILLS_TIMEOUT_S:
                 self._fail_stills(now, ask, "stills_timeout")
                 return
             jpegs = reply.get("jpegs")
@@ -754,6 +772,10 @@ class Asker:
                 "stills": [{"frame_key": frame.key, "captured_at": frame.capture_ts,
                             "arrived_at": frame.capture_ts + (frame.arrival_mono - frame.capture_mono)} for frame in frames],
                 "decided_at": ask["decided_at"], "sent_at": ask.get("sent_at"), "answered_at": answered_at,
+                # The stills request's wait for the detector's process: times it was busy, and decision to taken.
+                "stills_busy": ask["busy"],
+                "stills_wait_s": (round(ask["admitted_mono"] - ask["decided_mono"], 3)
+                                  if ask["admitted_mono"] is not None else None),
                 "reply_s": round(answered_mono - sent_mono, 3) if answered_mono is not None and sent_mono is not None else None,
                 "picture_to_answer_s": round(answered_mono - latest.capture_mono, 3) if answered_mono is not None else None,
                 "model": model, "usage": usage, "status": None if outcome != "completed" else ("valid" if facts else "invalid"),

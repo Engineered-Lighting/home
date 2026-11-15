@@ -357,8 +357,15 @@ class OccupancyTest(unittest.TestCase):
 class FakeDetector:
     def __init__(self):
         self.on_stills, self.requests, self.answer = None, [], True
+        self.busy, self.refused, self.stopped = 0, 0, False   # busy: how many stills requests to refuse next
 
     def send_alone(self, header):
+        if self.stopped:
+            raise RuntimeError("the detector process stopped")
+        if self.busy:   # its one optional slot taken, as by the live body's pass: perceive.DetectorWorker says False
+            self.busy -= 1
+            self.refused += 1
+            return False
         self.requests.append(header)
         if self.answer and self.on_stills:
             self.on_stills({"stills_id": header["id"],
@@ -577,6 +584,79 @@ class AskTest(unittest.TestCase):
         event = self.run_for(12)
         self.assertEqual(event["health"]["qwen"]["state"], "unavailable")
         self.assertEqual(event["health"]["qwen"]["why"], "the pictures aren't being made")
+
+    def first_stills_request(self, busy=0):
+        """Frames until the first stills request; the frame it's asked on has the detector's process busy `busy`
+        times (each later frame asks again)."""
+        while not self.asker.counts["stills_busy"] and not self.detector.requests:
+            self.detector.busy = busy
+            self.tick()
+
+    def test_a_busy_detector_process_is_asked_again_on_the_next_frame(self):
+        """The live body's pass shares the process's one optional slot. A refusal waits a frame, not the 2 s turn."""
+        self.first_stills_request(busy=1)
+        decided = self.asker.inflight["decided_mono"]
+        self.assertEqual(self.asks_sent(), 0)
+        self.assertIsNotNone(self.asker.inflight, "the ask waits for the slot")
+        self.tick()
+        retried = self.clock.t
+        self.assertEqual(self.asks_sent(), 1, "asked again on the next frame")
+        self.assertEqual(self.asker.counts["stills_failed"], 0)
+        self.assertEqual(self.asker.counts["stills_busy"], 1)
+        self.tick()   # the answer is taken on the next frame, and its line written
+        line = self.log_lines()[-1]
+        self.assertEqual(line["outcome"], "completed")
+        self.assertEqual(line["stills_busy"], 1)
+        self.assertAlmostEqual(line["stills_wait_s"], retried - decided, places=3)
+        self.assertEqual(len(self.detector.requests), 1)
+
+    def test_an_ask_the_process_takes_at_once_waits_nothing(self):
+        self.first_stills_request()
+        self.tick()
+        line = self.log_lines()[-1]
+        self.assertEqual((line["stills_busy"], line["stills_wait_s"]), (0, 0.0))
+
+    def test_a_process_busy_past_the_wait_gives_the_ask_up_without_a_back_off(self):
+        self.first_stills_request(busy=100)
+        decided = self.asker.inflight["decided_mono"]
+        while self.asker.inflight is not None:
+            self.tick()
+        self.assertGreaterEqual(self.clock.t - decided, ask.STILLS_WAIT_S)
+        self.assertLess(self.clock.t - decided, ask.STILLS_WAIT_S + 0.5)
+        self.assertEqual(self.asks_sent(), 0)
+        self.assertEqual(self.asker.counts["stills_failed"], 1)
+        self.assertEqual(self.asker.backoff_until, 0.0)
+        line = self.log_lines()[-1]
+        self.assertEqual((line["outcome"], line["why"]), ("stills_failed", "stills_worker_busy"))
+        self.assertEqual(line["stills_busy"], self.detector.refused)
+        self.assertIsNone(line["stills_wait_s"])
+        self.assertGreaterEqual(self.detector.refused, 4, "asked on every frame of the wait")
+
+    def test_the_stills_timeout_runs_from_when_the_process_took_the_request(self):
+        self.detector.answer = False
+        self.first_stills_request(busy=3)
+        while not self.detector.requests:
+            self.tick()
+        taken = self.clock.t
+        while self.asker.inflight is not None:
+            self.tick()
+        self.assertGreaterEqual(self.clock.t - taken, ask.STILLS_TIMEOUT_S)
+        self.assertEqual(self.log_lines()[-1]["why"], "stills_timeout")
+
+    def test_a_stopped_process_ends_the_ask_at_once(self):
+        self.detector.stopped = True
+        while not self.asker.counts["stills_failed"]:
+            self.tick()
+        self.assertIsNone(self.asker.inflight)
+        self.assertEqual(self.log_lines()[-1]["why"], "stills_worker_stopped")
+
+    def test_the_evidence_changing_while_waiting_ends_the_ask_without_another_try(self):
+        self.first_stills_request(busy=100)
+        refused = self.detector.refused
+        self.tick(people=2)   # a second person: the binding ends
+        self.assertIsNone(self.asker.inflight)
+        self.assertEqual(self.detector.refused, refused, "no try for evidence that's gone")
+        self.assertEqual(self.log_lines()[-1]["outcome"], "not_sent")
 
     def test_the_gate_is_checked_again_before_posting(self):
         for _ in range(12):

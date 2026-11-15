@@ -17,9 +17,9 @@ register('data:text/javascript,' + encodeURIComponent(`export async function res
 const THREE = await import(threeURL);
 const { attachApartmentPeopleLayer, validPeopleEvent, PEOPLE_SCHEMA } = await import(fileUrl('home-3d/apartment-people-layer.mjs'));
 
-function fixture() {
+function fixture(options = {}) {
     const apartmentRoot = new THREE.Group(), clock = { t: 100 };
-    const layer = attachApartmentPeopleLayer({ apartmentRoot }, { now: () => clock.t, animate: false });
+    const layer = attachApartmentPeopleLayer({ apartmentRoot }, { now: () => clock.t, animate: false, ...options });
     const advance = (seconds, steps = Math.max(1, Math.round(seconds / .02))) => {
         for (let i = 0; i < steps; i++) { clock.t += seconds / steps; layer.tick(seconds / steps); }
     };
@@ -120,21 +120,19 @@ test("each marker keeps what's near it from den-live's labels, words only", () =
     assert.equal(f.layer.markers().find(m => m.track_id === 't-1').near, null);
 });
 
-test('under a live body figure the floor marker (dot, ring, arrow) steps back, and returns when the body clears', () => {
-    const f = fixture();
-    f.layer.update(f.event([f.track('trk-1', [0, 0], { heading_deg: 90 }), f.track('trk-2', [2, 0], { heading_deg: 0 })]));
-    f.advance(.02);
+test('with the den’s body feature on there is no floor marker at all, so a body gap can’t flash it back; the trail stays', () => {
+    const f = fixture({ floorMarker: false });
+    f.layer.update(f.event([f.track('trk-1', [0, 0], { heading_deg: 90 }), f.track('trk-2', [2, 0])]));
     const marker = id => f.root().getObjectByName(`person-${id}`), trail = id => f.root().getObjectByName(`trail-${id}`);
-    f.layer.setBodies(['trk-1']);
-    for (const step of [0, .02]) {
-        f.advance(step || .001);
-        assert.equal(marker('trk-1').visible, false, 'the body carries trk-1: no dot, ring or arrow');
+    for (let i = 0; i < 3; i++) {
+        f.advance(.4);
+        f.layer.update(f.event([f.track('trk-1', [0, .1 * i], { heading_deg: 90 }), f.track('trk-2', [2, 0])]));
+        for (const id of ['trk-1', 'trk-2']) assert.equal(marker(id).visible, false, `${id}: no disc, ring or arrow`);
         assert.equal(trail('trk-1').visible, true, 'the faint trail stays');
-        assert.deepEqual([marker('trk-2').visible, marker('trk-2').children[2].visible], [true, true], 'no body: trk-2 keeps its marker and arrow');
     }
-    assert.deepEqual(f.layer.markers().map(m => [m.track_id, m.dot]), [['trk-1', false], ['trk-2', true]]);
-    f.layer.setBodies([]);
-    assert.deepEqual([marker('trk-1').visible, marker('trk-1').children[2].visible], [true, true], 'the body cleared: the marker is back at once');
-    f.layer.setBodies(['', 'x'.repeat(65), null]);
-    assert.ok(f.layer.markers().every(m => m.dot), 'ids that are not track ids hide nothing');
+    assert.deepEqual(f.layer.markers().map(m => m.dot), [false, false]);
+    const plain = fixture();
+    plain.layer.update(plain.event([plain.track('trk-1', [0, 0])]));
+    plain.advance(.02);
+    assert.equal(plain.root().getObjectByName('person-trk-1').visible, true, 'without the body feature the marker shows the person');
 });

@@ -486,8 +486,11 @@ inPart(2, 'the mobile Den draws a face-free figure, and Stop holds the visible s
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.body?.layer?.points > 0, null, { timeout: 60000 });
     assert.equal((await live()).body.layer.trackId, 'authored-track');
     assert.ok((await live()).body.last_paint_age_s > 0);
-    // the body figure carries the person: no blue floor dot under it (design A); the ring stays
-    await page.waitForFunction(() => window.HomeDenLiveView.markers().length === 1 && window.HomeDenLiveView.markers()[0].dot === false, null, { timeout: 10000 });
+    // With the body feature on, the body, its label and the label's ring carry the person: the people layer's floor
+    // marker (disc, ring, arrow) is never drawn in the den, so nothing can flicker under them (design A).
+    const markerShown = () => page.evaluate(() => window.__APT_ENGINE?.apartmentRoot?.getObjectByName('person-authored-person')?.visible ?? null);
+    await page.waitForFunction(() => window.HomeDenLiveView.markers().length === 1, null, { timeout: 10000 });
+    assert.equal(await markerShown(), false, 'no floor marker under the body');
     assert.equal(fake.bodies.size, 1);
     assert.equal(fake.streams.size, 1);
     fake.bodyStreaming = false;
@@ -496,7 +499,8 @@ inPart(2, 'the mobile Den draws a face-free figure, and Stop holds the visible s
       const status = window.HomeDenLiveView?.status();
       return status?.body?.reason === 'ambiguous' && status.body.layer?.points === 0 && status.layer?.tracks === 1;
     });
-    assert.equal((await page.evaluate(() => window.HomeDenLiveView.markers()))[0].dot, true, 'no body: the dot is back');
+    await delay(600);   // a few frames into the gap
+    assert.equal(await markerShown(), false, 'a gap in the body frames never brings the floor marker back');
     fake.bodyStreaming = true;
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.body?.layer?.points > 0);
     await page.waitForFunction(() => window.HomeDenLiveView?.status()?.coordinator?.kind === 'running');

@@ -131,10 +131,16 @@
       { id: "frame-pose", label: "2D pose on frame", available: false, reason: "Shown with the analyzed frame in Camera · JEV" },
       { id: "follow", label: "Follow", available: false, reason: "Needs continuous tracking · planned" },
     ];
+    /* The den's labelled surfaces (home-den-labels-view.mjs owns both rows): listed only where that view is mounted. */
+    const room = seams.surfaces ? [{ id: "room", title: "Room", rows: [
+      bound("surfaces", { label: "Labelled surfaces", ariaLabel: "Show labelled surfaces layer" }, "The den's labels aren't loaded"),
+      bound("surface-names", { label: "All surface names", detail: "else on hover" }, "The den's labels aren't loaded"),
+    ] }] : [];
     return [
       { id: "guide", title: "Guide", rows: [wide
         ? { id: "legend", label: "Legend", detail: "what the room's marks mean", available: true, value: legend, set: (value) => setChoice("legend", value) }
         : { id: "legend", label: "Legend", available: false, reason: `Shown in windows ${LEGEND_MIN_WIDTH} px and wider; Help lists the marks` }] },
+      ...room,
       { id: "light", title: "Light", rows: [
         fixtures,
         bound("pools", { label: "Light pools", detail: "where light lands" },

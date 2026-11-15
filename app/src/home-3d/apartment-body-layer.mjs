@@ -324,7 +324,8 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         snapshot() {
             const B = now0.B, objectPoints = [];
             for (let i = 0; i < B.n; i += 3) if (B.kind[i] === KIND.heldObject && B.alpha[i] > 0.3) objectPoints.push([B.pos[i * 3], B.pos[i * 3 + 1], B.pos[i * 3 + 2]]);
-            const held = objectPoints.length > 8 ? object : null;
+            // A located object always gets its marker: unnamed (the labels' "Held object" pill) when the frame names none.
+            const held = objectPoints.length > 8 ? object ?? { label: null, confidence: null } : null;
             if (measuredOnly) return { trackId, presence, centroid: centroid && centroid.slice(), torso, joints: {}, objectPoints, object: held };
             return { trackId, presence, centroid: centroid && centroid.slice(), joints: { ...joints }, speed, objectPoints, object: held };
         },

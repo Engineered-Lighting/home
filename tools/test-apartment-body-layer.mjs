@@ -151,6 +151,10 @@ test('the measured figure shows what the person holds in the accent blue, with i
     plain.layer.updateMeasured(decodeLiveBodyEvent(measuredBodyEvent()).decoded);
     plain.advance(0.01);
     assert.equal(plain.layer.snapshot().object, null, 'no held object: no tag');
+    const unnamed = fixture({ measuredOnly: true, reducedMotion: true });
+    unnamed.layer.updateMeasured(decodeLiveBodyEvent({ ...measuredBodyEvent({ held: true }), object: null }).decoded);
+    unnamed.advance(0.01);
+    assert.deepEqual(unnamed.layer.snapshot().object, { label: null, confidence: null }, 'located but unnamed: still its marker');
     assert.deepEqual(plain.layer.snapshot().objectPoints, []);
     f.layer.clear();
     assert.equal(f.layer.snapshot().object, null);

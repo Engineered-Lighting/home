@@ -967,18 +967,24 @@ class SharedSlot:
     pass is submitted first when it's due (Perceiver.finish, before Loop._publish runs the ask) and answers before the
     next frame; BodyLink, refused, sends on a later frame. The stills are answered at once, before the next row."""
 
+    EPSILON_S = 1e-6   # a frame exactly body_s after the last pass is due, whatever float steps the clock took
+
     def __init__(self, clock, body_s):
         self.worker, self.clock, self.body_s = slot_worker(clock), clock, body_s
         self.on_stills, self.requests, self.last_body = None, [], None
         self.alone_last, self.alone = None, 0   # the body's passes with no ask: what it's owed
-        self.body_frames = 0
+        self.frames = self.body_frames = 0
+
+    def due(self, last):
+        return last is None or self.clock() - last >= self.body_s - self.EPSILON_S
 
     def frame(self):
-        if self.alone_last is None or self.clock() - self.alone_last >= self.body_s:
+        self.frames += 1
+        if self.due(self.alone_last):
             self.alone_last, self.alone = self.clock(), self.alone + 1
         if self.worker.optional is not None and self.worker.optional[0] == "body":
             self.worker.optional = None   # the last frame's body pass answered
-        if self.last_body is None or self.clock() - self.last_body >= self.body_s:
+        if self.due(self.last_body):
             if self.worker.send_alone({"kind": "body"}):
                 self.worker.writes.get_nowait()
                 self.last_body = self.clock()
@@ -1002,8 +1008,10 @@ class SharedSlot:
 class BodyEveryFrameTest(unittest.TestCase):
     """With the body's pass due on every frame it takes the slot ahead of the ask each time. The asks still go out."""
 
-    def setUp(self):
+    def setUp(self, start=None):
         AskTest.setUp(self)
+        if start is not None:   # the clock from another start: the association, an hour old, moves with it
+            self.clock.t, self.since = start, start - 60.0
         self.detector = SharedSlot(self.clock, 0.3)
         self.asker.detector, self.detector.on_stills = self.detector, self.asker._stills
         observe = self.asker.observe
@@ -1015,12 +1023,14 @@ class BodyEveryFrameTest(unittest.TestCase):
 
     tick, drain, log_lines, asks_sent = AskTest.tick, AskTest.drain, AskTest.log_lines, AskTest.asks_sent
 
-    def check(self, body_s, spacings):
+    def check(self, body_s, spacings, *, every_frame=True):
         self.detector.body_s = body_s
         start, n = self.clock.t, 0
         while self.clock.t - start < 60.0:
             self.tick(seconds=spacings[n % len(spacings)])
             n += 1
+        if every_frame:   # the case this test is for: with no ask, the body's pass would go out on every frame
+            self.assertEqual(self.detector.alone, self.detector.frames)
         outcomes = [line["outcome"] for line in self.log_lines()]
         turn = 2.0 + 2 * max(spacings)   # the 2 s turn, the frame it's decided on and the one it's taken on
         self.assertNotIn("stills_failed", outcomes)
@@ -1034,7 +1044,13 @@ class BodyEveryFrameTest(unittest.TestCase):
         self.check(0.3, [0.32, 0.41, 0.55, 0.38, 0.47, 0.35])
 
     def test_body_every_0_3_s_with_frames_0_24_s_apart(self):
-        self.check(0.3, [0.24])
+        self.check(0.3, [0.24], every_frame=False)   # today's LA: the body every other frame
+
+    def test_the_every_frame_cases_hold_from_any_clock_start(self):
+        for start in (0.0, 1000.0, 123456.789):
+            with self.subTest(start=start):
+                self.setUp(start)
+                self.check(0.2, [0.2])
 
 
 class StillsTest(unittest.TestCase):

@@ -43,6 +43,13 @@ WRISTS = ("left_wrist", "right_wrist")
 WRIST_REACH_M, OBJECT_MIN_PX, OBJECT_MAX_POINTS = 0.32, 40, 4096
 HELD_FRAMES, HELD_OF = 2, 3
 MAX_POLYGON = 256
+# When the seg pass names nothing at the hand (a phone is about 20 px in the RGB frame, too small for it), what the hand
+# holds by depth alone, as den-live had it on 2026-11-11 (1a4268f7): measured pixels within WRIST_REACH_M of a wrist
+# whose elbow is measured too, that the body's own capsules don't explain (OBJECT_MARGIN_M beyond them), the largest
+# 4-connected region of at least DEPTH_OBJECT_MIN_M2 (phone-sized), while the hands move slower than HAND_STILL_MPS. It
+# holds on the same 2-of-3 rule, unnamed: kind 5 points, and object null for Home's "Held object" marker.
+OBJECT_MARGIN_M, DEPTH_OBJECT_MIN_M2, HAND_STILL_MPS = 0.025, 0.006, 0.3
+UNNAMED = ""   # the hold rule's key for an object held by depth alone
 
 
 def _finite(value):
@@ -179,6 +186,7 @@ class BodyMaker:
         self.np, self.cv2 = np, cv2
         self.rgb = _rgb_view(np, rgb)   # the RGB camera, for the held object's mask; None leaves it off
         self.held_seen, self.held_track = deque(maxlen=HELD_OF), None
+        self.hand, self.hand_speed = None, 0.0   # the last frame's wrists and the time, and their smoothed speed
         self.fx, self.fy, self.cx, self.cy = (float(x) for x in left_k[:4])
         self.R, self.t = np.asarray(room_from_left[0], float), np.asarray(room_from_left[1], float)
         if (not all(math.isfinite(x) for x in (self.fx, self.fy, self.cx, self.cy))
@@ -307,9 +315,10 @@ class BodyMaker:
             rows, cols = np.mgrid[v0:v1, u0:u1]
             depth[cut_side(cols, rows, cut)] = 0
         return self._person(depth, bg, v0, u0, joints, torso, centre, person, masked=masked,
-                            ceiling=None if cut is None else cut[3], held=held)
+                            ceiling=None if cut is None else cut[3], held=held, now=now)
 
-    def _person(self, depth, bg, v0, u0, joints, torso, centre, person, *, masked=None, ceiling=None, held=None):
+    def _person(self, depth, bg, v0, u0, joints, torso, centre, person, *, masked=None, ceiling=None, held=None,
+                now=0.0):
         np, cv2 = self.np, self.cv2
         valid = (depth >= NEAR_MM) & (depth <= FAR_MM) & (bg > 0)
         delta = bg - depth
@@ -345,11 +354,16 @@ class BodyMaker:
         if holding:
             if person["track_id"] != self.held_track:
                 self.held_seen.clear()
-                self.held_track = person["track_id"]
+                self.held_track, self.hand, self.hand_speed = person["track_id"], None, 0.0
+            still = self._hands_still(joints, now)
             held_mask, instance = self._held(depth, valid, delta, component, joints, held, v0, u0)
-            self.held_seen.append(instance["label"] if instance else None)
-            if instance is not None and self.held_seen.count(instance["label"]) >= HELD_FRAMES:
-                held_now = instance
+            key = instance["label"] if instance else None
+            if instance is None and still:   # the seg pass named nothing here: what the hand holds by depth alone
+                held_mask = self._depth_held(depth, valid, delta, component, joints, v0, u0)
+                key = UNNAMED if held_mask is not None else None
+            self.held_seen.append(key)
+            if key is not None and self.held_seen.count(key) >= HELD_FRAMES:
+                held_now = instance   # None when unnamed: kind 5 points with object null
                 component = component & ~held_mask   # the object's pixels are its own points, not the body's
             else:
                 held_mask = None
@@ -420,6 +434,71 @@ class BodyMaker:
             frame["object"] = None if held_now is None else {
                 "label": held_now["label"], "confidence": round(float(held_now["score"]), 3), "source": "detector"}
         return frame, None
+
+    def _hands_still(self, joints, now):
+        """True while the measured wrists move slower than HAND_STILL_MPS (smoothed over frames, as on 2026-11-11)."""
+        np = self.np
+        wrists = {name: joints[name] for name in WRISTS if name in joints}
+        if self.hand is not None and now > self.hand[1]:
+            moved = [float(np.linalg.norm(point - self.hand[0][name])) for name, point in wrists.items() if name in self.hand[0]]
+            if moved:
+                self.hand_speed += (max(moved) / (now - self.hand[1]) - self.hand_speed) * 0.5
+        self.hand = (wrists, now)
+        return self.hand_speed < HAND_STILL_MPS
+
+    def _capsules(self, joints):
+        """The body's own volume from its measured joints, (a, b, radius) in metres: what a held object isn't."""
+        np = self.np
+
+        def mid(a, b):
+            return (joints[a] + joints[b]) / 2 if a in joints and b in joints else None
+        chest, pelvis = mid(*SHOULDERS), mid(*HIPS)
+        capsules = []
+        if chest is not None and pelvis is not None:
+            up = chest - pelvis
+            up = up / max(float(np.linalg.norm(up)), 1e-9)
+            capsules += [(pelvis, chest, 0.17), (chest, chest + up * 0.25, 0.11)]   # the torso, then the neck and head
+        for side in ("left", "right"):
+            shoulder, elbow, wrist, hip, knee, ankle = (joints.get(side + "_" + part) for part in
+                                                        ("shoulder", "elbow", "wrist", "hip", "knee", "ankle"))
+            if shoulder is not None and elbow is not None:
+                capsules.append((shoulder, elbow, 0.06))
+            if elbow is not None and wrist is not None:
+                along = (wrist - elbow) / max(float(np.linalg.norm(wrist - elbow)), 1e-9)
+                capsules += [(elbow, wrist, 0.045), (wrist, wrist + along * 0.09, 0.035)]   # the forearm, then the hand
+            if hip is not None and knee is not None:
+                capsules.append((hip, knee, 0.095))
+            if knee is not None and ankle is not None:
+                capsules.append((knee, ankle, 0.065))
+        return capsules
+
+    def _depth_held(self, depth, valid, delta, component, joints, v0, u0):
+        """What the hand holds by depth alone (the module note), as a pixel mask, or None."""
+        np, cv2 = self.np, self.cv2
+        # A wrist counts only with its elbow: without the forearm's direction the hand itself can't be explained.
+        wrists = [joints[side + "_wrist"] for side in ("left", "right")
+                  if side + "_wrist" in joints and side + "_elbow" in joints]
+        if not wrists:
+            return None
+        rows, cols = np.nonzero(component | (valid & (delta >= NEAR_LIMB_MM)))
+        camera = self._camera_points(depth[rows, cols], rows + v0, cols + u0)
+        pick = np.min([np.linalg.norm(camera - wrist, axis=1) for wrist in wrists], axis=0) <= WRIST_REACH_M
+        for a, b, radius in self._capsules(joints):
+            pick &= _seg_dist(np, camera, a, b) >= radius + OBJECT_MARGIN_M
+        if not pick.any():
+            return None
+        candidates = np.zeros(depth.shape, np.uint8)
+        candidates[rows[pick], cols[pick]] = 1
+        count, labels, stats, _ = cv2.connectedComponentsWithStats(candidates, connectivity=4)
+        if count <= 1:
+            return None
+        region = labels == 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+        z = depth[region].astype(float)
+        region &= np.abs(depth.astype(float) - np.median(z)) <= EDGE_MM   # its own surface, as the seg path keeps
+        metres = depth[region] / 1000.0
+        if float(np.sum((metres / self.fx) ** 2)) < DEPTH_OBJECT_MIN_M2:
+            return None
+        return region
 
     def _held(self, depth, valid, delta, component, joints, held, v0, u0):
         """(this frame's held-object pixel mask, its instance) or (None, None): the person's own pixels, and anything

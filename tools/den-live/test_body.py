@@ -500,6 +500,83 @@ class HeldObjectTest(unittest.TestCase):
             B.BodyMaker(np, cv2, left_k=(FX, FY, CX, CY), room_from_left=(R, T), rgb=dict(RGB, k=[0, 0, 0, 0, 0]))
 
 
+def phone_in_hand(phone=True):
+    """A standing person whose left forearm, wrist and knees are measured, holding a phone just past the hand (or not)."""
+    bg, depth, head, bounds, joints = scene("standing")
+    depth = depth.copy()
+    c = 292
+    if phone:
+        depth[170:194, c + 92:c + 108] = 1950                  # 8 by 12 cm, 8 cm nearer than the hand
+    joints = {**joints, "left_elbow": [world(c + 62, 198, 2030).tolist(), "supported"],
+              "left_wrist": [world(c + 88, 198, 2030).tolist(), "supported"],
+              "left_knee": [world(c + 13, 300, 2000).tolist(), "supported"],
+              "right_knee": [world(c + 50, 300, 2000).tolist(), "supported"]}
+    return bg, depth, head, bounds, joints
+
+
+class DepthHeldTest(unittest.TestCase):
+    """What the hand holds by depth alone, when the seg pass names nothing there (a phone is too small for it)."""
+    maker = HeldObjectTest.maker
+    learned = BodyTest.learned
+    held_frame = HeldObjectTest.held_frame
+
+    def kinds(self, frame):
+        return decode(frame)["kind"].ravel()
+
+    def test_a_held_phone_with_no_seg_instance_is_held_unnamed(self):
+        fixture = phone_in_hand()
+        maker = self.learned(fixture)
+        first, why = self.held_frame(maker, fixture, [])
+        self.assertIsNone(why)
+        self.assertFalse((self.kinds(first) == B.KIND_OBJECT).any(), "one frame isn't a hold yet")
+        second, _ = self.held_frame(maker, fixture, [])
+        self.assertIsNone(second["object"], "unnamed: Home marks it as a held object")
+        points = decode(second)
+        held = points["kind"].ravel() == B.KIND_OBJECT
+        self.assertGreater(int(held.sum()), 10)
+        rows, cols = np.divmod(points["key"].ravel(), B.WIDTH)
+        self.assertTrue(((rows[held] >= 170) & (rows[held] < 194) & (cols[held] >= 384) & (cols[held] < 400)).all(),
+                        "only the phone's own pixels")
+
+    def test_an_empty_hand_holds_nothing(self):
+        fixture = phone_in_hand(phone=False)
+        maker = self.learned(fixture)
+        for _ in range(3):
+            frame, why = self.held_frame(maker, fixture, [])
+            self.assertIsNone(why)
+            self.assertIsNone(frame["object"])
+            self.assertFalse((self.kinds(frame) == B.KIND_OBJECT).any())
+
+    def test_moving_hands_hold_nothing_by_depth(self):
+        fixture = phone_in_hand()
+        maker = self.learned(fixture)
+        bg, depth, head, bounds, joints = fixture
+        for step in range(3):
+            moved = {**joints, "left_wrist": [(np.asarray(joints["left_wrist"][0]) + [0, 0, 0.2 * (step % 2)]).tolist(),
+                                               "supported"]}
+            person = dict(subject((bg, depth, head, bounds, moved)), track_id="fixture-track")
+            frame, _ = maker.step(depth, observation="person", person=person, now=20 + step * 0.2, frame_key="fixture-7",
+                                  binding=BINDING, held=[])
+            self.assertFalse((self.kinds(frame) == B.KIND_OBJECT).any(), "a hand moving 1 m/s isn't holding still")
+
+    def test_a_seg_named_object_comes_first(self):
+        fixture = phone_in_hand()
+        maker = self.learned(fixture)
+        c = 292
+        phone = {"label": "cell phone", "score": 0.8, "polygon": [[c + 90, 168], [c + 110, 168], [c + 110, 196], [c + 90, 196]]}
+        self.held_frame(maker, fixture, [phone])
+        frame, _ = self.held_frame(maker, fixture, [phone])
+        self.assertEqual(frame["object"], {"label": "cell phone", "confidence": 0.8, "source": "detector"})
+
+    def test_with_the_pass_off_nothing_is_held_by_depth_either(self):
+        fixture = phone_in_hand()
+        maker = self.learned(fixture)
+        for _ in range(3):
+            frame, _ = self.held_frame(maker, fixture, None)
+            self.assertNotIn("object", frame)
+            self.assertFalse((self.kinds(frame) != 0).any())
+
+
 class ChannelTest(unittest.TestCase):
     def test_reply_binds_request_frame_and_calibration_and_rebind_drops_background(self):
         ch = B.BodyChannel()

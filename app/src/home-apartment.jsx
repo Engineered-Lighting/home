@@ -859,6 +859,45 @@ function aptSettleWithin(task, timeoutMs, signal) {
   });
 }
 
+/* A new interior engine's scan (its point cloud) on a cold load. It never gives
+ * up while bytes keep arriving: the den's 11.4 MB cloud can take far longer
+ * than a handoff's 4 s on a slow link (2026-11-14: a fresh device sat on "the
+ * interior could not be loaded"). It gives up only after APT_SCAN_STALL_MS with
+ * no progress at all. Resolves { status: "settled" | "failed" | "stalled" |
+ * "cancelled", error? }; onProgress gets the engine's own progress events. */
+const APT_SCAN_STALL_MS = 20000;
+function aptAwaitScan(engine, { isCurrent = () => true, onProgress = () => {}, stallMs = APT_SCAN_STALL_MS,
+  pollMs = 500, now = () => Date.now(), later = (fn, ms) => setTimeout(fn, ms), cancel = (id) => clearTimeout(id) } = {}) {
+  return new Promise((resolve) => {
+    let done = false, timer = null, off = null, lastProgressAt = now();
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      if (timer !== null) cancel(timer);
+      try { off?.(); } catch (_) { /* the engine may be gone */ }
+      resolve(result);
+    };
+    try {
+      off = engine.on?.("progress", (progress) => {
+        lastProgressAt = now();
+        try { onProgress(progress); } catch (_) { /* a display never stops the load */ }
+      });
+    } catch (_) { off = null; }
+    const tick = () => {
+      timer = null;
+      if (done) return;
+      if (!isCurrent()) { finish({ status: "cancelled" }); return; }
+      if (now() - lastProgressAt >= stallMs) { finish({ status: "stalled" }); return; }
+      timer = later(tick, pollMs);
+    };
+    timer = later(tick, pollMs);
+    Promise.resolve(engine.pointsPromise).then(
+      () => finish({ status: "settled" }),
+      (error) => finish({ status: "failed", error }),
+    );
+  });
+}
+
 /* A staged provider may become visible only while the coordinator intent that
  * asked for it still owns preparation for the same renderer/site revision.
  * Keep the predicate pure: the seam harness exercises every invalidation axis
@@ -4814,27 +4853,45 @@ function HomeApartmentLiveView({ open, onClose, endpoint, token, sim, connection
       await bindInteriorEngine(oldEngine, contentIsCurrent);
       return contentIsCurrent();
     }
-    const canvas = document.createElement("canvas");
-    canvas.style.cssText = "display:block;width:100%;height:100%;";
+    const newCanvas = () => {
+      const element = document.createElement("canvas");
+      element.style.cssText = "display:block;width:100%;height:100%;";
+      return element;
+    };
+    let canvas = newCanvas();
     const module = await window.Home3D.ready;
     if (!module || !contentIsCurrent()) return false;
     let next = null;
     let adopted = false;
     const pending = { engine: null, cancelled: false, controller: new AbortController() };
     pendingInteriorRef.current = pending;
+    const live = () => !pending.cancelled && contentIsCurrent();
     try {
-      next = await module.createEngine({ canvas, hostEl: hostRef.current, sim: simActive, siteId,
-        contentRevision: revision === "legacy" ? null : revision,
-        signal: pending.controller.signal,
-        performanceController: oldEngine?.performanceController });
-      next.contentRevision = revision;
-      next.workspaceScope = preparedScope;
-      pending.engine = next;
-      if (pending.cancelled || !contentIsCurrent()) return false;
-      next.setRunning(false);
-      next.setSize(hostRef.current?.clientWidth || 1, hostRef.current?.clientHeight || 1);
-      const loaded = await aptSettleWithin(next.pointsPromise, APT_HANDOFF_ENDPOINT_BUDGET_MS);
-      if (loaded.status !== "settled" || pending.cancelled || !contentIsCurrent()) return false;
+      // The scan loads for as long as its bytes keep arriving, with the room's
+      // progress on screen. A real failure (an error, or no bytes for
+      // APT_SCAN_STALL_MS) gets one fresh engine before the room shows Retry.
+      for (let attempt = 0; ; attempt++) {
+        next = await module.createEngine({ canvas, hostEl: hostRef.current, sim: simActive, siteId,
+          contentRevision: revision === "legacy" ? null : revision,
+          signal: pending.controller.signal,
+          performanceController: oldEngine?.performanceController });
+        next.contentRevision = revision;
+        next.workspaceScope = preparedScope;
+        pending.engine = next;
+        if (!live()) return false;
+        next.setRunning(false);
+        next.setSize(hostRef.current?.clientWidth || 1, hostRef.current?.clientHeight || 1);
+        setProgress({ loaded: 0, total: 0 });
+        const loaded = await aptAwaitScan(next, { isCurrent: live, onProgress: (progress) => { if (live()) setProgress({ ...progress }); } });
+        if (!live()) return false;
+        if (loaded.status === "settled") break;
+        if (attempt >= 1) return false;
+        console.warn(`[home-apartment] the ${siteId} scan ${loaded.status === "stalled" ? "stalled" : "failed"}; loading it once more`,
+          loaded.error || "");
+        next.dispose?.(); canvas.remove();
+        next = null; pending.engine = null;
+        canvas = newCanvas();
+      }
       // The complete world retains ownership while the new scan is installed.
       // No model or live-control state from the previous home is presented.
       detachRef.current?.();

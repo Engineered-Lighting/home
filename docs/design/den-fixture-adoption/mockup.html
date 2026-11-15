@@ -276,7 +276,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     <section>
       <h2>What stays off</h2>
       <ul>
-        <li>Adopting needs no motion and no lit spot. The socket ends <b>adopted · virtual until the go</b>.</li>
+        <li>Adopting needs no motion and no lit spot. The socket ends <b>virtual</b> until its go.</li>
         <li>The bench comes first, before the fixture goes up. Test moves then wait for the transport (your go) and the socket's own switch, which den-live's sender enforces.</li>
         <li>The spot lights only after its aim check. Until a fixture is live, its room light stands in for the bulb it replaced.</li>
         <li>Stop works everywhere. Resume is always your press.</li>
@@ -379,10 +379,11 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     if (id === "F3" && S.adopted) {
       if (S.f3 === "offline") return { text: "offline", cls: "attn" };
       if (S.f3 === "fault") return { text: "fault", cls: "attn" };
-      if (S.f3 === "recheck") return { text: "aim check out of date", cls: "attn" };
+      if (S.f3 === "recheck") return { text: "new profile · record it", cls: "attn" };
       if (S.f3 === "wrongboard") return { text: "not its board", cls: "attn" };
-      if (S.go.physical === "on") return liveLitNow() ? { text: "live", cls: "live" } : { text: "on · dark", cls: "" };
-      if (S.go.physical === "tests") return { text: "tests", cls: "" };
+      if (S.go.physical === "on") return liveLitNow() ? { text: "live", cls: "live" } : { text: S.go.aim === "outofdate" ? "on · aim check out of date" : "on · moving dark", cls: "" };
+      if (S.go.physical === "tests") return { text: "tests · moves dark", cls: "" };
+      if (S.go.aim === "outofdate") return { text: "virtual · aim check out of date", cls: "attn" };
     }
     return { text: "virtual", cls: "" };
   }
@@ -551,7 +552,8 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
   function renderControls() {
     const { k, r, rehearsing } = plan();
     const nR = IDS.filter(id => k[id] === "robotic").length, nH = IDS.filter(id => k[id] === "hue").length;
-    const anyVirtual = IDS.some(id => k[id] === "robotic" && !(id === "F3" && liveLitNow()));
+    const anyVirtual = !rehearsing && IDS.some(id => k[id] === "robotic" && !(id === "F3" && S.adopted && S.go.physical !== "off"));
+    const movingDark = !rehearsing && S.adopted && k.F3 === "robotic" && S.go.physical !== "off" && !liveLitNow();
     const rows = IDS.map(id => {
       const tag = tagFor(id, k, rehearsing);
       const kindWord = k[id] === "hue" ? "Hue" : k[id] === "calibrating" ? "Robotic · calibrating" : "Robotic";
@@ -560,7 +562,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
         <span class="right">${tag ? `<span class="badge ${tag.cls === "attn" ? "attn" : tag.cls === "live" ? "ok" : tag.text === "virtual" ? "virtual" : ""}">${tag.text}</span>` : ""}</span></button></li>`;
     }).join("");
     return `<div class="head"><div class="grow"><h2>Den lights</h2><p class="sub">${rehearsing ? "Rehearsing all four" : `${nR} robotic · ${nH} Hue`}${k.F3 === "calibrating" ? " · F3 mid-swap" : ""}</p></div>
-      <div class="badges">${anyVirtual ? `<span class="badge virtual">Virtual until the go</span>` : ""}</div></div>
+      <div class="badges">${anyVirtual ? `<span class="badge virtual">Virtual until the go</span>` : ""}${movingDark ? `<span class="badge attn">Moving dark</span>` : ""}</div></div>
       ${tabsHtml()}
       ${S.newFound && !S.flow ? `<div class="callout ice"><b>Board 2 joined Home Assistant.</b><span class="meta">It isn't in a socket yet.</span><div class="actions"><button class="btn primary" data-act="startFlow">Adopt it</button></div></div>` : ""}
       <section class="section"><h4>Sockets</h4><ul class="rows">${rows}</ul>
@@ -601,10 +603,12 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     const fallbackBulb = IDS.find(id => k[id] === "hue" && r[id]?.role === "reading light");
     if (fallbackBulb) why.push(`${fallbackBulb} is the reading light: the bulb behind you`);
     if (rehearsing) why.push("Rehearsing: den-live sends nothing to the real fixtures");
-    else if (nR && !liveLitNow()) why.push("The bulbs plan as if no spot serves: the robotic sockets are virtual until the go");
+    else if (nR && !liveLitNow()) why.push("The real bulbs plan as if no spot serves: no robotic socket is live yet");
+    const realF3 = !rehearsing && S.adopted && k.F3 === "robotic" && S.go.physical !== "off";
+    const actuation = realF3 ? (liveLitNow() ? "Moving F3; the other spots in Home" : "Moving F3 dark; the other spots in Home") : "Moving the virtual spots in Home";
     return `<div class="head"><div class="grow"><h2>Lighting coordinator</h2><p class="sub">On · Reading · ${rehearsing ? "rehearsing all four" : `${nR} robotic, ${4 - nR} Hue`}</p></div></div>
       ${tabsHtml()}
-      <p class="meta">Moving the virtual spots in Home</p>
+      <p class="meta">${actuation}</p>
       <section class="section"><h4>Sockets</h4><ul class="rows" style="gap:8px">${lines}</ul>
         ${nR ? `<p class="meta">Assumed for ${IDS.filter(id => k[id] === "robotic").join(", ")}: beam 20°, light output</p>` : ""}</section>
       <section class="section"><h4>Why</h4><ul class="rows" style="gap:4px">${why.map(l => `<li class="sub">${esc(l)}</li>`).join("")}</ul>
@@ -643,16 +647,18 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     html += `<section class="section"><div class="actions"><button class="btn small" data-act="takeDown">Take it down</button><span class="meta">Back to a bulb: the checklist in reverse.</span></div></section>${toastHtml()}`;
     return html;
   }
-  const STATES = [["virtual", "Adopted"], ["held", "In your hands"], ["stopped", "Stopped"], ["offline", "Offline"], ["fault", "Fault"], ["recheck", "Re-commissioned"], ["wrongboard", "Not its board"]];
+  const STATES = [["virtual", "Normal"], ["held", "In your hands"], ["stopped", "Stopped"], ["offline", "Offline"], ["fault", "Fault"], ["recheck", "Re-commissioned"], ["wrongboard", "Not its board"]];
   function stateSection() {
     const words = {
-      virtual: ["Adopted · virtual until the go", "The coordinator plans F3 and Home draws it. Nothing that moves it or lights its spot is sent. Its room light stands in for the Reading bulb.", ""],
+      virtual: ({ off: ["Virtual until its go", "The coordinator plans F3 and Home draws it. Nothing that moves it or lights its spot is sent. Its room light stands in for the Reading bulb.", ""],
+        tests: ["Tests · moves dark", "Only your Go live moves reach it. The coordinator still plans it virtually.", ""],
+        on: liveLitNow() ? ["Live", "The coordinator drives F3 and may light it.", ""] : ["On · moving dark", "The coordinator drives F3 dark until its aim check passes. The real bulbs still plan as if it can't serve.", ""] })[S.go.physical],
       held: ["In your hands", "You changed its spot. The coordinator passes it by and learns from it.", `<button class="btn small" data-act="f3" data-v="virtual">Return to auto</button>`],
       stopped: ["Stopped · the spot is dark", "Stop survives a reboot. Its room light is untouched.", `<button class="btn small" data-act="f3" data-v="virtual">Resume</button><span class="meta">Always your press.</span>`],
       offline: ["Offline since 21:40 · check its power", "It rejoins by itself. The other sockets cover its light now.", `<button class="btn small" data-act="f3" data-v="virtual">Reconnect to F3</button>`],
       fault: ["Fault: a motion fault · dark and holding", "Check it, then Resume. A light fault needs a power cycle; anything else, a bench visit.", `<button class="btn small" data-act="f3" data-v="virtual">Resume</button>`],
-      recheck: ["Aim check out of date", "den-live saw a new profile (re-commissioned) and sent it nothing but Stop. Home re-read the profile; F3 waits at tests until the aim check passes again.", ""],
-      wrongboard: ["Not the board adopted here", "den-live checked F3's board before sending, and its number or profile doesn't match the adoption. Only Stop goes to it.", `<button class="btn small" data-act="f3" data-v="virtual">Reconnect to F3</button>`],
+      recheck: ["New profile from the bench", "Same board, new profile: it was re-commissioned. den-live sends it only Stop until you record it. Recording it marks the aim check out of date; F3's switch is untouched.", `<button class="btn small primary" data-act="recordProfile">Record it</button>`],
+      wrongboard: ["F3's board isn't the one adopted here", "A different board number answered for F3. Only Stop goes to it. Take it down and adopt the right one.", ""],
     }[S.f3];
     return `<section class="section"><div class="callout ${["offline", "fault", "recheck", "wrongboard"].includes(S.f3) ? "attn" : ""}"><b>${words[0]}</b><span class="meta">${words[1]}</span>${words[2] ? `<div class="actions">${words[2]}</div>` : ""}</div>
       <div class="actions"><span class="meta">Mockup: try a state</span><div class="seg">${STATES.map(([v, l]) => `<button aria-pressed="${S.f3 === v}" data-act="f3" data-v="${v}">${l}</button>`).join("")}</div></div></section>`;
@@ -662,11 +668,11 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
   function goLive() {
     const g = S.go, open2 = g.preview, phys = g.physical, lit = g.transport === "lit";
     const testsDone = Object.values(g.tests).every(v => v === "pass");
-    const switchWords = { off: "Only Stop reaches it.", tests: "Your Go live presses, Stop and Resume.",
+    const switchWords = { off: "Only Stop reaches it. Your first hold here is F3's go.", tests: "Your Go live presses, Stop and Resume.",
       on: g.aim === "passed" && lit ? "The coordinator drives it, lit." : "The coordinator drives it, dark until its aim check passes." }[phys];
     let h = `<section class="section"><h3>Go live</h3><p class="meta">Three locks. Nothing moves F3 or lights its spot until they're open, and its spot lights only after its aim check.</p><ol class="locks">
       <li data-open="true"><b>1 · The bench, for board 2</b><span class="lockstate">Record valid ✓ · sittings 3 and 4 dated ✓</span></li>
-      <li data-open="${open2}"><b>2 · The transport</b><span class="lockstate">${open2 ? `On · ${lit ? "lit" : "dark"} · your go` : "Off · waits for your go"}</span></li>
+      <li data-open="${open2}"><b>2 · The transport, opened once</b><span class="lockstate">${open2 ? `On · ${lit ? "lit" : "dark"} · your first go` : "Off · waits for your go"}</span></li>
       <li data-open="${phys !== "off"}"><b>3 · F3's own switch</b><span class="physeg">${["off", "tests", "on"].map(v => `<span class="${phys === v ? "on" : ""}">${v}</span>`).join("")}</span><span class="meta">${switchWords}</span></li></ol>`;
     if (phys === "off") h += `<div class="actions">${holdBtn("allowTests", "Hold: allow test moves", open2)}</div>${open2 ? "" : `<p class="meta">Waits for the go. Built and shipped, disabled until then.</p>`}`;
     h += `<label class="mockopt"><input type="checkbox" data-act="goPreview" ${g.preview ? "checked" : ""}><span>Preview after the go<br>Mockup only: pretends the transport is on.</span></label>`;
@@ -690,7 +696,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     if (g.running === "aim") {
       const steps = ["Dark move to A", "Lit at rest, leased", "5 frames", "Dark move to B", "Lit at rest, leased", "5 frames"];
       h += `<ul class="checks">${steps.map((t, i) => tick(i < g.runStep ? "ok" : "wait", t, "")).join("")}</ul>`;
-    } else if (g.aim === "not_run") {
+    } else if (g.aim === "not_run" || g.aim === "outofdate") {
       h += `<div class="actions"><button class="btn primary" data-act="runAim" ${g.prep.every(Boolean) && !g.stopped ? "" : "disabled"}>Run aim check</button>
         <span class="meta">Try:</span><div class="seg">${[["pass", "Passes"], ["turned", "Turned mount"], ["spread", "Spread"], ["head", "A head near the beam"]].map(([v, l]) =>
         `<button aria-pressed="${g.aimVariant === v}" data-act="aimVariant" data-v="${v}">${l}</button>`).join("")}</div></div>`;
@@ -731,7 +737,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     const ok = g.aim === "passed";
     let words;
     if (ok) words = `<div class="callout ok"><b>Passed: 4 of 5 and 5 of 5 within · off by 3 cm</b><span class="meta">Recorded with the beam width it used (20°, assumed). A measured width entered later marks it out of date.</span></div>`;
-    else if (g.aimVariant === "turned") words = `<div class="callout attn"><b>Both landed 3° to the left: the mount is turned.</b><span class="meta">Correcting writes the yaw to the equipment record. The run waits for den-live to re-bind, then goes again.</span><div class="actions"><button class="btn small primary" data-act="fixYaw">Correct the yaw by 3°</button></div></div>`;
+    else if (g.aimVariant === "turned") words = `<div class="callout attn"><b>Both landed 3° to the left: the mount is turned.</b><span class="meta">Correcting saves the yaw in the sockets record. den-live has it at once, in a new run, and the check goes again.</span><div class="actions"><button class="btn small primary" data-act="fixYaw">Correct the yaw by 3°</button></div></div>`;
     else words = `<div class="callout attn"><b>The spot moved around: 2 of 5 within.</b><span class="meta">If it repeats, the beam width may be wrong (assumed 20°): measure it at the bench.</span><div class="actions"><button class="btn small" data-act="rerunAim">Run again</button></div></div>`;
     return `<div class="targets">${aimTarget("A", sets[0], ok)}${aimTarget("B", sets[1], ok)}</div><p class="meta">The predicted point is the cross; the dashed circle is half the beam's width at that throw. No frame is shown or leaves the server.</p>${words}`;
   }
@@ -770,7 +776,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
       <div class="actions"><button class="btn small" data-act="pulse">Pulse its room light</button><span class="meta">Low, room light only. Nothing moves; the spot stays dark.</span></div></div>`;
     else if (f.variant === "uncommissioned") card = `<div class="callout attn"><b>Not commissioned</b><span class="sub">It works as nine ordinary lights, but its spot and motion stay off. Commission it at the bench in the one app, then come back.</span><div class="actions"><button class="btn small" data-act="cancelFlow">Leave it for now</button></div></div>`;
     else if (f.variant === "noanswer") card = `<div class="callout"><b>It joined but isn't answering yet.</b><span class="sub">Asking again: 1 of 3, 5 s apart. It may still be booting.</span><div class="actions"><button class="btn small" data-act="variant" data-v="ok">Check again</button></div></div>`;
-    else if (f.variant === "paired") card = `<div class="callout ice"><b>This is F3's fixture, paired again.</b><span class="sub">Same board and MAC, a new Home Assistant device. Its profile hasn't changed.</span><div class="actions"><button class="btn small primary" data-act="reconnect">Reconnect to F3</button></div><span class="meta">Writes the new device link, so den-live's sender follows it. No re-adoption.</span></div>`;
+    else if (f.variant === "paired") card = `<div class="callout ice"><b>This is F3's fixture, paired again.</b><span class="sub">Same board and MAC, a new Home Assistant device. Its profile hasn't changed.</span><div class="actions"><button class="btn small primary" data-act="reconnect">Reconnect to F3</button></div><span class="meta">Saves the new device link in the sockets record, so den-live's sender follows it at once. No re-adoption.</span></div>`;
     else card = `<div class="callout attn"><b>Firmware update needed</b><span class="sub">Home needs firmware v2-b or later. Update it at the bench.</span></div>`;
     return `<h3>Found a fixture</h3>${card}
       <div class="actions"><span class="meta">Try:</span><div class="seg">${variants.map(([v, l]) => `<button aria-pressed="${f.variant === v}" data-act="variant" data-v="${v}">${l}</button>`).join("")}</div></div>
@@ -807,13 +813,13 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     const can = i => !t[i] && (i === 0 || t[i - 1]) && !f.wrongBulb;
     const done = i => can(i) ? `<button class="btn small" data-act="tick" data-i="${i}">Done</button>` : "";
     const line2 = t[1] ? (f.wrongBulb ? `<span class="attn-t">That was the Corner bulb: the map may be wrong.</span>` : `${esc(bulb)} · unavailable ✓`) : "Home watches Home Assistant for it to go.";
-    const power = t[4] ? (f.stoppedAtPower ? "It answered stopped. Resume it when you like; adoption goes on." : `${f.socket} answers · ready ✓`) : f.waiting ? "Waiting for it to answer…" : "";
+    const power = t[4] ? (f.stoppedAtPower ? "It answered stopped. Resume it in Home Assistant when you like; adoption goes on." : `${f.socket} answers · ready ✓`) : f.waiting ? "Waiting for it to answer…" : "";
     return `<h3>Mount it</h3><p class="sub">Your hands. Tick each line as you go.</p>
       <ul class="checks">
       ${tick(t[0] ? "ok" : "wait", "Make the socket safe", "Switch or breaker, as you do today.", done(0))}
       ${tick(t[1] ? (f.wrongBulb ? "bad" : "ok") : "wait", `Take the ${esc(bulb)} out`, line2, f.wrongBulb ? `<button class="btn small" data-act="backToSocket">Back</button>` : done(1))}
       ${tick(t[2] ? "ok" : "wait", `Point den_lighting's ${f.socket} at the fixture's room light`, "Your edit of the bulb map. Its room light stands in for the bulb until the go.", done(2))}
-      ${tick(t[3] ? "ok" : "wait", "Mount it level, front to the arrow", f.yaw ? `Front turned ${f.yaw}° from the model: written to the equipment record at adoption.` : "The arrow in the room shows its front.", can(3) ? `<span class="actions"><button class="btn small" data-act="yaw">It faces another way</button>${done(3)}</span>` : "")}
+      ${tick(t[3] ? "ok" : "wait", "Mount it level, front to the arrow", f.yaw ? `Front turned ${f.yaw}° from the model: saved with the adoption.` : "The arrow in the room shows its front.", can(3) ? `<span class="actions"><button class="btn small" data-act="yaw">It faces another way</button>${done(3)}</span>` : "")}
       ${tick(t[4] ? "ok" : "wait", "Power it on", power, f.waiting ? `<span class="spinner"></span>` : can(4) ? `<button class="btn small" data-act="power">Done</button>` : "")}
       </ul>
       ${f.swapStarted ? `<div class="callout attn"><b>Swap started.</b><span class="meta">${f.socket} is out of the coordinator's plan, and the other sockets cover its light. Home now shows what's installed.</span></div>` : ""}
@@ -867,7 +873,8 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     return `<h3>Adopt into ${f.socket}</h3>
       <dl class="kv"><dt>Socket</dt><dd>${f.socket}, replacing the ${esc(f.bulb)}</dd><dt>Name</dt><dd>${esc(f.name)}</dd><dt>Board</dt><dd>2 · build 2031 · profile 3fa2</dd>
         <dt>Bench</dt><dd>sittings 2–4 dated</dd><dt>Usable range</dt><dd>pan ±175° · tilt −90° to 85°</dd><dt>Assumed</dt><dd>beam 20°, light output</dd>
-        <dt>Writes</dt><dd>the socket (adoption store)${f.yaw ? ` · the yaw, ${f.yaw}° (equipment record)` : ""}</dd></dl>
+        <dt>Mount yaw</dt><dd>${f.yaw ? `${f.yaw}° from the model` : "as modelled"}</dd>
+        <dt>Saves</dt><dd>one change to the sockets record, in den-live's folder: the socket, its board, name and yaw</dd></dl>
       <div class="callout"><span class="sub">From now on the coordinator plans ${f.socket} as a robotic fixture, and Home draws it. <b>Nothing that moves it or lights its spot is sent until the go.</b> Until then, the real room treats ${f.socket} as a bulb socket: its room light stands in for the ${esc(f.bulb)}.</span></div>
       ${f.conflict ? `<div class="callout attn"><b>The den's setup changed while you were adopting.</b><span class="meta">Review again: your draft is kept. Nothing was retried.</span><div class="actions"><button class="btn small" data-act="reviewAgain">Review again</button></div></div>` : ""}
       <div class="actions"><button class="btn" data-act="prev">Back</button><button class="btn primary" data-act="adopt" ${f.conflict ? "disabled" : ""}>Adopt into ${f.socket}</button></div>
@@ -875,8 +882,8 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
   }
   function stepDone() {
     const f = S.flow;
-    return `<div class="callout ok"><b>${f.socket} · ${esc(f.name)} · adopted · virtual until the go</b><span class="sub">The adoption store has a new revision. den-live started a new run with it: 1 robotic, 3 Hue.</span></div>
-      <p class="sub">Next: the go opens the transport. Then ${f.socket}'s own switch, here.</p>
+    return `<div class="callout ok"><b>${f.socket} · ${esc(f.name)} · virtual</b><span class="sub">Saved. den-live had the new sockets revision at once and started a new run with it: 1 robotic, 3 Hue.</span></div>
+      <p class="sub">${S.go.preview ? `Next: ${f.socket}'s own switch, here.` : `Next: your go opens the transport. Then ${f.socket}'s own switch, here.`}</p>
       <div class="actions"><button class="btn primary" data-act="openF3">Open ${f.socket}</button><button class="btn" data-act="closeFlow">See the den</button></div>`;
   }
   // ---------- render ----------
@@ -957,7 +964,8 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
       if (f && f.swapStarted && !S.adopted) { S.flow = null; S.mix = "0+4"; S.rehearse = true; say(`Put the bulb back: ${f.socket} is a Hue socket again (a new revision).`); return; }
       S.flow = null; S.toast = ""; render();
     },
-    f3(d) { S.f3 = d.v; if (d.v === "recheck" && S.go.physical === "on") S.go.physical = "tests"; S.go.stopped = d.v === "stopped" ? S.go.stopped : false; S.toast = ""; render(); },
+    f3(d) { S.f3 = d.v; S.go.stopped = d.v === "stopped" ? S.go.stopped : false; S.toast = ""; render(); },
+    recordProfile() { S.f3 = "virtual"; if (S.go.aim === "passed") S.go.aim = "outofdate"; say("Recorded the new profile. The aim check is out of date, so F3's coordinator moves stay dark until it passes; its switch is unchanged."); },
     takeDown() { S.mix = "0+4"; S.rehearse = true; S.adopted = false; S.selected = null; S.newFound = false; S.go = freshGo(); say("F3 is back to the Reading bulb. Board 2 keeps its bench measurements in Home."); },
     goPreview() { S.go.preview = !S.go.preview; if (!S.go.preview) S.go = freshGo(); render(); },
     allowTests() { S.go.physical = "tests"; say("F3 allows your test moves. The coordinator still plans it virtually."); },
@@ -974,7 +982,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
       later(1500, () => { if (S.go !== g || g.running !== "test:" + d.k) return; g.running = ""; g.tests[d.k] = d.k === "rest" ? "ask" : "pass"; render(); });
     },
     restYes() { S.go.tests.rest = "pass"; render(); },
-    restTurned() { S.go.tests.rest = "pass"; say("Wrote the turned yaw, 10°, to the equipment record (a new revision). The aim check will confirm it."); },
+    restTurned() { S.go.tests.rest = "pass"; say("Saved the turned yaw, 10°, in the sockets record. den-live has it now; the aim check will confirm it."); },
     restLevel() { S.go.tests.rest = "level"; render(); },
     drill() { const g = S.go; g.running = "test:drill"; render(); say("Moving dark… press Stop now."); },
     prep(d) { S.go.prep[Number(d.i)] = true; render(); },
@@ -987,7 +995,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
         render(); later(650, stepOn); };
       later(650, stepOn);
     },
-    fixYaw() { S.go.aimVariant = "pass"; S.go.aim = "not_run"; S.toast = "Wrote the yaw, 3°, to the equipment record. den-live re-bound; running again."; A.runAim(); },
+    fixYaw() { S.go.aimVariant = "pass"; S.go.aim = "not_run"; S.toast = "Saved the yaw, 3°, in the sockets record. den-live started a new run with it; running again."; A.runAim(); },
     rerunAim() { S.go.aimVariant = "pass"; S.go.aim = "not_run"; A.runAim(); },
     noop() {},
   };

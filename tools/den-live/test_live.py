@@ -701,7 +701,9 @@ class Perceiving(unittest.TestCase):
         self.run_take(p, frames)
         later = frames[-1].t_host + 0.35 + 30
         health = p.idle({'status': 'offline', 'why': 'no new frame for 30 s'}, later)['health']
-        self.assertEqual(health, {'timings_ms': {}, 'fps_in': None, 'dropped_per_min': 0, 'lag_s_median': None, 'transit_s_median': None},
+        self.assertEqual(health, {'timings_ms': {}, 'fps_in': None, 'dropped_per_min': 0, 'lag_s_median': None, 'transit_s_median': None,
+                                  'camera_age_s_median': None, 'camera_age_s_p95': None,
+                                  'capture_to_stream_s_median': None, 'capture_to_stream_s_p95': None},
                          'nothing old speaks for now')
 
     def test_idle_keeps_the_epoch_while_a_fresh_frame_is_at_the_detector(self):
@@ -759,6 +761,70 @@ class Perceiving(unittest.TestCase):
             health = self.run_take(p, stamped(wrong))[-1]['health']
             self.assertIsNone(health['transit_s_median'], wrong)
             self.assertGreaterEqual(health['lag_s_median'], 0.23, 'measured local work is included')
+
+    def aged(self, age, *, transit=True):
+        """The reader's first 30 bundles, arriving 0.12 s after capture, with captured_unix_ns (the transit) and body5's
+        rgb_age_at_packaging_seconds: absent for age 'absent' (body4), else the value, None written as null."""
+        import test_register_now as tr
+
+        def change(meta):
+            if transit:
+                meta.update(captured_unix_ns=int(round((1_800_000_000.0 + t_host) * 1e9)))
+            if age != 'absent':
+                meta.update(rgb_age_at_packaging_seconds=age,
+                            rgb_age_at_packaging_semantics='camera_host_sdk_clock_at_packaging_minus_rgb_frame_timestamp')
+        out = []
+        for b in bundles(READING)[:30]:
+            t_host = b.t_host
+            out.append(source.Bundle(tr.with_metadata(b.data, change), b.session, b.rgb_seq, b.t_host, b.arrival_unix,
+                                     b.arrival_mono))
+        return out
+
+    def test_the_camera_wait_rides_each_frame_and_the_health_line(self):
+        """body5's rgb_age_at_packaging_seconds: each event's camera_age_s, its median and p95 over the minute, and
+        capture to stream: the wait + the transit + the frame's time here. These bundles arrive on the offset's own
+        delay, so capture_mono is their arrival, and the frame's time here is its lag."""
+        p = self.perceiver(READING)
+        events = self.run_take(p, self.aged(0.6))
+        health = events[-1]['health']
+        self.assertTrue(all(e['camera_age_s'] == 0.6 for e in events))
+        self.assertEqual((health['camera_age_s_median'], health['camera_age_s_p95']), (0.6, 0.6))
+        self.assertAlmostEqual(health['transit_s_median'], 0.12, places=3)
+        self.assertAlmostEqual(health["capture_to_stream_s_median"], 0.6 + 0.12 + health["lag_s_median"], delta=0.002)
+        self.assertGreaterEqual(health['capture_to_stream_s_p95'], health['capture_to_stream_s_median'])
+        line = rl.status_line(p, events[-1])
+        self.assertIn(' behind | 0.60 s camera wait (p95 0.60) | %.2f s capture to stream (p95 '
+                      % health['capture_to_stream_s_median'], line)
+        p = self.perceiver(READING)
+        health = self.run_take(p, self.aged(0.6, transit=False))[-1]['health']
+        self.assertEqual(health['camera_age_s_median'], 0.6)
+        self.assertIsNone(health['capture_to_stream_s_median'], 'no transit, no capture to stream')
+
+    def test_a_bundle_that_doesnt_say_its_camera_wait_reads_as_before(self):
+        """Absent (body4) or null: camera_age_s is null, the minute's figures are null, the health line is as it was,
+        and every frame tracks as it did. A float changes nothing but the new fields either."""
+        def tracks(p, events):   # each run has its own id, in every track id
+            return json.dumps([e['tracks'] for e in events]).replace(p.run_id, 'RUN')
+        first = self.perceiver(READING)
+        plain = self.run_take(first, self.aged('absent'))
+        for age in ('absent', None, 0.6):
+            with self.subTest(age=age):
+                p = self.perceiver(READING)
+                events = self.run_take(p, self.aged(age))
+                self.assertEqual(tracks(p, events), tracks(first, plain))
+                self.assertEqual([e['presence'] for e in events], [e['presence'] for e in plain])
+                self.assertAlmostEqual(events[-1]['health']['transit_s_median'], 0.12, places=3)
+                if age == 0.6:
+                    continue
+                health = events[-1]['health']
+                self.assertTrue(all(e['camera_age_s'] is None for e in events))
+                self.assertEqual({key: health[key] for key in ('camera_age_s_median', 'camera_age_s_p95',
+                                                              'capture_to_stream_s_median', 'capture_to_stream_s_p95')},
+                                 dict.fromkeys(('camera_age_s_median', 'camera_age_s_p95',
+                                                'capture_to_stream_s_median', 'capture_to_stream_s_p95')))
+                line = rl.status_line(p, events[-1])
+                self.assertNotIn('camera wait', line)
+                self.assertRegex(line, r' behind \| \d+ dropped a minute \| ')
 
     def test_events_name_the_registration_and_the_scan(self):
         p = self.perceiver(READING)
@@ -820,6 +886,41 @@ class ScanFloor(unittest.TestCase):
             counts = {'frames': 40, 'refused_depth': 0, 'detector_errors': 40, 'unreadable': 0, 'out_of_order': 0, 'expired': 0}
         line = rl.status_line(P(), {'camera': {'status': 'ok', 'why': 'detector errors'}, 'health': {}, 'tracks': []})
         self.assertEqual(line, 'camera ok: detector errors | - frames a second | 0 people | - behind | 0 dropped a minute | 40 frames, 40 detector errors')
+
+    def test_the_camera_wait_is_read_only_from_a_number_in_range(self):
+        def meta(**raw):
+            return {'raw': raw}
+        self.assertIsNone(perceive.camera_age({}))
+        self.assertIsNone(perceive.camera_age(meta()), 'absent: body4 and before')
+        self.assertIsNone(perceive.camera_age(meta(rgb_age_at_packaging_seconds=None)), 'null: the camera could not tell')
+        self.assertEqual(perceive.camera_age(meta(rgb_age_at_packaging_seconds=0.123457)), 0.123457)
+        self.assertEqual(perceive.camera_age(meta(rgb_age_at_packaging_seconds=0)), 0.0)
+        self.assertEqual(perceive.camera_age(meta(rgb_age_at_packaging_seconds=perceive.CAMERA_AGE_MAX_S)), 5.0)
+        for wrong in (True, '0.6', [0.6], float('nan'), float('inf'), -0.001, perceive.CAMERA_AGE_MAX_S + 0.001):
+            with self.subTest(wrong=wrong):
+                self.assertIsNone(perceive.camera_age(meta(rgb_age_at_packaging_seconds=wrong)))
+
+    def test_the_minutes_figures(self):
+        self.assertEqual(perceive.minute_figures('x', []), {'x_median': None, 'x_p95': None})
+        samples = [(n, n / 100) for n in range(1, 21)]   # 0.01 .. 0.20
+        self.assertEqual(perceive.minute_figures('x', samples), {'x_median': 0.105, 'x_p95': 0.19})
+
+    def test_the_status_line_adds_the_camera_wait_only_when_it_is_known(self):
+        class P:
+            counts = {'frames': 40, 'refused_depth': 0, 'detector_errors': 0, 'unreadable': 0, 'out_of_order': 0, 'expired': 0}
+        health = {'fps_in': 4.2, 'lag_s_median': 0.31, 'dropped_per_min': 0}
+        old = 'camera ok | 4.2 frames a second | 0 people | 0.31 s behind | 0 dropped a minute | 40 frames'
+        for unknown in ({}, dict.fromkeys(('camera_age_s_median', 'camera_age_s_p95',
+                                           'capture_to_stream_s_median', 'capture_to_stream_s_p95'))):
+            with self.subTest(unknown=unknown):
+                self.assertEqual(rl.status_line(P(), {'camera': {'status': 'ok'}, 'health': {**health, **unknown}, 'tracks': []}), old)
+        known = {**health, 'camera_age_s_median': 0.62, 'camera_age_s_p95': 0.7,
+                 'capture_to_stream_s_median': 1.05, 'capture_to_stream_s_p95': 1.2}
+        self.assertEqual(rl.status_line(P(), {'camera': {'status': 'ok'}, 'health': known, 'tracks': []}),
+                         'camera ok | 4.2 frames a second | 0 people | 0.31 s behind | 0.62 s camera wait (p95 0.70)'
+                         ' | 1.05 s capture to stream (p95 1.20) | 0 dropped a minute | 40 frames')
+        wait_only = {**known, 'capture_to_stream_s_median': None, 'capture_to_stream_s_p95': None}
+        self.assertNotIn('capture to stream', rl.status_line(P(), {'camera': {'status': 'ok'}, 'health': wait_only, 'tracks': []}))
 
     def test_the_site_is_read_not_written(self):
         site = rl.den_site()

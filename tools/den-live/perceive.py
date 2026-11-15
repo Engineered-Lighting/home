@@ -26,6 +26,17 @@ Numbers this phase sets, with where they come from:
   bundle's arrival time here less its captured_unix_ns is the camera-to-here transit. transit_s_median is its median
   over the health window, from frames where it lies between 0 and 5 s only; a clock that's wrong again gives null, and
   nothing else changes. The walk test adds it to "behind" for its capture-to-stream lag.
+- The camera wait (camera_age_s): captured_unix_ns is packaging time, so the wait on the camera from the frame to its
+  packaging (the stereo backlog included: about 0.1 s at night, 0.56-0.68 s on daylight afternoons under body4) is in
+  neither the transit nor "behind". From body5, each bundle's metadata says it: rgb_age_at_packaging_seconds, the
+  camera's SDK clock at packaging less the RGB frame's timestamp, both on the camera. Each frame's event carries it, null
+  when the bundle doesn't say (body4 and before) or says something outside 0-5 s, and the health line has its median
+  and p95 over the last minute, from every frame read (one later too late or refused too). Nothing else reads it: the
+  tracker's clock and every old figure stay as they were.
+- Capture to stream (capture_to_stream_s), from body5: the camera wait + the transit + this frame's time here, from its
+  arrival to its event. Not the camera wait + transit + "behind": t_host is the frame's own timestamp, so "behind"
+  already holds whatever of the wait and the transit the offset's 5th percentile doesn't, and that part would count
+  twice. Median and p95 over the last minute, from frames with both the wait and the transit.
 - Too dark (plan L2): the frame's mean Y under 6 for 3 s, back over 9 for 3 s; then there's no picture to use, so the
   stream says mode none, why too dark. Measured on the den camera on 2026-11-14 (night-mode notes): under the den's
   warm lamp the mean Y is 11-22, with only a screen lit 5-7, and at every frame of both den-detect found the owner
@@ -97,6 +108,8 @@ HEALTH_S = 10.0      # frames a second and lag are over this window only: an old
 PERSON_MIN = 0.5     # den-detect's pose line, and plan L3's marker line
 ERROR_NAMES_MAX = 8  # distinct detector error type names kept by name; any more count as "other"
 TRANSIT_MAX_S = 5.0  # arrival less captured_unix_ns counts only between 0 and this (plan L1)
+CAMERA_AGE_MAX_S = 5.0   # the camera's rgb_age_at_packaging_seconds counts only between 0 and this
+CAMERA_AGE_WINDOW_S = 60.0   # the camera wait and capture to stream: median and p95 over the last minute
 NOT_CORRECTED = "depth not corrected at the camera"
 CORRECTION_CHANGED = ("the camera's depth correction isn't the one step 2 registered on: paste register_now.py without "
                       "--again, which records a new take")
@@ -174,6 +187,41 @@ def track_method_copy(tools, bounds, folder):
 
 
 # ---- the clock -------------------------------------------------------------------------------------------------
+
+def camera_age(meta):
+    """The camera's wait from the frame to its packaging (the module note), from body5's metadata
+    rgb_age_at_packaging_seconds as den-observe keeps it in raw; None when it's absent (body4 and before), null, not a
+    number, or outside 0 to CAMERA_AGE_MAX_S."""
+    value = (meta.get("raw") or {}).get("rgb_age_at_packaging_seconds")
+    if type(value) not in (int, float) or not math.isfinite(value) or not 0.0 <= value <= CAMERA_AGE_MAX_S:
+        return None
+    return float(value)
+
+
+def packaging_transit(meta, bundle):
+    """The bundle's arrival here less its captured_unix_ns (packaging), by the two wall clocks; None outside 0 to
+    TRANSIT_MAX_S, as when the Jetson's clock is wrong."""
+    captured = (meta.get("raw") or {}).get("captured_unix_ns")
+    if type(captured) is not int:
+        return None
+    transit = bundle.arrival_unix - captured / 1e9
+    return transit if 0.0 <= transit <= TRANSIT_MAX_S else None
+
+
+def with_camera_age(event, age):
+    """The frame's event with its camera wait (camera_age), rounded, or null."""
+    event["camera_age_s"] = None if age is None else round(age, 3)
+    return event
+
+
+def minute_figures(name, samples):
+    """{name_median, name_p95} of (mono, seconds) samples, both None with none."""
+    values = sorted(value for _, value in samples)
+    if not values:
+        return {name + "_median": None, name + "_p95": None}
+    return {name + "_median": round(statistics.median(values), 3),
+            name + "_p95": round(values[math.ceil(len(values) * 0.95) - 1], 3)}
+
 
 class ClockOffset:
     """this PC's monotonic clock ~ t_host + offset, from the arrival times (the module note)."""
@@ -463,6 +511,7 @@ class Perceiver:
         self.error_names = {}   # detector_errors by the worker's exception type name (a type name only, never text)
         self.last_t_host = self.last_capture = None
         self.arrivals, self.lags, self.drops, self.transits = deque(), deque(), deque(), deque()
+        self.camera_ages, self.capture_to_stream = deque(), deque()   # over CAMERA_AGE_WINDOW_S
         self.problem = None
         self.hops = {}
         self.last_input_mono = None
@@ -512,6 +561,9 @@ class Perceiver:
             self.drops.popleft()
         while self.transits and now_mono - self.transits[0][0] > HEALTH_S:
             self.transits.popleft()
+        for samples in (self.camera_ages, self.capture_to_stream):
+            while samples and now_mono - samples[0][0] > CAMERA_AGE_WINDOW_S:
+                samples.popleft()
         seconds = (self.arrivals[-1] - self.arrivals[0]) if len(self.arrivals) > 1 else 0
         timings = {}
         for stage, samples in self.hops.items():
@@ -525,23 +577,24 @@ class Perceiver:
         return {"timings_ms": timings, "fps_in": round((len(self.arrivals) - 1) / seconds, 2) if seconds > 0 else None,
                 "dropped_per_min": len(self.drops),
                 "lag_s_median": round(statistics.median(lag for _, lag in self.lags), 3) if self.lags else None,
-                "transit_s_median": round(statistics.median(s for _, s in self.transits), 3) if self.transits else None}
+                "transit_s_median": round(statistics.median(s for _, s in self.transits), 3) if self.transits else None,
+                **minute_figures("camera_age_s", self.camera_ages),
+                **minute_figures("capture_to_stream_s", self.capture_to_stream)}
 
     def _transit(self, meta, bundle):
         """Legacy wall-clock packaging-to-arrival estimate for display; never used as a freshness bound."""
-        captured = (meta.get("raw") or {}).get("captured_unix_ns")
-        if type(captured) is not int:
-            return
-        transit = bundle.arrival_unix - captured / 1e9
-        if 0.0 <= transit <= TRANSIT_MAX_S:
+        transit = packaging_transit(meta, bundle)
+        if transit is not None:
             self.transits.append((bundle.arrival_mono, transit))
 
     def event(self, ago_s, tracks, camera_state, now_mono):
-        """ago_s: how long before now the frame was captured (None for an event with no frame)."""
+        """ago_s: how long before now the frame was captured (None for an event with no frame). camera_age_s, the
+        frame's camera wait, is None here; a frame's event gets its own (with_camera_age)."""
         self.seq += 1
         emitted = self.now()
         return {"schema": SCHEMA, "home": self.home, "seq": self.seq, **self.scope,
                 "capture_ts": None if ago_s is None else round(emitted - ago_s, 3), "emitted_ts": round(emitted, 3),
+                "camera_age_s": None,
                 "mode": self.mode, "camera": {"status": camera_state.get("status", "ok"), "why": camera_state.get("why") or self.problem},
                 "health": self._health(now_mono), "tracks": self._near(tracks)}
 
@@ -711,6 +764,9 @@ class Perceiver:
             return self._drop("unreadable", now_mono, "frames unreadable")
         depth = self.scaled(depth)
         self._transit(meta, bundle)
+        age = camera_age(meta)
+        if age is not None:   # every frame read, a late or refused one too: the slow ones are the point
+            self.camera_ages.append((now_mono, age))
         raw = meta.get("raw") or {}
         correction = raw.get("depth_correction")
         if self.require_source_correction and not (isinstance(correction, dict) and correction.get("applied") is True):
@@ -794,8 +850,9 @@ class Perceiver:
                 self._submit_body(prepared)
             else:
                 self._clear_body("pose_unavailable")
-            return self._snapshot(self.event(now_mono - capture_mono, [], dict(camera_state, why="too dark"), now_mono),
-                                  status="degraded")
+            event = with_camera_age(self.event(now_mono - capture_mono, [], dict(camera_state, why="too dark"), now_mono),
+                                    camera_age(meta))
+            return self._snapshot(event, status="degraded")
         self.last_capture = capture_mono
         offset = capture_mono - ref.rgb.host_s
         row = reply["row"]
@@ -839,7 +896,10 @@ class Perceiver:
             return self._drop("expired", now_mono, "tracking result expired")
         self._timing(now_mono, track=time.monotonic() - start_track)
         self.lags.append((now_mono, now_mono - capture_mono))
-        event = self.event(now_mono - capture_mono, tracks, camera_state, now_mono)
+        age, transit = camera_age(meta), packaging_transit(meta, prepared.bundle)
+        if age is not None and transit is not None:   # the module note: the wait, the transit, then its time here
+            self.capture_to_stream.append((now_mono, age + transit + max(0.0, now_mono - prepared.bundle.arrival_mono)))
+        event = with_camera_age(self.event(now_mono - capture_mono, tracks, camera_state, now_mono), age)
         candidates = [o for o in observations if o["kind"] in ("person_box", "keypoints")
                       and (o.get("score") or 0) >= PERSON_MIN]
         evidence = []

@@ -289,6 +289,11 @@ The owner qualification uses one short tailnet phone run in room light and one w
 - **The floor:** the tracker's floor box is your scan's walkable floor, padded 1 m on every side. den-track's own box is a tape rectangle in no scan frame. In the den simulation, your real sofa sat outside it, and one reader split into three tracks.
 - **Freshness:** a frame older than 1.5 s by the time the detector finishes is dropped and counted.
 - **The clock:** frame times come from when frames arrive on this PC, as they did while the den Jetson's clock read 1970. They're kept on this PC's monotonic clock, so a time-sync step can't stall the tracker. "Behind" leaves out the camera-to-PC transit, about 0.1 s here. Since the Jetson's clock is right again, the stream's health line also has `transit_s_median`: arrival less the frame's `captured_unix_ns`, used only between 0 and 5 s. Step 4's walk test adds it to "behind".
+- **The camera's own wait** (from the camera's body5 release on). `captured_unix_ns` is when the camera packages a frame, not when it took it, so none of the figures above include the wait between the two. That wait is about 0.1 s at night and 0.56–0.68 s on daylight afternoons under body4. Each bundle now says it as `rgb_age_at_packaging_seconds`, and den-live:
+  - gives each frame's event `camera_age_s`. It's null when the bundle doesn't say, as body4's don't, or says something outside 0–5 s;
+  - adds to the health line, over the last minute, `camera_age_s_median` and `_p95`, from every frame read, plus `capture_to_stream_s_median` and `_p95`. Capture to stream is the camera's wait + the transit + the frame's time on this PC from its arrival to its event.
+  - Capture to stream doesn't add "behind". Frame times are anchored to the least delayed recent arrivals, so "behind" already holds any part of the wait and the transit above that, and that part would count twice.
+  - Every older figure, and the tracker's clock, stays as it was. With a camera that doesn't say its wait, the new figures are null and the printed line is unchanged.
 - **Weak boxes:** a person box under 0.5 still reaches the tracker, but it never shows as a marker on its own. A track shows once a pose, or a box at 0.5 or more, has backed it (plan L3).
 - **The arrow:** each marker's `heading_deg` is its track's `body_facing` (below), so it goes when the pose expires, 1.5 s after the last facing sample. den-track's own heading, and its old 3 s hold, no longer draw it.
 - **New epochs:** a camera restart gives new marker ids (`e2-trk-1`), never an old marker. An epoch starts on a new camera session, the camera's clock going back more than 1 s, a new depth calibration, a day/night switch, or 3.0 s without a fresh frame. One late or missing frame only makes the stream stale for a moment: the next frame keeps the epoch and the track.
@@ -307,7 +312,7 @@ The owner qualification uses one short tailnet phone run in room light and one w
 - **Too dark:** the picture's mean brightness under 6 (of 255) for 3 s gives "too dark"; over 9 for 3 s ends it. A
   lamp-lit den at night (about 11-22) is tracked and asked about as by day.
 
-**Every 10 s it prints one line**, for example `camera ok | 4.0 frames a second | 1 people | 0.25 s behind | 0 dropped a minute | 160 frames`. Anything dropped is named at the end, such as `, 3 out of order`. That's words and counts, never a position. Tell an agent those lines if something looks wrong.
+**Every 10 s it prints one line**, for example `camera ok | 4.0 frames a second | 1 people | 0.25 s behind | 0 dropped a minute | 160 frames`. With a camera that says its own wait (body5), `| 0.62 s camera wait (p95 0.70) | 1.05 s capture to stream (p95 1.20)` follows "behind". Anything dropped is named at the end, such as `, 3 out of order`. That's words and counts, never a position. Tell an agent those lines if something looks wrong.
 
 **What's kept:** nothing. No frames, no tracks. Only the tracker's method copy and the detector's log go in `%USERPROFILE%\den-live\private\live\`.
 

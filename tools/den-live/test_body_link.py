@@ -191,7 +191,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(set(person["joints"]), {"left_shoulder", "right_shoulder", "left_hip", "right_hip"})
         self.assertEqual(person["facing_deg"], 0)
         self.assertIsNone(body_person({**track, "state": "coasting"}, pose, lambda _: (0, 10), 30))
-        self.assertIsNone(body_person({**track, "association": "ambiguous"}, pose, lambda _: (0, 10), 30))
+        self.assertIsNotNone(body_person({**track, "association": "ambiguous"}, pose, lambda _: (0, 10), 30),
+                             "one person seen: den-track's doubt about who doesn't blank them")
+        self.assertIsNone(body_person({**track, "association": None}, pose, lambda _: (0, 10), 30))
         perceiver = Perceiver.__new__(Perceiver)
         perceiver.home = "den"
         perceiver.body = SimpleNamespace(prepare=lambda *args: None)

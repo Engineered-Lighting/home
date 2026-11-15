@@ -94,21 +94,28 @@ class RgbBodyInput:
         people = [o for o in observations if o["kind"] in ("keypoints", "person_box")]
         if not people and not tracks:
             return BodyInput(*common, "empty")
-        if len(tracks) > 1:   # two people tracked: whose depth is whose can't be told
-            return BodyInput(*common, "ambiguous")
-        if len(tracks) != 1 or len(supported) != 1:
+        if len(tracks) != len(supported):
             return BodyInput(*common, "unknown")
-        # The one track's own observation this frame. Any other detection doesn't support it: a stray box, a reflection,
+        # The tracks a detection supports this frame. One that none supports (coasting) has no pixels here. Often it's
+        # the same person left behind: a stop, a sit or a stand-up moves them past den-track's gate, and their next
+        # detection starts a new track while the old one coasts on for seconds. It doesn't blank the figure.
+        seen = [(track, ids) for track, ids in zip(tracks, supported) if ids]
+        if len(seen) > 1:   # two people seen: whose depth is whose can't be told
+            return BodyInput(*common, "ambiguous")
+        if len(seen) != 1:
+            return BodyInput(*common, "unknown")
+        (track, ids), = seen
+        # The track's own observation this frame. Any other detection doesn't support it: a stray box, a reflection,
         # a pose the tracker never followed. It isn't this person, and it doesn't blank their figure.
-        own = [o for o in people if o["obs_id"] in supported[0]]
+        own = [o for o in people if o["obs_id"] in ids]
         if len(own) != 1:
             return BodyInput(*common, "ambiguous" if len(own) > 1 else "unknown")
 
-        track, pose = tracks[0], own[0]
+        pose = own[0]
+        # den-track's "ambiguous" is about who (a new track, or a coasting one within reach), not about whose pixels
+        # these are: one person is seen, so the figure is theirs. The people stream keeps the doubt for the ask.
         status, _ = association.get(track["track_id"], (None, None))
-        if status == "ambiguous":
-            return BodyInput(*common, "ambiguous")
-        if (track["state"] != "confirmed" or status != "confident" or pose["obs_id"] not in supported[0]
+        if (track["state"] != "confirmed" or status not in ("confident", "ambiguous") or pose["obs_id"] not in ids
                 or pose["kind"] != "keypoints" or pose["validity"] != "valid"
                 or pose["transform_id"] != self.camera.transform_id
                 or pose["freshness"]["status"] != "fresh" or pose["freshness"]["depth"] != "used"):

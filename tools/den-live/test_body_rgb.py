@@ -42,18 +42,8 @@ class Fixture:
 
         self.synth = synth
         self.rows = fake_detector
-        self.scene = synth.Scene()
-        self.depth = self.scene.depth_mm()
+        self.place(0.0)
         self.empty_depth = (4200).to_bytes(2, "little") * (640 * 400)
-        # A distinct foreground silhouette and shoulder/hip seeds outside
-        # the conservative neck exclusion, using the pinned projection.
-        joints = {**synth.JOINTS, "left_hip": (0.16, 0.95), "right_hip": (-0.16, 0.95),
-                  "left_shoulder": (0.23, 1.41), "right_shoulder": (-0.23, 1.41)}
-        self.pixels = {}
-        for name, (x, z) in joints.items():
-            left = synth.g.apply(*self.scene.left_from_room, (x, synth.PANEL_Y, z))
-            self.pixels[name] = synth.g.project(
-                synth.g.apply(*synth.RGB_FROM_LEFT, left), self.scene.k_rgb, self.scene.d_rgb)
         self.model = scratch / "room-model.jsonl"
         self.model.write_text(json.dumps(synth.room_model()), encoding="utf-8")
         self.method = track_method_copy(self.tools, [-2.0, -1.0, 5.0, 6.0], scratch)
@@ -83,6 +73,21 @@ class Fixture:
         self.last = None
         self.reply = None
         self.luma = 110
+
+    def place(self, dx):
+        """The person dx metres along the room's x: the scene's depth, and the detector's keypoints there."""
+        synth = self.synth
+        self.scene = synth.Scene(panel_dx=dx)
+        self.depth = self.scene.depth_mm()
+        # A distinct foreground silhouette and shoulder/hip seeds outside
+        # the conservative neck exclusion, using the pinned projection.
+        joints = {**synth.JOINTS, "left_hip": (0.16, 0.95), "right_hip": (-0.16, 0.95),
+                  "left_shoulder": (0.23, 1.41), "right_shoulder": (-0.23, 1.41)}
+        self.pixels = {}
+        for name, (x, z) in joints.items():
+            left = synth.g.apply(*self.scene.left_from_room, (x + dx, synth.PANEL_Y, z))
+            self.pixels[name] = synth.g.project(
+                synth.g.apply(*synth.RGB_FROM_LEFT, left), self.scene.k_rgb, self.scene.d_rgb)
 
     def publish(self, scope, **fields):
         self.rendered.append((scope, fields))
@@ -309,6 +314,64 @@ class RgbBodyTests(unittest.TestCase):
         self.assertEqual(call(observations=[pose, twin], tracks=[track], supported=[{"pose-a", "pose-b"}]).observation,
                          "ambiguous", "two detections on one track")
         self.assertEqual(call(observations=[stray], tracks=[track], supported=[{"pose-a"}]).observation, "unknown")
+
+    def test_a_coasting_duplicate_doesnt_blank_the_one_person_seen(self):
+        """A stop, a sit or a stand-up moves the person past den-track's gate, so their next detection starts a new
+        track and the old one coasts on with no detection, up to 6 s; den-track calls both ambiguous. One person is
+        seen, so the figure stays (on LA that blanked it about 17 times a day, 5-6 s each). A passer-by, seen, still
+        makes the frame ambiguous."""
+        f = self.f
+        for n in range(16):
+            f.frame(n)
+        value = f.last
+        bundle, meta, depth = f.seen
+        pose = dict(value.pose, obs_id="pose-a")
+        old, new = dict(value.track, track_id="t1", state="coasting"), dict(value.track, track_id="t2", state="confirmed")
+        doubt = {"t1": ("ambiguous", 0.0), "t2": ("ambiguous", 0.0)}
+        call = lambda **kw: f.provider(bundle, meta, depth, frame_key=value.frame_key, mode="rgb", association=doubt, **kw)
+        split = call(observations=[pose], tracks=[old, new], supported=[set(), {"pose-a"}])
+        self.assertEqual(split.observation, "person")
+        self.assertEqual(split.track["track_id"], "t2")
+        passer = dict(pose, obs_id="passer")
+        self.assertEqual(call(observations=[pose, passer], tracks=[old, new], supported=[{"passer"}, {"pose-a"}]).observation,
+                         "ambiguous", "a second person seen")
+        self.assertEqual(call(observations=[], tracks=[old], supported=[set()]).observation, "unknown",
+                         "nobody seen: the last figure holds")
+        self.assertEqual(call(observations=[pose], tracks=[dict(new, state="coasting")], supported=[{"pose-a"}],
+                              ).observation, "unknown", "a coasting track is never the figure's")
+
+    def test_the_split_replayed_through_den_track_keeps_one_figure(self):
+        """LA's split, through den-track: the owner shown, two frames with no detection (sitting down), then seen 1.5 m
+        over. den-track starts a new track there and the old one coasts on. The figure goes on with no blank:
+        one change of track, and the old one never shows again."""
+        f = self.f
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        for n in range(55, 70):
+            f.frame(n)
+        shown = [fields["frame"]["track_id"] for _, fields in f.rendered if fields.get("frame")]
+        self.assertTrue(shown, f.link.why)
+        start = len(f.rendered)
+        for n in (70, 71):
+            f.frame(n, empty=True, depth=f.depth)   # no detection; the person is still there
+        f.place(1.5)   # past the synthetic gate, which its noisier detections make wider than on LA (0.7 m p50 there)
+        split = 0
+        for n in range(72, 86):
+            split += len(f.frame(n)["tracks"]) > 1
+        self.assertGreater(split, 0, "den-track split the one person in two")
+        after = f.rendered[start:]
+        reasons = [fields.get("reason") for _, fields in after if not fields.get("frame")]
+        self.assertEqual([r for r in reasons if r != "scope_changed"], [], "no clear but the change of track")
+        for i, (_, fields) in enumerate(after):
+            if fields.get("reason") == "scope_changed":
+                self.assertTrue(after[i + 1][1].get("frame"), "the new track's figure comes with its scope")
+        tracks = [fields["frame"]["track_id"] for _, fields in after if fields.get("frame")]
+        self.assertGreater(len(tracks), 8, "a figure on most frames")
+        self.assertNotEqual(tracks[-1], shown[-1])
+        self.assertEqual(tracks[tracks.index(tracks[-1]):], [tracks[-1]] * (len(tracks) - tracks.index(tracks[-1])),
+                         "once on the new track, the old one never shows")
 
     def test_normal_service_passes_registration_bound_profile_without_an_injected_callback(self):
         f = self.f

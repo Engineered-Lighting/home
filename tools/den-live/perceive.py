@@ -669,10 +669,7 @@ class Perceiver:
             self.body.clear("ambiguous" if value.observation == "ambiguous" else "pose_unavailable", scope=scope)
             return
         person = None
-        if value.observation == "person":
-            if (value.track or {}).get("association") == "ambiguous":
-                self.body.clear("ambiguous", scope=scope)
-                return None
+        if value.observation == "person":   # one person seen (body_rgb): den-track's doubt about who doesn't blank them
             person = body_person(value.track, value.pose, self.t.records.body_heading,
                                  self.track_method.tracker["heading_max_sd_deg"])
             if person is None:
@@ -1036,10 +1033,11 @@ def _legacy_body_person(observations, tracks, supported):
 
 
 def body_person(track, pose, heading, max_heading_sd=None):
-    """Pass only the current supported body joints from one confidently associated pose."""
+    """Pass only the current supported body joints from the one seen person's pose: a confirmed track, confident or
+    ambiguous to den-track (body_rgb has made sure no other person is seen, so a doubt about who doesn't blank them)."""
     if max_heading_sd is None:
         return _legacy_body_person(track, pose, heading)
-    if (not track or track.get("state") != "confirmed" or track.get("association") != "confident"
+    if (not track or track.get("state") != "confirmed" or track.get("association") not in ("confident", "ambiguous")
             or not isinstance(track.get("track_id"), str) or not 0 < len(track["track_id"]) <= 64
             or not pose or pose.get("kind") != "keypoints" or pose.get("validity") != "valid"):
         return None

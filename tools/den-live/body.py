@@ -8,8 +8,11 @@ actual depth pixel from that bundle, times step 2's depth scale (the setup's
 depth_scale, as perceive.py scales the lift's depth; 1.0 changes nothing).
 """
 import base64
+import hashlib
 import io
+import json
 import math
+import os
 import time
 import zipfile
 from collections import deque
@@ -18,6 +21,11 @@ HEIGHT, WIDTH = 400, 640
 DEPTH_SCALE_RANGE = (0.90, 1.10)   # contracts.py's: this file loads in the detector's venv on its own
 N = HEIGHT * WIDTH
 EMPTY_S, LEARN_FRAMES, RELEARN_S = 8.0, 12, 120.0
+# The learned empty room, kept in the worker's state folder so a restart or an install while someone is in the den
+# doesn't blank the figure until the room is empty again. It's keyed by what makes it this room from this camera (the
+# scan revision, the camera's registration and its depth profile, intrinsics and depth scale), never by the run. It's
+# read back only within KEPT_MAX_S of being learned. As before, the next empty spell after RELEARN_S learns it afresh.
+BACKGROUND_FILE, KEPT_MAX_S = "body-background.npz", 24 * 3600.0
 CUT_MM, NEAR_LIMB_MM, EDGE_MM = 120, 40, 60
 NEAR_MM, FAR_MM = 300, 5000
 GATE_M, MIN_BODY_PX = 0.9, 300
@@ -197,6 +205,7 @@ class BodyMaker:
             raise ValueError("invalid depth registration")
         self.background = None
         self.learned_at = None
+        self.on_learned = None   # BodyChannel's: keep each newly learned background
         self.stats = {}
         self.interrupt_learning()
 
@@ -221,6 +230,8 @@ class BodyMaker:
         background = np.zeros(raw.shape, np.float32)
         background[seen] = np.nanmedian(np.where(valid[:, seen], stack[:, seen], np.nan), axis=0)
         self.background, self.learned_at, self.learning = background, now, []
+        if self.on_learned is not None:
+            self.on_learned(background)
 
     def _camera_points(self, depth, rows, cols):
         z = depth.astype(float) / 1000
@@ -612,12 +623,51 @@ def depth_of(np, data, scale=1.0):
     return depth
 
 
-class BodyChannel:
-    """Handle body commands on the last bundle and echo private request identity to the publisher."""
+def background_key(setup):
+    """The kept background's key: this room's scan revision, the camera's registration and depth profile, and the
+    depth geometry (intrinsics, room_from_left, depth scale). Never the run or the camera epoch."""
+    binding = setup.get("binding")
+    binding = binding if isinstance(binding, dict) else {}
+    identity = {"content_revision": binding.get("content_revision"), "transform_id": binding.get("transform_id"),
+                "depth_profile": binding.get("depth_profile"), "left_k": setup.get("left_k"),
+                "room_from_left": setup.get("room_from_left"), "depth_scale": setup.get("depth_scale", 1.0)}
+    return hashlib.sha256(json.dumps(identity, sort_keys=True, allow_nan=False).encode("utf-8")).hexdigest()
 
-    def __init__(self):
+
+def keep_background(np, folder, key, background, *, wall=time.time):
+    """Write the learned background beside its key and time, atomically. Nothing on failure: it's only a head start."""
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        part = folder / (BACKGROUND_FILE + ".part")
+        with open(part, "wb") as out:
+            np.savez(out, background=background.astype(np.float32), key=np.array(key), saved_unix=np.array(float(wall())))
+        os.replace(part, folder / BACKGROUND_FILE)
+    except (OSError, ValueError):
+        pass
+
+
+def kept_background(np, folder, key, *, wall=time.time):
+    """The kept background for this key, learned within KEPT_MAX_S, or None."""
+    try:
+        with np.load(folder / BACKGROUND_FILE, allow_pickle=False) as kept:
+            background, saved_key, saved = kept["background"], str(kept["key"]), float(kept["saved_unix"])
+    except (OSError, KeyError, ValueError, TypeError):
+        return None
+    if (saved_key != key or not 0 <= wall() - saved <= KEPT_MAX_S or background.shape != (HEIGHT, WIDTH)
+            or background.dtype != np.float32 or not np.isfinite(background).all()):
+        return None
+    return background
+
+
+class BodyChannel:
+    """Handle body commands on the last bundle and echo private request identity to the publisher. state: the worker's
+    state folder, where the learned background is kept across a restart (None keeps nothing)."""
+
+    def __init__(self, state=None, *, wall=time.time):
+        from pathlib import Path
         self.maker = self.binding = None
         self.depth_scale = 1.0
+        self.state, self.wall = (Path(state) if state is not None else None), wall
 
     def handle(self, header, kept):
         """kept is the last detection's (worker id, bundle bytes, pipeline frame key[, its held-object instances])."""
@@ -636,6 +686,13 @@ class BodyChannel:
                 self.depth_scale = float(scale)
                 self.maker = BodyMaker(np, cv2, left_k=setup["left_k"], room_from_left=setup["room_from_left"],
                                        rgb=setup.get("rgb"))
+                if self.state is not None:
+                    key = background_key(setup)
+                    # A kept background is this room's from this camera: start from it rather than warming. The next
+                    # empty spell learns it afresh (learned_at stays None, so it may at once).
+                    self.maker.background = kept_background(np, self.state, key, wall=self.wall)
+                    self.maker.on_learned = lambda background: keep_background(np, self.state, key, background,
+                                                                                wall=self.wall)
                 return {"body_ready": True, "binding": self.binding}
             except Exception as exc:
                 return {"body_refused": type(exc).__name__, "binding": self.binding}

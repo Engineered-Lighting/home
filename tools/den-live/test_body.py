@@ -577,6 +577,70 @@ class DepthHeldTest(unittest.TestCase):
             self.assertFalse((self.kinds(frame) != 0).any())
 
 
+class KeptBackgroundTest(unittest.TestCase):
+    """The learned empty room survives a restart: a new run in the same room from the same camera starts from it."""
+
+    def setUp(self):
+        import tempfile
+        folder = tempfile.TemporaryDirectory(prefix="den-body-bg-")
+        self.addCleanup(folder.cleanup)
+        self.state = Path(folder.name)
+        self.wall = 1_800_000_000.0
+
+    def setup(self, run="run-1", **changes):
+        binding = {**BINDING, "run_id": run, "track_epoch": 1}
+        return {**SETUP, "setup": {**SETUP["setup"], "binding": binding, **changes}}
+
+    def learn(self, channel, fixture):
+        packet = (1, bundle(fixture[0]), "fixture-7")
+        for i in range(B.LEARN_FRAMES + 2):
+            channel.handle({**body_header("fixture-7", now=B.EMPTY_S * (i > 0) + i * 0.2),
+                            "binding": channel.binding}, packet)
+        self.assertIsNotNone(channel.maker.background)
+
+    def channel(self, at=0.0):
+        return B.BodyChannel(self.state, wall=lambda: self.wall + at)
+
+    def test_a_restart_in_the_same_room_starts_from_the_learned_background(self):
+        fixture = scene("standing")
+        first = self.channel()
+        first.handle(self.setup(), None)
+        self.learn(first, fixture)
+        self.assertTrue((self.state / B.BACKGROUND_FILE).is_file())
+        later = self.channel(at=600)
+        self.assertEqual(later.handle(self.setup(run="run-2"), None)["body_ready"], True)
+        self.assertIsNotNone(later.maker.background, "a new run, the same room and camera: no warming")
+        self.assertTrue(np.array_equal(later.maker.background, first.maker.background))
+        self.assertIsNone(later.maker.learned_at, "the next empty spell still learns it afresh")
+        frame, why = later.maker.step(fixture[1], observation="person", person=subject(fixture), now=20,
+                                      frame_key="fixture-7", binding=BINDING)   # the fixture's head evidence's
+        self.assertIsNone(why)
+        self.assertGreater(frame["points"]["count"], 0)
+
+    def test_another_room_camera_or_an_old_one_starts_warming(self):
+        fixture = scene("standing")
+        first = self.channel()
+        first.handle(self.setup(), None)
+        self.learn(first, fixture)
+        for changes, at in (({"binding": {**BINDING, "run_id": "r", "content_revision": "another-scan"}}, 60),
+                            ({"room_from_left": [R, [0.3, 0.0, 1.4]]}, 60), ({"depth_scale": 0.95}, 60),
+                            ({}, B.KEPT_MAX_S + 1)):
+            with self.subTest(changes=changes, at=at):
+                later = self.channel(at=at)
+                later.handle(self.setup(run="run-2", **changes), None)
+                self.assertIsNone(later.maker.background)
+
+    def test_a_damaged_file_or_no_state_folder_keeps_nothing(self):
+        (self.state / B.BACKGROUND_FILE).write_bytes(b"not a background")
+        damaged = self.channel()
+        self.assertEqual(damaged.handle(self.setup(), None)["body_ready"], True)
+        self.assertIsNone(damaged.maker.background)
+        plain = B.BodyChannel()
+        plain.handle(self.setup(), None)
+        self.learn(plain, scene("standing"))
+        self.assertEqual((self.state / B.BACKGROUND_FILE).read_bytes(), b"not a background", "no state: nothing kept")
+
+
 class ChannelTest(unittest.TestCase):
     def test_reply_binds_request_frame_and_calibration_and_rebind_drops_background(self):
         ch = B.BodyChannel()

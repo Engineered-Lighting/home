@@ -151,6 +151,7 @@ def main(argv=None):
     parser.add_argument("--device", choices=("auto", "cpu"), default="auto")
     args = parser.parse_args(argv)
     models = Path(args.models).resolve()   # before contain(), which moves the working folder into --state
+    state = Path(args.state).resolve()
     own_stdout()
     detect.guard()
     try:
@@ -189,7 +190,7 @@ def main(argv=None):
             if bodies is None:
                 try:
                     import body
-                    bodies = body.BodyChannel()
+                    bodies = body.BodyChannel(state)   # keeps the learned background in --state across restarts
                 except Exception as exc:  # a type name only
                     if header.get("kind") == "setup_body":
                         say({"body_refused": type(exc).__name__, "binding": (header.get("setup") or {}).get("binding")})

@@ -163,10 +163,15 @@ def status_line(perceiver, latest, logs=()):
     qwen = health.get("qwen")
     asks = "" if not qwen else " | Qwen %s%s, %d asks a minute" % (qwen["state"], (": " + qwen["why"]) if qwen.get("why") else "",
                                                                  qwen.get("asks_per_min") or 0)
-    return ("camera %s%s | %s frames a second | %d people | %s behind | %d dropped a minute | %d frames%s%s"
+    # The camera's own wait and the whole capture to stream (perceive's module note), over the last minute; only once
+    # the camera says its wait (body5), so the line is as it was for a camera that doesn't.
+    minute = "".join(" | %.2f s %s (p95 %.2f)" % (health[key + "_median"], words, health[key + "_p95"])
+                     for key, words in (("camera_age_s", "camera wait"), ("capture_to_stream_s", "capture to stream"))
+                     if health.get(key + "_median") is not None and health.get(key + "_p95") is not None)
+    return ("camera %s%s | %s frames a second | %d people | %s behind%s | %d dropped a minute | %d frames%s%s"
             % (camera.get("status", "starting"), (": " + camera["why"]) if camera.get("why") else "",
                "-" if health.get("fps_in") is None else "%.1f" % health["fps_in"], len(event.get("tracks") or []),
-               "-" if lag is None else "%.2f s" % lag, health.get("dropped_per_min") or 0, c["frames"],
+               "-" if lag is None else "%.2f s" % lag, minute, health.get("dropped_per_min") or 0, c["frames"],
                (", " + problems) if problems else "", asks))
 
 

@@ -67,9 +67,10 @@ class RgbBodyInput:
         self.profile, self.camera, self.clock = profile, camera, clock
 
     def __call__(self, bundle, meta, depth, *, frame_key, mode, observations, tracks, supported, association,
-                 capture_mono=None):
+                 capture_mono=None, together=None):
         """capture_mono: perception's own estimate of the frame's capture, on the source's clock (the camera's stamp
-        plus the arrival-anchored offset the people stream uses)."""
+        plus the arrival-anchored offset the people stream uses). together: the pairs of track ids (sorted) a detection
+        each supported on one frame this epoch; None counts every other track as someone else."""
         profile = self.profile
         if mode != "rgb" or self.camera.transform_id != profile.transform_id:
             return None
@@ -96,15 +97,21 @@ class RgbBodyInput:
             return BodyInput(*common, "empty")
         if len(tracks) != len(supported):
             return BodyInput(*common, "unknown")
-        # The tracks a detection supports this frame. One that none supports (coasting) has no pixels here. Often it's
-        # the same person left behind: a stop, a sit or a stand-up moves them past den-track's gate, and their next
-        # detection starts a new track while the old one coasts on for seconds. It doesn't blank the figure.
+        # The tracks a detection supports this frame.
         seen = [(track, ids) for track, ids in zip(tracks, supported) if ids]
         if len(seen) > 1:   # two people seen: whose depth is whose can't be told
             return BodyInput(*common, "ambiguous")
         if len(seen) != 1:
             return BodyInput(*common, "unknown")
         (track, ids), = seen
+        # A track no detection supports this frame is someone missed (behind the other, one box for two close people),
+        # unless it's this person left behind: a stop, a sit or a stand-up moves them past den-track's gate, so their
+        # next detection starts a new track while the old one coasts on for seconds. One detection supports one track,
+        # so those two were never seen together. Any other track, seen with this one before, is still someone else.
+        for other, other_ids in zip(tracks, supported):
+            if not other_ids and (together is None
+                                  or tuple(sorted((track["track_id"], other["track_id"]))) in together):
+                return BodyInput(*common, "ambiguous")
         # The track's own observation this frame. Any other detection doesn't support it: a stray box, a reflection,
         # a pose the tracker never followed. It isn't this person, and it doesn't blank their figure.
         own = [o for o in people if o["obs_id"] in ids]

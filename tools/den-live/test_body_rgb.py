@@ -76,18 +76,21 @@ class Fixture:
 
     def place(self, dx):
         """The person dx metres along the room's x: the scene's depth, and the detector's keypoints there."""
+        self.scene, self.depth, self.pixels = self.person_at(dx)
+
+    def person_at(self, dx):
+        """(the scene, its depth and the detector's keypoints) with the person dx metres along the room's x."""
         synth = self.synth
-        self.scene = synth.Scene(panel_dx=dx)
-        self.depth = self.scene.depth_mm()
+        scene = synth.Scene(panel_dx=dx)
         # A distinct foreground silhouette and shoulder/hip seeds outside
         # the conservative neck exclusion, using the pinned projection.
         joints = {**synth.JOINTS, "left_hip": (0.16, 0.95), "right_hip": (-0.16, 0.95),
                   "left_shoulder": (0.23, 1.41), "right_shoulder": (-0.23, 1.41)}
-        self.pixels = {}
+        pixels = {}
         for name, (x, z) in joints.items():
-            left = synth.g.apply(*self.scene.left_from_room, (x + dx, synth.PANEL_Y, z))
-            self.pixels[name] = synth.g.project(
-                synth.g.apply(*synth.RGB_FROM_LEFT, left), self.scene.k_rgb, self.scene.d_rgb)
+            left = synth.g.apply(*scene.left_from_room, (x + dx, synth.PANEL_Y, z))
+            pixels[name] = synth.g.project(synth.g.apply(*synth.RGB_FROM_LEFT, left), scene.k_rgb, scene.d_rgb)
+        return scene, scene.depth_mm(), pixels
 
     def publish(self, scope, **fields):
         self.rendered.append((scope, fields))
@@ -103,7 +106,8 @@ class Fixture:
 
     def frame(self, seq, *, empty=False, rival=False, receipt=True, receipt_depth_seq=None, age=0.05,
               correction=CORRECTION, depth=None, skew=0.015, session="fixture-camera", missing_ear=False,
-              timing_evidence=TIMING_EVIDENCE):
+              timing_evidence=TIMING_EVIDENCE, first=True, second=None):
+        """first: the person's own detection (False: missed this frame). second: another person's keypoints, detected."""
         capture = 5100.0 + seq * 0.2
         self.clock.now = 100.0 + seq * 0.2 + 0.07
         meta = self.synth.metadata(session, seq, capture, capture - skew,
@@ -111,8 +115,11 @@ class Fixture:
         meta["depth_correction"] = correction
         pixels = {name: uv for name, uv in self.pixels.items() if not missing_ear or name != "right_ear"}
         row = self.rows.row(capture, rgb_seq=seq, pixels=pixels)
-        if empty:
+        if empty or not first:
             row["detections"].clear()
+        if second is not None:
+            other = self.rows.row(capture, rgb_seq=seq, pixels=second)["detections"][0]
+            row["detections"].append(dict(other, id="second"))
         if rival:
             row["detections"].append({"id": "rival", "class": "person", "score": 0.55,
                                       "box_xyxy": [8.0, 12.0, 90.0, 65.0], "keypoints": None})
@@ -328,17 +335,52 @@ class RgbBodyTests(unittest.TestCase):
         pose = dict(value.pose, obs_id="pose-a")
         old, new = dict(value.track, track_id="t1", state="coasting"), dict(value.track, track_id="t2", state="confirmed")
         doubt = {"t1": ("ambiguous", 0.0), "t2": ("ambiguous", 0.0)}
-        call = lambda **kw: f.provider(bundle, meta, depth, frame_key=value.frame_key, mode="rgb", association=doubt, **kw)
+        call = lambda together=frozenset(), **kw: f.provider(bundle, meta, depth, frame_key=value.frame_key, mode="rgb",
+                                                             association=doubt, together=together, **kw)
         split = call(observations=[pose], tracks=[old, new], supported=[set(), {"pose-a"}])
         self.assertEqual(split.observation, "person")
         self.assertEqual(split.track["track_id"], "t2")
         passer = dict(pose, obs_id="passer")
         self.assertEqual(call(observations=[pose, passer], tracks=[old, new], supported=[{"passer"}, {"pose-a"}]).observation,
                          "ambiguous", "a second person seen")
+        # Someone seen with this person before and missed this frame (behind them, one box for two close people) is
+        # still someone else, confirmed or coasting.
+        missed = dict(old, state="confirmed")
+        for other in (missed, old):
+            self.assertEqual(call(observations=[pose], tracks=[other, new], supported=[set(), {"pose-a"}],
+                                  together=frozenset({("t1", "t2")})).observation, "ambiguous", other["state"])
+        self.assertEqual(call(observations=[pose], tracks=[missed, new], supported=[set(), {"pose-a"}],
+                              together=None).observation, "ambiguous", "with no record of who was seen together")
         self.assertEqual(call(observations=[], tracks=[old], supported=[set()]).observation, "unknown",
                          "nobody seen: the last figure holds")
         self.assertEqual(call(observations=[pose], tracks=[dict(new, state="coasting")], supported=[{"pose-a"}],
                               ).observation, "unknown", "a coasting track is never the figure's")
+
+    def test_two_people_side_by_side_are_never_one_figure_through_misses(self):
+        """Two people touching, side by side as on the sofa, through den-track. Both seen: no figure. Then one is missed
+        for three frames (behind the other, one box for both), then each in turn for a frame: the missed one is still
+        someone else, so still no figure, never one drawn with the other's depth flooded in."""
+        import numpy as np
+
+        f = self.f
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        _, depth_b, pixels_b = f.person_at(0.6)
+        a, b = np.frombuffer(f.depth, "<u2"), np.frombuffer(depth_b, "<u2")
+        both = np.where((a > 0) & ((b == 0) | (a <= b)), a, b).astype("<u2").tobytes()
+        for n in range(55):
+            f.frame(n, empty=True)
+        for n in range(55, 75):
+            event = f.frame(n, depth=both, second=pixels_b)
+        self.assertEqual(len(event["tracks"]), 2, "den-track follows both")
+        self.assertEqual(f.last.observation, "ambiguous")
+        start = len(f.rendered)
+        seen = [(True, False)] * 3 + [(True, True), (False, True), (True, True), (True, False), (True, True),
+                                       (False, True), (True, False)]
+        for n, (first, second) in enumerate(seen, 75):
+            f.frame(n, depth=both, first=first, second=pixels_b if second else None)
+            self.assertNotEqual(f.last.observation, "person", "frame %d, seen %s" % (n, (first, second)))
+        self.assertEqual([fields for _, fields in f.rendered[start:] if fields.get("frame")], [], "no figure")
 
     def test_the_split_replayed_through_den_track_keeps_one_figure(self):
         """LA's split, through den-track: the owner shown, two frames with no detection (sitting down), then seen 1.5 m

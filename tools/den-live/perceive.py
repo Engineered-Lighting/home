@@ -521,6 +521,9 @@ class Perceiver:
         room = self.track_method.room
         self.core = self.t.records.tracker_core.TrackerCore(self.track_method.tracker, exits=room["exits_m"], floor=room["floor_m"])
         self.strong = set()   # tracks a pose or a person box at PERSON_MIN or more has ever supported
+        # Pairs of tracks a detection each supported on one frame this epoch: two people. A split's two tracks never
+        # are (one detection supports one track), so the body tells a left-behind duplicate from someone missed.
+        self.together = set()
         self.last_capture = None
         self.pending_capture = None   # the capture time of the frame prepare handed on, until finish takes it
         self.body_input = None
@@ -647,7 +650,7 @@ class Perceiver:
             value = self.body_provider(bundle, meta, depth, frame_key=frame_key, mode=self.mode,
                                     observations=observations, tracks=tracks, supported=supported,
                                     association={} if association is None else association,
-                                    capture_mono=ref.capture_mono)
+                                    capture_mono=ref.capture_mono, together=frozenset(self.together))
             arrival = receipt_arrival(bundle)
             if (qualified_body_input(value, self.scope) and value.frame_key == frame_key
                     and value.run_id == ref.service_run_id and value.track_epoch == ref.camera_epoch
@@ -888,6 +891,8 @@ class Perceiver:
             supported.append(set(track.obs_ids))
             # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
             association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
+        seen_now = sorted(marker["track_id"] for marker, ids in zip(tracks, supported) if ids)
+        self.together.update((a, b) for i, a in enumerate(seen_now) for b in seen_now[i + 1:])
         now_mono += time.monotonic() - start_lift
         if now_mono >= capture_mono + FRESH_S:
             return self._drop("expired", now_mono, "tracking result expired")
@@ -1034,7 +1039,8 @@ def _legacy_body_person(observations, tracks, supported):
 
 def body_person(track, pose, heading, max_heading_sd=None):
     """Pass only the current supported body joints from the one seen person's pose: a confirmed track, confident or
-    ambiguous to den-track (body_rgb has made sure no other person is seen, so a doubt about who doesn't blank them)."""
+    ambiguous to den-track (body_rgb has made sure no one else is seen or was seen with them, so den-track's doubt is
+    about a left-behind duplicate and doesn't blank them)."""
     if max_heading_sd is None:
         return _legacy_body_person(track, pose, heading)
     if (not track or track.get("state") != "confirmed" or track.get("association") not in ("confident", "ambiguous")

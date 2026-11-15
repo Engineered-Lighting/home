@@ -240,6 +240,7 @@ class PipelineTests(unittest.TestCase):
         perceiver.snapshot = TrackingSnapshot(perceiver.run_id, 3, 1, None, "starting", None, "unknown", ())
         perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})
         perceiver.core, perceiver.strong = SimpleNamespace(step=lambda *args: [(track, "confirmed")]), set()
+        perceiver.together = set()
         perceiver.clock = SimpleNamespace(add=lambda *_: None, offset=lambda: 0)
         perceiver._transit = lambda *_: None
         perceiver.require_source_correction, perceiver.source_correction = False, None
@@ -276,7 +277,8 @@ class PipelineTests(unittest.TestCase):
         key = ["synthetic-run", 3, 1]
         self.assertEqual(calls, [("detect", {}),
                                  ("provider", {"frame_key": key, "mode": "none", "observations": (), "tracks": (),
-                                               "supported": (), "association": {}, "capture_mono": 100.0}),
+                                               "supported": (), "association": {}, "capture_mono": 100.0,
+                                               "together": frozenset()}),
                                  ("submit", 42, {"frame_key": key, "mode": "infrared"})])
         self.assertEqual(event["why"], "too dark")
 

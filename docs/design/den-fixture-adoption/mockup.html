@@ -304,7 +304,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
   // Rehearse the full set: the four virtual fixtures, whatever is installed (not during a swap).
   const rehearsingNow = () => S.rehearse && !(S.flow && S.flow.swapStarted);
   // A robotic socket serves the real room only when live: on, a lit transport, and its aim check passed.
-  const liveLitNow = () => S.adopted && S.go.physical === "on" && S.go.aim === "passed" && S.go.transport === "lit" && !rehearsingNow();
+  const liveLitNow = () => S.adopted && S.go.physical === "on" && S.go.aim === "passed" && S.go.transport === "lit" && S.f3 !== "recheck" && !rehearsingNow();
   const timers = new Set();
   const later = (ms, fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
   const clearTimers = () => { for (const t of timers) clearTimeout(t); timers.clear(); };
@@ -379,7 +379,7 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
     if (id === "F3" && S.adopted) {
       if (S.f3 === "offline") return { text: "offline", cls: "attn" };
       if (S.f3 === "fault") return { text: "fault", cls: "attn" };
-      if (S.f3 === "recheck") return { text: "new profile · record it", cls: "attn" };
+      if (S.f3 === "recheck") return { text: "new profile · dark until its aim check", cls: "attn" };
       if (S.f3 === "wrongboard") return { text: "not its board", cls: "attn" };
       if (S.go.physical === "on") return liveLitNow() ? { text: "live", cls: "live" } : { text: S.go.aim === "outofdate" ? "on · aim check out of date" : "on · moving dark", cls: "" };
       if (S.go.physical === "tests") return { text: "tests · moves dark", cls: "" };
@@ -654,10 +654,12 @@ details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5
         tests: ["Tests · moves dark", "Only your Go live moves reach it. The coordinator still plans it virtually.", ""],
         on: liveLitNow() ? ["Live", "The coordinator drives F3 and may light it.", ""] : ["On · moving dark", "The coordinator drives F3 dark until its aim check passes. The real bulbs still plan as if it can't serve.", ""] })[S.go.physical],
       held: ["In your hands", "You changed its spot. The coordinator passes it by and learns from it.", `<button class="btn small" data-act="f3" data-v="virtual">Return to auto</button>`],
-      stopped: ["Stopped · the spot is dark", "Stop survives a reboot. Its room light is untouched.", `<button class="btn small" data-act="f3" data-v="virtual">Resume</button><span class="meta">Always your press.</span>`],
+      stopped: S.go.physical === "off" || !S.go.preview
+        ? ["Stopped · the spot is dark", "Stop survives a reboot. Its room light is untouched. At off, resume it in Home Assistant.", `<span class="meta">Resume it in Home Assistant: always your press.</span>`]
+        : ["Stopped · the spot is dark", "Stop survives a reboot. Its room light is untouched.", `<button class="btn small" data-act="f3" data-v="virtual">Resume</button><span class="meta">Always your press.</span>`],
       offline: ["Offline since 21:40 · check its power", "It rejoins by itself. The other sockets cover its light now.", `<button class="btn small" data-act="f3" data-v="virtual">Reconnect to F3</button>`],
       fault: ["Fault: a motion fault · dark and holding", "Check it, then Resume. A light fault needs a power cycle; anything else, a bench visit.", `<button class="btn small" data-act="f3" data-v="virtual">Resume</button>`],
-      recheck: ["New profile from the bench", "Same board, new profile: it was re-commissioned. den-live sends it only Stop until you record it. Recording it marks the aim check out of date; F3's switch is untouched.", `<button class="btn small primary" data-act="recordProfile">Record it</button>`],
+      recheck: ["New profile from the bench", "Same board, new profile: it was re-commissioned. den-live plans it from the new record; its aim check no longer matches, so the coordinator's moves stay dark until it passes again. Moves follow F3's switch.", `<button class="btn small primary" data-act="recordProfile">Record it</button><span class="meta">Acknowledges it. The switch is untouched.</span>`],
       wrongboard: ["F3's board isn't the one adopted here", "A different board number answered for F3. Only Stop goes to it. Take it down and adopt the right one.", ""],
     }[S.f3];
     return `<section class="section"><div class="callout ${["offline", "fault", "recheck", "wrongboard"].includes(S.f3) ? "attn" : ""}"><b>${words[0]}</b><span class="meta">${words[1]}</span>${words[2] ? `<div class="actions">${words[2]}</div>` : ""}</div>

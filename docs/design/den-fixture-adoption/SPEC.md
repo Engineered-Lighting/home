@@ -18,6 +18,13 @@ until the bench sittings pass and the owner says go (§7).
   - trace rows carry a route, so the sender can tell the owner's Go live moves from the coordinator's;
   - every fact about a board maps to exactly one state.
 
+**Revision 4** follows the third check:
+- a new run carries the owner's hand holds and reuses unchanged board checks;
+- den-live builds each board's profile from its record;
+- an offline board is retried on a timer;
+- only den-live may record an aim-check pass;
+- the sockets route is signed-in only, for reading too.
+
 **Inputs:**
 - the firmware chat's adoption handoff: bench commissioning A1–A13, Home adoption B1–B11, states and faults,
   capabilities;
@@ -97,12 +104,20 @@ the sofa mark, the desk target and the named aims are never retired, and Home's 
 `PUT …/labels`).
 - Signed-in Home reads it, and saves the whole document, through the gateway's den-live route: `GET` and `PUT
   …/sockets`.
-- Each save is a compare-and-swap on its `revision`: 200 with the new document, 409 with the current one, 400 with a
-  reason. As with labels, the gateway lets only signed-in Home send it, with the CSRF header.
-- **den-live has each revision the moment it's saved.** It starts a new run on it (§3.4). It also checks the file's
-  revision every 2 s, so a file put back by hand is picked up too.
-- If den-live doesn't answer, Home can't save a socket change, and says so: `den-live isn't answering, so nothing
-  changed.`
+- **The route is its own kind, signed in only, for reading too.** Look-only and Serve-admitted requests get 403 on both
+  `GET` and `PUT`. Unlike labels, it holds device ids and the switch. Look-only still sees each socket's kind, state and
+  role in the snapshot's `sockets{}`.
+- Each save is a compare-and-swap on its `revision`, with the CSRF header: 200 with the new document, 409 with the
+  current one, 400 with a reason. Each save carries its request id as `last_request_id`, so an unknown outcome is
+  settled by a `GET`.
+- **Home's save may keep or lower `aim_check`, never set it to `passed`.** A save that does is a 400. Only den-live
+  writes a pass, from its own aim-check result (§4.12).
+- **den-live has each revision the moment it's saved.** It starts a new run on it (§3.4) before the `PUT` answers. It
+  also checks the file's revision and digest every 2 s, so a file put back by hand is picked up too.
+- If den-live doesn't answer:
+  - a save fails, and Home says `den-live isn't answering, so nothing changed.`;
+  - a read fails, and Home shows the socket list as `den-live isn't answering`, with its buttons off and no "New
+    fixture found".
 
 This is the **only map of boards to sockets.** desk.json shrinks to the transport switch.
 
@@ -112,11 +127,13 @@ This is the **only map of boards to sockets.** desk.json shrinks to the transpor
 { "kind": "robotic",                  // robotic | hue | empty
   "state": "adopted",                 // robotic only: calibrating | adopted
   "physical": "off",                  // robotic only: off | tests | on (§4.10)
-  "board": { "number": 2, "profile_id": "…", "ha_device": "…" },   // robotic only
+  "board": { "number": 2, "profile_id": "…", "ha_device": "…",      // robotic only; the one current device id
+             "readback": { "state": "…", "attention": "…", "profile_id": "…" } },   // HA entities, from the registry at adoption
   "name": "Sofa spot",
   "replaced_light": "light.<bulb>",   // for the swap back
-  "mount_yaw_deg": 0,                 // the mount's turn from the modelled front (§3.2)
-  "aim_check": { "result": "not_run" | "passed" | "out_of_date", "at": <ts>, "yaw_deg": 0, "fwhm_deg": 20 },
+  "mount_yaw_deg": 0,                 // the mount's turn from the modelled front, + counter-clockwise from above (§3.2)
+  "aim_check": { "result": "not_run" | "passed" | "out_of_date", "at": <ts>,
+                 "yaw_deg": 0, "profile_id": "…", "fwhm_deg": 20 },   // what it passed with; only den-live writes passed
   "beam_fwhm_deg": 20, "lumens": null, "assumed": ["beam_fwhm_deg", "lumens"] }
 ```
 
@@ -124,19 +141,21 @@ This is the **only map of boards to sockets.** desk.json shrinks to the transpor
 - **The bulb map.** That's den_lighting's `sockets:` map (plan 04, step 6), the one source. Home and den-live read it
   through den_lighting's status.
 - **Anything the board reports:** limits, motion, lit travel, capabilities. den-live and Home read those from
-  `c12.get_profile`, so they can't disagree.
+  `c12.get_profile`, so they can't disagree (§3.5).
 - **Offline, fault or stopped.** Those come from den-live's health reads, merged into the snapshot's `sockets{}`. They
   never make a revision.
 - **The MAC or IEEE address.**
 
 **A missing or unreadable sockets file** reads as no socket robotic: every socket `hue`, Rehearse on, nothing sent but
 Stop. That's today's view, and the program's dark-by-default rule. An unreadable file also shows `The sockets record
-doesn't read`.
+doesn't read`. Then den-live has no board list, so **Home's Stop goes to the gateway's fallback**, which stops every
+board in the boards store (§5).
 
 ### 3.2 The mount yaw: one number, turned in one place
 
-The yaw is the mount's turn from the socket's modelled front. It lives in the sockets record (`mount_yaw_deg`), which
-exists for every socket, so it never touches the equipment record's fields.
+The yaw is the mount's turn from the socket's modelled front, **positive counter-clockwise seen from above**, the same
+sense as the board's pan. It lives in the sockets record (`mount_yaw_deg`), which exists for every socket, so it never
+touches the equipment record's fields or the geometry export.
 - **One conversion,** in a shared function: the socket's `horizontal_world_reference`, from the geometry export, turned
   by the yaw about Z. It's used by den-live when it loads its rows at each new run (aiming, and `eye.path_clear`), and
   by Home's renderer (`equipment-virtual-fixtures.mjs`, at the reference), for robotic sockets only. Hue and empty
@@ -144,16 +163,18 @@ exists for every socket, so it never touches the equipment record's fields.
 - **Written at three points:** mounting ("It faces another way"), the first dark test move ("Turned"), and the aim
   check's correction. Each is one compare-and-swap that sets the yaw **and** marks the aim check `out_of_date`, so
   there's no ordering gap.
-- **The aim check records the yaw it passed with.** If the yaw differs, den-live treats it as not passed, and the
-  spot stays dark.
+- **The aim check records the yaw and the `profile_id` it passed with.** If either differs, den-live treats it as not
+  passed, and the coordinator's rows stay dark.
 - **Taking a fixture down** sets the yaw back to 0.
 - The run header carries each socket's yaw (S1).
 
 ### 3.3 The boards store, and the draft: in Home
 
 **The boards store** is a small private store in Home's gateway, beside the equipment store, with its own
-compare-and-swap. It's never exported. It holds one entry per board, keyed by board number + `board_mac`:
-- the HA device id and IEEE address;
+compare-and-swap. It's never exported. It keeps **history and bench facts only**: every current fact den-live or Home
+acts on (the device id, the yaw, the switch, the aim check) is in the sockets record alone. It's written after a socket
+save succeeds. It holds one entry per board, keyed by board number + `board_mac`:
+- the IEEE address, and the HA device ids the board has had;
 - `fw_build`, `capabilities`, and `profile_id` and `mount_revision` at adoption;
 - the zone map: which endpoints are the radials, and which is the downlight (or none). It's entered from the bench, and
   shown as assumed from Light 1's check until then;
@@ -169,14 +190,50 @@ or the other device, resumes from it. **Cancel** discards it, unless the bulb is
 
 ### 3.4 What a new run means in den-live
 
-Each new sockets revision starts a new run:
+Each new sockets revision starts a new run. **den-live rebuilds and rebinds** the Preview, the trace, the desk, the
+sender and its routes **before the `PUT` answers**:
 - a new run header, with the new map, profiles, yaws and per-socket lit rule;
 - unsent moves and keep-lits are gone;
 - learning is kept.
 
 **Lit roles carry over.** A socket that was lit for a role relights as already admitted: its relight skips the facing
 check. Only the head, the eyes, range, the end of the task, or another head in the beam can end it (the owner's facing
-ruling). A lit spot pays only a short relight.
+ruling).
+
+**The owner's hand holds carry over,** so a save never takes back what the owner is holding (manual always wins). Each
+hold keeps:
+- its held parts;
+- its `ends`, `episode`, `task_light` and `lit`;
+- its `hold_learning`;
+- the aim the hand left.
+
+A hold still ends only on Off, Stop, Return to auto, or its own end. The one exception: a socket that leaves robotic, or
+gets a different board, drops its own hold. The snapshot carries each hold's `event_id`, and Home re-keys its manual
+entry to the new run by it (H4). Today Home matches on the run's epoch, so a carried hold would never be released.
+
+**Board checks carry over too.** A socket whose board entry (number, `profile_id`, device) is unchanged, and whose
+board hasn't rejoined since, keeps its last board check. Only changed or new sockets wait for `get_profile`. So a save
+for F2 relights a lit F3 at once, and a lit spot pays only a short relight.
+
+### 3.5 The board's profile in den-live
+
+den-live builds den-core's profile for each robotic socket **in memory**, from the `get_profile` answer, with the
+handoff's key map:
+
+| den-core key | From |
+|---|---|
+| `range` | the record's per-motor limits, inset by its `host_inset_cdeg` |
+| `axes`, `settle_s` | the record's motion profile; `settle_s` is the slower axis's `settle_ms` / 1000 |
+| `path_margin_cdeg` | the record's `path_margin_cdeg` |
+| `lit_motion`, `retarget_mid_move` | the record's `motion_flags`, bits 0 and 1 |
+| `dim_motion` | true when the board advertises timed moves with fades, its only way to dim while moving; otherwise false. The coordinator chat confirms the meaning. |
+| `beam_fwhm_deg`, `lumens` | the sockets record; den-core's assumed defaults when missing, marked assumed |
+| `capabilities` | the answer's `capabilities` |
+| `label`, `fictional` | the socket's name; always `false` |
+
+**It never falls back to the fictional profile** for an adopted board. It keeps the board number and `profile_id` for
+the board check, never `board_mac` or the motor ids, and copies the record nowhere. The run header carries each socket's
+number, `profile_id`, capabilities and the built profile's `profile_sha256`, as today's header carries its hash.
 
 ## 4. The flow, screen by screen
 
@@ -229,7 +286,7 @@ virtual and harmless. The dates are lock 1 (§4.10).
 | `no_record` or `record_invalid` | **Not commissioned.** `It works as nine ordinary lights, but its spot and motion stay off. Commission it at the bench, then come back.` | Bench commissioning in the one app. Home can't fix it. **Leave it for now** keeps it unbound. |
 | `no_answer` | `It joined but isn't answering yet.` Home asks again 3 times, 5 s apart. | **Check again**. If it never answers: power-cycle it. |
 | `capabilities` null, `contract_version` ≠ 1, or `frame_id` ≠ 1 | **Firmware update needed.** `Home needs firmware v2-b or later, in the c12-fixture-joints-1 frame.` | At the bench. |
-| Same board number, different MAC, as an adopted board | `Two boards say they're board 2.` | A bench visit to renumber one. Home adopts neither until then. |
+| Same board number, different MAC, as an adopted board | `Two boards say they're board 2.` | A bench visit to renumber the one that isn't adopted. Home adopts neither until then. |
 | Same board number and MAC as an adopted board, new HA device id | `This is F3's fixture, paired again.` **Reconnect to F3.** | Saves the new HA device id in the sockets record, so den-live's sender follows it at once. If its `profile_id` changed too, it's also re-commissioned (§5). |
 
 **"Which one is this?"** offers **Pulse its room light**, the owner's press. It pulses endpoint 1, the room light, at
@@ -388,15 +445,22 @@ Stop always goes. Resume goes at tests and on.
 
 The run header carries each socket's lit rule, so the replay can follow it (S1).
 
-**The board check.** Before it sends anything but Stop to a socket, at the start of each run and whenever the board
-rejoins, den-live calls `c12.get_profile` on the socket's device. Every non-Stop row waits for the answer. Each fact maps
-to one state:
-- **no answer** is offline. den-live checks again when the board rejoins;
-- **a different board number** is `not the board adopted here`, and only Stop goes;
-- **the same number with a new `profile_id`** is re-commissioned (§5), and only Stop goes until the owner records it.
+**The board check.** Before it sends anything but Stop to a socket, den-live calls `c12.get_profile` on the socket's
+device, and every non-Stop row waits for the answer. It checks:
+- at a socket's first run;
+- when its board entry changes;
+- when the board rejoins.
 
-den-live keeps only the board number, `profile_id` and capabilities from the answer, never `board_mac`. It doesn't copy
-the record anywhere.
+An unchanged socket keeps its last check (§3.4). Each fact maps to one state:
+- **no answer** is offline. den-live retries every 30 s while the socket is offline, within the radio budget, as well
+  as when the board rejoins;
+- **a different board number** is `not the board adopted here`, and only Stop goes;
+- **the same number with a new `profile_id`** is re-commissioned (§5). den-live builds the profile from the new record,
+  and the aim check no longer matches it, so the coordinator's rows stay dark. Moves follow the switch, and the board
+  enforces its own new limits. **Record it** in Home acknowledges it.
+
+den-live builds the profile in memory (§3.5) and keeps only the board number and `profile_id`, never `board_mac` or the
+motor ids. It copies the record nowhere.
 
 **A departure from the handoff, recorded in §8:** the firmware's table takes the coordinator only once "adopted, aim
 check passed" (handoff, §6). Here the coordinator may drive a fixture dark at `on` before its aim check, and only
@@ -463,8 +527,9 @@ room are fine; a head in the beam isn't.
 
 No frame is shown or leaves LA.
 
-**Pass:** at least 4 of 5 frames within, on both targets. The socket's `aim_check` becomes `passed`, recording the yaw
-and FWHM it used. From the next run, the coordinator may light F3.
+**Pass:** at least 4 of 5 frames within, on both targets. **den-live writes the pass itself,** from its own result, as
+a sockets revision: `aim_check` becomes `passed`, recording the yaw, `profile_id` and FWHM it used. A Home save can never
+set it. From that new run, the coordinator may light F3.
 
 **Failure:**
 
@@ -487,11 +552,11 @@ whatever is asked.
 **Stored** in the sockets record: `calibrating` or `adopted`, plus `physical` and `aim_check`.
 
 **Live,** from den-live's health, merged into the snapshot's `sockets{}`:
-- den-live reads every adopted board, **whether or not the transport is on**, with a read-only Home Assistant session,
-  as the bulbs' overlay does;
-- it's one multi-attribute read about every 5 s, including `profile_id`, plus `get_profile` at each run and when a board
-  rejoins;
-- reads aren't sending.
+- den-live reads every adopted board, **whether or not the transport is on**, with its existing Home Assistant client:
+  the same token, no new access. These are reads, not the transport, and never sending;
+- it's one multi-attribute read about every 5 s of the socket's `readback` entities, including `profile_id`, plus the
+  board checks (§4.10);
+- until attribute reporting is set up (W2, before fixture 2), health shows **as Home Assistant last saw it**.
 
 | State | Source | Room (orb) | Row | Recovery |
 |---|---|---|---|---|
@@ -501,9 +566,9 @@ whatever is asked.
 | **Live** | stored | As above | `· live` | — |
 | **Aim check out of date** | stored | Orb, with a small amber dot | `· aim check out of date · dark until it passes` | Set by a new yaw, a measured beam width, or a recorded re-commissioning. `physical` is never touched: the coordinator's rows stay dark until the check passes again. |
 | **Held by hand** | den-live | The solid ice ring (the orb WIP's held mark) | `in your hands · Return to auto` | Home's existing hand holds. The board flags an EP 9 or hand MOVE. A change to the radials or downlight (EP 1–8) isn't flagged by the board: Home detects it as it does for a Hue bulb. |
-| **Stopped** | den-live | The core dims, with a small square under it | `Stopped · Resume` | **Resume is always the owner's press.** Stop survives a reboot. |
-| **Offline** | den-live | A hollow dashed ring, no glow | `Offline since 21:40 · check its power` (on a wall switch: `· or the wall switch`) | It rejoins by itself, and den-live checks the board again. If it left the network, pair it again: **Reconnect to F3** (§4.3). |
-| **Re-commissioned** | den-live | Orb, with a small amber dot | `New profile from the bench · Record it` | Same board number, new `profile_id`. Only Stop goes. **Record it** is the owner's press: Home saves the `profile_id` den-live published, and marks the aim check out of date. No re-adoption. |
+| **Stopped** | den-live | The core dims, with a small square under it | `Stopped · Resume`. At off, or with the transport off: `Stopped · resume it in Home Assistant` | **Resume is always the owner's press.** den-live sends it at tests and on. Stop survives a reboot. |
+| **Offline** | den-live | A hollow dashed ring, no glow | `Offline since 21:40 · check its power` (on a wall switch: `· or the wall switch`) | den-live retries the board check every 30 s, and when it rejoins. If it left the network, pair it again: **Reconnect to F3** (§4.3). |
+| **Re-commissioned** | den-live | Orb, with a small amber dot | `New profile from the bench · dark until its aim check` | Same board number, new `profile_id`. den-live plans it from the new record; the aim check no longer matches, so the coordinator's rows stay dark, and moves follow the switch. **Record it** (the owner's press) saves the new `profile_id` and marks the aim check out of date. No re-adoption. |
 | **Not the board adopted here** | den-live | Diamond | `F3's board isn't the one adopted here` | A different board number. Only Stop goes. Take down and re-adopt. |
 | **Fault** | den-live | The amber attention diamond on the orb | The fault in words, from `contracts/c12v2/zcl-fc13.md` | A motion fault (13–19): dark and holding, **Resume** after the owner checks it. A light fault: dark until a power cycle. Over temperature: the spot is out until it cools 2 °C below the trip. Anything else: a bench visit. |
 | **Motors changed or out of range** | den-live | Diamond | `Needs a bench visit` | The one app's recovery screen |
@@ -513,8 +578,9 @@ whatever is asked.
 **Stop has one route, with one fallback.**
 - Go live's Stop and the den's Stop are the same control: den-live's coordinator Stop, which reaches the sender's Stop
   lane first.
-- If den-live doesn't confirm within 1 s, Home's gateway calls `c12.stop` on every adopted board directly. Stop is always
-  safe.
+- If den-live's Stop route doesn't answer within 1 s, or answers that its sockets record doesn't read, Home's gateway
+  calls `c12.stop` directly on every board in its boards store. It reads nothing from den-live to do it, and Stop is
+  safe on any board.
 - Home Assistant's own Stop on the board works even with LA down.
 - H2 makes the gateway forward Stop, Resume and the manual route in every mode. Today it forwards them only in virtual
   mode.
@@ -664,7 +730,7 @@ check`, or `live`.
   checked against its receipt.
 - **No private data leaves:**
   - no frames from the aim check, only within or out per frame;
-  - the MAC and IEEE address stay in Home's boards store, and den-live keeps neither;
+  - the MAC and IEEE address stay in Home's boards store. den-live keeps neither, nor the motor ids;
   - everything said in words goes in through `textContent`.
 
 ## 8. Owner questions, merged, and what's decided
@@ -681,13 +747,14 @@ The firmware chat's 12 (F1–F12) and the coordinator chat's 5 (C1–C5), de-dup
 | F5: where adoption runs | Home at the den. The bench stays in the one app, and Home shows only its result and dates. |
 | F4: the downlight | Which endpoint is the downlight is the bench's to confirm per board (the boards store's zone map, assumed until then). Whether EP 1 includes Z7 is set in the record at the bench (A10). Home reads it. |
 | F8: "which one is this?" | Ask the firmware chat for a slow room-light pulse on Zigbee Identify. Until then: **Pulse its room light**. |
-| F9: re-commissioning | den-live notices the new `profile_id` and sends only Stop. The owner records it (one press), and the aim check runs again. Until it passes, the coordinator's rows stay dark. `physical` is never changed for it. |
+| F9: re-commissioning | den-live notices the new `profile_id` and plans from the new record. The aim check no longer matches, so the coordinator's rows stay dark until it runs again and passes. Moves follow the switch, and the owner acknowledges with **Record it**. `physical` is never changed for it. |
 | F11: firmware updates | At the bench. OTA, when it exists, is outside this spec. |
 | F12: Resume | Never automatic. Always the owner's press. |
 | C3: the full set | Show what's installed. **Rehearse the full set** stays on until the first adoption, and is a toggle after (§6.4). |
 | Before the go | The fixture's room light stands in for the bulb it replaced, and the real bulbs plan as if its spot can't serve (§6.3). |
 | Who may adopt | Signed in only. Look-only shows states. |
 | The go | The first fixture's go opens the transport (an install). Each fixture's own go is the owner's first hold on its switch, with its bench dates entered. There's no separate approval for the Go live screens. |
+| A lit or dark first go | **Lit, recommended.** A lit transport is harmless here: until an aim check passes, the only lit step is the aim check's own leased spot at rest. A dark go would need a second install before any aim check. |
 | The coordinator before the aim check | **A departure from the handoff's table** ("the coordinator taking a fixture: adopted, aim check passed"). The coordinator may drive a fixture **dark** at `on` before its aim check. It **lights** it only after the check passes at the current yaw. The spine tells the firmware chat. |
 
 **For the owner** (each with the default Home would build):
@@ -710,18 +777,18 @@ private-data scan, and no push or merge without the spine.
 
 | Step | What | Tests |
 |---|---|---|
-| **H1** | **The boards store** (compare-and-swap, private folder, never exported). **The gateway's `GET` and `PUT …/sockets`,** through the den-live route, signed in with CSRF, as for labels. **The yaw in Home's renderer:** the shared turn of `horizontal_world_reference`, robotic sockets only. | Boards store: fields, a 409 on conflict, never retried, nothing exported. Sockets route: refused without sign-in or CSRF; a 409 passes through with the current document. Yaw: a robotic socket's reference turns by its yaw; a hue socket and an approximate `direction_unit` are unchanged. |
-| **H2** | **The read path in the gateway:** Home Assistant's service list, the device registry filtered to `EngineeredLight` / `c12-v2`, `c12.get_profile`, attribute reads before adoption, and den_lighting's status for the bulb map. At most one read a second per board. **No direct `c12.move` or `c12.keep_lit`.** The Stop fallback. **Stop, Resume and the manual route forwarded to den-live in every mode.** | A fake Home Assistant for each `get_profile` result (old firmware, a frame other than 1, a duplicate board number, re-pairing); the rate cap. Move and keep-lit are never called directly. Stop, Resume and manual writes reach den-live in each gateway mode. The Stop fallback fires when den-live doesn't confirm within 1 s. |
+| **H1** | **The boards store** (compare-and-swap, private folder, never exported; history and bench facts only, written after the socket save). **The gateway's `GET` and `PUT …/sockets`,** through the den-live route as its own kind: signed in only for both, with CSRF on the save, carrying `last_request_id`. **The yaw in Home's renderer:** the shared turn of `horizontal_world_reference`, robotic sockets only. **Readback entities** from the device registry, written into the socket entry at adoption. | Boards store: fields, a 409 on conflict, never retried, nothing exported. Sockets route: look-only and Serve get 403 on `GET` and `PUT`; refused without CSRF; a 409 passes through with the current document; an unknown outcome is settled by a `GET`. Yaw: a robotic socket's reference turns by its yaw, counter-clockwise from above; a hue socket and an approximate `direction_unit` are unchanged; **the geometry export's `horizontal_world_reference` is unchanged by any yaw.** |
+| **H2** | **The read path in the gateway, through a server-side Home Assistant client with its own allowlist:** states, the device registry (filtered to `EngineeredLight` / `c12-v2`), `c12.get_profile` and `c12.stop` only. The legacy page proxy stays off, or refuses domain `c12`. Attribute reads before adoption, and den_lighting's status for the bulb map. At most one read a second per board. **No direct `c12.move` or `c12.keep_lit`.** The Stop fallback. **Stop, Resume and the manual route forwarded to den-live in every mode.** | A fake Home Assistant for each `get_profile` result (old firmware, a frame other than 1, a duplicate board number, re-pairing); the rate cap. Move and keep-lit are never called, directly or through the page proxy. Stop, Resume and manual writes reach den-live in each gateway mode. The Stop fallback stops every board in the boards store, reading nothing from den-live, when den-live doesn't answer within 1 s, or answers that its record doesn't read. |
 | **H3** | **The flow** (§4.0–4.9): a pure model (`home-den-adoption-model.mjs`: steps, draft, failure transitions) and the sheet. Behind `HOME_WEB_DEN_ADOPTION`, off by default. | Model: every step's success and failure path; resuming a draft; "put the bulb back" after the swap starts; the board check at binding; a stopped board at power-on; den-live not answering on save. Browser, desktop and phone, with a fake Home Assistant and den-live: the flow sends nothing but reads and the pulse; look-only has no buttons; text through `textContent`. |
-| **H4** | **The mixed den** (coordinator A5): drawing by kind, role and switch state (with the orb chat's look), the Controls list, the coordinator panel's Sockets section and actuation line, and **spot playback plus `applyCoordinatorSpots` taking partial row sets scoped by `sockets{}`**. | Every mix with every subset of sockets as the robotic ones. Roles only from `sockets{}`. 1 + 3 and rehearse on and off draw end to end, through both guards; with no `sockets{}`, all four as today. Offline, fault and empty drawing. `virtual` only at off. Phone sizes in both themes. |
-| **H5** | **Fixture health** from den-live's snapshot (§5): each state in words, **Record it** for a re-commissioned board, Reconnect, take down. | Each state from a fake snapshot. Re-pairing keeps the adoption. Record it saves the published `profile_id` and marks the aim check out of date, without touching `physical`. |
+| **H4** | **The mixed den** (coordinator A5): drawing by kind, role and switch state (with the orb chat's look), the Controls list, the coordinator panel's Sockets section and actuation line, and **spot playback plus `applyCoordinatorSpots` taking partial row sets scoped by `sockets{}`**. **A carried hand hold is re-keyed across a new run by its `event_id`.** | Every mix with every subset of sockets as the robotic ones. Roles only from `sockets{}`. 1 + 3 and rehearse on and off draw end to end, through both guards; with no `sockets{}`, all four as today. A hold carried into a new run is still shown, and released when den-live ends it. Offline, fault and empty drawing. `virtual` only at off. Phone sizes in both themes. |
+| **H5** | **Fixture health** from den-live's snapshot (§5): each state in words, **Record it** for a re-commissioned board, Reconnect, take down. | Each state from a fake snapshot, including `as Home Assistant last saw it`. Re-pairing keeps the adoption. Record it saves the published `profile_id` and marks the aim check out of date, without touching `physical`. Stopped at off reads `resume it in Home Assistant`. |
 | **H6** | **Go live** (§4.10–4.13): the card and its locks, the socket's switch (holds up, taps down), the dark test moves, the Stop drill and the aim-check screen, all through den-live's D1 routes. Built before the go, with buttons disabled until lock 2 opens. | Every button disabled unless its locks are open. Hold-to-confirm. One command in flight; nothing retried; Resume never automatic; Stop always enabled. The aim result from a fake den-live reply, with no frame in it. |
 
 ### den-live and the coordinator (the coordinator chat)
 
 | Step | What | Tests |
 |---|---|---|
-| **A1** | **The sockets record** (`den-sockets-1`) in the state folder: the compare-and-swap `GET` and `PUT …/sockets` behind the gateway, and the 2 s check. A new run per revision, with lit roles carried over. Missing or unreadable means no socket robotic. **The sender by route and socket** (§4.10): the table, `dropped_not_live`, `dropped_dark`, coordinator rows lit only after the aim check at the current yaw, and the aim check's leased lit step. **The board check**, holding non-Stop rows until it answers, keeping only number, `profile_id` and capabilities. **The yaw turn** at row load. **Rehearse,** on while no socket is robotic: coordinator rows dropped, real bulbs on §6.3's plan. **Health reads of adopted boards** whether or not the transport is on. `host_inset_cdeg` from the record. A missing `lumens` uses den-core's assumed default, marked assumed in the run header. desk.json shrinks to the transport switch. | With the fake Home Assistant and a lit transport: **a PUT that lowers F3 on → tests stops its next coordinator row, with no restart. The board move:** board 1 from F3 to F2, board 2 into F3, all by PUTs; F3's rows go only to board 2's device, and F2 gets nothing above its own switch. A pending board check: only Stop goes until it answers. At tests with no aim check, the aim check's lit step goes lit and coordinator rows stay dark. At on without a pass, keep-lit is `dropped_dark` and an at-rest lit MOVE goes at level 0. A changed yaw darkens coordinator rows. A different board number gets only Stop; a new `profile_id`, only Stop until recorded; no answer is offline. Rehearse on: no coordinator row, and the bulbs keep the fallback. F3 lit and faced, then a store write: F3 relights. |
+| **A1** | **The sockets record** (`den-sockets-1`) in the state folder: the compare-and-swap `GET` and `PUT …/sockets` behind the gateway, refusing a save that sets `aim_check` to passed, and the 2 s check of revision and digest. **A new run per revision** (§3.4): Preview, trace, desk, sender and routes rebuilt and rebound before the `PUT` answers; lit roles, hand holds and unchanged board checks carried over. Missing or unreadable means no socket robotic. **The sender by route and socket** (§4.10): the table, `dropped_not_live`, `dropped_dark`, coordinator rows lit only after a pass at the current yaw and `profile_id`, and the aim check's leased lit step. **The board check**, holding non-Stop rows until it answers, retried every 30 s while offline. **The profile built in memory** from `get_profile` (§3.5), never the fictional one, never keeping `board_mac` or motor ids. **The yaw turn** at row load. **The aim-check pass written by den-live.** **Rehearse,** on while no socket is robotic: coordinator rows dropped, real bulbs on §6.3's plan. **Health reads of adopted boards** through the existing client, whether or not the transport is on. A missing `lumens` uses den-core's assumed default, marked assumed. desk.json shrinks to the transport switch. | With the fake Home Assistant (extended so `get_profile` returns the record) and a lit transport: **a PUT that lowers F3 on → tests stops its next coordinator row, with no restart. The board move:** board 1 from F3 to F2, board 2 into F3, all by PUTs; F3's rows go only to board 2's device, and F2 gets nothing above its own switch. **An adopted board plans with the range and motion from its record**, never the fictional profile. **F1 held by hand (spot and one radial), then a PUT for F3:** F1 is still held in the new run, gets no row, its snapshot still shows the hand, and Return to auto releases it. **With `get_profile` slower than the keep-lit lease, a PUT for F2 relights a lit F3 without waiting.** A pending board check: only Stop goes until it answers. One `get_profile` times out, the next timed check answers, and the socket recovers with no save and no restart. A PUT carrying a pass gets a 400; den-live's own pass makes a revision. At tests with no aim check, the aim check's lit step goes lit and coordinator rows stay dark. At on without a pass, keep-lit is `dropped_dark` and an at-rest lit MOVE goes at level 0. A changed yaw or `profile_id` darkens coordinator rows. A different board number gets only Stop; no answer is offline. Rehearse on: no coordinator row, and the bulbs keep the fallback. F3 lit and faced, then a store write: F3 relights. |
 | **D1** (with A1) | **The Go live routes** (`route: go_live`): the owner's dark test moves, and the aim check's leased lit step at rest. Never learning events. | Refused below tests. One command in flight. The lit step's keep-lit stops if the route dies. |
 | **A2–A4** | As the coordinator plan has them: aim jobs on robotic sockets only; room roles and the fallback reading light; learning carried over. Plus **the real-room rule** (§6.3) and **facing admits, it doesn't move** (§6.1). | The plan's tests over every mix. A socket that isn't live counts as unable to serve for the bulbs. Every lit role stays lit as the reader turns. |
 | **A1b** | `sockets{F: {kind, state, role, physical}}` in `den-virtual-spots-1` (contract 0/4); each board's health, including `profile_id`, in the coordinator state. | Snapshot shape per mix; health refreshed at about 5 s, never faster than the budget. |
@@ -747,7 +814,7 @@ private-data scan, and no push or merge without the spine.
 
 | Step | What |
 |---|---|
-| **S1** | Contracts: `den-sockets-1` (contract 1's socket part), the socket id ↔ F1–F4 label, `sockets{}` in the snapshot (0/4), and for the trace (5): `route` on every row, `dropped_not_live` and `dropped_dark`, and the run header's per-socket lit rule, yaw, and profiles from adopted boards (number, `profile_id`, capabilities only). The departure from the handoff's coordinator gate, sent to the firmware chat. |
+| **S1** | Contracts: `den-sockets-1` (contract 1's socket part; only den-live writes a pass), the socket id ↔ F1–F4 label, `sockets{}` in the snapshot (0/4) with each hold's `event_id`, and for the trace (5): `route` on every row, `dropped_not_live` and `dropped_dark`, and the run header's per-socket lit rule, yaw, and each adopted board's number, `profile_id`, capabilities and built `profile_sha256`. The profile key map (§3.5), with `dim_motion` for the coordinator chat to confirm. The departure from the handoff's coordinator gate, sent to the firmware chat. |
 | **S2** | verify-producer and the trace header follow the robotic count (with A7). |
 | **S3** | The first go: the transport's install, with the owner. |
 
@@ -765,13 +832,14 @@ private-data scan, and no push or merge without the spine.
 4. H3.
 5. A2–A4 + A1b + P1 + H4 + H5 + H6 + S2 + A7. All of it lands before the first adoption.
 6. **Per fixture:** the bench (sittings 2–4 and A13) → adopt (it plans 1 + 3 virtually) → for the first fixture, the
-   go's install (S3) → its own go (off → tests) → dark tests → on (driven dark) → the aim check → live.
+   go's install (S3, lit recommended) → its own go (off → tests) → dark tests → on (driven dark) → the aim check → live.
+   **W2** (attribute reporting) lands before fixture 2.
 
 ## 10. Privacy
 
 - The mockup and every test use an invented den, invented names and synthetic readings.
 - No camera frame, face, network address, token or room coordinate is shown, stored in git, or sent anywhere.
 - The MAC and IEEE address live only in Home's private boards store. The sockets record holds the HA device id, in
-  den-live's private state folder. den-live keeps only the board number, `profile_id` and capabilities from the board's
-  answer.
+  den-live's private state folder, and only signed-in Home can read it. den-live builds each board's profile in memory
+  and keeps only its number and `profile_id`, never the MAC or the motor ids.
 - The aim check returns within or out per frame, and an offset in centimetres. It never returns an image.

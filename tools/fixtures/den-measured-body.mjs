@@ -1,7 +1,7 @@
-import { encodeBodyFrame, LIVE_BODY_SCHEMA } from '../../app/src/home-3d/apartment-body-frame.mjs';
+import { encodeBodyFrame, KIND, LIVE_BODY_SCHEMA } from '../../app/src/home-3d/apartment-body-frame.mjs';
 
 export function measuredBodyEvent({ revision = 'authored-scan', runId = 'authored-run', epoch = 1, seq = 1,
-    captured = 100, reason, x = 1.2, mode = 'rgb' } = {}) {
+    captured = 100, reason, x = 1.2, mode = 'rgb', held = null } = {}) {
     const common = { schema: LIVE_BODY_SCHEMA, home: 'den', run_id: runId, track_epoch: epoch,
         content_revision: revision, transform_id: 'authored-transform', seq, mode };
     if (reason) return { ...common, status: 'clear', reason };
@@ -15,7 +15,12 @@ export function measuredBodyEvent({ revision = 'authored-scan', runId = 'authore
             positions.push({ key: (row + 110) * 640 + column + 200, xyz_m: [x + dx, 1.5 - 0.07 * Math.cos(dx * 11), z], normal: [0, -1, 0] });
         }
     }
+    if (held) {   // an authored book in front of the chest: kind heldObject, after the body's keys
+        for (let i = 0; i < 60; i++) positions.push({ key: 200000 + i, xyz_m: [x - 0.1 + (i % 10) * 0.02, 1.35, 1.0 + Math.floor(i / 10) * 0.025],
+            normal: [0, -1, 0], kind: KIND.heldObject });
+    }
     const { count, key, position_mm, normal, kind } = encodeBodyFrame({ points: positions }).points;
     return { ...common, status: 'ready', track_id: 'authored-track', capture_ts: captured, expires_ts: captured + 1,
-        points: { count, key, position_mm, normal, kind }, facing_deg: 90, shoulder_midpoint_m: [x, 1.46, 1.51], pelvis_z_m: 0.78 };
+        points: { count, key, position_mm, normal, kind }, facing_deg: 90, shoulder_midpoint_m: [x, 1.46, 1.51], pelvis_z_m: 0.78,
+        ...(held === null ? {} : { object: held === true ? { label: 'book', confidence: 0.91, source: 'detector' } : held }) };
 }

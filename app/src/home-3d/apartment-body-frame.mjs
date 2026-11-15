@@ -109,8 +109,15 @@ const liveId = value => typeof value === 'string' && value.length > 0 && value.l
 const LIVE_LEASES_S = [1, 2];
 const exactFields = (object, fields) => !!object && Object.keys(object).length === fields.length
     && fields.every(key => Object.hasOwn(object, key));
+// What the person holds, when den-live's held-object pass is on: its points are kind heldObject (actual depth pixels, as
+// every measured point), and the frame names it: null, or the detector's label and score.
+const LIVE_KINDS = new Set([KIND.measured, KIND.heldObject]);
+const liveObject = object => object === null || exactFields(object, ['label', 'confidence', 'source'])
+    && typeof object.label === 'string' && object.label.length > 0 && object.label.length <= 32
+    && finite(object.confidence) && object.confidence >= 0 && object.confidence <= 1 && object.source === 'detector';
 
-/* Only the live mount uses this decoder. It accepts current measured geometry and torso summaries. */
+/* Only the live mount uses this decoder. It accepts current measured geometry and torso summaries, and the held object
+ * (kind heldObject points and an object label) when den-live sends one. */
 export function decodeLiveBodyEvent(event) {
     if (event?.schema !== LIVE_BODY_SCHEMA || !liveId(event.home) || !liveId(event.run_id)
         || !liveId(event.content_revision) || !liveId(event.transform_id)
@@ -119,7 +126,9 @@ export function decodeLiveBodyEvent(event) {
     if (event.status === 'clear') {
         return exactFields(event, [...LIVE_FIELDS, 'reason']) && CLEAR_REASONS.has(event.reason) ? { event } : null;
     }
-    if (event.status !== 'ready' || event.mode === 'none' || !exactFields(event, [...LIVE_FIELDS, ...READY_FIELDS])
+    const fields = Object.hasOwn(event, 'object') ? [...LIVE_FIELDS, ...READY_FIELDS, 'object'] : [...LIVE_FIELDS, ...READY_FIELDS];
+    if (event.status !== 'ready' || event.mode === 'none' || !exactFields(event, fields)
+        || Object.hasOwn(event, 'object') && !liveObject(event.object)
         || !liveId(event.track_id) || !finite(event.capture_ts)
         || !LIVE_LEASES_S.some(lease => event.expires_ts === event.capture_ts + lease)
         || !(event.facing_deg === null || finite(event.facing_deg) && event.facing_deg >= 0 && event.facing_deg < 360)
@@ -129,7 +138,7 @@ export function decodeLiveBodyEvent(event) {
     if (!exactFields(p, POINT_FIELDS) || !Number.isSafeInteger(p.count) || p.count < 1 || p.count > MAX_POINTS
         || POINT_FIELDS.slice(1).some(key => typeof p[key] !== 'string' || p[key].length !== 4 * Math.ceil(p.count * FIELDS[key] / 3))) return null;
     const decoded = decodePoints(event);
-    if (!decoded || decoded.keys.at(-1) >= DEPTH_PIXELS || decoded.kind.some(kind => kind !== KIND.measured)) return null;
+    if (!decoded || decoded.keys.at(-1) >= DEPTH_PIXELS || decoded.kind.some(kind => !LIVE_KINDS.has(kind))) return null;
     decoded.torso = { facingDeg: event.facing_deg, shoulder: event.shoulder_midpoint_m, pelvisZ: event.pelvis_z_m };
     return { event, decoded };
 }

@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -31,6 +31,78 @@ def row(wrist=(300, 200, 0.9)):
 
 
 class Masks(unittest.TestCase):
+    def test_cpu_reconstruction_override_transfers_only_prediction_and_prototype(self):
+        class Tensor:
+            def __init__(self, empty=False):
+                self.host = SimpleNamespace(empty=empty)
+                self.cpu_calls = 0
+
+            def cpu(self):
+                self.cpu_calls += 1
+                return self.host
+        class Base:
+            def construct_result(self, pred, img, orig_img, img_path, proto):
+                self.delegated = (pred, img, orig_img, img_path, proto)
+                return self.delegated
+        predictor_class = H.cpu_mask_predictor(Base)
+        self.assertEqual({name for name in predictor_class.__dict__ if not name.startswith("__")}, {"construct_result"})
+        for empty, has_proto in [(False, True), (True, True), (True, False)]:
+            with self.subTest(empty=empty, prototype=has_proto):
+                pred, proto = Tensor(empty), Tensor() if has_proto else None
+                img, original, path = object(), object(), object()
+                predictor = predictor_class()
+                output = predictor.construct_result(pred, img, original, path, proto)
+                self.assertIs(output, predictor.delegated)
+                self.assertEqual(pred.cpu_calls, 1)
+                self.assertIs(output[0], pred.host)
+                self.assertEqual(output[0].empty, empty)
+                for actual, expected in zip(output[1:4], (img, original, path)):
+                    self.assertIs(actual, expected)
+                if proto is not None:
+                    self.assertEqual(proto.cpu_calls, 1)
+                    self.assertIs(output[4], proto.host)
+                else:
+                    self.assertIsNone(output[4])
+
+    def test_custom_predictor_is_lazy_cached_and_only_passed_to_cuda(self):
+        predictor_class = type("SyntheticPredictor", (), {})
+        factory = Mock(return_value=predictor_class)
+        expected, image = object(), object()
+        model = SimpleNamespace(predict=Mock(return_value=[expected]))
+        cpu = H.Segmenter(model, "cpu", predictor_factory=factory)
+        self.assertIs(cpu.predict(image), expected)
+        factory.assert_not_called()
+        model.predict.assert_called_once_with(image, verbose=False, device="cpu", conf=H.SCORE_MIN)
+        model.predict.reset_mock()
+        gpu = H.Segmenter(model, "cuda:0", predictor_factory=factory)
+        self.assertIs(gpu.predict(image), expected)
+        self.assertIs(gpu.predict(image), expected)
+        factory.assert_called_once_with()
+        self.assertEqual(model.predict.call_count, 2)
+        for called in model.predict.call_args_list:
+            self.assertIs(called.args[0], image)
+            self.assertEqual(called.kwargs, {"verbose": False, "device": "cuda:0", "conf": H.SCORE_MIN,
+                                             "predictor": predictor_class, "half": False})
+
+    def test_gpu_first_run_uses_injected_predictor_without_importing_runtime(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / H.HELD_WEIGHTS
+            path.write_bytes(b"synthetic pinned weights")
+            pin = hashlib.sha256(path.read_bytes()).hexdigest()
+            predictor_class = type("SyntheticPredictor", (), {})
+            model = SimpleNamespace(predict=Mock(return_value=[result()]))
+            yolo = Mock(return_value=model)
+            segmenter, why = H.load(folder, "cuda:0", pinned=pin, yolo=yolo,
+                                    predictor_factory=lambda: predictor_class)
+            self.assertIsNone(why)
+            self.assertIs(segmenter.model, model)
+            yolo.assert_called_once_with(str(path), task="segment")
+            call = model.predict.call_args
+            self.assertEqual(call.args[0].shape, (360, 640, 3))
+            self.assertEqual(call.args[0].dtype, np.dtype("uint8"))
+            self.assertIs(call.kwargs["predictor"], predictor_class)
+            self.assertIs(call.kwargs["half"], False)
+
     def test_person_masks_and_only_holdable_near_a_supported_wrist(self):
         masks = H.instances(result((0, .8, square()), (73, .9, square()), (57, .9, square()),
                                    (73, .9, square(20, 20)), (67, .2, square())), row(), cv2)

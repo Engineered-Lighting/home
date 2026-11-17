@@ -212,6 +212,11 @@ class PeopleStream:
                         self.wfile.write(_sse("body_clock", {"server_ts": stream.body_time(stream.body_clock())}))
                     else:
                         self.wfile.write(b"retry: 2000\n\n")
+                        # Always available, including when the coordinator is off.
+                        # Sample here, not when a cached people event was produced.
+                        self.wfile.write(_sse("source_clock", {
+                            "schema": "den-source-clock-1", "clock_domain": "producer_monotonic",
+                            "server_mono": stream.clock()}))
                     self.wfile.flush()
                     while not stream.closing.is_set():
                         wait = stream.body_wait() if body else stream.heartbeat_s

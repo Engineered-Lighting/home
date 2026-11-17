@@ -299,10 +299,11 @@ after(async () => {
   if (folder) fs.rmSync(folder, { recursive: true, force: true });
 });
 
-async function openHome(mobile, { latency = false } = {}) {
+async function openHome(mobile, { latency = false, deviceScaleFactor = 1 } = {}) {
   // The service worker is blocked, as in the other Home browser suites: its one takeover reload per build otherwise lands
   // at an unpredictable point in a case and aborts whatever it was doing.
   const context = await browser.newContext({ ignoreHTTPSErrors: true, hasTouch: mobile, isMobile: mobile, serviceWorkers: 'block',
+    deviceScaleFactor,
     viewport: mobile ? { width: 390, height: 844 } : { width: 1366, height: 768 } });
   await context.route('**/*', route => {
     const url = route.request().url();
@@ -328,7 +329,8 @@ inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draw
   fake.control = { ...fake.control, on: true, stopped: false };
   try {
     for (const mobile of [false, true]) {
-      const { page, context } = await openHome(mobile, { latency: true });
+      // Keep full logical desktop/phone layouts while bounding software-renderer pixel work.
+      const { page, context } = await openHome(mobile, { latency: true, deviceScaleFactor: 0.5 });
       try {
         await page.waitForFunction(() => {
           const rows = window.HomeDenLatency?.snapshot().entries || [];

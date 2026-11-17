@@ -2,6 +2,7 @@
  * inference, or fixture writes. GPU completion proves the submitted frame
  * finished; the browser compositor/monitor presentation remains unobserved. */
 export function createLightingRenderEvidence({ renderer, nowMs = () => Date.now(),
+    monotonicMs = nowMs,
     setTimeout: later = globalThis.setTimeout, clearTimeout: cancel = globalThis.clearTimeout,
     isVisible = () => true, timeoutMs = 2000 } = {}) {
     let disposed = false, frameId = 0;
@@ -14,17 +15,24 @@ export function createLightingRenderEvidence({ renderer, nowMs = () => Date.now(
         if (!jobs.delete(job)) return;
         if (job.timer != null) cancel(job.timer);
         if (job.pollTimer != null) cancel(job.pollTimer);
+        job.signal?.removeEventListener('abort', job.onAbort);
         try { job.gl?.deleteSync(job.fence); } catch (_) { /* lost context */ }
         job.resolve(result);
     };
     const fail = (job, reason) => finish(job, { ok: false, reason });
     return Object.freeze({
-        request({ isCurrent = () => false, isReady = () => true } = {}) {
-            if (disposed || typeof isCurrent !== 'function' || jobs.size >= 16)
+        request({ isCurrent = () => false, isReady = () => true, onSubmitted = null, signal = null } = {}) {
+            if (disposed || typeof isCurrent !== 'function' || typeof isReady !== 'function'
+                || onSubmitted !== null && typeof onSubmitted !== 'function'
+                || signal !== null && (typeof signal.aborted !== 'boolean' || typeof signal.addEventListener !== 'function'
+                    || typeof signal.removeEventListener !== 'function') || jobs.size >= 16)
                 return Promise.resolve({ ok: false, reason: 'renderer_receipt_unavailable' });
+            if (signal?.aborted) return Promise.resolve({ ok: false, reason: 'renderer_scope_changed' });
             return new Promise(resolve => {
-                const job = { resolve, isCurrent, isReady, submitted: false, timer: null, started: nowMs() };
+                const job = { resolve, isCurrent, isReady, onSubmitted, signal, submitted: false, timer: null, started: nowMs() };
                 jobs.add(job);
+                job.onAbort = () => fail(job, 'renderer_scope_changed');
+                signal?.addEventListener('abort', job.onAbort, { once: true });
                 job.timer = later(() => fail(job, 'renderer_frame_timeout'), timeoutMs);
             });
         },
@@ -38,11 +46,16 @@ export function createLightingRenderEvidence({ renderer, nowMs = () => Date.now(
                 try { if (job.isReady() !== true) continue; }
                 catch (_) { fail(job, 'renderer_scope_changed'); continue; }
                 job.submitted = true;
-                const submittedAt = nowMs(), submittedFrame = frameId;
+                const submittedAt = nowMs(), submittedMono = monotonicMs(), submittedFrame = frameId;
+                try { job.onSubmitted?.({ frame_id: submittedFrame, frame_submitted_at_ms: submittedAt,
+                    frame_submitted_mono_ms: submittedMono }); }
+                catch (_) { /* an optional observer cannot interrupt the rendered frame */ }
+                if (!jobs.has(job)) continue;
                 const complete = backend => {
                     if (!valid(job)) { fail(job, 'renderer_scope_changed'); return; }
                     finish(job, { ok: true, stage: 'gpu_completed_frame', frame_id: submittedFrame,
                         frame_submitted_at_ms: submittedAt, gpu_completed_at_ms: nowMs(), backend,
+                        frame_submitted_mono_ms: submittedMono, gpu_completed_mono_ms: monotonicMs(),
                         presentation_observed: false, physical_commands: false });
                 };
                 const queue = renderer?.backend?.isWebGPUBackend && renderer.backend.device?.queue;

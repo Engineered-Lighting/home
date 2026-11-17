@@ -150,6 +150,8 @@ test('modes.js keeps the x-ray copies out of the depth buffer; the engine render
   const modes = fs.readFileSync(path.join(SRC, 'home-3d/modes.js'), 'utf8');
   assert.ok(modes.includes('material.depthWrite = material.userData?.noDepthWrite ? false : depthWrite;'));
   const engine = fs.readFileSync(path.join(SRC, 'home-3d/engine.js'), 'utf8');
-  const prepasses = engine.match(/xrayLook\?\.prepass\(\);\n\s*renderer\.render\(scene, camera\);/g) || [];
-  assert.equal(prepasses.length, 2, 'the frame loop and the capture both accumulate before rendering');
+  const capturePrepasses = engine.match(/xrayLook\?\.prepass\(\);\s*renderer\.render\(scene, camera\);/g) || [];
+  const presentationPrepasses = engine.match(/xrayLook\?\.prepass\(\);\s*try\s*\{\s*presenting = true;\s*renderer\.render\(scene, camera\);/g) || [];
+  assert.equal(capturePrepasses.length, 1, 'capture accumulates before rendering');
+  assert.equal(presentationPrepasses.length, 1, 'the witnessed frame accumulates before rendering');
 });

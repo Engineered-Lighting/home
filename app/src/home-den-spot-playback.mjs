@@ -152,7 +152,7 @@ const eventId = () => 'home-' + (globalThis.crypto?.randomUUID?.() ?? `${Date.no
 /* post(path, body) → Promise<{status, answer}>: the coordinator's writes through the gateway (home-den-live-view.mjs),
  * or null when this page sends none (look-only). */
 export function createSpotPlayback({ home, site, clock = () => performance.now(), onChange = () => {},
-    later = setTimeout, cancel = clearTimeout, post = null, makeEventId = eventId }) {
+    later = setTimeout, cancel = clearTimeout, post = null, makeEventId = eventId, onPlayback = null }) {
     let overlay = null, applied = null, candidate = null, control = null, controlVersion = 0;
     let anchor = null, openedAt = null, transform = null, scan = null, highestSeq = -1, stopCounter = -1, timer = null;
     let renderOffset = null;   // Home's clock minus the coordinator's, in ms: the lowest transit seen, creeping up
@@ -165,10 +165,13 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
     // fixture id → the snapshot Home had applied just before a burst of changes started: den-live checks "before" at it.
     const burstFrom = new Map();
 
+    const observe = (phase, value) => { try { onPlayback?.(phase, value); } catch (_) { /* optional timing observer */ } };
+
     function clear() {
         if (timer !== null) cancel(timer);
         timer = null;
         candidate = null;
+        observe('clear', null);
         if (!applied) return;
         applied = null;
         overlay?.applyCoordinatorSpots?.(null);
@@ -331,6 +334,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
         stampPaint(value.epoch, value.seq, fixtures.some(fixture => fixture.on === true));
         if (timer !== null) cancel(timer);
         applied = { ...value, fixtures, generation: scope.generation, deadline };
+        observe('applied', applied);
         timer = deadline === Infinity ? null : later(check, Math.ceil(deadline - clock()));
         onChange();
     }
@@ -350,10 +354,12 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             if (revision(value.seq) && value.seq <= highestSeq) return;
             if (revision(value.seq)) highestSeq = value.seq;
             if (!validSnapshot(value, home, site)) { clear(); return; }
+            observe('decoded', value);
             if (value.stop_counter < stopCounter) return;
             const transit = clock() - value.sampled_mono * 1000;
             renderOffset = renderOffset === null ? transit : Math.min(transit, renderOffset + RENDER_CREEP_MS);
             candidate = value;
+            observe('scheduled', value);
             applyCandidate();
         },
         controlVersion: () => controlVersion, control: () => control, holds: () => ({ ...hold }), current: () => applied };

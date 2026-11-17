@@ -55,6 +55,19 @@ test('People action browsers and both precision contracts are included in the co
   assert.ok(fs.readFileSync(path.join(root,'tools/test-apartment-lit-splats-native-browser-part4.mjs'),'utf8').includes("phase:'calibration'"));
   assert.ok(fs.readFileSync(path.join(root,'tools/fixtures/apartment-lit-splats-browser-proof.mjs'),'utf8').includes("phase==='calibration'?12:1"));
 });
+
+test('Den latency collection and reporting select their regression harnesses', () => {
+  const collector = planOf(['--files', 'app/src/home-den-latency.mjs']);
+  assert.ok(collector.includes('test-den-latency.mjs'));
+  assert.ok(collector.includes('test-den-latency-report.mjs'));
+  for (const file of ['app/src/home-den-live-view.mjs', 'app/src/home-den-spot-playback.mjs',
+    'app/src/home-3d/lighting-render-evidence.mjs']) {
+    assert.ok(planOf(['--files', file]).includes('test-den-latency.mjs'), file);
+  }
+  for (const file of ['tools/den-latency-report.mjs', 'tools/test-den-latency-report.mjs']) {
+    assert.ok(planOf(['--files', file]).includes('test-den-latency-report.mjs'), file);
+  }
+});
 function assertExactCover(argv, counts) {
   const full = planOf(argv);
   assert.equal(new Set(full).size, full.length, 'the unsharded plan names each item once');

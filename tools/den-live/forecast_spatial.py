@@ -134,7 +134,9 @@ def qualify(forecast, snapshot, track, now_mono):
     # Preserve the canonical producer dataclass fields instead of introducing a
     # second motion wire representation or shifting them by arrival age again.
     packet = asdict(replace(forecast, state=validated_state, samples=samples))
-    packet.update(schema=SCHEMA, qualified_at_mono=float(now_mono),
+    packet.update(schema=SCHEMA, coordinate_space="room_floor_xy_m", time_domain="producer_monotonic",
+                  covariance_order=("x", "y", "vx", "vy"), uncertainty_kind="conservative_envelope",
+                  qualified_at_mono=float(now_mono),
                   remaining_freshness_s=forecast.valid_until_mono - now_mono,
                   shadow_only=True, virtual_only=True, physical_qualified=False,
                   walkable_qualified=False, beam_qualified=False, delay_qualified=False,

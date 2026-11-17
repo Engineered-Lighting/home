@@ -21,6 +21,13 @@ and common registration/timing envelopes must not be treated as independent nois
 without a justified correlation model. Missing qualification produces unavailable
 evidence. A numerical uncertainty envelope is not a calibrated probability.
 
+The current state explicitly reports `time_status=estimated_source_elapsed` and
+`time_qualified=false`. Its history gate supports diagnostic shadow forecasts;
+it does not certify a physical clock or calibrated trajectory containment. A
+changed source/tracker elapsed-time offset taints that raw track until a new
+birth or camera epoch. Report availability rather than treating universal refusal
+as a successful operational forecast.
+
 `forecast_spatial.qualify(forecast, snapshot, track, now_mono)` returns a packet or
 a fixed refusal reason. It checks the actual current motion state, full covariance,
 source observations, confirmed/confident association and exact service, epoch,
@@ -35,8 +42,10 @@ generator and must not be added a second time. Head orientation and body facing
 are separate anatomical evidence, including when someone walks sideways or looks
 behind them.
 
-The qualified packet adds schema `den-spatial-forecast-1`, `qualified_at_mono` and
-`remaining_freshness_s`. Its shadow/virtual scope and false physical, aiming,
+The qualified packet adds schema `den-spatial-forecast-1`, coordinate space
+`room_floor_xy_m`, time domain `producer_monotonic`, covariance order
+`[x, y, vx, vy]`, uncertainty kind `conservative_envelope`, `qualified_at_mono`
+and `remaining_freshness_s`. Its shadow/virtual scope and false physical, aiming,
 occupancy, walkable, beam-footprint and illumination-delay qualification flags are
 explicit. These flags do not authorize virtual actuator commands either. The
 lighting coordinator still owns eligibility, manual holds, Stop, target selection

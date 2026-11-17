@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>den-sim scene render</title>
+<!-- Hop 1. Served by render.mjs on 127.0.0.1 only. Home's vendored three r180 and its GLTFLoader, loaded the way
+     Home's engine loads them (the room under a group turned -90 degrees about x, so z is up). Writes, per shot and
+     pose: RGBA 640x360 from the RGB camera, RGBA 640x400 from the left and right cameras, float32 eye-space depth in
+     metres from the left camera. True joints go to the truth route only. -->
+<script type="importmap">{"imports": {"three": "/vendor/three.module.js", "three/addons/": "/vendor/addons/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { COCO17, poseParams, joints, buildPerson } from '/figure.js';
+
+const post = (route, body) => fetch(route, { method: 'POST', body });
+try {
+  const job = await (await fetch('/job.json')).json(), shots = job.shots, cam = shots.camera, room = shots.room;
+  const colour = text => Number(text);
+  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+  renderer.setPixelRatio(1);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.toneMapping = THREE.NoToneMapping;
+  document.body.appendChild(renderer.domElement);
+  const gl = renderer.getContext(), info = gl.getExtension('WEBGL_debug_renderer_info');
+  const rendererName = info ? gl.getParameter(info.UNMASKED_RENDERER_WEBGL) : 'unknown';
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(colour(room.background));
+  const roomRoot = new THREE.Group();           // engine.js: the apartment root turned so z is up
+  roomRoot.rotation.x = -Math.PI / 2;
+  scene.add(roomRoot);
+  roomRoot.updateMatrixWorld(true);
+
+  const glb = await new GLTFLoader().parseAsync(await (await fetch('/room.glb')).arrayBuffer(), '');
+  glb.scene.traverse(o => { if (o.isMesh) o.receiveShadow = true; });
+  const shell = new THREE.Group(); shell.position.set(...room.glb_offset_m); shell.add(glb.scene); roomRoot.add(shell);
+  for (const b of room.boxes) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(...b.size_m), new THREE.MeshStandardMaterial({ color: colour(b.colour), roughness: b.roughness, metalness: 0 }));
+    m.position.set(...b.centre_m); m.castShadow = m.receiveShadow = true; roomRoot.add(m);
+  }
+  const L = room.lights;
+  scene.add(new THREE.HemisphereLight(colour(L.hemisphere.sky), colour(L.hemisphere.ground), L.hemisphere.intensity));
+  for (const [name, spec] of [['key', L.key], ['fill', L.fill]]) {
+    const light = new THREE.DirectionalLight(colour(spec.colour), spec.intensity);
+    roomRoot.add(light); roomRoot.add(light.target);
+    light.position.set(...spec.position_m); light.target.position.set(...spec.target_m);
+    if (name === 'key') {
+      light.castShadow = true; light.shadow.mapSize.set(spec.shadow_map, spec.shadow_map);
+      Object.assign(light.shadow.camera, { left: -spec.shadow_half_m, right: spec.shadow_half_m, top: spec.shadow_half_m, bottom: -spec.shadow_half_m, near: 0.1, far: spec.shadow_far_m });
+    }
+  }
+  // Registration marks: bright discs on flat surfaces, shown only in the marks shot.
+  const marks = new THREE.Group(); roomRoot.add(marks);
+  const upZ = new THREE.Vector3(0, 0, 1);
+  for (const m of shots.marks) {
+    const disc = new THREE.Mesh(new THREE.CircleGeometry(0.045, 32), new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false }));
+    disc.position.set(...m.xyz.map((v, i) => v + m.normal[i] * 0.002)); disc.quaternion.setFromUnitVectors(upZ, new THREE.Vector3(...m.normal));
+    marks.add(disc);
+  }
+  const figure = new THREE.Group(); roomRoot.add(figure);
+
+  // An OpenCV camera (+x right, +y down, +z forward) in the room frame, as a three camera with K's projection,
+  // the half-pixel shift included.
+  function poseCamera(m, K, width, height, near = 0.05, far = 30) {
+    const camera = new THREE.PerspectiveCamera();
+    const R = new THREE.Matrix4().set(m[0][0], -m[0][1], -m[0][2], m[0][3], m[1][0], -m[1][1], -m[1][2], m[1][3],
+      m[2][0], -m[2][1], -m[2][2], m[2][3], 0, 0, 0, 1);
+    const world = new THREE.Matrix4().multiplyMatrices(roomRoot.matrixWorld, R);
+    camera.matrixAutoUpdate = false; camera.matrix.copy(world); camera.matrixWorld.copy(world); camera.matrixWorldInverse.copy(world).invert();
+    const { fx, fy, cx, cy } = K;
+    camera.projectionMatrix.set(2 * fx / width, 0, 1 - 2 * (cx + 0.5) / width, 0, 0, 2 * fy / height, 2 * (cy + 0.5) / height - 1, 0,
+      0, 0, -(far + near) / (far - near), -2 * far * near / (far - near), 0, 0, -1, 0);
+    camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+    return camera;
+  }
+  const [dw, dh] = cam.depth_size, [rw, rh] = cam.rgb_size;
+  const depthTarget = new THREE.WebGLRenderTarget(dw, dh, { type: THREE.FloatType, format: THREE.RGBAFormat, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+  const depthMaterial = new THREE.ShaderMaterial({ side: THREE.DoubleSide,
+    vertexShader: 'varying float vZ; void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); vZ = -mv.z; gl_Position = projectionMatrix * mv; }',
+    fragmentShader: 'varying float vZ; void main(){ gl_FragColor = vec4(vZ, 0.0, 0.0, 1.0); }' });
+  function renderColour(pose, K, width, height) {
+    renderer.setSize(width, height, false); renderer.setRenderTarget(null);
+    renderer.render(scene, poseCamera(pose, K, width, height));
+    const out = new Uint8Array(width * height * 4);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    return out;
+  }
+  function renderDepth(pose, K, width, height) {
+    const background = scene.background, shadows = renderer.shadowMap.autoUpdate;
+    scene.background = null; renderer.shadowMap.autoUpdate = false; scene.overrideMaterial = depthMaterial;
+    renderer.setRenderTarget(depthTarget); renderer.setClearColor(0x000000, 0); renderer.clear();
+    renderer.render(scene, poseCamera(pose, K, width, height));
+    const out = new Float32Array(width * height * 4);
+    renderer.readRenderTargetPixels(depthTarget, 0, 0, width, height, out);
+    renderer.setRenderTarget(null); scene.overrideMaterial = null; scene.background = background; renderer.shadowMap.autoUpdate = shadows;
+    const z = new Float32Array(width * height);
+    for (let i = 0; i < z.length; i++) z[i] = out[4 * i];
+    return z;
+  }
+  const shift = (m, dx) => m.map((row, i) => i < 3 ? [row[0], row[1], row[2], row[3] + row[0] * dx] : row);
+  const poseLeft = cam.room_from_left, poseRight = shift(poseLeft, cam.baseline_m), poseRgb = shift(poseLeft, cam.rgb_offset_m);
+  const pixel = p => {                            // a room point in the RGB image, for the truth folder only
+    const d = [0, 1, 2].map(i => p[i] - poseRgb[i][3]), c = [0, 1, 2].map(k => d[0] * poseRgb[0][k] + d[1] * poseRgb[1][k] + d[2] * poseRgb[2][k]);
+    return [cam.rgb_k.fx * c[0] / c[2] + cam.rgb_k.cx, cam.rgb_k.fy * c[1] / c[2] + cam.rgb_k.cy];
+  };
+
+  const timings = {};
+  for (const item of job.items) {
+    const poses = poseParams(job.seed, item.poses), truth = [];
+    marks.visible = item.marks === true;
+    for (let k = 0; k < item.poses; k++) {
+      figure.clear();
+      if (item.person) figure.add(buildPerson(THREE, item.person, poses[k]));
+      const t0 = performance.now(), stem = `/out/${item.name}.p${k}`;
+      const rgb = renderColour(poseRgb, cam.rgb_k, rw, rh), left = renderColour(poseLeft, cam.left_k, dw, dh);
+      const right = renderColour(poseRight, cam.left_k, dw, dh), depth = renderDepth(poseLeft, cam.left_k, dw, dh);
+      timings[`${item.name}.p${k}`] = Math.round(performance.now() - t0);
+      await post(stem + '.rgb.rgba', rgb); await post(stem + '.left.rgba', left); await post(stem + '.right.rgba', right);
+      await post(stem + '.depth.f32', new Uint8Array(depth.buffer));
+      if (item.person) {
+        const j = joints(item.person, poses[k]).joints;
+        truth.push({ pose: k, params: poses[k], joints_m: Object.fromEntries(COCO17.map(n => [n, j[n]])),
+          rgb_px: Object.fromEntries(COCO17.map(n => [n, pixel(j[n])])) });
+      }
+    }
+    if (item.person) await post(`/truth/${item.name}.json`, JSON.stringify({ person: item.person, poses: truth }));
+  }
+  await post('/done', JSON.stringify({ renderer: rendererName, three: THREE.REVISION, timings_ms: timings }));
+} catch (error) {
+  await post('/failed', String(error && error.stack || error));
+}
+</script>

@@ -1,0 +1,40 @@
+{
+  "schema": "den-sim-refs-1",
+  "note": "Pinned refs for the den simulation. Results refer to these shas; local branches keep moving. Run output goes to output_root, outside every checkout.",
+  "base": {
+    "ref": "origin/main",
+    "sha": "bd57ecc604aaa9b70648f3481c303b8973c4d2b7"
+  },
+  "tools": {
+    "rung-2-observe": "257eca52",
+    "claude/rung-3-track-local-514d6b": "a3298878",
+    "rung-5-bundle": "358a09d2",
+    "den-core-live": "f9d63320",
+    "den-register": "d310ef57",
+    "den-take": "257eca52",
+    "den-light": "8bcb37b3",
+    "den-verify": "82a8ef38"
+  },
+  "lifted": {
+    "note": "What ask_la.py lifts for the owner's paste, by git archive at these commits into <data root>\\tools\\, each file held to its blob before anything runs: the sofa look's LA helpers (la.py for the host and the ssh and scp argument lists, ask.py for the requests, the GPU gate and the reply check, copied to LA unchanged; its timezone helper is never called, because the time label is fixed) and qwen_scene.py, the same blob the click archives at den-core-live.",
+    "files": {
+      "tools/sofa-look/ask.py": {"commit": "0a9371a2a5e8e08a6d56392705aa21fd054e43af", "blob": "3f1ea21117703f92d397f1fb07d183819a43da05"},
+      "tools/sofa-look/la.py": {"commit": "0a9371a2a5e8e08a6d56392705aa21fd054e43af", "blob": "3a1356b879d16e3af06297df14d792f50e12272b"},
+      "stack/services/perception-lab/qwen_scene.py": {"commit": "037216304d1fb3becd7b74db1bff6b8f6703f487", "blob": "d11dd1011cc7828772df83263e4c8039a16f0df1"}
+    }
+  },
+  "codec": {
+    "note": "On no git ref, so it is read by path and pinned by these sha256 digests: a click whose codec files differ reads not yet. Only its line endings differ from the release origin/main pins in room_production_canonical_provider.py: these files are LF, and those pins hash the same text with CRLF.",
+    "tools": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\tools",
+    "contracts": "C:\\claude\\home\\artifacts\\den-hardware-wire-20261015\\pcb-9b40487\\source\\contracts\\c12",
+    "sha256": {
+      "tools/c12_runtime_plan.py": "477de391670b0b85a39df41135ae5e66fe68e87b1416a2e2792cd4780af7379d",
+      "tools/c12_runtime_wire.py": "a7afb1c3f43ea0421987138154bc049068eff17f2dfc9de7a6ec2e7b8697f3b3",
+      "contracts/runtime-plan-v1.json": "e352aa58a6b2d7f5e357927b3d9b1f43acd95a5a134c5c2a9190720c806d6f48",
+      "contracts/motor-protocol-allowlist-v1.json": "cc52d554764f85fb9c6d15f56f2a4122cbc7a5f545608bfd845bfd477d52e422"
+    }
+  },
+  "content_packs": "C:\\claude\\home\\app\\data\\home-content",
+  "output_root": "%USERPROFILE%\\den-sim, or DEN_SIM_HOME when it is set",
+  "tools_note": "The fix round's final heads (claude/fix-rung-1, -2, -3, -5, -8-stage1, -9, -10), commits on this PC, read with git archive. The key names are the refs #424 first pinned; den-take is read from den-observe's commit, which carries tools/den-take."
+}

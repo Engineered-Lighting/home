@@ -83,6 +83,7 @@ from collections import deque
 from pathlib import Path
 
 import person_fields
+import motion
 import head_binding
 import room_labels
 import seated as seated_rule
@@ -551,6 +552,7 @@ class Perceiver:
         self.facing = person_fields.Facing(self.t.records.body_heading,   # contract 2's body_facing, the same way
                                            self.track_method.tracker["heading_max_sd_deg"])
         self.speed = person_fields.Speed()   # each track's floor speed, for posture's walking
+        self.motion = motion.Receipts()   # observation qualification only; velocity and P remain den-track's
 
     def _epoch(self, *, clock_reset=False):
         self._clear_body("scope_changed")
@@ -924,7 +926,7 @@ class Perceiver:
                   and (o.get("kind") == "keypoints" or (o.get("kind") == "person_box" and (o.get("score") or 0) >= PERSON_MIN))}
         frames, _counts = self.t.records.frames_from_observations(observations, self.track_method.tracker)
         detections = frames[0]["detections"] if frames else []
-        tracks, supported, association = [], [], {}
+        tracks, supported, association, raw_tracks = [], [], {}, {}
         for track, state in self.core.step(capture_mono, detections):
             if strong.intersection(track.obs_ids):
                 self.strong.add(track.id)
@@ -943,6 +945,10 @@ class Perceiver:
             supported.append(set(track.obs_ids))
             # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
             association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
+            # Copy the private filter through motion.Receipts below. track_record
+            # intentionally exposes no velocity covariance, so never reconstruct P
+            # from its rounded position covariance or the marker's scalar sigma.
+            raw_tracks[tracks[-1]["track_id"]] = track
         now_mono += time.monotonic() - start_lift
         if now_mono >= capture_mono + FRESH_S:
             return self._drop("expired", now_mono, "tracking result expired")
@@ -954,6 +960,8 @@ class Perceiver:
         event = with_camera_age(self.event(now_mono - capture_mono, tracks, camera_state, now_mono), age)
         candidates = [o for o in observations if o["kind"] in ("person_box", "keypoints")
                       and (o.get("score") or 0) >= PERSON_MIN]
+        motion_timing = motion.timing_bound(ref, prepared.bundle, meta)
+        person_fields_started = time.monotonic()
         evidence = []
         for marker, obs_ids in zip(event["tracks"], supported):
             track_id = marker["track_id"]
@@ -999,12 +1007,19 @@ class Perceiver:
             else:
                 stereo_torso = {"left_hip", "right_hip", "left_shoulder", "right_shoulder"}.intersection(stereo)
                 basis = "stereo" if stereo_torso or any(o["kind"] == "person_box" for o in position_observations) else "plane"
+            motion_state = self.motion.update(
+                raw_tracks[track_id], frame=ref, track_id=track_id, association_revision=revision,
+                association_status="confident" if safe and basis == "stereo" else "ambiguous", state=marker["state"],
+                current_obs_ids=tuple(sorted(obs_ids)), available_mono=now_mono + time.monotonic() - person_fields_started,
+                accel_sigma_mps2=self.track_method.tracker.get("accel_sigma"),
+                registration_error_m=self.camera.error_bound_m, timing_error_s=motion_timing)
             evidence.append(TrackEvidence(track_id, marker["state"], tuple(marker["xy_m"]), marker["sigma_m"],
                                           basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
                                           revision, since, MappingProxyType(stereo), marker.get("near"),
                                           seated=seated, body_facing=facing, head_point_m=person_fields.head_point(stereo),
                                           wrists_m=person_fields.wrists(stereo), posture=posture,
-                                          head_orientation=head_orientation, torso_orientation=torso_orientation))
+                                          head_orientation=head_orientation, torso_orientation=torso_orientation,
+                                          motion=motion_state))
             # The people projection carries the person binding (contract 2): run, epoch, track id, revision; and its
             # arrow is body_facing's, gone when that expires.
             # For Home's caption: seated and posture, as perception has them, and a who slot that nothing fills

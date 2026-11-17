@@ -1,6 +1,9 @@
 """Submit the exact frame retained by the detector and fence late body replies."""
 import math
+import statistics
 import threading
+import time
+from collections import deque
 
 from body_clock import lease_clock
 from stream import BODY_LEASE_S
@@ -14,11 +17,18 @@ MIN_INTERVAL_S = 0.2
 # without a pose or enough depth doesn't blank the figure. Anything that changes the scene (empty, ambiguous, a new
 # scope or track, the detector stopping) clears at once.
 HOLD_REASONS = frozenset(("pose_unavailable", "insufficient_depth", "stale"))
+TIMING_STAGES = ("body_queue", "mask_wait", "body_compute", "segment_queue", "segment_inference", "body_roundtrip")
+TIMING_SAMPLES = 100
+
+
+def _milliseconds(value):
+    return type(value) in (int, float) and 0 <= value <= BODY_LEASE_S * 1000 and math.isfinite(value)
 
 
 class BodyLink:
-    def __init__(self, detector, *, stream, min_interval_s=MIN_INTERVAL_S, clock=lease_clock):
+    def __init__(self, detector, *, stream, min_interval_s=MIN_INTERVAL_S, clock=lease_clock, monotonic=time.monotonic):
         self.detector, self.stream, self.clock = detector, stream, clock
+        self.monotonic = monotonic
         self.min_interval_s = min_interval_s
         self.lock = threading.Lock()
         self.scope = self.track = self.binding = self.pending = None
@@ -30,6 +40,7 @@ class BodyLink:
         self.last_sent = self.last_clear = self.why = self.stopped = self.compute_s = None
         self.shown_until = None   # the lease end of the last published frame
         self.closed = False
+        self._timings = deque(maxlen=TIMING_SAMPLES)
         self.counts = dict(sent=0, skipped_busy=0, skipped_rate=0, frames=0, empty=0, errors=0)
         detector.on_body = self._reply
 
@@ -50,6 +61,7 @@ class BodyLink:
         if (scope, binding, track, association_revision) != (self.scope, self.binding, self.track, self.association_revision):
             self.scope, self.binding, self.track = scope, binding, track
             self.association_revision = association_revision
+            self._timings.clear()
             self.last_sent = self.last_clear = self.shown_until = None
             self._clear("scope_changed")
 
@@ -137,9 +149,41 @@ class BodyLink:
                 self.counts["frames"] += 1
                 self.why = self.last_clear = None
                 self.shown_until = capture_mono + BODY_LEASE_S
+                self._record_timing(reply, pending)
             else:
                 self.shown_until = None
                 self._clear("stale")
+
+    def _record_timing(self, reply, pending):
+        now = self.monotonic()
+        values = reply.get("timings_ms")
+        values = values if isinstance(values, dict) else {}
+        sample = {key: round(float(values[key]), 3) for key in TIMING_STAGES[:-1]
+                  if _milliseconds(values.get(key))}
+        if "body_compute" not in sample and type(reply.get("compute_s")) in (int, float):
+            compute_ms = reply["compute_s"] * 1000
+            if _milliseconds(compute_ms):
+                sample["body_compute"] = round(compute_ms, 3)
+        elapsed = (now - pending["submitted_mono"]) * 1000
+        if _milliseconds(elapsed):
+            sample["body_roundtrip"] = round(elapsed, 3)
+        if sample and math.isfinite(now):
+            self._timings.append({"at_mono": now, "request_id": pending["request_id"],
+                                  "body_id": pending["id"], "timings_ms": sample})
+
+    def timing_summary(self):
+        """Numeric performance samples admitted after the same identity and expiry gates as body publication."""
+        with self.lock:
+            stages = {}
+            for key in TIMING_STAGES:
+                values = sorted(sample["timings_ms"][key] for sample in self._timings if key in sample["timings_ms"])
+                if values:
+                    stages[key] = {"n": len(values), "p50": round(statistics.median(values), 3),
+                                   "p95": values[math.ceil(len(values) * .95) - 1], "max": values[-1]}
+            age = (self.monotonic() - self._timings[-1]["at_mono"]) * 1000 if self._timings else None
+            return {"samples": len(self._timings), "limit": TIMING_SAMPLES, "clock": "host_monotonic",
+                    "last_age_ms": round(age, 3) if age is not None and math.isfinite(age) and age >= 0 else None,
+                    "timings_ms": stages}
 
     def submit(self, frame_id, *, frame_key, scope, setup, capture_mono, observation, person=None):
         """Queue setup or one exact-frame job, without waiting for a reply."""
@@ -174,7 +218,8 @@ class BodyLink:
                           "frame_key": frame_key, "binding": binding, "observation": observation, "person": person,
                           "reset_learning": self.reset_learning, "remaining_s": capture_mono + BODY_LEASE_S - now}
                 previous_sent = self.last_sent
-                self.pending = {**header, "generation": self.generation, "capture_mono": capture_mono}
+                self.pending = {**header, "generation": self.generation, "capture_mono": capture_mono,
+                                "submitted_mono": self.monotonic()}
                 self.reset_learning = False
                 self.last_sent = now
                 self.counts["sent"] += 1

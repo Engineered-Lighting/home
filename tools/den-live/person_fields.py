@@ -105,9 +105,13 @@ def _covariance(value):
     return a * d * f + 2 * b * c * e - a * e * e - d * c * c - f * b * b >= -scale ** 2 * tolerance
 
 
-def _orientation_joints(pose, ids):
+def _orientation_joints(pose, ids, registration_variance_m2=None):
     if (not pose or pose.get("kind") != "keypoints" or pose.get("joint_set") != "coco17"
             or pose.get("validity", "valid") != "valid"):
+        return None
+    if (registration_variance_m2 is not None
+            and (type(registration_variance_m2) not in (int, float)
+                 or not math.isfinite(registration_variance_m2) or registration_variance_m2 < 0)):
         return None
     joints = {}
     for entry in pose.get("joints_room") or ():
@@ -121,7 +125,16 @@ def _orientation_joints(pose, ids):
                 or any(type(v) not in (int, float) or not math.isfinite(v) for v in xyz)
                 or not _covariance(entry.get("cov"))):
             return None
-        joints[j] = entry
+        if registration_variance_m2 is None:
+            joints[j] = entry
+        else:
+            # The pinned observer adds the same isotropic registration translation to every joint. Relative
+            # landmark axes cancel this common translation. Keep the measured residual and its full covariance.
+            covariance = [[value - registration_variance_m2 if i == k else value
+                           for k, value in enumerate(row)] for i, row in enumerate(entry["cov"])]
+            if not _covariance(covariance):
+                return None
+            joints[j] = {**entry, "cov": covariance}
     return joints if len(joints) == len(ids) else None
 
 
@@ -184,8 +197,8 @@ def _angular_noise(points, joints, axes):
     return math.degrees(bound)
 
 
-def _orientation(pose, t, ids, axes, model_sd, max_sd, basis):
-    joints = _orientation_joints(pose, ids)
+def _orientation(pose, t, ids, axes, model_sd, max_sd, basis, registration_variance_m2):
+    joints = _orientation_joints(pose, ids, registration_variance_m2)
     if joints is None or type(t) not in (int, float) or not math.isfinite(t):
         return None
     points = {j: joints[j]["xyz"] for j in ids}
@@ -201,16 +214,20 @@ def _orientation(pose, t, ids, axes, model_sd, max_sd, basis):
                          math.degrees(math.atan2(forward[2], horizontal)), angular_sd, float(t), ids, basis)
 
 
-def head_orientation(pose, t):
-    """Current measured coarse head direction. Missing, contradictory or noisy five-landmark geometry abstains."""
+def head_orientation(pose, t, *, registration_variance_m2=None):
+    """Current measured coarse head direction, optionally accounting for known common registration translation.
+
+    Missing, contradictory or noisy five-landmark geometry abstains. Without an explicit common variance, the
+    complete marginal joint covariances are retained.
+    """
     return _orientation(pose, t, HEAD_ORIENTATION_JOINTS, _head_axes, HEAD_MODEL_SD_DEG,
-                        HEAD_MAX_SD_DEG, "stereo_face_axis")
+                        HEAD_MAX_SD_DEG, "stereo_face_axis", registration_variance_m2)
 
 
-def torso_orientation(pose, t):
-    """Current shoulder/hip-plane direction and uncertainty, independent of the held body_facing summary."""
+def torso_orientation(pose, t, *, registration_variance_m2=None):
+    """Current shoulder/hip-plane direction, optionally accounting for known common registration translation."""
     return _orientation(pose, t, TORSO_ORIENTATION_JOINTS, _torso_axes, TORSO_MODEL_SD_DEG,
-                        TORSO_MAX_SD_DEG, "stereo_torso_plane")
+                        TORSO_MAX_SD_DEG, "stereo_torso_plane", registration_variance_m2)
 
 
 def orientation_projection(value):

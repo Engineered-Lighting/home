@@ -261,6 +261,43 @@ class MeasuredOrientation(unittest.TestCase):
         old = TrackEvidence("t", "confirmed", (1, 2), 0.1, "stereo", ("o",), "confident", 1, 10, {})
         self.assertEqual((old.head_orientation, old.torso_orientation), (None, None))
 
+    def test_known_common_registration_translation_cancels_from_relative_axes(self):
+        import copy
+        common = 0.10 ** 2
+        for build, function in ((self.head, pf.head_orientation),
+                                (lambda var: body(20, var=var), pf.torso_orientation)):
+            with self.subTest(function=function.__name__):
+                independent = function(build(var=0.000001), 10)
+                pose = build(var=0.000001 + common)
+                original = copy.deepcopy(pose)
+                corrected = function(pose, 10, registration_variance_m2=common)
+                self.assertIsNotNone(corrected)
+                self.assertEqual(corrected.forward, independent.forward)
+                self.assertEqual(corrected.up, independent.up)
+                self.assertAlmostEqual(corrected.angular_sd_deg, independent.angular_sd_deg, places=8)
+                self.assertEqual(pose, original, "the observer's total marginal covariance remains intact")
+                shifted = copy.deepcopy(pose)
+                for joint in shifted["joints_room"]:
+                    joint["xyz"] = [v + offset for v, offset in zip(joint["xyz"], (4.0, -3.0, 2.0))]
+                translated = function(shifted, 10, registration_variance_m2=common)
+                self.assertIsNotNone(translated)
+                for key in ("yaw_deg", "pitch_deg", "angular_sd_deg"):
+                    self.assertAlmostEqual(getattr(corrected, key), getattr(translated, key), places=6)
+                self.assertIsNone(function(pose, 10), "old callers retain the full covariance without context")
+                noisy = function(build(var=0.05 + common), 10, registration_variance_m2=common)
+                self.assertIsNone(noisy, "independent measurement uncertainty still uses the original gate")
+
+    def test_invalid_common_variance_or_non_psd_residual_abstains(self):
+        for build, function in ((self.head, pf.head_orientation),
+                                (lambda var: body(20, var=var), pf.torso_orientation)):
+            for variance in (-1.0, float("nan"), float("inf"), True, 0.001):
+                self.assertIsNone(function(build(var=0.0001), 10, registration_variance_m2=variance))
+            pose = build(var=0.0011)
+            # The total covariance is PSD, but removing a common term that was never present leaves an invalid
+            # relative covariance. Reject this input instead of repairing its eigenvalues or clamping diagonals.
+            pose["joints_room"][0]["cov"] = [[0.0011, 0.0002, 0], [0.0002, 0.0011, 0], [0, 0, 0.0011]]
+            self.assertIsNone(function(pose, 10, registration_variance_m2=0.001))
+
 
 class OrientationIntegration(unittest.TestCase):
     @classmethod
@@ -279,7 +316,9 @@ class OrientationIntegration(unittest.TestCase):
             observations = original(*args, **kwargs)
             for obs in observations:
                 if obs["kind"] == "keypoints":
-                    obs["joints_room"] = body(45, var=0.000001)["joints_room"] + MeasuredOrientation.head()["joints_room"]
+                    marginal = 0.000001 + p.camera.error_bound_m ** 2
+                    obs["joints_room"] = (body(45, var=marginal)["joints_room"]
+                                          + MeasuredOrientation.head(var=marginal)["joints_room"])
                     poses.append(obs)
             return observations
 

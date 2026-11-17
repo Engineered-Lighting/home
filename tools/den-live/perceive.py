@@ -940,8 +940,10 @@ class Perceiver:
             seated = self.seated.update(track_id, revision, capture_mono, stereo)
             posture = person_fields.posture(seated, stereo, self.speed.update(track_id, capture_mono, tuple(marker["xy_m"])))
             current_pose = pose if safe and stereo else None
-            head_orientation = person_fields.head_orientation(current_pose, capture_mono)
-            torso_orientation = person_fields.torso_orientation(current_pose, capture_mono)
+            head_orientation = person_fields.head_orientation(current_pose, capture_mono,
+                                                             registration_variance_m2=self.camera.error_bound_m ** 2)
+            torso_orientation = person_fields.torso_orientation(current_pose, capture_mono,
+                                                               registration_variance_m2=self.camera.error_bound_m ** 2)
             position_observations = [o for o in sources if o.get("room_position")]
             if not position_observations:
                 basis = "coast"

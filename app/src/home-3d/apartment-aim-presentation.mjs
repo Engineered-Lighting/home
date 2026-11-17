@@ -419,8 +419,8 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
         const rect = host.getBoundingClientRect();
         return { x: clientX - rect.left, y: clientY - rect.top };
     }
-    function drawProposal(proposal) {
-        const origin = proposal && aimOrigin(state.aim?.descriptor);
+    function drawProposal(proposal, descriptor = state.aim?.descriptor) {
+        const origin = proposal && aimOrigin(descriptor);
         if (!origin || !vector(proposal.target.point_m)) { proposalLine.visible = proposalSpot.visible = false; return; }
         const positions = lineGeometry.attributes.position;
         positions.array.set([...origin.point_m, ...proposal.target.point_m]); positions.needsUpdate = true;
@@ -436,7 +436,10 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
     function frame() {
         if (!current()) return false;
         const box = bounds(), proposal = shownProposal();
-        drawProposal(drag ? null : proposal);
+        if (drag?.direct) {
+            const target = drag.model?.valid && proposalTargetFromModel(drag.model);
+            drawProposal(target ? { target } : null, drag.descriptor);
+        } else drawProposal(drag ? null : proposal);
         if (!elements?.root?.isConnected || !box) return false;
         // Every projection reads layout, so all of them run before any style
         // write; one frame then costs at most one layout, not one per element.
@@ -502,7 +505,7 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
             const fixtures = Array.isArray(next.fixtures) ? next.fixtures.filter(item => typeof item?.fixture_id === 'string') : state.fixtures;
             state = { fixtures, selectedId: next.selectedId ?? null, hoverId: next.hoverId ?? null,
                 pillFixtureId: next.pillFixtureId ?? null, aim: next.aim?.descriptor ? next.aim : null, proposal: next.proposal ?? null };
-            if (drag && !aimFixture()) { drag = null; notify({ dragging: false, model: null }); }
+            if (drag && !drag.direct && !aimFixture()) { drag = null; notify({ dragging: false, model: null }); }
             return true;
         },
         attach(root) {
@@ -511,6 +514,19 @@ export function createAimPresentation({ layer, host, isCurrent, getInsets = () =
             return () => { if (elements?.root === root) { hideAll(); elements = null; } };
         },
         frame,
+        describeDirectAim(descriptor, limits, hit) {
+            if (!current()) return null;
+            return describeAimHit({ descriptor, limits, hit, traceBeam });
+        },
+        previewDirectAim(descriptor, model, clientX, clientY) {
+            if (!current() || drag && !drag.direct) return;
+            drag = { direct: true, descriptor, model, cursor: cursorOf(clientX, clientY) };
+            notify({ dragging: true, model });
+            frame();
+        },
+        clearDirectAim() {
+            if (drag?.direct) handle.cancelDrag();
+        },
         beginDrag({ pointerId, clientX, clientY } = {}) {
             if (!current() || drag || !aimFixture() || ![clientX, clientY].every(finite)) return false;
             const cursor = cursorOf(clientX, clientY);

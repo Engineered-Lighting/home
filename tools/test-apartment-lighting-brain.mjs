@@ -11,7 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import * as THREE from 'three';
-import { createEquipmentVirtualFixtures } from '../app/src/home-3d/equipment-virtual-fixtures.mjs';
+import { createEquipmentVirtualFixtures, HAND_SETTLE_MS } from '../app/src/home-3d/equipment-virtual-fixtures.mjs';
 import { sealRegisteredDeskTarget } from '../app/src/home-3d/registered-desk-target.mjs';
 import { buildBrainGeometry, prepareBrainGeometryFile, parseArgs } from './den-room/brain-targets.mjs';
 
@@ -50,6 +50,7 @@ function clock() {
     setTimeout: (fn, ms) => { timers.set(++seq, { fn, at: now + ms }); return seq; },
     clearTimeout: id => { timers.delete(id); },
     size: () => timers.size,
+    callbacksDueIn: ms => [...timers.values()].filter(timer => timer.at === now + ms).map(timer => timer.fn),
     async advance(ms) {
       const end = now + ms;
       for (;;) {
@@ -124,6 +125,130 @@ async function following(initial, { configure = () => {}, ...options } = {}) {
   return { t, brain, room, views, applied, wired, view: () => wired.follower.readback() };
 }
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `${a} != ${b}`);
+
+test('Den ownership suppresses every AL-1 virtual output across updates, refresh and disconnect', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    configure(room) {
+      room.preview.setDocument(Core.toDocument(registrationModel()), { coordinator: true });
+      room.overlay.denSpotSnapshotOwned = true;
+      const scope = room.preview.coordinatorSpotScope();
+      room.preview.applyCoordinatorSpots(scope.fixture_ids.map(fixture_id => ({ fixture_id,
+        on: fixture_id === F3, level: .6, cct_k: 3500, pan_deg: 12, tilt_deg: 35,
+        reason: 'task', motion_phase: 'settled' })), scope.generation, { ambient: { level: .75, cct_k: 3000 } });
+    },
+  });
+  try {
+    const before = copy(f.room.preview.readback().fixtures);
+    await f.brain.push(brainState({ at: 1010 }));
+    f.wired.follower.refresh();
+    await f.t.advance(4000);
+    f.brain.live().onerror();
+    assert.equal(f.view().online, false, 'the AL-1 client remains observable');
+    await f.t.advance(1000);
+    assert.equal(f.room.calls.aim, 0);
+    assert.equal(f.room.calls.set, 0);
+    assert.deepEqual(f.room.preview.readback().fixtures, before);
+    assert.equal(f.view().online, true, 'a reconnect remains observable without restoring AL-1 output');
+    assert.equal(f.view().physical_commands, false);
+  } finally { f.wired.dispose(); }
+});
+
+test('a running AL-1 fade yields on Den takeover before its next write without a new brain event', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }));
+  try {
+    await f.t.advance(500);
+    assert.ok(f.view().fixtures.some(row => row.fading));
+    const before = copy(f.room.preview.readback().fixtures), calls = { ...f.room.calls };
+    // Keep the overlay and generation unchanged to exercise the live ownership guard.
+    f.room.overlay.denSpotSnapshotOwned = true;
+    await f.t.advance(500);
+    assert.deepEqual(f.room.calls, calls);
+    assert.deepEqual(f.room.preview.readback().fixtures, before);
+    assert.ok(f.view().fixtures.every(row => !row.fading && row.applied_state === null));
+    await f.brain.push(brainState({ at: 1010, mode: 'reading', fixtures: { [F4]: READING } }));
+    await f.t.advance(3000);
+    assert.deepEqual(f.room.calls, calls, 'fresh decisions cannot restart a retired AL-1 fade');
+  } finally { f.wired.dispose(); }
+});
+
+test('releasing Den ownership reapplies an unchanged AL-1 decision after its cached application was retired', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }));
+  try {
+    await f.t.advance(3500);
+    f.room.overlay.denSpotSnapshotOwned = true;
+    f.wired.follower.refresh();
+    f.room.preview.setFixtureState(F3, { radials: [{ number: 1, brightness: .9 }],
+      downward: { brightness: .9 }, spotlight: { on: false, brightness: 0 } });
+    const calls = f.room.calls.set;
+    f.room.overlay.denSpotSnapshotOwned = false;
+    f.wired.follower.refresh();
+    await f.t.advance(2100);
+    assert.ok(f.room.calls.set > calls);
+    near(f.room.state(F3).radials[0].brightness, .3);
+    near(f.room.state(F3).downward.brightness, .3);
+    near(f.room.state(F3).spotlight.brightness, .8);
+    assert.equal(f.room.state(F3).spotlight.on, true);
+  } finally { f.wired.dispose(); }
+});
+
+test('a cancelled AL-1 callback cannot write or retire a new fade after Den ownership is released', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }));
+  try {
+    await f.t.advance(500);
+    const retired = f.t.callbacksDueIn(Follower.STEP_MS);
+    assert.equal(retired.length, 4);
+    f.room.overlay.denSpotSnapshotOwned = true;
+    f.wired.follower.refresh();
+    assert.ok(f.view().fixtures.every(row => !row.fading));
+    f.room.overlay.denSpotSnapshotOwned = false;
+    f.wired.follower.refresh();
+    const calls = { ...f.room.calls };
+    for (const callback of retired) callback();
+    assert.deepEqual(f.room.calls, calls, 'already-queued callbacks are invalidated even if cancellation came too late');
+    assert.ok(f.view().fixtures.every(row => row.fading), 'a retired callback cannot erase the current fade');
+    await f.t.advance(3100);
+    near(f.room.state(F3).radials[0].brightness, .3);
+    near(f.room.state(F3).spotlight.brightness, .8);
+  } finally { f.wired.dispose(); }
+});
+
+test('Den takeover and release preserve a manual AL-1 pause and its override transport', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    configure: room => { room.overlay.denSpotSnapshotOwned = true; },
+  });
+  try {
+    f.wired.follower.handChange(F3, { reason: 'change' });
+    f.room.preview.setFixtureState(F3, { radials: [{ number: 1, brightness: .9 }], downward: { brightness: .85 } });
+    const held = copy(f.room.state(F3));
+    await pause(); await pause();
+    assert.equal(f.brain.requests.find(row => row.method === 'POST')?.body.fixture_id, F3);
+    await f.brain.push(brainState({ at: 1010, mode: 'reading', fixtures: {
+      [F3]: { ...READING, paused_until: 2900, pause_reason: 'manual_change' },
+    } }));
+    f.room.overlay.denSpotSnapshotOwned = false;
+    f.wired.follower.refresh();
+    await f.t.advance(2500);
+    assert.equal(f.view().fixtures.find(row => row.fixture_id === F3).paused, 'manual');
+    assert.deepEqual(f.room.state(F3), held);
+  } finally { f.wired.dispose(); }
+});
+
+test('a pending AL-1 render receipt loses authority as soon as Den takes ownership', async () => {
+  const pending = [];
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    diagnostics: true, requestRenderEvidence: context => new Promise(resolve => pending.push({ context, resolve })),
+  });
+  try {
+    await f.t.advance(3500);
+    const receipt = pending.find(row => row.context.fixture_id === F3);
+    assert.ok(receipt); assert.equal(receipt.context.isCurrent(), true);
+    f.room.overlay.denSpotSnapshotOwned = true;
+    assert.equal(receipt.context.isCurrent(), false, 'ownership invalidates evidence before another client event');
+    receipt.resolve({ ok: true, stage: 'gpu_completed_frame', frame_id: 9 }); await pause();
+    assert.equal(f.view().fixtures.find(row => row.fixture_id === F3).rendered, null);
+    assert.ok(!f.wired.follower.diagnosticReadback().events.some(row => row.stage === 'gpu_completed_frame'));
+  } finally { f.wired.dispose(); }
+});
 
 test('authored reading observations pass through the real publisher/brain into moving Home virtual aims',async()=>{
   const run=spawnSync(process.env.PYTHON||'python',['tools/fixtures/den-reading-coordinator.py'],{
@@ -753,6 +878,9 @@ test('Victoria view wires the brain, the hand-change seam and the sofa mark; the
   assert.match(body('changeVirtualFixtureByHand'), /releaseFixtureForHandChange\(fixtureId, \{ reason: "change" \}\);\s*return changeVirtualFixture\(/);
   assert.match(body('applyAimHistoryState'), /releaseFixtureForHandChange\(id, \{ reason \}\);/);
   assert.match(apartment, /releaseFixtureForHandChange\(id, \{ reason: "aim" \}\);/);
+  // The same seam holds the fixture for the hand while den-live's coordinator owns the spots.
+  const seam = apartment.slice(apartment.indexOf('const releaseFixtureForHandChange = '), apartment.indexOf('const changeVirtualFixtureByHand = '));
+  assert.match(seam, /engineRef\.current\?\.overlay\?\.holdVirtualFixtureForHand\?\.\(fixtureId, \{ reason: reason \|\| "change" \}\)/);
   assert.match(apartment, /Follower\.createBrainFollowing\(/);
   assert.match(apartment, /<window\.HomeLightingBrainPanel brain=\{lightingBrain\} ops=\{denOpsBanner\}/);
   assert.match(apartment, /onClick=\{\(\) => \{ setTargetMarkKind\("sofa"\); startDeskTargetSelection\("sofa"\); \}\}/);
@@ -763,4 +891,198 @@ test('Victoria view wires the brain, the hand-change seam and the sofa mark; the
   const at = name => loader.indexOf(`"${name}"`);
   for (const name of ['home-lighting-brain-client.js', 'home-lighting-brain-follower.js', 'home-lighting-sofa-target.js', 'home-lighting-brain-panel.jsx'])
     assert.ok(at(name) > 0 && at(name) < at('home-apartment.jsx'), name);
+});
+
+test('the coordinator spot eases between level steps, glides on its S-curve, dims the room and blanks at once on Stop', async () => {
+  const { localGlide } = await import('../app/src/home-den-spot-playback.mjs');
+  const registration = registrationFor();
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding });
+  preview.setDocument(registration, { coordinator: true });
+  const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
+  const state = id => preview.readback().fixtures.find(row => row.fixture_id === id).state;
+  const [spot] = ids;
+  const house = copy(state(spot).radials.map(zone => zone.brightness));
+  const row = (id, patch = {}) => ({ fixture_id: id, on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
+    target_m: null, reason: 'waiting_for_task', motion_phase: 'settled', ...patch });
+  const rows = patch => ids.map(id => row(id, id === spot ? patch : {}));
+  // A rise: the first step from dark shows at once, as the board shows it; the next steps are eased toward.
+  assert.equal(preview.applyCoordinatorSpots(rows({ on: true, level: .2, reason: 'task' }), generation,
+    { ambient: { level: .3, cct_k: 2700 } }), true);
+  assert.equal(state(spot).spotlight.brightness, .2, 'first light is never delayed');
+  assert.equal(preview.applyCoordinatorSpots(rows({ on: true, level: .5, reason: 'task' }), generation,
+    { ambient: { level: .3, cct_k: 2700 } }), true);
+  assert.ok(state(spot).spotlight.brightness < .5, 'a later step is eased toward');
+  assert.equal(preview.presentationActive(), true);
+  preview.advancePresentation(performance.now() + 1000);
+  assert.equal(state(spot).spotlight.brightness, .5);
+  // The room's glow follows the coordinator's ambient on every fixture.
+  for (const id of ids) {
+    assert.ok(state(id).radials.every(zone => zone.brightness === .3 && zone.color_temp_kelvin === 2700));
+    assert.equal(state(id).downward.brightness, .3);
+  }
+  // A glide is drawn on its curve, frame by frame, and lands where the MOVE goes.
+  const start = performance.now();
+  const glide = localGlide({ from_deg: [0, 30], to_deg: [-8, 34], start_mono: 0, duration_s: 1, limits: [1.5, 6, 40],
+    shape: 'scurve-7' }, start);
+  preview.applyCoordinatorSpots(rows({ on: true, level: .5, reason: 'task', motion_phase: 'moving', glide_local: glide }), generation);
+  const half = (glide.startMs + glide.endMs) / 2;
+  preview.advancePresentation(half);
+  near(state(spot).pan_deg, -4, 1e-6); near(state(spot).tilt_deg, 32, 1e-6);
+  preview.advancePresentation(glide.endMs + 1);
+  assert.deepEqual([state(spot).pan_deg, state(spot).tilt_deg], [-8, 34]);
+  // Stop blanks at once, and the room's own glow comes back when the coordinator directs none.
+  preview.applyCoordinatorSpots(rows({ on: false, level: 0, reason: 'stopped', pan_deg: -8, tilt_deg: 34 }), generation,
+    { ambient: null });
+  assert.equal(state(spot).spotlight.brightness, 0, 'no ease on Stop');
+  assert.deepEqual(state(spot).radials.map(zone => zone.brightness), house);
+  // Expiry (rows null) also blanks at once.
+  preview.applyCoordinatorSpots(rows({ on: true, level: .5, reason: 'task' }), generation);
+  preview.advancePresentation(performance.now() + 1000);
+  preview.applyCoordinatorSpots(null, generation);
+  assert.equal(state(spot).spotlight.brightness, 0);
+  preview.dispose();
+});
+
+test('manual always wins: with the coordinator on, a drag aim, the pan slider, a radial paint and the level go through, hold across snapshots and a Stop, report once per settled change, and Resume hands back', () => {
+  const registration = registrationFor();
+  const timers = new Map(); let nextTimer = 1;
+  const later = (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; };
+  const settle = () => { const due = [...timers.values()]; timers.clear(); for (const timer of due) timer.fn(); };
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding, later, cancel: id => timers.delete(id) });
+  preview.setDocument(registration, { coordinator: true });
+  const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
+  const state = id => preview.readback().fixtures.find(row => row.fixture_id === id).state;
+  const held = preview.readback().fixtures.find(row => !row.spot_only).fixture_id, others = ids.filter(id => id !== held);
+  const row = (id, patch = {}) => ({ fixture_id: id, on: true, level: .5, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
+    target_m: null, reason: 'task', motion_phase: 'settled', ...patch });
+  const snapshot = (patch = {}, options = {}) => preview.applyCoordinatorSpots(ids.map(id => row(id, patch)), generation,
+    { ambient: { level: .3, cct_k: 2700 }, ...options });
+  const draw = () => preview.advancePresentation(performance.now() + 1000);
+  const events = [], starts = [];
+  const stop = preview.onHandChange(event => (event.phase === 'start' ? starts : events).push(event));
+  assert.equal(snapshot(), true); draw();
+  // No change is refused, even with no hand hold (the owner, 2026-11-14): only the hold keeps it from the next snapshot.
+  assert.equal(preview.setFixtureState(others[0], { tilt_deg: 44 }).ok, true);
+  snapshot(); draw();
+  assert.equal(state(others[0]).tilt_deg, 30, 'without a hold the coordinator directs it again');
+  // The hand-change seam holds the fixture first; then the drag's Set aim, the pan slider, a radial paint and the
+  // level slider all go through.
+  const origin = preview.interactionDescriptor(held).display_origin_m;
+  const target = { point: [origin[0] + .8, origin[1] + .3, origin[2] - 1.2], normal: [0, 0, 1] };
+  assert.equal(preview.holdForHand(held, { reason: 'aim' }), true);
+  assert.equal(preview.aimAtTarget(held, target, { sweep: true }).ok, true);
+  const tilt = state(held).tilt_deg;
+  assert.ok(tilt > 30, 'the drag aimed it down at the floor');
+  assert.deepEqual(starts, [{ phase: 'start', fixture_id: held }], 'the burst starts before the change is applied');
+  settle();
+  assert.equal(events.length, 1, 'the drop is one settled change');
+  assert.equal(events[0].phase, 'settled');
+  assert.deepEqual(Object.keys(events[0].after).sort(), ['pan_deg', 'target', 'tilt_deg']);
+  assert.equal(events[0].before.tilt_deg, 30); assert.equal(events[0].after.tilt_deg, tilt);
+  assert.equal(events[0].before.target, null); assert.deepEqual(events[0].after.target.point, target.point);
+  assert.equal(events[0].reason, 'aim'); assert.ok(events[0].label && Number.isFinite(events[0].at_ms));
+  // A slider sweep is many inputs and one settled change; so is a burst of paint and level.
+  for (const pan of [2, 4, 6, 8]) { preview.holdForHand(held, { reason: 'change' }); assert.equal(preview.setFixtureState(held, { pan_deg: pan }).ok, true); }
+  preview.holdForHand(held); assert.equal(preview.setFixtureState(held, { radials: [{ number: 1, on: true, brightness: .9 }] }).ok, true);
+  preview.holdForHand(held); assert.equal(preview.setFixtureState(held, { spotlight: { brightness: .8 } }).ok, true);
+  assert.equal(timers.size, 1, 'one settle timer for the burst');
+  assert.equal(events.length, 1, 'nothing is reported mid-burst');
+  assert.equal(starts.length, 2, 'one start for the whole burst');
+  settle();
+  assert.equal(events.length, 2);
+  assert.deepEqual(Object.keys(events[1].after).sort(), ['pan_deg', 'radials', 'spotlight', 'target']);
+  assert.equal(events[1].before.pan_deg, events[0].after.pan_deg); assert.equal(events[1].after.pan_deg, 8);
+  assert.equal(events[1].after.target, null, 'a slider retires the surface target');
+  assert.deepEqual(events[1].after.radials.map(zone => [zone.number, zone.on, zone.brightness]), [[1, true, .9]]);
+  assert.equal(events[1].before.radials.length, 1, 'only the painted zone');
+  assert.deepEqual([events[1].before.spotlight.brightness, events[1].after.spotlight.brightness], [.5, .8]);
+  // Snapshot after snapshot, with the room's glow on each, the held fixture stays as the hand left it; the others follow.
+  for (let i = 0; i < 5; i++) assert.equal(snapshot({ pan_deg: -10, tilt_deg: 20, level: .7 }), true);
+  draw();
+  assert.deepEqual([state(held).pan_deg, state(held).tilt_deg, state(held).spotlight.brightness], [8, tilt, .8]);
+  assert.equal(state(held).radials.find(zone => zone.number === 1).brightness, .9, 'the painted zone stays painted');
+  for (const id of others) {
+    assert.deepEqual([state(id).pan_deg, state(id).tilt_deg, state(id).spotlight.brightness], [-10, 20, .7]);
+    assert.ok(state(id).radials.every(zone => zone.brightness === .3));
+  }
+  // A Stop, and an expiry, blank the coordinator's spots, never the hand's.
+  snapshot({ on: false, level: 0, reason: 'stopped' }, { ambient: null });
+  preview.applyCoordinatorSpots(null, generation);
+  assert.equal(state(held).spotlight.brightness, .8);
+  for (const id of others) assert.equal(state(id).spotlight.brightness, 0);
+  assert.deepEqual(preview.handHolds().map(hold => [hold.fixture_id, hold.reason]), [[held, 'change']]);
+  // Resume hands it back: the next snapshot directs it again, and its zones take the room glow.
+  assert.deepEqual(preview.releaseHands(), [held]);
+  assert.deepEqual(preview.handHolds(), []);
+  snapshot(); draw();
+  assert.deepEqual([state(held).pan_deg, state(held).tilt_deg, state(held).spotlight.brightness], [0, 30, .5]);
+  assert.ok(state(held).radials.every(zone => zone.brightness === .3));
+  // den-live's release hands back one fixture; a burst not settled when it ends is not reported.
+  preview.holdForHand(held); preview.setFixtureState(held, { tilt_deg: 50 });
+  assert.deepEqual(preview.releaseHand(held), [held]);
+  settle();
+  assert.equal(events.length, 2);
+  assert.deepEqual(preview.releaseHand(held), [], 'nothing left to release');
+  stop();
+  preview.holdForHand(held); preview.setFixtureState(held, { tilt_deg: 40 }); settle();
+  assert.equal(events.length, 2, 'an unsubscribed listener hears nothing');
+  // Outside the coordinator's ownership there is nothing to hold.
+  preview.setDocument(registration, { coordinator: false });
+  assert.equal(preview.holdForHand(held), false);
+  assert.equal(HAND_SETTLE_MS, 800);
+  preview.dispose();
+});
+
+test('the fixture marks a spot aimed and waiting dark with a dashed warm collar, and a held fixture with a solid ice collar', () => {
+  const registration = registrationFor();
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding, later: () => 0, cancel: () => {} });
+  preview.setDocument(registration, { coordinator: true });
+  const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
+  const mark = id => preview.root.getObjectByName('equipment-virtual-fixture:' + id).getObjectByName('fixture-mark');
+  const collar = (id, kind) => mark(id).getObjectByName('fixture-mark-' + kind);
+  const row = (id, patch = {}) => ({ fixture_id: id, on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
+    target_m: [1, 1, .8], reason: 'waiting_for_task', motion_phase: 'settled', ...patch });
+  const [aimed, lit, idle] = ids;
+  const apply = () => preview.applyCoordinatorSpots(ids.map(id => row(id, id === aimed ? { reason: 'pre_aim' }
+    : id === lit ? { on: true, level: .7, reason: 'task' } : {})), generation);
+  assert.equal(apply(), true);
+  assert.deepEqual([mark(aimed).visible, mark(aimed).userData.mark], [true, 'aimed'], 'aimed and dark: the dashed collar');
+  assert.deepEqual([collar(aimed, 'aimed').visible, collar(aimed, 'held').visible, collar(aimed, 'aimed').material.color.getHex()], [true, false, 0xffb066]);
+  assert.deepEqual([mark(lit).visible, mark(idle).visible], [false, false], 'lit, or dark and not aimed: no collar');
+  assert.equal(preview.applyCoordinatorSpots(ids.map(id => row(id, id === aimed ? { reason: 'standby' } : {})), generation), true);
+  assert.equal(mark(aimed).userData.mark, 'aimed', 'standby is aimed at the page and dark too');
+  // a person's hand: the solid ice collar, the colour Home gives people, kept across snapshots until it is handed back
+  assert.equal(preview.holdForHand(idle, { reason: 'change' }), true);
+  assert.deepEqual([mark(idle).visible, mark(idle).userData.mark, collar(idle, 'held').visible, collar(idle, 'aimed').visible,
+    collar(idle, 'held').material.color.getHex()], [true, 'held', true, false, 0xb8d8ff]);
+  assert.equal(apply(), true);
+  assert.equal(mark(idle).userData.mark, 'held', 'a snapshot passes a held fixture by');
+  // Stop blanks every spot: no aimed collar stays, and the hand's collar does
+  assert.equal(preview.applyCoordinatorSpots(null, generation), true);
+  assert.deepEqual([mark(aimed).visible, mark(idle).userData.mark], [false, 'held']);
+  assert.deepEqual(preview.releaseHands(), [idle]);
+  assert.equal(mark(idle).visible, false, 'handed back: no collar');
+  preview.dispose();
+});
+
+test('the coordinator dimming the room glow fades each fixture’s drawn zones, and Stop’s put-back eases them in', () => {
+  const registration = registrationFor();
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding, later: () => 0, cancel: () => {} });
+  preview.setDocument(registration, { coordinator: true });
+  const { generation, fixture_ids: ids } = preview.coordinatorSpotScope();
+  const sector = () => preview.root.children[0].getObjectByName('radial-diffuser-sector-1');
+  const rows = ids.map(id => ({ fixture_id: id, on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 30,
+    reason: 'waiting_for_task', motion_phase: 'settled' }));
+  assert.deepEqual([sector().visible, sector().userData.drawn_level], [true, .75], 'each fixture starts with its own glow');
+  assert.equal(preview.applyCoordinatorSpots(rows, generation, { ambient: { level: 0, cct_k: 2700 } }), true);
+  assert.equal(preview.readback().fixtures[0].state.radials[0].on, false, 'the room glow is off at once');
+  assert.equal(preview.presentationActive(), true, 'and its fade is drawn, not left at the old level');
+  preview.advancePresentation(performance.now() + 2000);
+  assert.deepEqual([sector().visible, sector().userData.drawn_level], [false, 0]);
+  // Stop puts each fixture's own glow back, and that eases in too
+  assert.equal(preview.applyCoordinatorSpots(null, generation), true);
+  assert.equal(preview.presentationActive(), true);
+  preview.advancePresentation(performance.now() + 4000);
+  assert.deepEqual([sector().visible, sector().userData.drawn_level], [true, .75]);
+  preview.dispose();
 });

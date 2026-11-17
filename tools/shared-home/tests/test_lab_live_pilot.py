@@ -1,11 +1,13 @@
 """Live-scene consumer on the camera-pilot ledger, with fakes only: temp SQLite,
 a fake model transport, localhost TLS fixtures. No model, host or credential."""
 import contextlib
+import errno
 import hashlib
 import http.client
 import io
 import json
 from pathlib import Path
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -570,8 +572,8 @@ class TLSIngressTests(PilotLiveFixture, unittest.TestCase):
     def tearDown(self):
         self.teardown()
 
-    def ingress(self, identities):
-        return pilot_live.PilotLiveIngress(("127.0.0.1", 0), self.pilot, self.live,
+    def ingress(self, identities, port=0):
+        return pilot_live.PilotLiveIngress(("127.0.0.1", port), self.pilot, self.live,
                                            certificate=str(FIXTURES / "server.pem"),
                                            private_key=str(FIXTURES / "server-test-only.key"),
                                            client_ca=str(FIXTURES / "ca.pem"), identities=identities,
@@ -599,6 +601,24 @@ class TLSIngressTests(PilotLiveFixture, unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(2)
+        self.assertTrue(self.live.closed and self.pilot.closed)
+
+    def registered(self):
+        fingerprint = hashlib.sha256(ssl.PEM_cert_to_DER_cert((FIXTURES / "client.pem").read_text())).hexdigest()
+        return {fingerprint: self.binding, "0" * 64: binding_fixture()}
+
+    def test_a_port_in_use_refuses_with_the_bind_error_and_closes_both_admissions(self):
+        # A failed bind runs server_close(). It used to raise AttributeError
+        # there (no .live yet), which hid the bind error itself.
+        holder = socket.socket()
+        holder.bind(("127.0.0.1", 0))
+        holder.listen(1)
+        try:
+            with self.assertRaises(OSError) as caught:
+                self.ingress(self.registered(), port=holder.getsockname()[1])
+            self.assertIn(caught.exception.errno, {errno.EADDRINUSE, getattr(errno, "WSAEADDRINUSE", errno.EADDRINUSE)})
+        finally:
+            holder.close()
         self.assertTrue(self.live.closed and self.pilot.closed)
 
 

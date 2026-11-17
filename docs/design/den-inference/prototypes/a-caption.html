@@ -1,0 +1,293 @@
+<title>Den Caption Prototype</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="den-shell.css">
+<style>
+/* Direction A, Caption: the label lives beside the body. Name, Qwen's word with its draining life, the held object,
+   what Qwen saw (up close), and what the house did for this person. */
+.chip { position: absolute; left: 10px; top: 10px; display: grid; gap: 2px; padding: 8px 10px; border-radius: 10px; max-width: min(300px, calc(100% - 20px));
+  background: var(--cv-glass); border: 1px solid var(--cv-line); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); font-size: 12.5px; }
+.chip-title { display: flex; align-items: center; gap: 7px; color: var(--cv-fg-0); font-weight: 560; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cv-fg-4); flex: 0 0 auto; }
+.chip[data-state="live"] .dot { background: var(--cv-ok); box-shadow: 0 0 8px var(--cv-ok); }
+.chip[data-state="attention"] .dot { background: var(--cv-attn); border-radius: 1px; transform: rotate(45deg); }
+.chip-facts { color: var(--cv-fg-2); font-variant-numeric: tabular-nums; }
+.chip-banner { color: var(--cv-attn); }
+.chip-banner:empty { display: none; }
+
+.leaders { position: absolute; inset: 0; pointer-events: none; }
+.cap { position: absolute; left: 0; top: 0; pointer-events: auto; cursor: pointer; will-change: transform; transition: opacity .3s var(--ease); }
+.cap::before { content: ""; position: absolute; inset: -22px -34px; z-index: -1; border-radius: 48px;
+  background: radial-gradient(closest-side, rgba(0,0,0,.8), rgba(0,0,0,.55) 60%, rgba(0,0,0,0)); }
+.cap-body { display: grid; gap: 3px; min-width: 0; }
+.cap[data-side="left"] .cap-body { justify-items: end; text-align: right; }
+.cap-name { display: flex; align-items: baseline; gap: 8px; }
+.cap[data-side="left"] .cap-name { flex-direction: row-reverse; }
+.nm { font: 600 20px/1.1 var(--sans); color: var(--cv-fg-0); letter-spacing: -.01em; white-space: nowrap; }
+.cap[data-kind="unknown"] .nm, .cap[data-kind="guest"] .nm { color: var(--cv-fg-1); font-weight: 560; }
+.cap[data-strength="weak"] .nm { text-decoration: underline dashed rgba(255,255,255,.45); text-underline-offset: 4px; }
+.prov { font: 500 11.5px/1 var(--mono); color: var(--cv-fg-3); white-space: nowrap; }
+.prov:empty { display: none; }
+.cap-act { display: flex; align-items: center; gap: 7px; min-height: 20px; }
+.cap[data-side="left"] .cap-act { flex-direction: row-reverse; }
+.life { width: 16px; height: 16px; flex: 0 0 auto; transform: rotate(-90deg); overflow: visible; }
+.life circle { fill: none; stroke-width: 2; }
+.life .bg { stroke: rgba(255,255,255,.14); }
+.life .arc { stroke: var(--cv-ice); stroke-linecap: round; transition: stroke .3s; }
+.life .spin { fill: var(--cv-ice); stroke: none; opacity: 0; }
+.cap[data-asking="1"] .life .spin { opacity: 1; }
+.word { font: 500 15px/1.2 var(--sans); color: var(--cv-ice); white-space: nowrap; transition: color .3s, opacity .3s; }
+.cap[data-answer="none"] .word { color: var(--cv-fg-3); font-weight: 450; font-size: 13.5px; }
+.age { font: 500 11.5px/1 var(--mono); color: var(--cv-fg-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cap-obj { display: flex; gap: 6px; }
+.obj { font: 600 11px/1 var(--mono); letter-spacing: .06em; color: #000; background: var(--cv-blue); padding: 4px 6px 3px; border-radius: 4px; text-transform: uppercase; }
+.cap-basis { font: 500 11.5px/1.35 var(--mono); color: var(--cv-fg-2); max-width: 260px; }
+.cap-basis b { font-weight: 500; color: var(--cv-fg-3); }
+.cap-house { font: 500 13.5px/1.25 var(--sans); color: var(--cv-warm); white-space: nowrap; display: flex; gap: 6px; align-items: center; }
+.cap-house .lvl { font: 500 11.5px/1 var(--mono); color: rgba(255, 221, 176, .7); }
+.cap-house[data-dark="1"] { color: var(--cv-fg-2); }
+.cap-near { font: 450 12px/1.2 var(--sans); color: var(--cv-fg-3); white-space: nowrap; }
+.cap [hidden] { display: none !important; }
+.cap[data-stale="1"] { opacity: .45; }
+.cap[data-stale="1"] .word, .cap[data-stale="1"] .nm { color: var(--cv-fg-2); }
+.flash { animation: flash .9s var(--ease); }
+@keyframes flash { 0% { color: #fff; text-shadow: 0 0 14px var(--cv-ice-glow); } 100% { text-shadow: none; } }
+
+.card { position: absolute; z-index: 5; width: min(320px, calc(100% - 20px)); max-height: calc(100% - 20px); overflow: auto;
+  padding: 14px 14px 12px; border-radius: 10px; background: var(--cv-glass); border: 1px solid var(--cv-line-strong);
+  backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); color: var(--cv-fg-1); font-size: 12.5px; }
+.device[data-layout="phone"] .card { left: 10px !important; right: 10px; bottom: 10px; top: auto !important; width: auto; }
+.card h3 { margin: 0; font: 600 18px/1.2 var(--sans); color: var(--cv-fg-0); display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.card h3 small { font: 500 11.5px/1 var(--mono); color: var(--cv-fg-3); }
+.card dl { display: grid; grid-template-columns: 92px 1fr; gap: 5px 10px; margin: 10px 0 0; }
+.card dt { color: var(--cv-fg-3); font: 500 11.5px/1.5 var(--mono); }
+.card dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.card .sec { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--cv-line); font: 500 11px/1 var(--mono); color: var(--cv-fg-4); letter-spacing: .05em; text-transform: uppercase; }
+.card .close { position: absolute; right: 8px; top: 8px; border: 0; background: transparent; color: var(--cv-fg-2); font-size: 16px; cursor: pointer; padding: 4px 6px; }
+.card .prop { color: var(--cv-proposed); font: 500 10.5px/1 var(--mono); border: 1px dashed currentColor; border-radius: 4px; padding: 1px 4px; margin-left: 4px; }
+.lifebar { height: 3px; border-radius: 2px; background: rgba(255,255,255,.12); margin-top: 5px; overflow: hidden; }
+.lifebar i { display: block; height: 100%; background: var(--cv-ice); }
+.device[data-layout="phone"] .nm { font-size: 17px; }
+.device[data-layout="phone"] .word { font-size: 14px; }
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="links.js"></script>
+<script src="den-sim.js"></script>
+<script src="den-client.js"></script>
+<script src="den-stage.js"></script>
+<script src="den-shell.js"></script>
+<script>
+(function () {
+const NOTES = `
+<article class="note"><h2>What this direction is</h2>
+<p>The body is the interface. Everything the house believes about a person sits in one caption beside their head: who (a name tag, never a face), what Qwen said they're doing, the object in their hands, and what the light did for them.</p>
+<p>Qwen's word carries a ring that drains over its 10 s life. When the ring empties the word goes, and the line says what Qwen is doing now. A new answer flashes in and refills the ring.</p>
+<p>Tap the person for the glass card: ages, expiry, Qwen's evidence, the binding, the light.</p></article>
+<article class="note"><h2>Bindings</h2><ul>
+<li>Name: <code>track.identity</code> <span class="pill-proposed">proposed</span>. Today: always "Someone".</li>
+<li>Word and ring: <code>activity.word</code>, age = <code>emitted_ts − at</code> + time since the event. Ends at 10 s, or sooner by <code>valid_for_s</code> <span class="pill-proposed">proposed</span>.</li>
+<li>Object pill and "Qwen saw": <code>activity.facts</code>, <code>activity.basis</code> <span class="pill-proposed">proposed</span>.</li>
+<li>House line: the spot row whose <code>subject.track_id</code> is this track. Its words come from <code>reason</code>.</li>
+<li>Ring and pointer: <code>xy_m</code>, <code>sigma_m</code>, <code>heading_deg</code> (no pointer when null).</li></ul></article>
+<article class="note"><h2>Design check</h2><dl class="score">
+<dt>Readable</dt><dd>Best of the four at room zoom: one place to look. Crowds at overview with two people, so overview shows the name and word only.</dd>
+<dt>Honest</dt><dd>The ring shows expiry without a number to over-read. Qwen's evidence stands in for the confidence it doesn't give. Risk: a caption reads as certain because it's beside the body.</dd>
+<dt>Fast</dt><dd>DOM text changes only when an event lands (3 a second at most). Positions follow at 60 fps on a 0.24 s smoother.</dd>
+<dt>Delight</dt><dd>High. The answer arriving at the head is the moment the house "gets it".</dd></dl></article>`;
+
+DenShell.mount({ letter: 'A', title: 'Caption: the body says what the house thinks',
+    subtitle: 'The live body with a floating System caption. Synthetic stream at real rates; no frames or real positions.',
+    notes: NOTES, side: 0, startAt: 21.0,
+    setup(ctx) {
+        const { overlay, stage, esc } = ctx;
+        overlay.innerHTML = `<canvas class="leaders" id="leaders"></canvas>
+          <div class="chip" id="chip" data-state="connecting"><p class="chip-title" style="margin:0"><span class="dot"></span><span>Den · live</span></p>
+          <p class="chip-facts" id="chip-facts" style="margin:0">Connecting…</p><p class="chip-banner" id="chip-banner" role="status" aria-live="polite" style="margin:0"></p></div>`;
+        const leaders = overlay.querySelector('#leaders'), lctx = leaders.getContext('2d');
+        const caps = new Map();
+        let open = null, card = null;
+
+        function capFor(id) {
+            let c = caps.get(id);
+            if (c) return c;
+            const el = document.createElement('div');
+            el.className = 'cap'; el.dataset.side = 'right';
+            el.innerHTML = `<div class="cap-body">
+              <div class="cap-name"><span class="nm"></span><span class="prov"></span></div>
+              <div class="cap-act"><svg class="life" viewBox="-9 -9 18 18" aria-hidden="true"><circle class="bg" r="7"/><circle class="arc" r="7" pathLength="100" stroke-dasharray="100 100"/><circle class="spin" r="1.6" cx="7" cy="0"/></svg><span class="word"></span><span class="age"></span></div>
+              <div class="cap-obj"><span class="obj"></span></div>
+              <div class="cap-basis"></div>
+              <div class="cap-house"><span class="hl"></span><span class="lvl"></span></div>
+              <div class="cap-near"></div></div>`;
+            el.addEventListener('click', e => { e.stopPropagation(); open = open === id ? null : id; });
+            overlay.appendChild(el);
+            c = { el, x: null, y: null, side: 'right', lastAt: null, word: '', q: k => el.querySelector(k), pulse: 0, opacity: 0 };
+            caps.set(id, c);
+            return c;
+        }
+        ctx.stageEl.addEventListener('stagetap', () => { open = null; });
+
+        const text = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+        const show = (node, on) => { if (node.hidden === on) node.hidden = !on; };
+        const secs = s => s < 10 ? `${s.toFixed(1)} s` : `${Math.round(s)} s`;
+
+        function frame(view, now, dt) {
+            // the status chip: live, how many, how far behind; and the banners Home shows today
+            const chip = overlay.querySelector('#chip');
+            chip.dataset.state = view.connecting ? 'connecting' : view.banner ? 'attention' : 'live';
+            text(overlay.querySelector('#chip-facts'), view.connecting ? 'Connecting…' : view.live
+                ? `${view.count === 0 ? 'No one' : view.count === 1 ? '1 person' : view.count + ' people'}${view.behind != null ? ` · ${view.behind.toFixed(2)} s behind` : ''}`
+                : `Last event ${Math.floor(view.sincePeople)} s ago`);
+            text(overlay.querySelector('#chip-banner'), view.banner ? `${view.banner.words}${view.banner.detail ? ' · ' + view.banner.detail : ''}` : '');
+
+            const W = stage.size.width, H = stage.size.height, dpr = Math.min(2, devicePixelRatio || 1);
+            if (leaders.width !== Math.round(W * dpr) || leaders.height !== Math.round(H * dpr)) { leaders.width = Math.round(W * dpr); leaders.height = Math.round(H * dpr); leaders.style.width = W + 'px'; leaders.style.height = H + 'px'; }
+            lctx.setTransform(dpr, 0, 0, dpr, 0, 0); lctx.clearRect(0, 0, W, H);
+
+            const anchors = stage.anchors();
+            const detail = stage.view === 'overview' ? 0 : stage.view === 'room' ? 1 : 2;
+            const phone = ctx.layout === 'phone';
+            const seen = new Set();
+            for (const t of view.tracks) {
+                const a = anchors.get(t.id);
+                if (!a || a.head.behind) continue;
+                seen.add(t.id);
+                const c = capFor(t.id), el = c.el;
+                // the body's head when this track has the body; else the floor ring (a marker-only person)
+                let head = a.ring;
+                const bh = stage.bodyHead();
+                if (a.hasBody && bh && stage.bodyVisible()) head = stage.project([bh[0], bh[1], bh[2] + 0.04]);
+                // which side: hysteresis at 42% / 66% of the width
+                if (head.x < W * 0.42) c.side = 'right'; else if (head.x > W * 0.66) c.side = 'left';
+                el.dataset.side = c.side;
+                const gap = phone ? 26 : 38;
+                const tx = c.side === 'right' ? head.x + gap : head.x - gap, ty = head.y - (phone ? 30 : 36);
+                const k = ctx.reduced() ? 1 : 1 - Math.exp(-dt / 0.24);
+                c.x = c.x == null || dt === 0 ? tx : c.x + (tx - c.x) * k; c.y = c.y == null || dt === 0 ? ty : c.y + (ty - c.y) * k;
+                const w = el.offsetWidth, hgt = el.offsetHeight;
+                if (c.side === 'right' && c.x + w > W - 8 && head.x - gap - w > 8) { c.side = 'left'; c.x = head.x - gap; el.dataset.side = 'left'; }
+                else if (c.side === 'left' && c.x - w < 8 && head.x + gap + w < W - 8) { c.side = 'right'; c.x = head.x + gap; el.dataset.side = 'right'; }
+                let left = c.side === 'right' ? c.x : c.x - w;
+                left = Math.max(8, Math.min(W - w - 8, left));
+                c.y = Math.max(8, Math.min(H - hgt - 8, c.y));
+                el.style.transform = `translate(${Math.round(left)}px, ${Math.round(c.y)}px)`;
+
+                // identity
+                const id = t.identity;
+                el.dataset.kind = id.kind; el.dataset.strength = id.strength;
+                text(c.q('.nm'), id.name);
+                text(c.q('.prov'), detail >= 2 && ctx.proposed ? (id.kind === 'household' ? `face ${id.score.toFixed(2)} · ${Math.round(id.age)} s ago` : id.kind === 'guest' ? 'face seen · not household' : 'no face seen yet') : '');
+
+                // Qwen's word, its life, and what Qwen is doing when there is no word
+                // Qwen asks about a seated person only. Today there's no seated flag: a track with an answer, or the only one.
+                const act = t.activity;
+                const asked = t.seated != null ? t.seated : !!act || view.tracks.length === 1;
+                const q = asked ? view.qwen : null;
+                el.dataset.answer = act ? 'live' : 'none';
+                c.q('.life').style.visibility = asked ? 'visible' : 'hidden';
+                const asking = ctx.proposed && q && q.inflightAge != null && q.state === 'asking';
+                el.dataset.asking = asking ? '1' : '0';
+                if (act) {
+                    text(c.q('.word'), act.words);
+                    text(c.q('.age'), `${Math.round(act.age)} s`);
+                    c.q('.arc').setAttribute('stroke-dasharray', `${(act.life * 100).toFixed(1)} 100`);
+                    if (c.word !== act.word || act.age < c.lastAge - 0.5) {
+                        const w2 = c.q('.word'); w2.classList.remove('flash'); void w2.offsetWidth; if (!ctx.reduced()) w2.classList.add('flash');
+                        c.pulse = now;
+                    }
+                    c.word = act.word; c.lastAge = act.age;
+                } else if (!asked) {
+                    text(c.q('.word'), t.posture || (t.state === 'coasting' ? 'Leaving view' : 'Not seated'));
+                    text(c.q('.age'), '');
+                    c.q('.arc').setAttribute('stroke-dasharray', '0 100');
+                    c.word = ''; c.lastAge = Infinity;
+                } else {
+                    const unbound = q && q.lastOutcome && q.lastOutcome.kind.startsWith('unbound') && q.lastOutcome.age < 10;
+                    const line = !q ? 'No Qwen health' : !view.live ? 'No stream' : unbound ? q.lastOutcome.words : q.state === 'asking' ? (asking ? 'Asking Qwen…' : 'Waiting for Qwen')
+                        : q.state === 'unavailable' ? 'Qwen unavailable' : `Qwen off · ${q.why || 'idle'}`;
+                    text(c.q('.word'), line);
+                    text(c.q('.age'), q && q.lastReplyAge != null && q.state !== 'off' && !unbound ? (q.lastReplyAge < 1 ? 'replied just now' : `replied ${Math.round(q.lastReplyAge)} s ago`) : '');
+                    c.q('.arc').setAttribute('stroke-dasharray', '0 100');
+                    c.word = ''; c.lastAge = Infinity;
+                }
+                if (asking) { const ang = (now * 4) % (Math.PI * 2); const s = c.q('.spin'); s.setAttribute('cx', (7 * Math.cos(ang)).toFixed(2)); s.setAttribute('cy', (7 * Math.sin(ang)).toFixed(2)); }
+
+                // the object, Qwen's evidence (up close), the house line, the near phrase
+                show(c.q('.cap-obj'), !!(act && act.object) && detail >= 1 || !!(act && act.object) && phone);
+                if (act && act.object) text(c.q('.obj'), act.object);
+                const basis = act && act.basis.length && detail >= 2;
+                show(c.q('.cap-basis'), !!basis);
+                if (basis) c.q('.cap-basis').innerHTML = `<b>Qwen saw</b> ${esc(act.basis.join(' · '))}`;
+                const light = view.light, mine = light && light.fresh && light.subject && light.subject.track_id === t.id;
+                const fx = mine ? (light.lit || light.aimed) : null;
+                let house = '', lvl = '', dark = false;
+                if (fx && light.lit) { house = `${fx.name} · ${fx.reason === 'task_released' ? 'fading out' : 'reading light'}`; lvl = `${Math.round(fx.level * 100)}% · ${fx.cct} K`; }
+                else if (fx) { house = `${fx.name} aimed, dark`; dark = true; }
+                else if (light && light.stopped && t.state === 'confirmed') { house = 'Stop is holding the spots'; dark = true; }
+                show(c.q('.cap-house'), !!house && detail >= 1 || !!house && phone);
+                text(c.q('.hl'), house); text(c.q('.lvl'), lvl); c.q('.cap-house').dataset.dark = dark ? '1' : '0';
+                show(c.q('.cap-near'), detail === 1 && !!t.near && !phone);
+                text(c.q('.cap-near'), t.near || '');
+                el.dataset.stale = t.state === 'coasting' ? '1' : '0';
+                c.opacity = Math.min(1, c.opacity + dt * 3); el.style.opacity = String(c.opacity * Math.min(1, a.opacity));
+
+                // the leader: head dot and a hairline to the caption; an answer's arrival runs along it
+                const lx = c.side === 'right' ? left - 6 : left + w + 6, ly = c.y + 12;
+                lctx.strokeStyle = 'rgba(237,237,237,0.38)'; lctx.lineWidth = 1;
+                lctx.beginPath(); lctx.moveTo(head.x, head.y); lctx.lineTo(lx, ly); lctx.stroke();
+                lctx.fillStyle = 'rgba(237,237,237,0.85)'; lctx.beginPath(); lctx.arc(head.x, head.y, 2.2, 0, Math.PI * 2); lctx.fill();
+                const since = now - c.pulse;
+                if (since >= 0 && since < 0.7 && !ctx.reduced()) {
+                    const u = since / 0.7, px = head.x + (lx - head.x) * u, py = head.y + (ly - head.y) * u;
+                    const g = lctx.createRadialGradient(px, py, 0, px, py, 14);
+                    g.addColorStop(0, `rgba(221,234,255,${0.9 * (1 - u)})`); g.addColorStop(1, 'rgba(184,216,255,0)');
+                    lctx.fillStyle = g; lctx.beginPath(); lctx.arc(px, py, 14, 0, Math.PI * 2); lctx.fill();
+                }
+            }
+            for (const [id, c] of caps) if (!seen.has(id)) {
+                c.opacity -= dt * 3; c.el.style.opacity = String(Math.max(0, c.opacity));
+                if (c.opacity <= 0 || !view.live && c.opacity < 0.5) { c.el.remove(); caps.delete(id); if (open === id) open = null; }
+            }
+            renderCard(view, now);
+        }
+
+        function renderCard(view, now) {
+            const t = open && view.tracks.find(x => x.id === open);
+            if (!t) { if (card) { card.remove(); card = null; } return; }
+            if (card && now - (card._at || 0) < 0.25 && now >= (card._at || 0)) return;
+            if (!card) {
+                card = document.createElement('div'); card.className = 'card'; card.setAttribute('role', 'dialog'); card.setAttribute('aria-label', 'Person details');
+                overlay.appendChild(card);
+            }
+            const c = caps.get(t.id);
+            if (c && ctx.layout !== 'phone') {
+                const x = Math.min(stage.size.width - 330, Math.max(10, c.side === 'right' ? c.x : c.x - 320)), y = Math.min(stage.size.height - 340, Math.max(10, c.y + 70));
+                card.style.left = x + 'px'; card.style.top = y + 'px';
+            }
+            const a = t.activity, light = view.light, mine = light && light.subject && light.subject.track_id === t.id;
+            const fx = mine ? (light.lit || light.aimed) : null, P = ctx.proposed ? '' : '<span class="prop">proposed</span>';
+            const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+            const html = `<button class="close" aria-label="Close" data-close>×</button>
+              <h3>${ctx.esc(t.identity.name)} <small>${ctx.esc(t.identity.kind === 'household' ? t.identity.detail : t.identity.kind === 'guest' ? 'guest' : 'not recognised')}</small></h3>
+              <dl>
+              ${row('Doing', a ? `${ctx.esc(a.words)}${a.closeUp ? ' · close-up work' : ''}<div class="lifebar"><i style="width:${(a.life * 100).toFixed(0)}%"></i></div>` : '<span style="color:var(--cv-fg-3)">No current answer</span>')}
+              ${a ? row('Answer', `given ${secs(a.age)} ago · good ${secs(a.left)} more`) : ''}
+              ${a && a.stillAge != null ? row('Still', `${secs(a.stillAge)} old`) : ''}
+              ${row('Holding', a && a.object ? ctx.esc(a.object) + (a.book && a.book !== 'not_visible' ? `, ${ctx.esc(a.book)}` : '') : a ? 'nothing seen' : '—')}
+              ${a && a.gaze ? row('Looking at', ctx.esc(a.gaze)) : ''}
+              ${a && a.basis.length ? row('Qwen saw', ctx.esc(a.basis.join(', '))) : row('Qwen saw', `<span style="color:var(--cv-fg-3)">not sent today</span>${P}`)}
+              </dl>
+              <div class="sec">The light</div>
+              <dl>${fx ? row(fx.name, `${fx.on ? `${Math.round(fx.level * 100)}% · ${fx.cct} K` : 'dark'} · ${ctx.esc(fx.words)}${fx.phase === 'moving' ? ' · moving' : ''}`) : row('Spots', mine ? 'none aimed' : 'not for this person')}
+              ${light && mine && light.subject.request_id ? row('Because of', `Qwen answer ${ctx.esc(light.subject.request_id)}${light.subjectAnswer ? ' (the one shown)' : ''}`) : ''}</dl>
+              <div class="sec">The track</div>
+              <dl>${row('Track', `<span class="mono">${ctx.esc(t.id)}</span>`)}${row('Where', `${ctx.esc(t.near || 'no label near')} · ±${Math.round(t.sigma * 100)} cm`)}
+              ${row('Facing', t.heading == null ? 'not fresh' : `${Math.round(t.heading)}°`)}${row('Binding', `epoch ${t.epoch} · revision ${t.revision}`)}</dl>`;
+            card._at = now;
+            if (card._html !== html) { card.innerHTML = html; card._html = html; card.querySelector('[data-close]').addEventListener('click', () => { open = null; }); }
+        }
+        return { frame };
+    } });
+})();
+</script>

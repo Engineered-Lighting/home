@@ -211,7 +211,8 @@ function fixture({ mode = 'zones' } = {}) {
   const hub = new AuthoredTarget('circle', host); hub.setAttribute('data-apt-radial-start', 'hub');
   const binding = { content_revision: 'authored-victoria-r1', registration_version: 1,
     manifest_digest: 'a'.repeat(64), frame_digest: 'b'.repeat(64), canonical_collision_digest: 'c'.repeat(64) };
-  const document = { binding, revision: 7, digest: 'd'.repeat(64) }, ids = ['authored-fixture-one', 'authored-fixture-two'];
+  const document = { scope: { site_id: 'victoria' }, binding, revision: 7, digest: 'd'.repeat(64) };
+  const ids = ['authored-fixture-one', 'authored-fixture-two'];
   const descriptors = new Map(ids.map((id, index) => [id, {
     schema: 'home-virtual-fixture-interaction-1', fixture_id: id, mount_id: 'authored-mount-' + index, generation: 3,
     equipment_revision: document.revision, equipment_digest: document.digest, binding: copy(binding),
@@ -223,13 +224,14 @@ function fixture({ mode = 'zones' } = {}) {
         on: true, brightness: .5, color_temp_kelvin: 3000 })) },
     target: { point: [1, 2, 0], normal: [0, 0, 1], kind: 'registered_mesh' }, truth_role: 'virtual_preview', physical_commands: false,
   }]));
-  const state = { patches: [], calls: [], intervals: [], selectedSite: 'victoria', pickId: ids[0],
+  const state = { patches: [], calls: [], intervals: [], aims: [], selectedSite: 'victoria', pickId: ids[0],
     previewRevision: 7, previewDigest: document.digest, previewVisible: true, previewStatus: 'ready', readout: null, projection: null, panel: 'controls', previewPublications: 0, nowMs: 0 };
+  const body = { userData: { interaction_role: 'fixture' } };
   const preview = () => ({ status: state.previewStatus, visible: state.previewVisible, revision: state.previewRevision,
     digest: state.previewDigest, fixtures: ids.map(id => ({ fixture_id: id, label: id, state: copy(descriptors.get(id).state) })) });
   const overlay = {
     virtualFixturesReadback: preview, virtualFixtureInteractionDescriptor: id => descriptors.has(id) ? copy(descriptors.get(id)) : null,
-    virtualFixturePickObjects: () => [], personGroup: { visible: false }, markersById: new Map(),
+    virtualFixturePickObjects: () => [body], personGroup: { visible: false }, markersById: new Map(),
     setVirtualFixtureSelected: id => { state.calls.push(['selected', id]); return overlay.virtualFixtureInteractionDescriptor(id); },
     setVirtualFixtureState(id, patch) {
       state.patches.push({ id, patch: copy(patch) });
@@ -244,8 +246,9 @@ function fixture({ mode = 'zones' } = {}) {
   const apartmentRoot = new THREE.Group(); apartmentRoot.updateMatrixWorld(true);
   const engine = { siteId: 'victoria', contentRevision: binding.content_revision,
     sceneIdentity: { siteId: 'victoria', contentRevision: binding.content_revision, registrationVersion: 1, frameDigest: binding.frame_digest },
-    camera, apartmentRoot, renderer: { domElement: canvas }, overlay,
-    picking: { pick: () => state.pickId ? [{ object: { userData: { fixture_id: state.pickId } } }] : [],
+    camera, apartmentRoot, renderer: { domElement: canvas }, overlay, modes: { mode: 'mesh' },
+    picking: { pick: objects => state.pickId && objects.includes(body)
+        ? [{ object: { userData: { ...body.userData, fixture_id: state.pickId } } }] : [],
       projectToScreen: () => assert.fail('no legacy marker projection is needed by this authored timer fixture') },
     displaySurfaceHit: () => ({ point: [1, 2, 0], normal: [0, 0, 1] }),
     rig: { inCameraPose: () => false, stepAzimuth() {}, stepElevation() {}, snapHome() {} } };
@@ -257,6 +260,7 @@ function fixture({ mode = 'zones' } = {}) {
       frame(info) { if (this.disposed) return false; if (options.signal.aborted || !options.isCurrent()) { this.dispose(); return false; } options.onPresentationFrame(info); return true; } };
     const abort = () => layer.dispose(); options.signal.addEventListener('abort', abort); layers.add(layer); return layer;
   };
+  domDocument.elementFromPoint = () => canvas;
   const frames = new Map(); let frameId = 0;
   overlay.createVirtualFixtureAimGesture = options => createDirectAimGestureController({ ...options,
     requestFrame: callback => { const id = ++frameId; frames.set(id, callback); return id; }, cancelFrame: id => frames.delete(id) });
@@ -267,7 +271,7 @@ function fixture({ mode = 'zones' } = {}) {
   window.Home3D = { ready: Promise.resolve({ loadDirectionalPresentation: async () => Presentation }) };
   const values = { window, document: domDocument, AbortController, open: true, phase: 'ready', selectedSiteId: 'victoria', selectedContentRevision: binding.content_revision,
     editing: false, calibCam: null, liveOn: false, rehearsalIsolated: false, spatialScale: 'apartment', unifiedShell: true,
-    virtualSpotlightsVisible: true, apartmentSceneControlsEnabled: true, selectedSiteInterior: true,
+    virtualSpotlightsVisible: true, apartmentSceneControlsEnabled: true, selectedSiteInterior: true, echoVirtualActive: false,
     apartmentAuthorityKey: 'authored-authority', workspaceAuthorityRef: { current: { key: 'authored-authority' } },
     modelSiteRef: { current: 'victoria' }, modelScopeRef: { current: { siteId: 'victoria', authorityKey: 'authored-authority',
       contentRevision: binding.content_revision, registrationVersion: 1, frameDigest: binding.frame_digest } },
@@ -277,6 +281,9 @@ function fixture({ mode = 'zones' } = {}) {
     virtualFixtureId: ids[0], selectedVirtualFixture: preview().fixtures[0], virtualInspectorTab: mode === 'zones' ? 'light' : 'aim',
     fixtureInteractionMode: mode, fixtureInteractionModeRef: { current: mode },
     virtualAimGestureRef: { current: null }, radialGestureOwnerRef: { current: null }, flushRadialGestureRef: { current: null },
+    aimPresentationRef: { current: { readback: () => ({ dragging: false }),
+      describeDirectAim: (_fixture, _limits, hit) => ({ valid: !!hit }), previewDirectAim() {}, clearDirectAim() {} } },
+    aimActionsRef: { current: { applyDirect: entry => state.aims.push(copy(entry)) } },
     directionalProjectionRef: { current: null }, deskTargetCaptureRef: { current: null },
     directionalView: null, directionalViewRef: { current: null }, directionalProjectRef: { current: null },
     virtualFixturePreviewDirtyRef: { current: false }, publishVirtualFixturePreviewRef: { current: null },
@@ -304,6 +311,7 @@ function fixture({ mode = 'zones' } = {}) {
     requestAnimationFrame: () => assert.fail('directional integration cannot create a new RAF loop'),
   };
   const context = vm.createContext(values), cleanups = [];
+  context.aptRetainEchoFixtureMemory = actual.evaluate(actual.component('aptRetainEchoFixtureMemory'), context);
   for (const name of ['selectionEngine', 'selectionLifecycle']) context[name] = actual.initializer(name, context);
   for (const name of ['getDirectionalSnapshot', 'isDirectionalProjectionCurrent', 'projectDirectionalFixture', 'changeFixtureInteractionMode', 'changeVirtualInspectorTab', 'selectVirtualFixture', 'changeVirtualFixture',
     // Radial painting is a hand change: it reaches changeVirtualFixture through the one switch point.
@@ -346,7 +354,7 @@ function fixture({ mode = 'zones' } = {}) {
     get presentationGroup() { return presentationGroup; },
     mountRadial: () => mount('const current = owner =>'), mountTimer: () => mount('virtualFixturePreviewDirtyRef.current &&'),
     mountPresentation: () => { values.directionalViewRef.current?.dispose(); values.directionalView = null; mount('let closed = false, lease = null'); },
-    mountPreview: () => mount('overlay.setVirtualFixtures(document)'),
+    mountPreview: () => mount('overlay.setVirtualFixtures(document, { coordinator })'),
     mountKeyboard: () => mount('const semanticCycleFromCard'), mountSpot: () => mount('overlay.createVirtualFixtureAimGesture'),
     point(relative = [0, 0], projection = values.directionalProjectionRef.current) {
       const point = projection.frame.project(relative), rect = host.getBoundingClientRect();
@@ -371,14 +379,14 @@ for (const [name, change] of [
   ['azimuth', f => { f.descriptors.get(f.ids[0]).state.radials[0].azimuth_deg += 5; }],
 ]) test('cached directional projection refuses changed ' + name + ' before gesture admission', () => {
   const f = fixture(); f.mountRadial(); const oldProjection = f.values.directionalProjectionRef.current;
-  change(f); const event = emit(f.canvas, 'pointerdown', f.point([0, 0], oldProjection));
-  assert.equal(event.defaultPrevented, true, 'a fixture hit remains selection-owned rather than orbiting');
+  change(f); const event = emit(f.hub, 'pointerdown', f.point([0, 0], oldProjection));
+  assert.equal(event.defaultPrevented, true, 'the radial handle remains selection-owned rather than orbiting');
   assert.equal(f.values.radialGestureOwnerRef.current === null, true, 'a fresh descriptor cannot borrow an earlier drawn plane');
   assert.deepEqual(f.state.patches, []); assert.equal(f.host.captures.size, 0); f.dispose();
 });
 
 function paintNow(f) {
-  emit(f.canvas, 'pointerdown', f.point());
+  emit(f.hub, 'pointerdown', f.point());
   assert.equal(f.values.radialGestureOwnerRef.current?.gesture.readback().active, true);
   assert.ok(f.state.readout, 'down publishes the existing zone level immediately');
   assert.equal(f.state.patches.length, 0, 'pickup alone does not write');
@@ -482,12 +490,12 @@ for (const [name, retire] of [
 
 test('native capture failure cancels without output or a stranded owner', () => {
   const f = fixture(); f.host.setPointerCapture = () => { throw Error('Authored detached capture'); }; f.mountRadial();
-  emit(f.canvas, 'pointerdown', f.point()); assert.equal(f.values.radialGestureOwnerRef.current, null);
+  emit(f.hub, 'pointerdown', f.point()); assert.equal(f.values.radialGestureOwnerRef.current, null);
   assert.equal(f.host.captures.size, 0); assert.deepEqual(f.state.patches, []); f.dispose();
 });
 
 test('a different pointer cannot move or release the captured radial gesture', () => {
-  const f = fixture(); f.mountRadial(); emit(f.canvas, 'pointerdown', f.point()); const owner = f.values.radialGestureOwnerRef.current;
+  const f = fixture(); f.mountRadial(); emit(f.hub, 'pointerdown', f.point()); const owner = f.values.radialGestureOwnerRef.current;
   emit(f.host, 'pointermove', { ...f.point([1.1, 0]), pointerId: 2 }); emit(f.host, 'pointerup', { ...f.point([1.1, 0]), pointerId: 2 });
   assert.equal(f.values.radialGestureOwnerRef.current, owner); assert.equal(owner.lastPatch, null); assert.deepEqual(f.state.patches, []); f.dispose();
 });
@@ -500,30 +508,45 @@ test('Zones leaves empty canvas input to the existing orbit owner', () => {
   assert.equal(f.values.virtualAimGestureRef.current.readback().active, false); f.dispose();
 });
 
-test('Zones selects another fixture without entering direct aim and waits for its own freshly drawn plane', () => {
-  const f = fixture(); f.mountSpot(); f.mountRadial(); f.state.pickId = f.ids[1];
-  emit(f.canvas, 'pointerdown', f.point()); assert.equal(f.values.virtualFixtureId, f.ids[1]);
-  assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.values.virtualAimGestureRef.current.readback().active, false);
-  emit(f.canvas, 'pointerdown', f.point()); assert.equal(f.values.radialGestureOwnerRef.current, null);
-  f.refresh(); emit(f.canvas, 'pointerdown', f.point()); assert.equal(f.values.radialGestureOwnerRef.current.fixtureId, f.ids[1]);
-  assert.deepEqual(f.state.patches, []); f.dispose();
+test('a canvas grab in Zones selects another fixture and hands its drop to direct aim', () => {
+  const f = fixture(); f.mountRadial(); f.mountSpot(); f.state.pickId = f.ids[1];
+  const down = emit(f.canvas, 'pointerdown', f.point());
+  assert.equal(down.defaultPrevented, true);
+  assert.equal(f.values.virtualFixtureId, f.ids[1]);
+  assert.equal(f.values.radialGestureOwnerRef.current, null);
+  assert.equal(f.values.virtualAimGestureRef.current.readback().fixture_id, f.ids[1]);
+  assert.equal(f.canvas.hasPointerCapture(1), true);
+  emit(f.canvas, 'pointermove', f.point([1.1, 0]));
+  assert.deepEqual(f.state.aims, [], 'a move does not apply an aim');
+  emit(f.canvas, 'pointerup', f.point([1.1, 0]));
+  assert.equal(f.canvas.hasPointerCapture(1), false);
+  assert.equal(f.state.aims.length, 1);
+  const [entry] = f.state.aims;
+  assert.equal(entry.fixture_id, f.ids[1]);
+  assert.equal(entry.physical_commands, false);
+  assert.deepEqual(entry.target.point, [1, 2, 0]);
+  assert.deepEqual(f.state.patches, []);
+  f.dispose();
 });
 
-test('pressing the already selected fixture in Zones reveals Controls through the existing guarded callback', () => {
+test('pressing the selected radial handle reveals Controls through the existing guarded callback', () => {
   const f = fixture(), before = copy([...f.descriptors]), history = f.values.virtualAimHistoryRef.current;
-  f.state.panel = 'chat'; f.mountRadial();
-  const event = emit(f.canvas, 'pointerdown', f.point());
+  f.state.panel = 'chat'; f.mountSpot(); f.mountRadial();
+  const event = emit(f.hub, 'pointerdown', f.point());
   assert.equal(event.defaultPrevented, true); assert.equal(f.state.panel, 'controls');
   assert.deepEqual(f.state.calls, [['selected', f.ids[0]], ['fixture', f.ids[0]], ['open', true], ['show']]);
   assert.equal(f.values.virtualFixtureId, f.ids[0]); assert.equal(f.values.virtualFixtureControlsOpen, true);
   assert.equal(f.values.virtualAimHistoryRef.current, history); assert.deepEqual(copy([...f.descriptors]), before);
-  assert.deepEqual(f.state.patches, []); assert.ok(f.values.radialGestureOwnerRef.current); f.dispose();
+  assert.deepEqual(f.state.patches, []);
+  assert.ok(f.values.radialGestureOwnerRef.current);
+  assert.equal(f.values.virtualAimGestureRef.current.readback().active, false);
+  f.dispose();
 });
 
 test('a declined same-fixture selection prevents Zones painting and cannot reveal Controls', () => {
   const f = fixture(), before = copy([...f.descriptors]); f.state.panel = 'chat';
   f.engine.overlay.setVirtualFixtureSelected = id => { f.state.calls.push(['selection-declined', id]); return null; };
-  f.mountRadial(); emit(f.canvas, 'pointerdown', f.point());
+  f.mountRadial(); emit(f.hub, 'pointerdown', f.point());
   assert.deepEqual(f.state.calls, [['selection-declined', f.ids[0]]]); assert.equal(f.state.panel, 'chat');
   assert.equal(f.values.radialGestureOwnerRef.current, null); assert.equal(f.host.captures.size, 0);
   assert.equal(f.values.virtualFixtureId, f.ids[0]); assert.equal(f.values.virtualFixtureControlsOpen, true);
@@ -578,7 +601,7 @@ for (const [name, change] of [
 test('immediate display state withdraws directional admission before the overlay effect updates readback', () => {
   const f = fixture(); assert.equal(f.state.previewVisible, true); f.values.virtualSpotlightsVisible = false;
   assert.equal(f.context.getDirectionalSnapshot(f.ids[0]), null); assert.equal(f.context.projectDirectionalFixture(), null);
-  f.mountRadial(); emit(f.canvas, 'pointerdown', f.point()); assert.equal(f.values.radialGestureOwnerRef.current, null); f.dispose();
+  f.mountRadial(); emit(f.hub, 'pointerdown', f.point()); assert.equal(f.values.radialGestureOwnerRef.current, null); f.dispose();
 });
 
 test('a plane with a visible hub but clipped contour uses inspector fallback and cannot paint', () => {

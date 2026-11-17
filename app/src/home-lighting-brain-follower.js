@@ -3,7 +3,8 @@
  * overlay seams (setVirtualFixtureState, aimVirtualFixtureAtTarget), fades in
  * small virtual steps, and never fights a manual change: a hand change pauses
  * that fixture here at once, posts an override, and the fixture stays paused
- * until the brain clears it or the owner chooses Return to Auto. Virtual only. */
+ * until the brain clears it or the owner chooses Return to Auto. Den Live's
+ * room ownership makes this follower yield every virtual channel. Virtual only. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -53,16 +54,17 @@
         refused_reason: brain.refused_reason, notice,
         fixtures: (state?.fixtures || []).map(row => {
           const e = entry(row.fixture_id), paused = pausedBy(row.fixture_id, e);
-          const observed = currentState(getOverlay() || {}, row.fixture_id)?.state || null;
+          const overlay = getOverlay() || {}, observed = currentState(overlay, row.fixture_id)?.state || null;
           return { fixture_id: row.fixture_id, auto: !paused, paused, pause_reason: e.local ? e.local.reason : row.pause_reason,
             paused_until: row.paused_until, override_sent: e.local ? e.local.sent : null, override_error: e.local?.error || null,
-            requested_spot_on: row.spot.on, spot_on: observed?.spotlight?.on ?? null,
+            requested_spot_on: overlay.denSpotSnapshotOwned ? null : row.spot.on, spot_on: observed?.spotlight?.on ?? null,
             application_error: e.error, applied_state: e.applied_state && copy(e.applied_state),
             rendered: e.rendered && copy(e.rendered), fading: !!e.tween };
         }), physical_commands: false };
     }
     const notify = () => { try { onChange(readback()); } catch (_) { /* view failure never stops following */ } };
     const stopTween = e => { if (e.tween) { cancel(e.tween.timer); e.tween = null; } e.serial++; e.pending = null; e.rendered = null; };
+    const yieldToDen = e => { stopTween(e); e.applied = null; e.applied_state = null; e.error = null; };
     const correlation = row => ({ fixture_id: row.fixture_id, state_revision: brain.state?.state_revision ?? null,
       decision_id: brain.state?.decision_id ?? null,
       generated_at: brain.state?.generated_at ?? null, received_at_ms: brain.received_at_ms ?? null,
@@ -72,6 +74,7 @@
       record({ stage: 'applied', ...context, generation: e.generation, ...application });
       if (!diagnostics || typeof requestRenderEvidence !== 'function') return;
       const current = () => !disposed && brain.online && e.serial === serial && !pausedBy(row.fixture_id, e)
+        && overlay.denSpotSnapshotOwned !== true
         && (!application.spotlight_on || nowMs() < Math.min(context.reading_evidence?.activity_valid_until ?? 0,
           context.reading_evidence?.pose_valid_until ?? 0) * 1000)
         && getOverlay() === overlay && overlay.virtualFixtureInteractionDescriptor?.(row.fixture_id)?.generation === e.generation;
@@ -108,13 +111,14 @@
       const descriptor = overlay.virtualFixtureInteractionDescriptor?.(id);
       const generation = descriptor?.generation ?? null;
       const desired = desiredChannels(row, current.ranges || { radials: [2200, 5000], downward: [2200, 5000], spotlight: [2700, 5000] });
-      const sig = signature(desired);
+      const spotOwned = overlay.denSpotSnapshotOwned === true;
+      const sig = spotOwned ? JSON.stringify([desired.radial, desired.downward]) : signature(desired);
       if ((e.applied === sig || e.pending === sig) && e.generation === generation) return false;
       stopTween(e);
       const serial = e.serial, context = correlation(row);
       e.error = null; e.generation = generation;
-      record({ stage: 'requested', ...context, generation, spotlight_on: desired.spotlight.on });
-      if (desired.spotlight.on) {
+      if (!spotOwned) record({ stage: 'requested', ...context, generation, spotlight_on: desired.spotlight.on });
+      if (!spotOwned && desired.spotlight.on) {
         const aimed = attempt(() => overlay.aimVirtualFixtureAtTarget?.(id, { point: desired.target_m, normal: [0, 0, 1], kind: 'lighting_brain_target' },
           generation === null ? undefined : { expectedGeneration: generation }));
         if (aimed?.ok !== true) {
@@ -124,18 +128,21 @@
         }
       }
       const from = copy(current.state), started = nowMs();
-      const ambientMs = desired.ambient_fade_s * 1000, spotMs = desired.spot_fade_s * 1000;
+      const ambientMs = desired.ambient_fade_s * 1000, spotMs = spotOwned ? 0 : desired.spot_fade_s * 1000;
       const tick = () => {
-        if (disposed || pausedBy(id, e) || !brain.online || serial !== e.serial || getOverlay() !== overlay) { e.tween = null; e.pending = null; return; }
+        if (serial !== e.serial) return;
+        if (disposed || pausedBy(id, e) || !brain.online || getOverlay() !== overlay) { e.tween = null; e.pending = null; return; }
+        // Ownership can change after a fade started, without a new brain event.
+        if (overlay.denSpotSnapshotOwned === true) { yieldToDen(e); return; }
         if ((overlay.virtualFixtureInteractionDescriptor?.(id)?.generation ?? null) !== generation) {
           e.error = 'equipment_preview_generation_changed'; e.applied = null; e.pending = null; e.tween = null; notify(); return;
         }
         const elapsed = nowMs() - started;
         const ta = ambientMs > 0 ? Math.min(1, elapsed / ambientMs) : 1, ts = spotMs > 0 ? Math.min(1, elapsed / spotMs) : 1;
         const result = attempt(() => overlay.setVirtualFixtureState?.(id, { ...patchAt(from, desired, ta, { radial: true, downward: true }),
-          ...patchAt(from, desired, ts, { spotlight: true }) }, generation === null ? undefined : { expectedGeneration: generation }));
+          ...(!spotOwned ? patchAt(from, desired, ts, { spotlight: true }) : {}) }, generation === null ? undefined : { expectedGeneration: generation }));
         if (result?.ok !== true) { e.error = result?.reason || 'fixture_write_unconfirmed'; notice = `Fixture update unavailable · ${e.error}`;
-          const stopped = attempt(() => overlay.setVirtualFixtureState?.(id, { spotlight: { on: false, brightness: 0 } },
+          const stopped = !spotOwned && attempt(() => overlay.setVirtualFixtureState?.(id, { spotlight: { on: false, brightness: 0 } },
             generation === null ? undefined : { expectedGeneration: generation }));
           e.applied_state = currentState(overlay, id)?.state || null;
           record({ stage: 'application_refused', ...context, reason: e.error, spotlight_off_confirmed: stopped?.ok === true });
@@ -143,7 +150,8 @@
         e.applied_state = currentState(overlay, id)?.state || null;
         if (ta < 1 || ts < 1) e.tween = { timer: later(tick, STEP_MS) };
         else { e.tween = null; e.pending = null; e.applied = e.error ? null : sig;
-          completed(overlay, row, e, serial, context); onApplied(id); notify(); }
+          if (!spotOwned) completed(overlay, row, e, serial, context);
+          onApplied(id); notify(); }
       };
       e.pending = sig;
       tick();
@@ -164,6 +172,12 @@
       const overlay = getOverlay();
       if (!overlay?.setVirtualFixtureState) return;
       notice = null;
+      // Den Live owns all virtual channels in its registered room. Keep the
+      // brain observable and preserve manual pauses, but retire its outputs.
+      if (overlay.denSpotSnapshotOwned === true) {
+        for (const e of fixtures.values()) yieldToDen(e);
+        return;
+      }
       for (const row of brain.state.fixtures) {
         const e = entry(row.fixture_id);
         if (pausedBy(row.fixture_id, e)) { stopTween(e); e.applied = null; continue; }
@@ -188,12 +202,13 @@
       brain = next;
       if (!brain.online && wasOnline) {
         const overlay = getOverlay();
-        notice = 'Automatic spotlights disabled · ambient held · manual pauses preserved';
+        notice = overlay?.denSpotSnapshotOwned ? 'Ambient held · manual pauses preserved'
+          : 'Automatic spotlights disabled · ambient held · manual pauses preserved';
         for (const [id, e] of fixtures) {
           stopTween(e); e.applied = null;
           // Preserve manual choices and ambient. An automatic spotlight must
           // not outlive its stream's authority indefinitely.
-          if (pausedBy(id, e) || !overlay) continue;
+          if (pausedBy(id, e) || !overlay || overlay.denSpotSnapshotOwned) continue;
           const generation = overlay.virtualFixtureInteractionDescriptor?.(id)?.generation;
           const result = attempt(() => overlay.setVirtualFixtureState?.(id, { spotlight: { on: false, brightness: 0 } },
             generation == null ? undefined : { expectedGeneration: generation }));

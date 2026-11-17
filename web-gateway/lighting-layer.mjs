@@ -1,12 +1,11 @@
-// Read-only L3 receiver sidecars beside the active Den pack. The caller keeps
+// Read-only L3 receiver sidecars beside the active home packs. The caller keeps
 // its existing authentication/origin boundary and supplies that authorization
 // explicitly. This module never changes a pack, registration or layer.
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import Core from '../app/src/home-equipment-registration.js';
-import { readPackIndex } from '../tools/content-packs.mjs';
-import { readActiveBinding } from './equipment-registration.mjs';
+import { readPackIndex, validateManifest } from '../tools/content-packs.mjs';
 
 export const MAX_LIGHTING_MANIFEST_BYTES = 4 * 1024 * 1024;
 // Bound each buffered response and keep at most two filesystem reads in flight.
@@ -14,7 +13,7 @@ export const MAX_LIGHTING_MANIFEST_BYTES = 4 * 1024 * 1024;
 export const MAX_LIGHTING_FILE_BYTES = 64 * 1024 * 1024;
 const MAX_RECEIVERS = 16 * 1024 * 1024, MAX_CONCURRENT = 2;
 const ID = '[a-z0-9][a-z0-9-]{0,63}', HASH = /^[a-f0-9]{64}$/;
-const ROUTE = new RegExp('^/content-packs/victoria/(' + ID + ')\\.lighting/(lighting-manifest\\.json|(?:splat|splat-mobile|points)-(?:albedo|normal-oct|basis-u8|basis-scale|bounce-tint|flags)\\.bin)$');
+const ROUTE = new RegExp('^/content-packs/(echo|victoria)/(' + ID + ')\\.lighting/(lighting-manifest\\.json|(?:splat|splat-mobile|points)-(?:albedo|normal-oct|basis-u8|basis-scale|bounce-tint|flags)\\.bin)$');
 const SOURCES = { splat: 'apartment.ply', 'splat-mobile': 'apartment.mobile.ply', points: 'points.ply' };
 const FIELDS = { albedo: 3, 'normal-oct': 2, 'basis-u8': null, 'basis-scale': 2, 'bounce-tint': 3, flags: 1 };
 const PRIVATE_HEADERS = {
@@ -41,14 +40,15 @@ function safeFile(root, filename) {
     'lighting_layer_path_invalid');
   return filename;
 }
-async function readBounded(root, filename, maximum) {
+async function readBounded(root, filename, maximum, { requireSingleLink = true } = {}) {
   safeFile(root, filename);
   const before = fs.lstatSync(filename);
-  need(before.isFile() && before.nlink === 1 && before.size > 0 && before.size <= maximum, 'lighting_layer_file_invalid');
+  need(before.isFile() && (!requireSingleLink || before.nlink === 1) && before.size > 0 && before.size <= maximum,
+    'lighting_layer_file_invalid');
   const file = await fs.promises.open(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
   try {
     const opened = await file.stat();
-    need(opened.dev === before.dev && opened.ino === before.ino && opened.size === before.size && opened.nlink === 1,
+    need(opened.dev === before.dev && opened.ino === before.ino && opened.size === before.size && opened.nlink === before.nlink,
       'lighting_layer_file_changed');
     // Read the stat-bounded length rather than reading until EOF if a producer
     // replaces or grows a file while a request is running.
@@ -59,14 +59,47 @@ async function readBounded(root, filename, maximum) {
       need(read.bytesRead > 0, 'lighting_layer_file_changed'); position += read.bytesRead;
     }
     const after = await file.stat();
-    need(after.size === opened.size && after.mtimeMs === opened.mtimeMs && after.ctimeMs === opened.ctimeMs && after.nlink === 1,
+    need(after.size === opened.size && after.mtimeMs === opened.mtimeMs && after.ctimeMs === opened.ctimeMs && after.nlink === opened.nlink,
       'lighting_layer_file_changed');
     return bytes;
   } finally { await file.close(); }
 }
+async function readActivePack(root, siteId, revision) {
+  const siteDirectory = path.join(root, siteId), directory = path.join(siteDirectory, revision);
+  const packFile = (name, maximum) => readBounded(root, path.join(directory, ...name.split('/')), maximum, { requireSingleLink: false });
+  let active;
+  try {
+    active = (await readBounded(root, path.join(siteDirectory, 'ACTIVE'), 128)).toString('utf8').trim();
+  } catch (error) {
+    if (error.code === 'ENOENT') throw fault('lighting_layer_not_found', 404);
+    throw error;
+  }
+  if (active !== revision) throw fault('lighting_layer_not_found', 404);
+  let pack;
+  try { pack = validateManifest(JSON.parse((await packFile('content-pack.json', 256 * 1024)).toString('utf8'))); }
+  catch { throw fault('lighting_layer_pack_unavailable'); }
+  need(pack.siteId === siteId && pack.revision === revision && pack.sceneAvailable, 'lighting_layer_binding_mismatch');
+  const catalog = readPackIndex(root).packs.filter(item => item.active && item.manifest.siteId === siteId);
+  need(catalog.length === 1 && same(catalog[0].manifest, pack), 'lighting_layer_binding_mismatch');
+  const pinned = async (name, maximum) => {
+    const asset = pack.assets[name];
+    need(asset && asset.bytes <= maximum, 'lighting_layer_pack_asset_mismatch');
+    const bytes = await packFile(asset.path, maximum);
+    need(bytes.length === asset.bytes && hash(bytes) === asset.sha256, 'lighting_layer_pack_asset_mismatch');
+    return asset.sha256;
+  };
+  const binding = {
+    content_revision: revision,
+    registration_version: pack.registrationVersion,
+    manifest_digest: hash(Core.canonicalJson(pack)),
+    frame_digest: await pinned('frame.json', 1024 * 1024),
+    canonical_collision_digest: await pinned('collision.glb', 32 * 1024 * 1024),
+  };
+  return { pack, binding };
+}
 function validateLayer(manifest, binding, pack) {
   need(object(manifest) && manifest.schema === 'home-lighting-layer-1' && manifest.version === 1
-    && manifest.site_id === 'victoria' && manifest.provenance?.status === 'modeled' && manifest.provenance?.measured === false,
+    && manifest.site_id === pack.siteId && manifest.provenance?.status === 'modeled' && manifest.provenance?.measured === false,
   'lighting_layer_schema');
   need(same(manifest.binding, binding), 'lighting_layer_binding_mismatch');
   need(object(manifest.pack_assets) && object(manifest.files) && object(manifest.receivers), 'lighting_layer_manifest_invalid');
@@ -123,16 +156,15 @@ export function createLightingLayerHandler({ contentPacksDir, authenticate } = {
       if (!configured) throw fault('lighting_layer_unconfigured');
       if (active >= MAX_CONCURRENT) throw fault('lighting_layer_busy', 429);
       active++; charged = true;
-      const revision = route[1], name = route[2];
-      const current = (await readBounded(root, path.join(root, 'victoria', 'ACTIVE'), 128)).toString('utf8').trim();
-      if (current !== revision) throw fault('lighting_layer_not_found', 404);
-      const binding = readActiveBinding(root);
-      need(binding.content_revision === revision, 'lighting_layer_binding_mismatch');
-      const pack = readPackIndex(root).packs.find(item => item.active && item.manifest.siteId === 'victoria'
-        && item.manifest.revision === revision)?.manifest;
-      need(pack && hash(Core.canonicalJson(pack)) === binding.manifest_digest, 'lighting_layer_binding_mismatch');
-      const directory = path.join(root, 'victoria', revision + '.lighting');
-      let bytes = await readBounded(root, path.join(directory, 'lighting-manifest.json'), MAX_LIGHTING_MANIFEST_BYTES);
+      const [, siteId, revision, name] = route;
+      const { pack, binding } = await readActivePack(root, siteId, revision);
+      const directory = path.join(root, siteId, revision + '.lighting');
+      let bytes;
+      try { bytes = await readBounded(root, path.join(directory, 'lighting-manifest.json'), MAX_LIGHTING_MANIFEST_BYTES); }
+      catch (error) {
+        if (error.code === 'ENOENT') throw fault('lighting_layer_not_found', 404);
+        throw error;
+      }
       let manifest;
       try { manifest = JSON.parse(bytes.toString('utf8')); } catch { throw fault('lighting_layer_manifest_invalid'); }
       const entries = validateLayer(manifest, binding, pack);
@@ -143,14 +175,15 @@ export function createLightingLayerHandler({ contentPacksDir, authenticate } = {
         need(bytes.length === entry.bytes && hash(bytes) === entry.sha256, 'lighting_layer_file_mismatch');
       }
       // Do not finish an old-pack read after a pack switch or session revocation.
-      need(same(binding, readActiveBinding(root)), 'lighting_layer_binding_mismatch');
+      need(same(binding, (await readActivePack(root, siteId, revision)).binding), 'lighting_layer_binding_mismatch');
       if (!allowed(req)) throw fault('lighting_layer_authentication_required', 401);
       if (req.aborted || res.destroyed) return;
       send(req, res, 200, bytes, name.endsWith('.json') ? 'application/json; charset=utf-8' : 'application/octet-stream',
         { ETag: '"' + hash(bytes) + '"' });
     } catch (error) {
       const status = error.status || 503;
-      send(req, res, status, Buffer.from(JSON.stringify({ ok: false, error: error.code || 'lighting_layer_unavailable' })),
+      const code = error.status ? error.code : 'lighting_layer_unavailable';
+      send(req, res, status, Buffer.from(JSON.stringify({ ok: false, error: code })),
         'application/json; charset=utf-8', status === 405 ? { Allow: 'GET, HEAD' } : {});
     } finally { if (charged) active--; }
   }

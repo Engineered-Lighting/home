@@ -15,11 +15,13 @@ start, like model-pin.json, so a rollback edit is never silently ignored.
   previous fresh `docker exec` per request, kept as the rollback.
 - kernel_journal: "sudo" (default; the previous `sudo -n journalctl -k`) or
   "adm" (`journalctl -k` as the service user, through group adm, no sudo).
-  "adm" needs the service user in group adm on the host.
+  "adm" needs the service user in group adm on the host. In both modes the
+  scan runs in its own session, and a scan past its bound is ended as a whole.
 - health_max_age_seconds: 0-3 (default 2). A request refreshes a cached health
   verdict older than this; 0 checks on every request, as before.
-- kernel_scan_seconds: 0-30 (default 30). The kernel-fault scan runs at most
-  this often; 0 scans on every health check, as before.
+- kernel_scan_seconds: 0-30 (default 30). A clean kernel-fault scan runs at
+  most this often; 0 scans on every health check, as before. After a failed
+  scan, none starts for 30 s, whatever this is set to.
 
 Live-scene consumer only (S1.4 yield and thermal ladder, S1.8 reopen); camera
 chat never reads these:

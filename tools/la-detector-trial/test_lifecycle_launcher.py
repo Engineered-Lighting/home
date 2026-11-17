@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 import lifecycle_launcher
 import start_live
-from lifecycle import Lifecycle,PreflightRejected
+from lifecycle import PREFLIGHT_REASONS,Lifecycle,PreflightRejected
 from lifecycle_launcher import Launcher,READY,declared_readiness
 
 RID='12345678-1234-1234-1234-123456789abc'
@@ -93,6 +93,8 @@ class LauncherTests(unittest.TestCase):
         for error,reason in ((ValueError('host memory headroom failed'),'preflight_memory'),
                              (ValueError('gpu memory headroom failed'),'preflight_vram'),
                              (ValueError('gpu thermal headroom failed'),'preflight_thermal'),
+                             (ValueError('new fault or unavailable fault check'),'preflight_kernel_fault'),
+                             (ValueError('kernel fault scan incomplete'),'preflight_kernel_scan_incomplete'),
                              (ValueError('something else'),'preflight_rejected'),
                              (OSError('host memory headroom failed'),'preflight_rejected')):
             def fail():raise error
@@ -102,6 +104,9 @@ class LauncherTests(unittest.TestCase):
         self.unit={'ActiveState':'active','MainPID':'7','InvocationID':'other','ControlGroup':''}
         with self.assertRaises(PreflightRejected) as caught:self.launcher.start('la-live-x',0)
         self.assertEqual(caught.exception.reason,'preflight_worker_active')
+
+    def test_every_mapped_gate_is_an_allowlisted_lease_reason(self):
+        self.assertLessEqual(set(lifecycle_launcher.GATES.values()),PREFLIGHT_REASONS)
 
     def test_lifecycle_records_allowlisted_preflight_reason_only(self):
         reasons=iter(['preflight_memory','memory below 3GiB: 2.4'])

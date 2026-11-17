@@ -4,14 +4,17 @@ Requires the separately approved private firewall rule and both trial operators
 ready. Does not modify networking, restart existing services or retry a trial.
 """
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 
 BASE = Path('/home/marcelo-lima/home-lab-yolo26-trial')
@@ -49,22 +52,89 @@ def preflight():
     if shutil.disk_usage(BASE).free<50*1024**3:raise ValueError('disk headroom failed')
     memory=dict(line.split(':',1) for line in Path('/proc/meminfo').read_text().splitlines())
     if int(memory['MemAvailable'].split()[0])*1024<8*1024**3:raise ValueError('host memory headroom failed')
-    # Plain journalctl (the service user is in adm): under NoNewPrivileges a
-    # `sudo -n` refusal exited 1 with empty stdout and read as "no faults".
-    # Incremental across leases: a clean scan records its start time; the next
-    # lease scans only from there (5 s overlap). The first full scan from the
-    # fixed baseline is slow at this unit's 50% CPU quota (~15 s, live 2026-09-30).
-    checkpoint=BASE/'kernel-fault-checkpoint.json'
-    try:since='@%d'%int(float(json.loads(checkpoint.read_text())['clean_until'])-5)
-    except Exception:since='2026-09-26 23:07:00 UTC'
-    started=time.time()
-    fault=subprocess.run(['journalctl','-k','--since',since,'--no-pager','--grep',
-        'invoked oom-killer|Out of memory: Killed|kernel panic|soft lockup|hard LOCKUP|Hardware Error|I/O error|segfault'],
-        capture_output=True,text=True,timeout=60)
-    if fault.returncode!=1 or fault.stderr.strip() or fault.stdout.strip() not in {'','-- No entries --'}:
-        raise ValueError('new fault or unavailable fault check')
-    temporary=checkpoint.with_suffix('.tmp');temporary.write_text(json.dumps({'clean_until':started}));temporary.replace(checkpoint)
+    scan_kernel_faults()
     return source,free,temp
+
+
+# The kernel-fault scan, preflight's last gate. It is incremental across leases:
+# each clean chunk records where it ended in kernel-fault-checkpoint.json, and the
+# next scan resumes there less KERNEL_OVERLAP. Without a usable checkpoint it starts
+# at KERNEL_BASELINE, earlier and never later. Each journalctl reads at most
+# KERNEL_CHUNK_SECONDS of journal, and one preflight runs chunks for at most
+# KERNEL_SCAN_SECONDS, so a stale checkpoint catches up over a few leases. Before,
+# one scan read the whole window under a 60 s bound: on 2026-11-11 a checkpoint
+# from Oct 23 needed ~110 s at the supervisor's 50% CPU quota, so every lease
+# failed until the owner advanced the checkpoint by hand.
+KERNEL_BASELINE='2026-09-26 23:07:00 UTC'
+KERNEL_FAULTS='invoked oom-killer|Out of memory: Killed|kernel panic|soft lockup|hard LOCKUP|Hardware Error|I/O error|segfault'
+KERNEL_OVERLAP=5
+KERNEL_CHUNK_SECONDS=6*3600
+KERNEL_SCAN_SECONDS=60
+
+
+def kernel_window_start(now):
+    """Epoch second the scan starts at: the checkpoint less the overlap, but never
+    before the baseline. A missing, malformed, non-finite or future checkpoint
+    is unusable, and the scan starts at the baseline instead."""
+    start=datetime.strptime(KERNEL_BASELINE,'%Y-%m-%d %H:%M:%S UTC').replace(tzinfo=timezone.utc).timestamp()
+    try:
+        until=float(json.loads((BASE/'kernel-fault-checkpoint.json').read_text())['clean_until'])
+        if math.isfinite(until) and until<=now:start=max(start,until-KERNEL_OVERLAP)
+    except Exception:pass
+    return int(start)
+
+
+def record_kernel_clean(until):
+    """Atomically record the end of a clean chunk. Only a clean chunk calls this."""
+    checkpoint=BASE/'kernel-fault-checkpoint.json'
+    temporary=checkpoint.with_suffix('.tmp')
+    with temporary.open('w') as out:
+        json.dump({'clean_until':until},out);out.flush();os.fsync(out.fileno())
+    temporary.replace(checkpoint)
+
+
+def scan_kernel_faults():
+    """Refuse unless the kernel journal is clean from the window start to now.
+
+    A fault in any chunk refuses, and that chunk is never recorded as clean.
+    Anything but exit 1 with no entries and an empty stderr is no proof of a
+    clean journal. When the budget runs out first, the scan refuses as
+    incomplete, and the clean chunks it already recorded let the next lease
+    start later. Plain journalctl, as a direct child (the service user is in
+    adm): under NoNewPrivileges a `sudo -n` refusal exited 1 with empty stdout
+    and read as "no faults". A timed-out child is killed by subprocess.run, so
+    nothing is left running."""
+    deadline=time.monotonic()+KERNEL_SCAN_SECONDS
+    since=first=kernel_window_start(time.time())
+    clean=None;chunks=0;outcome='refused'
+    try:
+        while True:
+            mark=time.time()
+            # A clock behind the window cannot prove anything about it.
+            if since>mark+1:raise ValueError('new fault or unavailable fault check')
+            until=since+KERNEL_CHUNK_SECONDS if mark-since>KERNEL_CHUNK_SECONDS else None
+            remaining=deadline-time.monotonic()
+            if remaining<=0:
+                outcome='incomplete';raise ValueError('kernel fault scan incomplete')
+            command=['journalctl','-k','--since','@%d'%since]
+            if until is not None:command+=['--until','@%d'%until]
+            try:fault=subprocess.run(command+['--no-pager','--grep',KERNEL_FAULTS],
+                capture_output=True,text=True,timeout=remaining)
+            except subprocess.TimeoutExpired:
+                outcome='incomplete';raise ValueError('kernel fault scan incomplete') from None
+            chunks+=1
+            if fault.returncode!=1 or fault.stderr.strip() or fault.stdout.strip() not in {'','-- No entries --'}:
+                raise ValueError('new fault or unavailable fault check')
+            clean=mark if until is None else until
+            record_kernel_clean(clean)
+            if until is None:
+                outcome='clean';return clean
+            since=until-KERNEL_OVERLAP
+    finally:
+        # Content-free progress for anything but the usual one-chunk clean scan.
+        if outcome!='clean' or chunks>1:
+            print('la lease kernel scan outcome=%s since=@%d clean_until=%s chunks=%d'%(
+                outcome,first,'none' if clean is None else '@%d'%clean,chunks),file=sys.stderr,flush=True)
 
 
 def worker_root(variant):
@@ -109,7 +179,7 @@ def main():
     receipt=BASE/('live-health-'+args.epoch+'.json')
     with receipt.open('x') as out:
         json.dump({'checked_at':time.time(),'gpu_free_mib':free,'gpu_temp_c':temp,
-                   'faults_since':'2026-09-26 23:07:00 UTC','new_matching_faults':False,
+                   'faults_since':KERNEL_BASELINE,'new_matching_faults':False,
                    'firewall_approval_reference':args.firewall_approval_reference},out)
         out.flush();os.fsync(out.fileno())
     token=(TLS/'client.token').read_text()

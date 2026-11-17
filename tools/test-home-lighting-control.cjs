@@ -79,3 +79,61 @@ test("Home passes the chip's home, else the Apartment's, to lighting and the Aut
   // The About chip still claims its message before lighting control.
   assert.ok(app.indexOf("const chatAbout = chatAboutRef.current;") < app.indexOf("window.HomeLightingControl?.run(text"));
 });
+
+
+test("Serve runs the inline card without Agent sign-in and recovers by lookup after reload", async () => {
+  const storage = new Map(), calls = [];
+  const id = "11111111-1111-4111-8111-111111111111";
+  const statuses = [{site_id:"echo",name:"Kitchen",operation:"off",brightness:null,status:"succeeded"},
+    {site_id:"victoria",name:"Kitchen",operation:"off",brightness:null,status:"succeeded"}];
+  const flush = () => new Promise(resolve => setImmediate(resolve));
+  function browser() {
+    function element(tag) {
+      assert.notEqual(tag, "iframe");
+      return {
+        tag, children: [], click() { this.handler(); }, setAttribute() {},
+        append(...children) { this.children.push(...children); },
+        addEventListener(_name, handler) { this.handler = handler; },
+      };
+    }
+    const window = {
+      HomeServe: { active: true }, HG_WEB_MODE: true, addEventListener() {},
+      document: { createElement: element }, crypto: { randomUUID: () => id },
+      sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value) },
+      HomeLightingIntent: { parse: () => ({ request: { version: 1, sites: ["echo","victoria"],
+        targets: ["kitchen"], operation: "off", brightness: null } }) },
+      fetch: async (url, init) => {
+        calls.push({ url, init });
+        assert.equal(init.credentials, "omit");
+        assert.equal(init.headers["X-Home-Lighting-CSRF"], "1");
+        assert.equal(JSON.parse(init.body).operation_id, id);
+        if (url.endsWith("/action")) {
+          assert.match(storage.get("home.serveLighting.pending.v1"), new RegExp(id));
+          throw new Error("lost reply");
+        }
+        return { ok: true, json: async () => ({ version:1, result:{version:1, operation_id:id, status:"done", results:statuses} }) };
+      }
+    };
+    vm.runInNewContext(source, { window, AbortController, setTimeout, clearTimeout });
+    const events = [];
+    const addEvent = event => events.push(event);
+    return { api: window.HomeLightingControl, addEvent, events, element };
+  }
+  const first = browser();
+  assert.equal(first.api.run("Turn off the kitchen in both homes", { addEvent:first.addEvent, isCurrent: () => true }), true);
+  await flush();
+  const second = browser();
+  second.api.restorePending(second.addEvent);
+  second.api.restorePending(second.addEvent);
+  assert.equal(second.events.length, 1);
+  const slot = second.element("div");
+  second.events[0].mountReview({ appendChild: card => slot.append(card) });
+  const [message, check] = slot.children[0].children;
+  assert.equal(check.hidden, false);
+  check.click();
+  await flush();
+  assert.match(message.textContent, /Done/);
+  assert.equal(check.hidden, true);
+  assert.deepEqual(calls.map(call => call.url), ["/api/home/lighting/action", "/api/home/lighting/outcome"]);
+  assert.equal(storage.get("home.serveLighting.pending.v1"), "[]");
+});

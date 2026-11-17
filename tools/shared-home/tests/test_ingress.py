@@ -2,6 +2,7 @@
 import hashlib
 import http.client
 import json
+import os
 from pathlib import Path
 import socket
 import ssl
@@ -58,8 +59,8 @@ class IngressTests(unittest.TestCase):
             time.sleep(.01)
         self.assertTrue(condition())
 
-    def server(self, *, identities=None, policy=None):
-        server = PrivateTLSIngress(("127.0.0.1", 0), self.gateway,
+    def server(self, *, identities=None, policy=None, port=0):
+        server = PrivateTLSIngress(("127.0.0.1", port), self.gateway,
             certificate=str(FIXTURES / "server.pem"), private_key=str(FIXTURES / "server-test-only.key"),
             client_ca=str(FIXTURES / "ca.pem"),
             identities={FINGERPRINT: binding_fixture()} if identities is None else identities,
@@ -88,6 +89,23 @@ class IngressTests(unittest.TestCase):
         response.begin()
         data = response.read()
         return response.status, json.loads(data)
+
+    @unittest.skipUnless(os.name == "posix", "Linux rebind rules; SO_REUSEADDR stays off on Windows")
+    def test_a_restart_rebinds_while_the_old_instance_s_connections_linger(self):
+        # 2026-11-11: two camera-pilot starts failed with EADDRINUSE on :9446
+        # while the old instance's closed connection sat in FIN-WAIT-2.
+        old = self.server()
+        port = old.server_address[1]
+        self.connect(old, tls=False)   # accepted, and this client never closes it
+        self.wait_for(lambda: old.active_connections == 1)
+        old.shutdown()
+        old.server_close()            # the server side closes first, so it lingers
+        self.servers.remove(next(entry for entry in self.servers if entry[0] is old))
+        new = self.server(port=port)
+        self.assertEqual(self.request(new), (200, {"alive": True, "mode": "private-mtls-ingress"}))
+        # A second listener on the live port is still refused.
+        with self.assertRaises(OSError):
+            socket.create_server(("127.0.0.1", port), reuse_port=False).close()
 
     def test_registered_certificate_snapshot_uses_existing_queue_and_site_binding(self):
         self.controller.enable("epoch-1")

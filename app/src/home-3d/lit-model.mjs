@@ -280,7 +280,7 @@ export function easeLights(lights, shown, elapsedMs, { snap = false, exposure = 
     const nextShown = [];
     const eased = (lights || []).map((light, index) => {
         const kelvin = Number.isFinite(light.kelvin) ? light.kelvin : 3000, previous = shown?.[index];
-        const next = snap || !previous ? { level: light.level, kelvin } : {
+        const next = snap || light.coordinatorSpot || !previous ? { level: light.level, kelvin } : {
             level: easeToward(previous.level, light.level, elapsedMs),
             kelvin: easeToward(previous.kelvin, kelvin, elapsedMs, { settled: LIT_EASE_SETTLED_KELVIN }) };
         nextShown.push(next);

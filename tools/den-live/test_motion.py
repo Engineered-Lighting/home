@@ -31,16 +31,16 @@ def state(**changes):
                   transform_id="transform", scan_revision="scan", depth_calibration_sha256="c" * 64,
                   observed_mono=100.0, available_mono=100.1, valid_until_mono=101.4,
                   xy_m=(1.0, 2.0), velocity_mps=(1.0, 0.0), covariance=P,
-                  sample_count=3, history_span_s=0.5, accel_sigma_mps2=0.6,
+                  sample_count=3, history_span_s=0.5, white_accel_sigma_mps32=0.6,
                   registration_error_m=0.1, timing_error_s=0.1, source_obs_ids=("obs10",))
     return motion.MotionState(**(values | changes))
 
 
 def receive(receipts, at, frame_id, *, velocity=(1.0, 0.0), raw=None, **changes):
-    raw = raw or SimpleNamespace(x=[1.0, 2.0, *velocity], P=[list(row) for row in P], last_seen=at)
+    raw = raw or SimpleNamespace(id=1, history=[True], x=[1.0, 2.0, *velocity], P=[list(row) for row in P], last_seen=at)
     values = dict(frame=frame(at, frame_id), track_id="person", association_revision=3,
                   association_status="confident", state="confirmed", current_obs_ids=(f"obs{frame_id}",),
-                  available_mono=at + 0.1, accel_sigma_mps2=0.6, registration_error_m=0.1, timing_error_s=0.05)
+                  available_mono=at + 0.1, white_accel_sigma_mps32=0.6, registration_error_m=0.1, timing_error_s=0.01)
     return receipts.update(raw, **(values | changes))
 
 
@@ -69,7 +69,7 @@ class Validation(unittest.TestCase):
 
     def test_semidefinite_zero_axes_are_supported_without_inventing_noise(self):
         zero = tuple((0, 0, 0, 0) for _ in range(4))
-        value = state(covariance=zero, velocity_mps=(0, 0), accel_sigma_mps2=0,
+        value = state(covariance=zero, velocity_mps=(0, 0), white_accel_sigma_mps32=0,
                       registration_error_m=0, timing_error_s=0)
         self.assertEqual(motion.forecast(value, 100.2).samples[0].covariance_m2, ((0, 0), (0, 0)))
         invalid = [list(row) for row in zero]
@@ -86,12 +86,23 @@ class Validation(unittest.TestCase):
                         dict(camera_epoch=True), dict(association_revision=-1), dict(frame_id=1.5),
                         dict(observed_mono=100.2), dict(available_mono=101.5), dict(valid_until_mono=102.0),
                         dict(velocity_mps=(math.inf, 0)), dict(timing_error_s=-1), dict(sample_count=1),
-                        dict(source_obs_ids=()), dict(basis="language_model")):
+                        dict(source_obs_ids=()), dict(basis="language_model"), dict(time_qualified=True),
+                        dict(time_status="qualified"), dict(timing_evidence_id="")):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 state(**changes)
 
 
 class Forecasting(unittest.TestCase):
+    def test_estimated_source_clock_remains_explicit_and_cannot_self_qualify(self):
+        value = state(timing_evidence_id="source-age-10")
+        result = motion.forecast(value, 100.2)
+        self.assertIsNotNone(result, "a guarded estimate remains useful for diagnostic shadow replay")
+        self.assertEqual(result.state.time_status, "estimated_source_elapsed")
+        self.assertIs(result.state.time_qualified, False)
+        self.assertEqual(result.state.timing_evidence_id, "source-age-10")
+        with self.assertRaises(ValueError):
+            dataclasses.replace(value, time_qualified=True)
+
     def test_horizons_include_capture_to_available_age_and_do_not_renew_expiry(self):
         value = state()
         result = motion.forecast(value, 100.2, frame=frame(), track_id="person", association_revision=3)
@@ -103,17 +114,43 @@ class Forecasting(unittest.TestCase):
         self.assertIsNone(motion.forecast(value, value.valid_until_mono))
 
     def test_full_cross_covariance_survives_and_error_envelope_only_adds(self):
-        value = state(accel_sigma_mps2=0, registration_error_m=0, timing_error_s=0)
+        value = state(white_accel_sigma_mps32=0, registration_error_m=0, timing_error_s=0)
         sample = motion.forecast(value, 100.1, horizons_s=(0.5,)).samples[0]
         # dt=.6: known analytical projection of the correlated input fixture.
         self.assertAlmostEqual(sample.covariance_m2[0][0], 0.1012)
         self.assertAlmostEqual(sample.covariance_m2[0][1], 0.0086)
         self.assertAlmostEqual(sample.covariance_m2[1][1], 0.1848)
-        for changes in (dict(registration_error_m=0.2), dict(timing_error_s=0.2), dict(accel_sigma_mps2=1.0)):
+        for changes in (dict(registration_error_m=0.2), dict(timing_error_s=0.2), dict(white_accel_sigma_mps32=1.0)):
             larger = motion.forecast(dataclasses.replace(value, **changes), 100.1, horizons_s=(0.5,)).samples[0]
             self.assertGreater(larger.covariance_m2[0][0], sample.covariance_m2[0][0])
             self.assertGreater(larger.covariance_m2[1][1], sample.covariance_m2[1][1])
             self.assertGreater(larger.sigma_m, sample.sigma_m)
+
+    def test_registration_envelope_covers_unknown_correlation_in_every_direction(self):
+        value = state(white_accel_sigma_mps32=0, registration_error_m=0, timing_error_s=0)
+        base = motion.forecast(value, 100.1, horizons_s=(0.5,)).samples[0]
+        error = 0.2
+        inflated = motion.forecast(dataclasses.replace(value, registration_error_m=error),
+                                   100.1, horizons_s=(0.5,)).samples[0]
+        for degrees in range(0, 360, 5):
+            u = (math.cos(math.radians(degrees)), math.sin(math.radians(degrees)))
+            def sd(covariance):
+                return math.sqrt(math.fsum(u[i] * covariance[i][j] * u[j] for i in range(2) for j in range(2)))
+            self.assertGreaterEqual(sd(inflated.covariance_m2) + 1e-12, sd(base.covariance_m2) + error)
+        self.assertAlmostEqual(inflated.sigma_m, base.sigma_m + error)
+
+    def test_white_acceleration_uses_spectral_density_not_a_physical_acceleration(self):
+        zero = tuple((0, 0, 0, 0) for _ in range(4))
+        value = state(covariance=zero, velocity_mps=(0, 0), white_accel_sigma_mps32=2,
+                      registration_error_m=0, timing_error_s=0)
+        sample = motion.forecast(value, 100.1, horizons_s=(0.5,)).samples[0]
+        self.assertAlmostEqual(sample.covariance_m2[0][0], 4 * 0.6 ** 3 / 3)
+        # Timing shifts integrated white noise by a correlated increment:
+        # sd(delta position) <= sigma*sqrt(dt*epsilon**2 + epsilon**3/3).
+        sample = motion.forecast(dataclasses.replace(value, timing_error_s=0.2),
+                                 100.1, horizons_s=(0.5,)).samples[0]
+        expected_sd = 2 * math.sqrt(0.6 ** 3 / 3) + 2 * math.sqrt(0.6 * 0.2 ** 2 + 0.2 ** 3 / 3)
+        self.assertAlmostEqual(sample.sigma_m, expected_sd)
 
     def test_propagated_envelopes_remain_finite_psd_and_grow_for_this_cv_fixture(self):
         samples = motion.forecast(state(), 100.2).samples
@@ -169,8 +206,7 @@ class ObservationReceipts(unittest.TestCase):
         self.assertLess(result.xy_m[1], turned.xy_m[1])
 
     def test_ambiguity_and_coasting_break_history_even_before_revision_changes(self):
-        for invalid in (dict(association_status="ambiguous"), dict(state="coasting"), dict(current_obs_ids=()),
-                        dict(timing_error_s=None)):
+        for invalid in (dict(association_status="ambiguous"), dict(state="coasting"), dict(current_obs_ids=())):
             receipts = motion.Receipts()
             receive(receipts, 100, 1)
             receive(receipts, 100.2, 2)
@@ -179,8 +215,7 @@ class ObservationReceipts(unittest.TestCase):
             self.assertEqual(reset.sample_count, 1)
 
     def test_new_epoch_run_association_and_registration_start_new_history(self):
-        for changes in (dict(camera_epoch=3), dict(service_run_id="new"), dict(transform_id="new"),
-                        dict(scan_revision="new"), dict(depth_calibration_sha256="d" * 64)):
+        for changes in (dict(camera_epoch=3), dict(service_run_id="new")):
             receipts = motion.Receipts()
             receive(receipts, 100, 1)
             receive(receipts, 100.2, 2)
@@ -190,6 +225,11 @@ class ObservationReceipts(unittest.TestCase):
         receive(receipts, 100, 1)
         receive(receipts, 100.2, 2)
         self.assertEqual(receive(receipts, 100.4, 3, association_revision=4).sample_count, 1)
+        for changes in (dict(transform_id="new"), dict(scan_revision="new"), dict(depth_calibration_sha256="d" * 64)):
+            receipts = motion.Receipts()
+            receive(receipts, 100, 1)
+            self.assertIsNone(receive(receipts, 100.2, 2, frame=frame(100.2, 2, **changes)),
+                              "changing room geometry cannot repair the existing raw filter")
 
     def test_out_of_order_frames_never_publish_and_duplicates_do_not_count(self):
         receipts = motion.Receipts()
@@ -197,6 +237,10 @@ class ObservationReceipts(unittest.TestCase):
         receive(receipts, 100.2, 2)
         self.assertIsNone(receive(receipts, 100.1, 3))
         self.assertIsNone(receive(receipts, 100.3, 1))
+        self.assertIsNone(receive(receipts, 100.6, 4), "bad-time filter history stays unqualified")
+        receipts = motion.Receipts()
+        receive(receipts, 100, 1)
+        receive(receipts, 100.2, 2)
         self.assertIsNone(receive(receipts, 100.4, 3, current_obs_ids=("obs2",)))
         self.assertEqual(receive(receipts, 100.6, 4).sample_count, 1)
 
@@ -211,8 +255,60 @@ class ObservationReceipts(unittest.TestCase):
         receive(receipts, 100, 1)
         self.assertEqual(receive(receipts, 102, 2).sample_count, 1)
         for i in range(200):
-            receive(receipts, 103, 1, track_id=f"person{i}")
+            raw = SimpleNamespace(id=i + 100, history=[True], x=[1, 2, 1, 0], P=P, last_seen=103)
+            receive(receipts, 103, 1, track_id=f"person{i}", raw=raw)
         self.assertEqual(len(receipts.history), 128)
+        self.assertEqual(len(receipts.clocks), 128)
+
+    def test_all_tentative_filter_updates_must_have_timing_receipts(self):
+        receipts = motion.Receipts()
+        raw = SimpleNamespace(id=1, history=[True], x=[1, 2, 1, 0], P=P, last_seen=100)
+        self.assertTrue(receipts.audit(raw, frame=frame(100, 1), timing_error_s=0.01))
+        raw.history.append(True)
+        raw.last_seen = 100.2
+        self.assertFalse(receipts.audit(raw, frame=frame(100.2, 2), timing_error_s=None))
+        for i in range(3, 7):
+            at = 100 + (i - 1) * 0.2
+            raw.history.append(True)
+            raw.last_seen = at
+            self.assertIsNone(receive(receipts, at, i, raw=raw))
+        self.assertGreater(receipts.counts["timing_receipt_unavailable"], 0)
+        # A different raw birth has no bad-time Kalman updates to inherit.
+        raw = SimpleNamespace(id=2, history=[True], x=[1, 2, 1, 0], P=P, last_seen=102)
+        self.assertIsNotNone(receive(receipts, 102, 1, raw=raw))
+
+    def test_a_late_attach_cannot_certify_earlier_tentative_history(self):
+        raw = SimpleNamespace(id=1, history=[True, True, True], x=[1, 2, 1, 0], P=P, last_seen=100)
+        receipts = motion.Receipts()
+        self.assertIsNone(receive(receipts, 100, 1, raw=raw))
+        self.assertEqual(receipts.counts["source_history_unavailable"], 1)
+
+    def test_identical_physical_walk_with_arrival_offset_steps_is_refused(self):
+        receipts = motion.Receipts()
+        # One physical 1 m/s walk. The arrival-anchored offset drops as quicker
+        # responses arrive; KF's apparent elapsed time and velocity differ.
+        delays = (0.30, 0.20, 0.05, 0.15, 0.10)
+        least_delay = math.inf
+        outputs = []
+        for i, delay in enumerate(delays):
+            source_time = 100 + i * 0.4
+            least_delay = min(least_delay, delay)
+            observed = source_time + least_delay
+            ref = frame(observed, i + 1, rgb=PlaneRef(i + 1, 1, source_time, 640, 360))
+            # This raw velocity may already be biased by the offset step.
+            raw = SimpleNamespace(id=1, history=[True] * (i + 1), x=[i * 0.4, 0, 2, 0], P=P, last_seen=observed)
+            outputs.append(receive(receipts, observed, i + 1, raw=raw, frame=ref, timing_error_s=0.02))
+        self.assertIsNotNone(outputs[0])
+        self.assertTrue(all(value is None for value in outputs[1:]))
+        self.assertGreater(receipts.counts["source_clock_changed"], 0)
+
+    def test_overlapping_capture_intervals_do_not_qualify_unchanged_velocity(self):
+        receipts = motion.Receipts()
+        receive(receipts, 100, 1, timing_error_s=0.15)
+        self.assertIsNone(receive(receipts, 100.2, 2, timing_error_s=0.15))
+        for i in range(3, 7):
+            self.assertIsNone(receive(receipts, 100 + 0.2 * (i - 1), i, timing_error_s=0.01))
+        self.assertGreater(receipts.counts["capture_intervals_overlap"], 0)
 
 
 class SourceTiming(unittest.TestCase):
@@ -256,13 +352,16 @@ class SourceTiming(unittest.TestCase):
 class LosslessProjection(unittest.TestCase):
     def test_optional_motion_survives_json_replay_with_full_precision_and_lineage(self):
         import person_state
-        value = state(covariance=tuple(tuple(x / 100 for x in row) for row in P))
+        value = state(covariance=tuple(tuple(x / 100 for x in row) for row in P), timing_evidence_id="source-age-10")
         track = TrackEvidence("person", "confirmed", value.xy_m, 0.1, "stereo", ("obs10",), "confident", 3, 99,
                               {}, motion=value)
         snapshot = TrackingSnapshot("run", 2, 1, frame(), "fresh", None, "present", (track,))
         record = json.loads(json.dumps(person_state.serialise(snapshot), allow_nan=False))
         restored = motion.MotionState(**record["tracks"][0]["motion"])
         self.assertEqual(restored, value)
+        self.assertIs(record["tracks"][0]["motion"]["time_qualified"], False)
+        self.assertEqual(record["tracks"][0]["motion"]["time_status"], "estimated_source_elapsed")
+        self.assertEqual(record["tracks"][0]["motion"]["timing_evidence_id"], "source-age-10")
         self.assertEqual(motion.forecast(restored, 100.2, frame=record["frame"]), motion.forecast(value, 100.2))
         changed = record["frame"] | {"camera_epoch": 3}
         self.assertIsNone(motion.forecast(restored, 100.2, frame=changed))

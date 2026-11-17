@@ -606,6 +606,7 @@ class Perceiver:
                 **minute_figures("camera_age_s", self.camera_ages),
                 **minute_figures("capture_to_stream_s", self.capture_to_stream),
                 "head_direction": {**self.head_direction, "reasons": dict(self.head_direction["reasons"])},
+                "motion": dict(self.motion.counts),
                 **({"segmentation": dict(segmentation)} if segmentation else {})}
 
     def _transit(self, meta, bundle):
@@ -927,7 +928,11 @@ class Perceiver:
         frames, _counts = self.t.records.frames_from_observations(observations, self.track_method.tracker)
         detections = frames[0]["detections"] if frames else []
         tracks, supported, association, raw_tracks = [], [], {}, {}
+        motion_timing = motion.timing_bound(ref, prepared.bundle, meta)
         for track, state in self.core.step(capture_mono, detections):
+            # Audit the filter's entire time support, not just the later safe
+            # projection: tentative/coasting updates have already changed x/P.
+            self.motion.audit(track, frame=ref, timing_error_s=motion_timing)
             if strong.intersection(track.obs_ids):
                 self.strong.add(track.id)
             if state not in OUT_STATES:
@@ -960,7 +965,6 @@ class Perceiver:
         event = with_camera_age(self.event(now_mono - capture_mono, tracks, camera_state, now_mono), age)
         candidates = [o for o in observations if o["kind"] in ("person_box", "keypoints")
                       and (o.get("score") or 0) >= PERSON_MIN]
-        motion_timing = motion.timing_bound(ref, prepared.bundle, meta)
         person_fields_started = time.monotonic()
         evidence = []
         for marker, obs_ids in zip(event["tracks"], supported):
@@ -1011,8 +1015,10 @@ class Perceiver:
                 raw_tracks[track_id], frame=ref, track_id=track_id, association_revision=revision,
                 association_status="confident" if safe and basis == "stereo" else "ambiguous", state=marker["state"],
                 current_obs_ids=tuple(sorted(obs_ids)), available_mono=now_mono + time.monotonic() - person_fields_started,
-                accel_sigma_mps2=self.track_method.tracker.get("accel_sigma"),
-                registration_error_m=self.camera.error_bound_m, timing_error_s=motion_timing)
+                white_accel_sigma_mps32=self.track_method.tracker.get("accel_sigma"),
+                registration_error_m=self.camera.error_bound_m, timing_error_s=motion_timing,
+                timing_evidence_id=(prepared.bundle.capture_age_receipt["evidence_id"]
+                                    if motion_timing is not None else None))
             evidence.append(TrackEvidence(track_id, marker["state"], tuple(marker["xy_m"]), marker["sigma_m"],
                                           basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
                                           revision, since, MappingProxyType(stereo), marker.get("near"),

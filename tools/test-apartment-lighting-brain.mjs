@@ -50,6 +50,7 @@ function clock() {
     setTimeout: (fn, ms) => { timers.set(++seq, { fn, at: now + ms }); return seq; },
     clearTimeout: id => { timers.delete(id); },
     size: () => timers.size,
+    callbacksDueIn: ms => [...timers.values()].filter(timer => timer.at === now + ms).map(timer => timer.fn),
     async advance(ms) {
       const end = now + ms;
       for (;;) {
@@ -125,21 +126,127 @@ async function following(initial, { configure = () => {}, ...options } = {}) {
 }
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `${a} != ${b}`);
 
-test('the legacy follower writes only ambient channels when the Den snapshot owns the spotlight', async () => {
+test('Den ownership suppresses every AL-1 virtual output across updates, refresh and disconnect', async () => {
   const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
     configure(room) {
+      room.preview.setDocument(Core.toDocument(registrationModel()), { coordinator: true });
       room.overlay.denSpotSnapshotOwned = true;
-      const set = room.overlay.setVirtualFixtureState;
-      room.overlay.setVirtualFixtureState = (id, patch) => {
-        assert.equal(Object.hasOwn(patch, 'spotlight'), false);
-        return set(id, patch);
-      };
+      const scope = room.preview.coordinatorSpotScope();
+      room.preview.applyCoordinatorSpots(scope.fixture_ids.map(fixture_id => ({ fixture_id,
+        on: fixture_id === F3, level: .6, cct_k: 3500, pan_deg: 12, tilt_deg: 35,
+        reason: 'task', motion_phase: 'settled' })), scope.generation, { ambient: { level: .75, cct_k: 3000 } });
     },
   });
   try {
-    await f.t.advance(10000);
+    const before = copy(f.room.preview.readback().fixtures);
+    await f.brain.push(brainState({ at: 1010 }));
+    f.wired.follower.refresh();
+    await f.t.advance(4000);
+    f.brain.live().onerror();
+    assert.equal(f.view().online, false, 'the AL-1 client remains observable');
+    await f.t.advance(1000);
     assert.equal(f.room.calls.aim, 0);
-    assert.ok(f.room.calls.set > 0, 'the legacy follower still applies ambient');
+    assert.equal(f.room.calls.set, 0);
+    assert.deepEqual(f.room.preview.readback().fixtures, before);
+    assert.equal(f.view().online, true, 'a reconnect remains observable without restoring AL-1 output');
+    assert.equal(f.view().physical_commands, false);
+  } finally { f.wired.dispose(); }
+});
+
+test('a running AL-1 fade yields on Den takeover before its next write without a new brain event', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }));
+  try {
+    await f.t.advance(500);
+    assert.ok(f.view().fixtures.some(row => row.fading));
+    const before = copy(f.room.preview.readback().fixtures), calls = { ...f.room.calls };
+    // Keep the overlay and generation unchanged to exercise the live ownership guard.
+    f.room.overlay.denSpotSnapshotOwned = true;
+    await f.t.advance(500);
+    assert.deepEqual(f.room.calls, calls);
+    assert.deepEqual(f.room.preview.readback().fixtures, before);
+    assert.ok(f.view().fixtures.every(row => !row.fading && row.applied_state === null));
+    await f.brain.push(brainState({ at: 1010, mode: 'reading', fixtures: { [F4]: READING } }));
+    await f.t.advance(3000);
+    assert.deepEqual(f.room.calls, calls, 'fresh decisions cannot restart a retired AL-1 fade');
+  } finally { f.wired.dispose(); }
+});
+
+test('releasing Den ownership reapplies an unchanged AL-1 decision after its cached application was retired', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }));
+  try {
+    await f.t.advance(3500);
+    f.room.overlay.denSpotSnapshotOwned = true;
+    f.wired.follower.refresh();
+    f.room.preview.setFixtureState(F3, { radials: [{ number: 1, brightness: .9 }],
+      downward: { brightness: .9 }, spotlight: { on: false, brightness: 0 } });
+    const calls = f.room.calls.set;
+    f.room.overlay.denSpotSnapshotOwned = false;
+    f.wired.follower.refresh();
+    await f.t.advance(2100);
+    assert.ok(f.room.calls.set > calls);
+    near(f.room.state(F3).radials[0].brightness, .3);
+    near(f.room.state(F3).downward.brightness, .3);
+    near(f.room.state(F3).spotlight.brightness, .8);
+    assert.equal(f.room.state(F3).spotlight.on, true);
+  } finally { f.wired.dispose(); }
+});
+
+test('a cancelled AL-1 callback cannot write or retire a new fade after Den ownership is released', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }));
+  try {
+    await f.t.advance(500);
+    const retired = f.t.callbacksDueIn(Follower.STEP_MS);
+    assert.equal(retired.length, 4);
+    f.room.overlay.denSpotSnapshotOwned = true;
+    f.wired.follower.refresh();
+    assert.ok(f.view().fixtures.every(row => !row.fading));
+    f.room.overlay.denSpotSnapshotOwned = false;
+    f.wired.follower.refresh();
+    const calls = { ...f.room.calls };
+    for (const callback of retired) callback();
+    assert.deepEqual(f.room.calls, calls, 'already-queued callbacks are invalidated even if cancellation came too late');
+    assert.ok(f.view().fixtures.every(row => row.fading), 'a retired callback cannot erase the current fade');
+    await f.t.advance(3100);
+    near(f.room.state(F3).radials[0].brightness, .3);
+    near(f.room.state(F3).spotlight.brightness, .8);
+  } finally { f.wired.dispose(); }
+});
+
+test('Den takeover and release preserve a manual AL-1 pause and its override transport', async () => {
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    configure: room => { room.overlay.denSpotSnapshotOwned = true; },
+  });
+  try {
+    f.wired.follower.handChange(F3, { reason: 'change' });
+    f.room.preview.setFixtureState(F3, { radials: [{ number: 1, brightness: .9 }], downward: { brightness: .85 } });
+    const held = copy(f.room.state(F3));
+    await pause(); await pause();
+    assert.equal(f.brain.requests.find(row => row.method === 'POST')?.body.fixture_id, F3);
+    await f.brain.push(brainState({ at: 1010, mode: 'reading', fixtures: {
+      [F3]: { ...READING, paused_until: 2900, pause_reason: 'manual_change' },
+    } }));
+    f.room.overlay.denSpotSnapshotOwned = false;
+    f.wired.follower.refresh();
+    await f.t.advance(2500);
+    assert.equal(f.view().fixtures.find(row => row.fixture_id === F3).paused, 'manual');
+    assert.deepEqual(f.room.state(F3), held);
+  } finally { f.wired.dispose(); }
+});
+
+test('a pending AL-1 render receipt loses authority as soon as Den takes ownership', async () => {
+  const pending = [];
+  const f = await following(brainState({ mode: 'reading', fixtures: { [F3]: READING } }), {
+    diagnostics: true, requestRenderEvidence: context => new Promise(resolve => pending.push({ context, resolve })),
+  });
+  try {
+    await f.t.advance(3500);
+    const receipt = pending.find(row => row.context.fixture_id === F3);
+    assert.ok(receipt); assert.equal(receipt.context.isCurrent(), true);
+    f.room.overlay.denSpotSnapshotOwned = true;
+    assert.equal(receipt.context.isCurrent(), false, 'ownership invalidates evidence before another client event');
+    receipt.resolve({ ok: true, stage: 'gpu_completed_frame', frame_id: 9 }); await pause();
+    assert.equal(f.view().fixtures.find(row => row.fixture_id === F3).rendered, null);
+    assert.ok(!f.wired.follower.diagnosticReadback().events.some(row => row.stage === 'gpu_completed_frame'));
   } finally { f.wired.dispose(); }
 });
 

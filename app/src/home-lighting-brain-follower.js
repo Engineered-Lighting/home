@@ -3,7 +3,8 @@
  * overlay seams (setVirtualFixtureState, aimVirtualFixtureAtTarget), fades in
  * small virtual steps, and never fights a manual change: a hand change pauses
  * that fixture here at once, posts an override, and the fixture stays paused
- * until the brain clears it or the owner chooses Return to Auto. Virtual only. */
+ * until the brain clears it or the owner chooses Return to Auto. Den Live's
+ * room ownership makes this follower yield every virtual channel. Virtual only. */
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -63,6 +64,7 @@
     }
     const notify = () => { try { onChange(readback()); } catch (_) { /* view failure never stops following */ } };
     const stopTween = e => { if (e.tween) { cancel(e.tween.timer); e.tween = null; } e.serial++; e.pending = null; e.rendered = null; };
+    const yieldToDen = e => { stopTween(e); e.applied = null; e.applied_state = null; e.error = null; };
     const correlation = row => ({ fixture_id: row.fixture_id, state_revision: brain.state?.state_revision ?? null,
       decision_id: brain.state?.decision_id ?? null,
       generated_at: brain.state?.generated_at ?? null, received_at_ms: brain.received_at_ms ?? null,
@@ -72,6 +74,7 @@
       record({ stage: 'applied', ...context, generation: e.generation, ...application });
       if (!diagnostics || typeof requestRenderEvidence !== 'function') return;
       const current = () => !disposed && brain.online && e.serial === serial && !pausedBy(row.fixture_id, e)
+        && overlay.denSpotSnapshotOwned !== true
         && (!application.spotlight_on || nowMs() < Math.min(context.reading_evidence?.activity_valid_until ?? 0,
           context.reading_evidence?.pose_valid_until ?? 0) * 1000)
         && getOverlay() === overlay && overlay.virtualFixtureInteractionDescriptor?.(row.fixture_id)?.generation === e.generation;
@@ -127,7 +130,10 @@
       const from = copy(current.state), started = nowMs();
       const ambientMs = desired.ambient_fade_s * 1000, spotMs = spotOwned ? 0 : desired.spot_fade_s * 1000;
       const tick = () => {
-        if (disposed || pausedBy(id, e) || !brain.online || serial !== e.serial || getOverlay() !== overlay) { e.tween = null; e.pending = null; return; }
+        if (serial !== e.serial) return;
+        if (disposed || pausedBy(id, e) || !brain.online || getOverlay() !== overlay) { e.tween = null; e.pending = null; return; }
+        // Ownership can change after a fade started, without a new brain event.
+        if (overlay.denSpotSnapshotOwned === true) { yieldToDen(e); return; }
         if ((overlay.virtualFixtureInteractionDescriptor?.(id)?.generation ?? null) !== generation) {
           e.error = 'equipment_preview_generation_changed'; e.applied = null; e.pending = null; e.tween = null; notify(); return;
         }
@@ -166,6 +172,12 @@
       const overlay = getOverlay();
       if (!overlay?.setVirtualFixtureState) return;
       notice = null;
+      // Den Live owns all virtual channels in its registered room. Keep the
+      // brain observable and preserve manual pauses, but retire its outputs.
+      if (overlay.denSpotSnapshotOwned === true) {
+        for (const e of fixtures.values()) yieldToDen(e);
+        return;
+      }
       for (const row of brain.state.fixtures) {
         const e = entry(row.fixture_id);
         if (pausedBy(row.fixture_id, e)) { stopTween(e); e.applied = null; continue; }

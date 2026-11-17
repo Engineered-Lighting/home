@@ -45,7 +45,7 @@ class Replay:
             state = self.receipts.update(
                 value, frame=frame, track_id=name, association_revision=1,
                 association_status=association, state=status, current_obs_ids=observations,
-                available_mono=available, accel_sigma_mps2=self.params["accel_sigma"],
+                available_mono=available, white_accel_sigma_mps32=self.params["accel_sigma"],
                 registration_error_m=0.05, timing_error_s=0.02)
             track = TrackEvidence(name, status, tuple(value.x[:2]), math.sqrt(max(value.P[0][0], value.P[1][1])),
                                   "stereo", observations, association, 1, value.since_ts, {}, motion=state)
@@ -91,7 +91,7 @@ class SpatialTracking(unittest.TestCase):
 
         # Isolate F P F^T algebra using actual filter P, without making an
         # assertion about physical error terms or their pending qualification.
-        algebra = dataclasses.replace(state, accel_sigma_mps2=0.0, registration_error_m=0.0, timing_error_s=0.0)
+        algebra = dataclasses.replace(state, white_accel_sigma_mps32=0.0, registration_error_m=0.0, timing_error_s=0.0)
         sample = motion.forecast(algebra, now, horizons_s=(0.5,)).samples[0]
         dt = sample.at_mono - state.observed_mono
         for i in range(2):

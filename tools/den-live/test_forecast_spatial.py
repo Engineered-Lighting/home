@@ -27,7 +27,7 @@ def fixture():
         transform_id=frame.transform_id, scan_revision="scan-1", depth_calibration_sha256="calibration-sha",
         observed_mono=100.0, available_mono=100.25, valid_until_mono=101.4,
         xy_m=(1.0, 2.0), velocity_mps=(1.0, 0.0), covariance=P,
-        sample_count=3, history_span_s=0.4, accel_sigma_mps2=0.1,
+        sample_count=3, history_span_s=0.4, white_accel_sigma_mps32=0.1,
         registration_error_m=0.05, timing_error_s=0.1, source_obs_ids=("observation-current",))
     track = TrackEvidence("track-1", "confirmed", state.xy_m, 0.3, "stereo", state.source_obs_ids,
                           "confident", 3, 99.0, MappingProxyType({}), motion=state)

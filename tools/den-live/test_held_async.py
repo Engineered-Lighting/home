@@ -151,26 +151,41 @@ class Device(unittest.TestCase):
         detect = SimpleNamespace(gpu_usable=Mock(return_value=(False, "not free")))
         held = SimpleNamespace(load=Mock(return_value=(model, None)))
         cleanup = Mock()
-        self.assertEqual(A.load_segmenter("models", "state", "cpu", detect, held, release_cuda=cleanup),
+        precision = Mock()
+        self.assertEqual(A.load_segmenter("models", "state", "cpu", detect, held, release_cuda=cleanup,
+                                          configure_cuda=precision),
                          (model, "cpu", None, None))
         detect.gpu_usable.assert_not_called()
         held.load.assert_called_once_with("models", "cpu", state="state")
         held.load.reset_mock()
-        self.assertEqual(A.load_segmenter("models", "state", "auto", detect, held, release_cuda=cleanup),
+        self.assertEqual(A.load_segmenter("models", "state", "auto", detect, held, release_cuda=cleanup,
+                                          configure_cuda=precision),
                          (model, "cpu", None, "gpu_unavailable"))
         detect.gpu_usable.assert_called_once()
         held.load.assert_called_once_with("models", "cpu", state="state")
         cleanup.assert_not_called()
+        precision.assert_not_called()
+
+    def test_cuda_precision_is_full_float32_with_tf32_disabled(self):
+        torch = SimpleNamespace(set_float32_matmul_precision=Mock(), backends=SimpleNamespace(
+            cuda=SimpleNamespace(matmul=SimpleNamespace(allow_tf32=True)), cudnn=SimpleNamespace(allow_tf32=True)))
+        A.configure_cuda_precision(torch)
+        torch.set_float32_matmul_precision.assert_called_once_with("highest")
+        self.assertIs(torch.backends.cuda.matmul.allow_tf32, False)
+        self.assertIs(torch.backends.cudnn.allow_tf32, False)
 
     def test_cuda_success_and_failed_warmup_cleanup_before_fresh_cpu_load(self):
         detect = SimpleNamespace(gpu_usable=Mock(return_value=(True, None)))
         model = object()
         held = SimpleNamespace(load=Mock(return_value=(model, None)))
         cleanup = Mock()
-        self.assertEqual(A.load_segmenter("models", "state", "auto", detect, held, release_cuda=cleanup),
+        precision = Mock()
+        self.assertEqual(A.load_segmenter("models", "state", "auto", detect, held, release_cuda=cleanup,
+                                          configure_cuda=precision),
                          (model, "cuda:0", None, None))
         held.load.assert_called_once_with("models", "cuda:0", state="state")
         cleanup.assert_not_called()
+        precision.assert_called_once_with()
         for failed in [(None, "first warmup failed"), RuntimeError("private error text")]:
             with self.subTest(failure=type(failed).__name__):
                 order = []
@@ -183,16 +198,17 @@ class Device(unittest.TestCase):
                     return model, None
                 cleanup = Mock(side_effect=lambda: order.append("cleanup"))
                 result = A.load_segmenter("models", "state", "auto", detect,
-                                          SimpleNamespace(load=load), release_cuda=cleanup)
+                                          SimpleNamespace(load=load), release_cuda=cleanup,
+                                          configure_cuda=lambda: order.append("precision"))
                 self.assertEqual(result, (model, "cpu", None, "gpu_load_failed"))
-                self.assertEqual(order, ["cuda:0", "cleanup", "cpu"])
+                self.assertEqual(order, ["precision", "cuda:0", "cleanup", "cpu"])
                 self.assertNotIn("private error text", str(result))
 
     def test_failed_cpu_load_still_refuses_and_cleanup_failure_keeps_fallback(self):
         detect = SimpleNamespace(gpu_usable=lambda: (True, None))
         held = SimpleNamespace(load=Mock(side_effect=[(None, "warm failure"), (None, "cpu refused")]))
         result = A.load_segmenter("models", "state", "auto", detect, held,
-                                  release_cuda=Mock(side_effect=RuntimeError("cleanup failed")))
+                                  release_cuda=Mock(side_effect=RuntimeError("cleanup failed")), configure_cuda=Mock())
         self.assertEqual(result, (None, None, "cpu refused", "gpu_load_failed"))
 
     def test_device_environment_and_truthful_child_health(self):

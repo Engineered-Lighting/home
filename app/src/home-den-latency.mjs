@@ -10,6 +10,23 @@ const REASONS = new Set(['scope_changed', 'superseded', 'stale', 'unavailable', 
 const finite = Number.isFinite;
 const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 128;
 
+/* The producer samples body_clock after the request starts and before its callback arrives. Either direction can
+ * consume the whole setup window. The existing 5 ms + 100 ppm margin widens that clock interval. Capture timestamps
+ * remain producer estimates. This helper supplies diagnostics only and never admits or extends a figure's lease. */
+export function producerCaptureAgeTiming({ started, serverTs, clockReceivedAt } = {}, captureTs, receivedAt) {
+    if (![started, serverTs, clockReceivedAt, captureTs, receivedAt].every(finite)
+        || started < 0 || clockReceivedAt < started || receivedAt < clockReceivedAt) return {};
+    const elapsed = (receivedAt - started) / 1000;
+    const upper = serverTs + elapsed + 0.005 + elapsed * 0.0001;
+    const lower = serverTs + (receivedAt - clockReceivedAt) / 1000 - 0.005 - elapsed * 0.0001;
+    const bounds = [(lower - captureTs) * 1000, (upper - captureTs) * 1000];
+    const midpoint = bounds[0] / 2 + bounds[1] / 2, uncertainty = (bounds[1] - bounds[0]) / 2;
+    if (![...bounds, midpoint, uncertainty].every(finite)) return {};
+    return { producer_age_at_receive_ms: bounds[1], producer_age_at_receive_interval_ms: bounds,
+        producer_age_at_receive_midpoint_ms: midpoint, producer_clock_uncertainty_ms: uncertainty,
+        producer_clock_round_trip_bound_ms: clockReceivedAt - started };
+}
+
 /* Temporary observers retain the target's own draw hook and restore it when this diagnostic finishes. No scene
  * traversal or observer remains on the disabled path. A whole-engine frame cannot satisfy this target witness. */
 function observeDraw(root, isDrawing) {
@@ -46,6 +63,13 @@ export function createDenLatencyTrace({ now = () => performance.now(), wallNow =
         if (finite(token.expires_ts)) row.expires_ts = token.expires_ts;
         if (finite(token.sampled_mono)) row.sampled_mono = token.sampled_mono;
         if (finite(token.producer_age_at_receive_ms)) row.producer_age_at_receive_ms = token.producer_age_at_receive_ms;
+        if (token.producer_age_at_receive_interval_ms) {
+            row.producer_clock_mapping = 'request_receive_interval';
+            row.producer_age_at_receive_interval_ms = token.producer_age_at_receive_interval_ms.slice();
+            row.producer_age_at_receive_midpoint_ms = token.producer_age_at_receive_midpoint_ms;
+            row.producer_clock_uncertainty_ms = token.producer_clock_uncertainty_ms;
+            row.producer_clock_round_trip_bound_ms = token.producer_clock_round_trip_bound_ms;
+        }
         if (typeof token.lit === 'boolean') row.lit = token.lit;
         if (token.key.kind === 'body') row.capture_timing = 'producer_capture_estimate';
         if (finite(fields.frame_id)) row.frame_id = fields.frame_id;
@@ -66,7 +90,7 @@ export function createDenLatencyTrace({ now = () => performance.now(), wallNow =
         token.controller?.abort();
         token.witness?.dispose();
     }
-    function receive(kind, event, receivedAt = now(), { producer_age_at_receive_ms } = {}) {
+    function receive(kind, event, receivedAt = now(), timing = {}) {
         const id = kind === 'body' ? event?.run_id : kind === 'spot' ? event?.epoch : null;
         if (!validId(id) || !Number.isSafeInteger(event?.seq) || event.seq < 0 || !finite(receivedAt)) return null;
         const previous = lanes.get(kind)?.key;
@@ -76,9 +100,18 @@ export function createDenLatencyTrace({ now = () => performance.now(), wallNow =
             capture_ts: finite(event.capture_ts) ? event.capture_ts : undefined,
             expires_ts: finite(event.expires_ts) ? event.expires_ts : undefined,
             sampled_mono: finite(event.sampled_mono) ? event.sampled_mono : undefined,
-            producer_age_at_receive_ms: finite(producer_age_at_receive_ms) ? producer_age_at_receive_ms : undefined,
+            producer_age_at_receive_ms: finite(timing.producer_age_at_receive_ms) ? timing.producer_age_at_receive_ms : undefined,
             lit: kind === 'spot' ? Object.values(event.fixtures || {}).some(row => row?.on === true) : undefined,
             finished: false };
+        const bounds = timing.producer_age_at_receive_interval_ms;
+        if (kind === 'body' && Array.isArray(bounds) && bounds.length === 2 && bounds.every(finite) && bounds[0] <= bounds[1]
+            && [timing.producer_age_at_receive_midpoint_ms, timing.producer_clock_uncertainty_ms,
+                timing.producer_clock_round_trip_bound_ms].every(finite)) {
+            token.producer_age_at_receive_interval_ms = bounds.slice();
+            token.producer_age_at_receive_midpoint_ms = timing.producer_age_at_receive_midpoint_ms;
+            token.producer_clock_uncertainty_ms = timing.producer_clock_uncertainty_ms;
+            token.producer_clock_round_trip_bound_ms = timing.producer_clock_round_trip_bound_ms;
+        }
         lanes.set(kind, token);
         record(token, 'received', {}, receivedAt);
         return token;
@@ -116,11 +149,13 @@ export function createDenLatencyTrace({ now = () => performance.now(), wallNow =
         return { schema: DEN_LATENCY_SCHEMA, presentation_observed: false, physical_commands: false,
             clock: { time_origin_ms: timeOrigin, exported_at_ms: now(), exported_unix_ms: wallNow() },
             limits: { ...DEN_LATENCY_LIMITS }, dropped_entries: dropped, pending: pending.size,
-            entries: entries.map(row => ({ ...row })) };
+            entries: entries.map(row => ({ ...row, ...(row.producer_age_at_receive_interval_ms
+                ? { producer_age_at_receive_interval_ms: row.producer_age_at_receive_interval_ms.slice() } : {}) })) };
     }
     function clear() {
         for (const kind of [...lanes.keys()]) invalidate(kind, 'trace_cleared');
         entries.length = 0; dropped = 0;
     }
-    return Object.freeze({ receive, mark, draw, invalidate, snapshot, exportJson: () => JSON.stringify(snapshot()), clear });
+    return Object.freeze({ receive, mark, draw, invalidate, snapshot, exportJson: () => JSON.stringify(snapshot()), clear,
+        captureAgeTiming: producerCaptureAgeTiming });
 }

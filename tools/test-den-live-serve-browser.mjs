@@ -355,6 +355,12 @@ inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draw
         const report = reportTrace(exported);
         assert.equal(report.visible_paint_observed, false);
         assert.equal(exported.schema, 'home-den-latency-1');
+        const capture = report.kinds.body.capture_estimate;
+        assert.equal(capture.qualified, false);
+        assert.ok(capture.clock_mapping.samples > 0, 'completed body draws include their bootstrap clock interval');
+        assert.equal(capture.clock_mapping.invalid_samples, 0);
+        assert.ok(capture.clock_mapping.setup_round_trip_bound_ms.p50 >= 0);
+        assert.ok(capture.clock_mapping.uncertainty_at_receive_ms.p50 >= 5);
       } catch (error) {
         const diagnostics = await Promise.race([page.evaluate(() => {
           const trace = window.HomeDenLatency?.snapshot(), den = window.HomeDenLiveView?.status();

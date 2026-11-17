@@ -8,6 +8,7 @@ the trace has committed: each level step lights only once its row is written."""
 import copy
 import dataclasses
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -26,6 +27,9 @@ from contracts import PERCEPTION_S
 from preview_evidence import Episode, field, finite, head as published_head, pose, seated as published_seated
 import preview_trace
 from preview_trace import PreviewTrace
+import walking as walking_policy
+import walking_intent
+from walking_intent_receipts import ReceiptLedger
 
 
 POSE_AGE_S = PERCEPTION_S
@@ -78,8 +82,17 @@ BINDING_KEYS = ("transform_id", "scan_revision", "equipment_revision", "equipmen
 
 class Preview:
     def __init__(self, core, *, binding, fixtures, state, seat_mark=None, clock=time.monotonic,
-                 publish=None, append=None, threaded=True, bulb_lights=(), utc_offset_h=None):
+                 publish=None, append=None, threaded=True, bulb_lights=(), utc_offset_h=None, walking=None):
         self.core, self.clock = core, clock
+        # Walking is a separate, opt-in projection. It never borrows reading's
+        # episode or enters the fixture/desk command queue.
+        self.walking = walking_policy.Planner(core, walking)
+        self.walking_configured = walking is not None
+        self.walking_snapshot = self.walking_intent = None
+        self.walking_intent_fingerprint = None
+        self.walking_after_mono = None
+        self.walking_intent_rejected = None
+        self.walking_intent_receipts = ReceiptLedger()
         self.binding = {key: binding[key] for key in BINDING_KEYS}
         revision = self.binding["equipment_revision"]
         if (type(revision) is not int or revision < 0 or not fixtures or
@@ -438,6 +451,10 @@ class Preview:
         """The person binding changed (any of its four keys), or a control reset it: the episode, its onset, the need
         state and its requests all go."""
         self.track_binding = self.track = self.track_until = self.hold_until = self.episode = self.eligibility = None
+        self.walking_snapshot = self.walking_intent = None
+        self.walking_intent_fingerprint = None
+        self.walking_intent_rejected = None
+        self.walking_intent_receipts = ReceiptLedger()
         self.eligible_track = None
         self.others = ()
         self.captured = self.since = None
@@ -489,6 +506,7 @@ class Preview:
                 if self.scope is not None and scope[0] != self.scope[0]:
                     self.retired_runs.add(self.scope[0])
                 self.scope, self.track_seq = scope, -1
+                self.walking_intent = None
                 self._drop_track()
             if seq <= self.track_seq:
                 return
@@ -524,9 +542,64 @@ class Preview:
                 if eligible is not None or eligibility != self.eligibility:
                     self.eligible_track = eligible
                 self.eligibility = eligibility
+            # Preserve only an accepted sequence, after any subject transition.
+            # A stale/unsafe snapshot revokes this lane; control transitions
+            # require another accepted frame rather than reusing old motion.
+            self.walking_snapshot = snapshot
             self._evaluate(now)
 
     offer_snapshot = tracking
+
+    def offer_intent(self, hint):
+        """Accept current advisory metadata; this grants no fixture authority."""
+        with self.lock:
+            if not self.walking_configured or hint is None:
+                return False
+            now = self.clock()
+            projection = walking_intent.project(hint, now, self.walking_snapshot,
+                                                control_cutoff=self.walking_after_mono)
+            if projection["reason"] != "awaiting_held_out_admission":
+                return self._reject_intent(projection, now)
+            # The request identity fences the complete immutable receipt. A
+            # retry neither republishes nor renews the original source lease.
+            def plain(value):
+                if hasattr(value, "items"):
+                    return {key: plain(item) for key, item in value.items()}
+                if isinstance(value, (tuple, list)):
+                    return [plain(item) for item in value]
+                return value
+            try:
+                payload = json.dumps({"public": hint.public(), "evidence": plain(hint.evidence), "text": hint.text},
+                                     sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+                if len(payload) > 131072:
+                    return self._reject_intent(projection, now, "oversized_intent_receipt")
+                fingerprint = hashlib.sha256(payload).hexdigest()
+            except (AttributeError, TypeError, ValueError, OverflowError, RecursionError):
+                return self._reject_intent(projection, now, "malformed_intent_hint")
+            previous = self.walking_intent
+            known, accepted, identity_reason = self.walking_intent_receipts.check(hint.request_id, fingerprint)
+            if known and identity_reason == "idempotent_retry":
+                return accepted
+            if identity_reason is not None:
+                return self._reject_intent(projection, now, identity_reason)
+            if previous is not None:
+                if ((hint.evidence["cutoff_at"], hint.produced_at)
+                        <= (previous.evidence["cutoff_at"], previous.produced_at)):
+                    self.walking_intent_receipts.record(hint.request_id, fingerprint, False)
+                    return self._reject_intent(projection, now, "older_intent_receipt")
+            self.walking_intent_receipts.record(hint.request_id, fingerprint, True)
+            self.walking_intent, self.walking_intent_fingerprint = hint, fingerprint
+            self.walking_intent_rejected = None
+            self._publish(now)
+            return True
+
+    def _reject_intent(self, projection, now, reason=None):
+        # One bounded diagnostic, projected on the next normal tick. Rejected
+        # replies never renew a beam, trigger a command, or republish a frame.
+        self.walking_intent_rejected = dict(projection, offered_mono=now)
+        if reason is not None:
+            self.walking_intent_rejected.update(disposition="ignored", reason=reason)
+        return False
 
     def _track(self, track, captured, deadline, hold, now):
         key = (*self.scope, field(track, "track_id"), field(track, "association_revision"))
@@ -2149,8 +2222,42 @@ class Preview:
                        "binding": self.binding, "subject": self._subject(), "sampled_mono": now, "valid_until_mono": until,
                        "on": self.on, "stopped": self.stopped, "stop_counter": self.stop_counter, "fixtures": fixtures,
                        "ambient": ambient, "bulbs": self._bulb_record()}
+        if self.walking_configured:
+            self.latest["path_lighting"] = self._path_lighting(now)
         self.counts["snapshots"] += 1
         self.publish(self.latest)
+
+    def _path_lighting(self, now):
+        """A separately leased virtual proposal, never an encoded fixture call."""
+        snapshot = self.walking_snapshot
+        captured = field(field(snapshot, "frame"), "capture_mono")
+        before_control = (self.walking_after_mono is not None and finite(captured)
+                          and captured < self.walking_after_mono)
+        if before_control:
+            snapshot = None
+        subject = None
+        if self.track_binding is not None:
+            subject = dict(zip(("service_run_id", "camera_epoch", "track_id", "association_revision"), self.track_binding))
+            subject.update(transform_id=self.binding["transform_id"], scan_revision=self.binding["scan_revision"],
+                           depth_calibration_sha256=field(field(self.walking_snapshot, "frame"), "depth_calibration_sha256"))
+        report = self.walking.evaluate(
+            snapshot, self.rows, now, on=self.on, stopped=self.stopped,
+            manual_holds=tuple(sorted({name for name, part in self.hands if part == "spot"})),
+            reading_active=self._lit() or bool(self.track and self.track["seated"]),
+            subject_binding=subject, intent=self.walking_intent)
+        track_id = (report.get("subject") or {}).get("track_id")
+        if track_id is None and self.walking_intent is not None:
+            track_id = self.walking_intent.dependencies["track_id"]
+        tracks = field(snapshot, "tracks", ()) or ()
+        track = next((item for item in tracks if field(item, "track_id") == track_id), None)
+        report["evidence"]["intent"] = walking_intent.project(
+            self.walking_intent, now, snapshot, motion_state=field(track, "motion"),
+            control_cutoff=self.walking_after_mono, plan_reason=report.get("reason"))
+        if self.walking_intent_rejected is not None:
+            report["evidence"]["intent_rejected"] = copy.deepcopy(self.walking_intent_rejected)
+        if before_control and self.on and not self.stopped and report.get("mode") != "off":
+            report["reason"] = "awaiting_post_control_frame"
+        return copy.deepcopy(report)
 
     def _learned_record(self, row):
         """What the task light carries from the owner's teaching, when it's lit for this episode's task."""
@@ -2220,6 +2327,8 @@ class Preview:
                        "fixture_situation": self._situation(self.clock())[1],
                        # Lines the change log couldn't use at start (torn, corrupt): skipped, never fatal.
                        "manual_log": {"skipped": self.manual_log.skipped + self.learning.skipped}}
+            if self.walking_configured:
+                current["path_lighting"] = copy.deepcopy((self.latest or {}).get("path_lighting"))
         if self.hue is not None:
             readback = self.hue.readback()
             current.update({**readback, "situation": readback.get("situation") or current["situation"],
@@ -2280,6 +2389,7 @@ class Preview:
             elif action in ("on", "off"):
                 self.on = action == "on"
             now = self.clock()
+            self.walking_after_mono = now
             self._drop_track()
             self.hands.clear()   # Off and Stop end every hand hold: den-live directs nothing, so there's nothing to hold
             for meta in self.manual_meta.values():

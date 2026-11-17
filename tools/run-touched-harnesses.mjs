@@ -80,6 +80,7 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-body-[\w-]+\.mjs|tools\/test-apartment-body-webgpu\.mjs)$/, ["test-apartment-webgpu-ports.mjs", "test-apartment-body-webgpu.mjs"]],
   [/^(?:app\/src\/home-den-spot-playback\.mjs|tools\/test-den-spot-playback\.mjs)$/, ["test-den-spot-playback.mjs"]],
   [/^(?:app\/src\/home-den-spot-playback\.mjs|tools\/den-live\/(?:manual|preview|test_manual_authority)\.py|tools\/test-den-manual-authority\.mjs)$/, ["test-den-manual-authority.mjs"]],
+  [/^tools\/(?:den-live\/(?:test_)?(?:walking(?:_intent(?:_receipts)?)?|intent|motion|preview(?:_[a-z_]+)?|contracts|direction|model_projection|perceive|person_state|stream)\.py|test-den-walking-lighting\.mjs)$/, ["test-den-walking-lighting.mjs"]],
   // The live den view's people layer: markers from den-live's people stream.
   [/^(?:app\/src\/home-3d\/apartment-people-layer\.mjs|tools\/test-apartment-people-layer\.mjs)$/, ["test-apartment-people-layer.mjs"]],
   [/^(?:app\/src\/home-den-live-qwen\.mjs|tools\/test-den-live-qwen-line\.mjs)$/, ["test-den-live-qwen-line.mjs"]],

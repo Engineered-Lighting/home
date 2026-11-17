@@ -82,6 +82,20 @@ function assertExactCover(argv, counts) {
   return full;
 }
 
+test('walking lighting contracts guard every provider and consumer seam exactly once across shards', () => {
+  const guard = 'test-den-walking-lighting.mjs';
+  const modules = ['walking', 'walking_intent', 'walking_intent_receipts', 'intent', 'motion', 'preview', 'contracts', 'direction',
+    'model_projection', 'perceive', 'person_state', 'stream'];
+  const files = modules.flatMap(name => [`tools/den-live/${name}.py`, `tools/den-live/test_${name}.py`]);
+  files.push('tools/den-live/test_preview_walking.py', `tools/${guard}`);
+  for (const file of files) {
+    const plan = planOf(['--files', file]);
+    assert.equal(plan.filter(name => name === guard).length, 1, 'the complete walking contracts guard ' + file);
+  }
+  const full = assertExactCover(['--files', files.join(',')], [1, 2, 3, 5]);
+  assert.equal(full.filter(name => name === guard).length, 1, 'combining all seams never drops or duplicates the guard');
+});
+
 const git = argv => execFileSync('git', argv, { cwd: root, encoding: 'utf8' }).trim();
 function actualBase() {
   const candidates = [process.env.GITHUB_BASE_REF && `origin/${process.env.GITHUB_BASE_REF}`, 'origin/main'].filter(Boolean);

@@ -1,0 +1,235 @@
+{
+  "evaluated_mono": 100.2,
+  "evidence": {
+    "intent": {
+      "authority": "semantic_prior_only",
+      "clip_id": null,
+      "clock": "producer_monotonic",
+      "consumed": false,
+      "dependencies": {},
+      "disposition": "absent",
+      "expires_at": null,
+      "hypotheses": [],
+      "intent": null,
+      "model_revision": null,
+      "observed_at": null,
+      "produced_at": null,
+      "profile_digest": null,
+      "reason": "intent_hint_absent",
+      "request_id": null,
+      "schema": "den.walking-intent/v1",
+      "selected": false,
+      "snapshot_manifest_digest": null,
+      "uncertainty": "uncalibrated_semantic_hint"
+    },
+    "motion": {
+      "association_revision": 3,
+      "available_mono": 100.05,
+      "basis": "den_track_kalman_cv",
+      "camera_epoch": 2,
+      "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "disposition": "consumed",
+      "frame_id": 10,
+      "observed_mono": 100.0,
+      "reason": "geometric_velocity",
+      "scan_revision": "walk-scan",
+      "selected": true,
+      "service_run_id": "walk-run",
+      "source_obs_ids": [
+        "walk-obs-10"
+      ],
+      "time_qualified": false,
+      "time_status": "estimated_source_elapsed",
+      "timing_evidence_id": null,
+      "track_id": "walker",
+      "transform_id": "walk-transform",
+      "valid_until_mono": 101.5,
+      "velocity_mps": [
+        0.5,
+        0.0
+      ]
+    }
+  },
+  "fixture_reasons": {},
+  "mode": "virtual",
+  "original_valid_until_mono": 101.5,
+  "proposals": [
+    {
+      "arrival_mono": 100.7811028208132,
+      "authority": "virtual_only",
+      "branch": "geometric_velocity",
+      "fixture_id": "F3",
+      "floor_profile_id": "synthetic-floor",
+      "footprint": {
+        "basis": "virtual_fwhm_floor_projection",
+        "heading_lead_m": 0.1,
+        "inner_radius_m": 0.20317822768056382,
+        "radius_m": 0.21624310993808307
+      },
+      "joints_cdeg": [
+        -2611,
+        -6599
+      ],
+      "precision_qualified": false,
+      "profile_id": "synthetic-fast-profile",
+      "source_motion": {
+        "association_revision": 3,
+        "available_mono": 100.05,
+        "basis": "den_track_kalman_cv",
+        "camera_epoch": 2,
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "frame_id": 10,
+        "observed_mono": 100.0,
+        "scan_revision": "walk-scan",
+        "service_run_id": "walk-run",
+        "source_obs_ids": [
+          "walk-obs-10"
+        ],
+        "time_qualified": false,
+        "time_status": "estimated_source_elapsed",
+        "timing_evidence_id": null,
+        "track_id": "walker",
+        "transform_id": "walk-transform",
+        "valid_until_mono": 101.5,
+        "velocity_mps": [
+          0.5,
+          0.0
+        ]
+      },
+      "start_mono": 100.27,
+      "target_m": [
+        0.49013346877207764,
+        0.0,
+        0.0
+      ],
+      "timing": {
+        "basis": "virtual_profile",
+        "cadence_wait_s": 0.0,
+        "command_bound_s": 0.02,
+        "current_motion_wait_s": 0.0,
+        "fade_to_useful_s": 0.0,
+        "forecast_horizon_s": 0.5811028208132001,
+        "motor_s": 0.47110282081320026,
+        "observation_age_s": 0.20000000000000284,
+        "queue_bound_s": 0.02,
+        "settle_s": 0.04,
+        "solve_residual_s": 0.0008358832690475992,
+        "transport_bound_s": 0.03
+      },
+      "uncertainty": {
+        "calibrated_probability": false,
+        "covariance_m2": [
+          [
+            0.0001608816493824535,
+            0.0
+          ],
+          [
+            0.0,
+            0.0001608816493824535
+          ]
+        ],
+        "envelope_m": 0.03846968068074981,
+        "sigma_m": 0.01268391301540867,
+        "sigma_multiplier": 3.0
+      },
+      "valid_until_mono": 101.5
+    }
+  ],
+  "reason": "geometric_velocity",
+  "schema": "den-path-lighting-1",
+  "status": "eligible",
+  "subject": {
+    "association_revision": 3,
+    "camera_epoch": 2,
+    "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "frame_id": 10,
+    "scan_revision": "walk-scan",
+    "service_run_id": "walk-run",
+    "track_id": "walker",
+    "transform_id": "walk-transform"
+  },
+  "valid_until_mono": 101.5,
+  "virtual_beams": [
+    {
+      "arrival_mono": 100.7811028208132,
+      "authority": "virtual_only",
+      "branch": "geometric_velocity",
+      "fixture_id": "F3",
+      "floor_profile_id": "synthetic-floor",
+      "footprint": {
+        "basis": "virtual_fwhm_floor_projection",
+        "heading_lead_m": 0.1,
+        "inner_radius_m": 0.20317822768056382,
+        "radius_m": 0.21624310993808307
+      },
+      "joints_cdeg": [
+        -2611,
+        -6599
+      ],
+      "precision_qualified": false,
+      "profile_id": "synthetic-fast-profile",
+      "radius_m": 0.21624310993808307,
+      "source_motion": {
+        "association_revision": 3,
+        "available_mono": 100.05,
+        "basis": "den_track_kalman_cv",
+        "camera_epoch": 2,
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "frame_id": 10,
+        "observed_mono": 100.0,
+        "scan_revision": "walk-scan",
+        "service_run_id": "walk-run",
+        "source_obs_ids": [
+          "walk-obs-10"
+        ],
+        "time_qualified": false,
+        "time_status": "estimated_source_elapsed",
+        "timing_evidence_id": null,
+        "track_id": "walker",
+        "transform_id": "walk-transform",
+        "valid_until_mono": 101.5,
+        "velocity_mps": [
+          0.5,
+          0.0
+        ]
+      },
+      "start_mono": 100.27,
+      "target_m": [
+        0.49013346877207764,
+        0.0,
+        0.0
+      ],
+      "timing": {
+        "basis": "virtual_profile",
+        "cadence_wait_s": 0.0,
+        "command_bound_s": 0.02,
+        "current_motion_wait_s": 0.0,
+        "fade_to_useful_s": 0.0,
+        "forecast_horizon_s": 0.5811028208132001,
+        "motor_s": 0.47110282081320026,
+        "observation_age_s": 0.20000000000000284,
+        "queue_bound_s": 0.02,
+        "settle_s": 0.04,
+        "solve_residual_s": 0.0008358832690475992,
+        "transport_bound_s": 0.03
+      },
+      "uncertainty": {
+        "calibrated_probability": false,
+        "covariance_m2": [
+          [
+            0.0001608816493824535,
+            0.0
+          ],
+          [
+            0.0,
+            0.0001608816493824535
+          ]
+        ],
+        "envelope_m": 0.03846968068074981,
+        "sigma_m": 0.01268391301540867,
+        "sigma_multiplier": 3.0
+      },
+      "valid_until_mono": 101.5
+    }
+  ]
+}

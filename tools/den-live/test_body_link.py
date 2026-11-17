@@ -337,6 +337,8 @@ class PipelineTests(unittest.TestCase):
         perceiver.seated = Published()
         perceiver.facing = Facing(lambda _: None, 30.0)   # no facing sample from these fakes
         perceiver.speed = Speed()   # posture's floor speed
+        from motion import Receipts
+        perceiver.motion = Receipts()
         perceiver.labels, perceiver.now = None, lambda: 1000
         perceiver.snapshot = TrackingSnapshot(perceiver.run_id, 3, 1, None, "starting", None, "unknown", ())
         perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})

@@ -22,6 +22,7 @@ The anchor: before a run's first snapshot in each day's file it writes one line
 so that run's *_mono times join the *_ts times of the ask log and the trace (contract 0's clocks).
 """
 import time
+from dataclasses import asdict
 
 from ask import AskLog
 from person_fields import orientation_projection
@@ -49,7 +50,7 @@ def frame_record(frame):
 def track_record(track):
     """One TrackEvidence's contract fields, near left out (words)."""
     seated, facing, head = track.seated, track.body_facing, track.head_point_m
-    return {"track_id": track.track_id, "state": track.state, "xy_m": [_number(v) for v in track.xy_m],
+    record = {"track_id": track.track_id, "state": track.state, "xy_m": [_number(v) for v in track.xy_m],
             "sigma_m": _number(track.sigma_m), "position_basis": track.position_basis,
             "current_obs_ids": list(track.current_obs_ids),
             "association": {"status": track.association_status, "revision": track.association_revision,
@@ -65,6 +66,12 @@ def track_record(track):
             "posture": track.posture,
             "head_orientation": orientation_record(track.head_orientation),
             "torso_orientation": orientation_record(track.torso_orientation)}
+    if track.motion is not None:
+        # Preserve the filter's full P and causal times exactly. Rounding an
+        # off-diagonal covariance can make a PSD matrix indefinite, and rounding
+        # a receipt time can make evidence appear available before it was.
+        record["motion"] = asdict(track.motion)
+    return record
 
 
 def orientation_record(value):

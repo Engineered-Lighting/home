@@ -829,10 +829,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
 
     // ---- render loop with frame governor ----
     let running = false;
-    const lightingRenderEvidence = lightingEvidenceM.createLightingRenderEvidence({ renderer,
+    let presenting = false;
+    const lightingRenderEvidence = lightingEvidenceM.createLightingRenderEvidence({ renderer, monotonicMs: () => performance.now(),
         isVisible: () => {
-            if (!running || disposed || document.hidden || !canvas.isConnected
-                || overlay.virtualFixturesReadback?.().visible !== true || !canvas.getClientRects().length) return false;
+            if (!running || disposed || document.hidden || !canvas.isConnected || !canvas.getClientRects().length) return false;
             const rect = canvas.getBoundingClientRect(), style = window.getComputedStyle(canvas);
             return style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
                 && rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
@@ -954,8 +954,11 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             }
         }
         xrayLook?.prepass();
-        renderer.render(scene, camera);
-        lightingRenderEvidence.afterRender();
+        try {
+            presenting = true;
+            renderer.render(scene, camera);
+            lightingRenderEvidence.afterRender();
+        } finally { presenting = false; }
 
         const renderTimeMs = Math.max(0, performance.now() - now);
         frameTimes.push(frameTimeMs);
@@ -992,8 +995,13 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         pointsMaterial, pointsPromise,
         requestLightingRenderEvidence(context = {}) {
             return lightingRenderEvidence.request({ ...context,
+                isCurrent: () => overlay.virtualFixturesReadback?.().visible === true && context.isCurrent?.() === true,
                 isReady: () => overlay.virtualFixturesPresentationActive?.() !== true });
         },
+        requestPresentationRenderEvidence(context = {}) {
+            return lightingRenderEvidence.request(context);
+        },
+        isPresentationFrame: () => presenting,
         gpu: gpuName,
         /* 'webgl', or 'webgpu' / 'webgpu-webgl2' behind ?renderer=webgpu. */
         rendererBackend: nodeRenderer ? (nodeRenderer.backend === 'webgpu' ? 'webgpu' : 'webgpu-webgl2') : 'webgl',

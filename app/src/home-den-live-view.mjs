@@ -40,7 +40,11 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     const pipelineKit = config.pipeline === true
         ? await import(`./home-den-pipeline-layer.mjs${cb}`).catch(error => { console.warn('[den-live] pipeline unavailable', error); return null; })
         : null;
-    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit, pipelineKit, inferenceKit);
+    const latency = new URLSearchParams(window.location.search).get('den-latency') === '1'
+        ? await import(`./home-den-latency.mjs${cb}`).then(module => module.createDenLatencyTrace())
+            .catch(error => { console.warn('[den-live] timing unavailable', error); return null; }) : null;
+    if (latency) window.HomeDenLatency = Object.freeze({ snapshot: latency.snapshot, exportJson: latency.exportJson, clear: latency.clear });
+    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit, pipelineKit, inferenceKit, latency);
     if (typeof config.body === 'string') {
         void Promise.all([import(`./home-3d/apartment-body-layer.mjs${cb}`), import(`./home-3d/apartment-body-labels.mjs${cb}`),
             import(`./home-3d/apartment-body-frame.mjs${cb}`)])
@@ -50,11 +54,12 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     }
 }
 
-function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit = null, pipelineKit = null, inferenceKit = null) {
+function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit = null, pipelineKit = null, inferenceKit = null, latency = null) {
     const lookOnly = window.HomeLookOnly?.active === true;
     let engine = null, scope = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
     let panel = null, caption = null, pipeline = null;
     let bodyKit = null, body = null, bodyRetryAt = 0, bodyFrames = 0, bodyAt = 0, watermark = null, pageActive = true;
+    let spotTrace = null;
     // A person's settled changes go to the coordinator to learn from (den-manual-1), as its other writes do; look-only
     // sends none.
     const post = !lookOnly && typeof config.coordinator === 'string' ? async (path, body) => {
@@ -62,12 +67,28 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-Home-Den-Live-CSRF': '1' }, body: JSON.stringify(body) });
         return { status: response.status, answer: await response.json().catch(() => null) };
     } : null;
-    const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site, post,
+    const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site, post, onPlayback: observeSpot,
         onChange: () => { panel?.refresh(); caption?.setSpot(spots?.current() ?? null); pipeline?.setSpot(spots?.current() ?? null); } });
     // With the den's live body feature (HomeDenLive.body), the body, its label and the label's ring carry each person, and
     // the people layer draws no floor marker: a gap between body frames can't flash it back. Without it, the marker shows them.
     const people = { floorMarker: typeof config.body !== 'string' };
     const scene = current => `${current.contentRevision ?? ''}:${current.sceneIdentity?.registrationVersion ?? ''}:${current.sceneIdentity?.frameDigest ?? ''}`;
+
+    function observeSpot(phase, snapshot) {
+        if (!latency) return;
+        if (phase === 'clear') { latency.invalidate('spot'); spotTrace = null; return; }
+        if (!spotTrace || snapshot?.epoch !== spotTrace.key.epoch || snapshot.seq !== spotTrace.key.seq) return;
+        latency.mark(spotTrace, phase);
+        if (phase !== 'applied') return;
+        const current = engine, overlay = current?.overlay;
+        if (overlay?.virtualFixtureHandHolds?.().length) { latency.invalidate('spot', 'manual_hold'); return; }
+        latency.draw(spotTrace, { root: overlay?.virtualFixturesGroup,
+            request: context => current?.requestPresentationRenderEvidence?.(context),
+            isDrawing: () => current?.isPresentationFrame?.() === true,
+            isCurrent: () => isCurrent() && engine === current && spots.current() === snapshot
+                && performance.now() < snapshot.deadline && overlay?.coordinatorSpotScope?.()?.generation === snapshot.generation
+                && !overlay?.virtualFixtureHandHolds?.().length });
+    }
 
     /* The den's room view is on screen: the den's engine, its canvas shown at room scale, the page visible. */
     function denEngine() {
@@ -106,7 +127,12 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         });
         if (spots) next.addEventListener('spot_snapshot', message => {
             if (source !== next || !isCurrent()) return;
-            try { spots.receive(JSON.parse(message.data)); }
+            const receivedAt = performance.now();
+            try {
+                const snapshot = JSON.parse(message.data);
+                spotTrace = latency?.receive('spot', snapshot, receivedAt) ?? null;
+                spots.receive(snapshot);
+            }
             catch (_) { spots.sourceLost(); }
             caption?.setSpot(spots.current() ?? null);
             pipeline?.setSpot(spots.current() ?? null);
@@ -119,6 +145,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         });
     }
     function clearBody(owned, reason) {
+        latency?.invalidate('body', reason === 'stale' || reason === 'scope_changed' ? reason : 'unavailable');
         owned.ready = null;
         owned.reason = reason;
         owned.lastPaintAge = null;
@@ -162,6 +189,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         });
         source.addEventListener('body', message => {
             if (!current() || connection.serverTs === null) return;
+            const receivedAt = performance.now();
             let result;
             try { result = bodyKit.decode(JSON.parse(message.data)); } catch (_) { return; }
             if (!result || result.event.home !== config.home) return;
@@ -170,6 +198,12 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             connection.runId = event.run_id;
             if (watermark?.runId === event.run_id && event.seq <= watermark.seq) return;
             watermark = { runId: event.run_id, seq: event.seq };
+            const old = owned.ready;
+            if (old && ['run_id', 'track_epoch', 'content_revision', 'transform_id', 'mode', 'track_id'].some(key => event[key] !== old.event[key]))
+                clearBody(owned, 'scope_changed');
+            const trace = latency?.receive('body', event, receivedAt,
+                { producer_age_at_receive_ms: (producerNow(connection, receivedAt) - event.capture_ts) * 1000 });
+            latency?.mark(trace, 'decoded');
             if (event.content_revision !== owned.engine.contentRevision) { clearBody(owned, 'scope_changed'); return; }
             if (event.status === 'clear') { clearBody(owned, event.reason); return; }
             const now = performance.now();
@@ -180,10 +214,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                 else clearBody(owned, 'stale');
                 return;
             }
-            const old = owned.ready;
-            if (old && ['run_id', 'track_epoch', 'content_revision', 'transform_id', 'mode', 'track_id'].some(key => event[key] !== old.event[key]))
-                clearBody(owned, 'scope_changed');
-            owned.ready = { event, decoded };
+            owned.ready = { event, decoded, trace };
+            latency?.mark(trace, 'scheduled');
             owned.reason = null;
             bodyFrames += 1; bodyAt = now;
         });
@@ -205,9 +237,16 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                     const now = producerNow(owned.connection, performance.now());
                     if (now >= owned.ready.event.expires_ts) { clearBody(owned, 'stale'); return; }
                     if (owned.ready.decoded && (current.rendererBackend === 'webgl' || owned.layer.status().webgpu)) {
+                        const ready = owned.ready;
                         owned.layer.updateMeasured(owned.ready.decoded);
                         owned.ready.decoded = null;
                         owned.lastPaintAge = now - owned.ready.event.capture_ts;
+                        latency?.mark(ready.trace, 'applied');
+                        latency?.draw(ready.trace, { root: owned.layer.root,
+                            request: context => current.requestPresentationRenderEvidence?.(context),
+                            isDrawing: () => current.isPresentationFrame?.() === true,
+                            isCurrent: () => admitted() && owned.ready === ready && owned.connection !== null
+                                && producerNow(owned.connection, performance.now()) < ready.event.expires_ts });
                     }
                     owned.layer.tick(deltaSeconds);
                     owned.labels.tick(deltaSeconds);
@@ -343,6 +382,20 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                     panel = panelKit.createCoordinatorPanel({ url: config.coordinator, lookOnly, spots });
                     chip.append(panel.element);
                 } catch (error) { console.warn('[den-live] coordinator panel not mounted', error); panel = null; }
+            }
+            if (latency) {
+                const save = document.createElement('button');
+                save.type = 'button'; save.className = 'home-den-live-chip-icon'; save.textContent = 'Save timing';
+                save.style.cssText = 'width:auto;min-height:32px;padding:0 8px;pointer-events:auto';
+                save.addEventListener('click', event => {
+                    event.stopPropagation();
+                    const url = URL.createObjectURL(new Blob([latency.exportJson()], { type: 'application/json' }));
+                    const link = document.createElement('a');
+                    link.href = url; link.download = 'home-den-latency.json'; link.hidden = true;
+                    chip.appendChild(link); link.click(); link.remove(); save.disabled = true;
+                    setTimeout(() => { URL.revokeObjectURL(url); save.disabled = false; }, 1000);
+                });
+                chip.appendChild(save);
             }
             if (capsule) {
                 const actions = document.createElement('span');

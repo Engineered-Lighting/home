@@ -16,6 +16,7 @@ import Core from '../app/src/home-equipment-registration.js';
 import { initRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { authoredDocument, installPack } from './fixtures/apartment-home-shell-fixtures.mjs';
 import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
+import { reportTrace } from './den-latency-report.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const certDir = path.join(root, 'tools/shared-home/tests/fixtures/gateway_client');
@@ -296,7 +297,7 @@ after(async () => {
   if (folder) fs.rmSync(folder, { recursive: true, force: true });
 });
 
-async function openHome(mobile) {
+async function openHome(mobile, { latency = false } = {}) {
   // The service worker is blocked, as in the other Home browser suites: its one takeover reload per build otherwise lands
   // at an unpredictable point in a case and aborts whatever it was doing.
   const context = await browser.newContext({ ignoreHTTPSErrors: true, hasTouch: mobile, isMobile: mobile, serviceWorkers: 'block',
@@ -311,10 +312,89 @@ async function openHome(mobile) {
     localStorage.setItem('apartment3d.site', 'victoria');
   });
   const page = await context.newPage();
-  await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off', { waitUntil: 'domcontentloaded' });
+  await page.goto(origin + '/?apartmentRedesign=1&worldZoom=off' + (latency ? '&den-latency=1' : ''), { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.HomeServe?.active === true && !!window.HomeLightingControl);
   return { page, context };
 }
+
+inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draws through GPU completion', { timeout: 120000 }, async () => {
+  const initial = { ...fake.control }, firstAction = fake.actions.length;
+  fake.control = { ...fake.control, on: true, stopped: false };
+  try {
+    for (const mobile of [false, true]) {
+      const { page, context } = await openHome(mobile, { latency: true });
+      try {
+        await page.waitForFunction(() => {
+          const rows = window.HomeDenLatency?.snapshot().entries || [];
+          return ['body', 'spot'].every(kind => rows.some(row => row.kind === kind && row.phase === 'gpu_completed'));
+        }, null, { timeout: 60000 });
+        const state = await page.evaluate(() => window.HomeDenLatency.snapshot());
+        assert.equal(state.presentation_observed, false); assert.equal(state.physical_commands, false);
+        assert.ok(state.entries.every(row => Number.isFinite(row.at_ms) && Number.isFinite(row.unix_ms)));
+        for (const kind of ['body', 'spot']) {
+          const completed = state.entries.find(row => row.kind === kind && row.phase === 'gpu_completed');
+          const identity = kind === 'body' ? 'run_id' : 'epoch';
+          assert.equal(completed[identity], kind === 'body' ? 'authored-run' : fake.epoch);
+          const same = state.entries.filter(row => row.kind === kind && row[identity] === completed[identity] && row.seq === completed.seq);
+          assert.deepEqual(same.map(row => row.phase), ['received', 'decoded', 'scheduled', 'applied', 'submitted', 'gpu_completed']);
+          assert.equal(same.find(row => row.phase === 'submitted').frame_id, completed.frame_id);
+          assert.ok(completed.gpu_completed_at_ms >= completed.frame_submitted_at_ms);
+        }
+        const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Save timing', exact: true }).click()]);
+        assert.equal(download.suggestedFilename(), 'home-den-latency.json');
+        const exported = JSON.parse(fs.readFileSync(await download.path(), 'utf8'));
+        assert.doesNotMatch(JSON.stringify(exported), /position_mm|target_m|shoulder|track_id|private/);
+        const report = reportTrace(exported);
+        assert.equal(report.visible_paint_observed, false);
+        assert.equal(exported.schema, 'home-den-latency-1');
+      } catch (error) {
+        const diagnostics = await Promise.race([page.evaluate(() => {
+          const trace = window.HomeDenLatency?.snapshot(), den = window.HomeDenLiveView?.status();
+          const engine = window.__APT_ENGINE, overlay = engine?.overlay, canvas = engine?.renderer?.domElement;
+          const fixtureState = overlay?.virtualFixturesReadback?.(), scope = overlay?.coordinatorSpotScope?.();
+          const rect = canvas?.getBoundingClientRect(), bodyRoot = engine?.apartmentRoot?.getObjectByName('home-apartment-body-owned');
+          const counts = {}, reasons = {};
+          for (const row of trace?.entries || []) {
+            const key = row.kind + '/' + row.phase;
+            counts[key] = (counts[key] || 0) + 1;
+            if (row.reason) reasons[row.reason] = (reasons[row.reason] || 0) + 1;
+          }
+          const boot = window.__bootState, perf = window.__homePerf?.snapshot();
+          return {
+            loaded: !!trace, pending: trace?.pending, dropped: trace?.dropped_entries,
+            counts, reasons, recent: trace?.entries.slice(-12), hidden: document.hidden, ready_state: document.readyState,
+            backend: engine?.rendererBackend, engine: !!engine, mode: engine?.modes?.mode,
+            canvas: canvas ? { connected: canvas.isConnected, width: rect.width, height: rect.height,
+              top: rect.top, left: rect.left, visibility: getComputedStyle(canvas).visibility,
+              owner: canvas.parentElement?.dataset?.aptSpatialOwner ?? null,
+              frame: engine.renderer.info?.render?.frame, calls: engine.renderer.info?.render?.calls } : null,
+            den: den ? { mounted: den.mounted, stream: den.stream, events: den.events, banner: den.banner,
+              body: den.body ? { stream: den.body.stream, mounted: den.body.mounted, frames: den.body.frames,
+                reason: den.body.reason, since_s: den.body.since_s, last_paint_age_s: den.body.last_paint_age_s,
+                points: den.body.layer?.points, presence: den.body.layer?.presence, webgpu: den.body.layer?.webgpu } : null,
+              spot: den.spot ? { epoch: den.spot.epoch, seq: den.spot.seq, generation: den.spot.generation,
+                deadline_left_ms: den.spot.deadline - performance.now(), fixtures: den.spot.fixtures?.length } : null } : null,
+            overlay: overlay ? { owned: overlay.denSpotSnapshotOwned, status: fixtureState?.status,
+              reason: fixtureState?.reason, visible: fixtureState?.visible, fixtures: fixtureState?.fixture_count,
+              scope_generation: scope?.generation, scope_fixtures: scope?.fixture_ids?.length,
+              held: overlay.virtualFixtureHandHolds?.().length } : null,
+            body_root: bodyRoot ? { visible: bodyRoot.visible, children: bodyRoot.children.slice(0, 8).map(child => ({
+              name: child.name, visible: child.visible, count: child.count ?? child.geometry?.drawRange?.count,
+              opacity: child.material?.uniforms?.uOpacity?.value })) } : null,
+            boot: boot ? { done: boot.done, loaded: boot.loaded, total: boot.total, current: boot.current, phase: boot.phase,
+              failed: !!boot.failed } : null,
+            jsx: { compiled: perf?.bootFiles?.filter(row => row.phase === 'precompiled').length,
+              transformed: perf?.bootFiles?.filter(row => row.phase === 'transform').length,
+              apartment: perf?.bootFiles?.filter(row => row.file === 'home-apartment.jsx').map(row => ({ phase: row.phase, ms: row.durationMs })).slice(-4) },
+          };
+        }), delay(3000).then(() => ({ evaluation_timeout: true }))]);
+        error.message += '\nTiming: ' + JSON.stringify({ viewport: mobile ? 'phone' : 'desktop', ...diagnostics });
+        throw error;
+      } finally { await context.close(); }
+    }
+    assert.equal(fake.actions.length, firstAction, 'timing and local downloads create no upstream writes');
+  } finally { fake.control = initial; }
+});
 
 async function startPreview(config) {
   const child = spawn(process.env.PYTHON || 'python', ['-B', 'tools/den-live/test_sofa_browser_backend.py'],

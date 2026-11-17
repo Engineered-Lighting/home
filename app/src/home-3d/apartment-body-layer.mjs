@@ -313,6 +313,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
     }
 
     return {
+        root,
         update,
         updateMeasured,
         clear,

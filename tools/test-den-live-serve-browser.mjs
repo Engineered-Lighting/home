@@ -625,6 +625,9 @@ inPart(2, 'the mobile Den draws a face-free figure, and Stop holds the visible s
     try {
       await other.bringToFront();
       await other.goto(page.url(), { waitUntil: 'domcontentloaded' });
+      await other.waitForFunction(() => window.HomeServe?.active === true && !!window.HomeLightingControl
+        && window.__APT_ENGINE?.siteId === 'victoria' && window.HomeDenLiveView?.status()?.mounted === true,
+      null, { timeout: 60000 });
       await other.waitForFunction(() => !document.hidden && window.HomeDenLiveView?.status()?.spot?.stopped === true);
       const observed = await other.evaluate(() => window.HomeDenLiveView.status().spot.stop_counter);
       await page.bringToFront();
@@ -642,7 +645,10 @@ inPart(2, 'the mobile Den draws a face-free figure, and Stop holds the visible s
       assert.equal(staleResume, 409, 'a second tab cannot resume past a newer Stop');
       assert.ok((await readDrawn()).every(on => on === false));
     } catch (error) {
-      const otherState = await other.evaluate(() => ({ hidden: document.hidden, den: window.HomeDenLiveView?.status() }));
+      const otherState = await other.evaluate(() => ({ hidden: document.hidden, den: window.HomeDenLiveView?.status(),
+        engine: !!window.__APT_ENGINE, ready_state: document.readyState,
+        boot: window.__bootState ? { done: window.__bootState.done, loaded: window.__bootState.loaded,
+          total: window.__bootState.total, failed: !!window.__bootState.failed } : null }));
       error.message += '\nOther tab: ' + JSON.stringify(otherState);
       throw error;
     } finally { await other.close(); }

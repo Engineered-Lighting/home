@@ -1,0 +1,1107 @@
+[
+ {
+  "id": "APT-F01",
+  "title": "Renderer overlay bridge",
+  "dep": [],
+  "proto": "scene.js: `_screen`, `_placeLabels`, `gDyn`, `surfaceHit`, `checkAim`",
+  "files": "app/src/home-3d/*, app/src/home-apartment.jsx",
+  "spec": "HANDOFF.md › The room view in the prototype is a placeholder",
+  "build": [
+   "A small API on the existing renderer for: projecting world points to screen, a DOM layer for labels and handles, a scene group for transient overlay geometry, and ray picks against the real scan mesh (reuse the target-drag picking).",
+   "No change to point cloud, splat, mesh, wall-fade, orbit or asset loading."
+  ],
+  "done": [
+   "A test overlay (a dot plus a label at a fixture) tracks correctly while orbiting in Cloud, Photo and Mesh.",
+   "A pick returns point, normal and surface name on the scan mesh.",
+   "Renderer frame time unchanged within noise."
+  ],
+  "epic": "F",
+  "status": "todo"
+ },
+ {
+  "id": "APT-F02",
+  "title": "Status vocabulary and tokens",
+  "dep": [],
+  "proto": "app.css (`--apt-*` tokens, `.apt-badge`), ui-kit.jsx `Badge`",
+  "files": "app/src/home-tokens.css",
+  "spec": "SPEC.md status semantics; DIRECTION.md",
+  "build": [
+   "Map the prototype's state colors (ok, attention, blocked, authored, proposed, none) onto existing `--hg-*` tokens, dark and light theme.",
+   "One Badge component with the agreed labels (Live, Held, Stale, Recorded, Authored, Proposed, Saved, Blocked, Reported).",
+   "Move `AIM_*` color literals into tokens. Remove the forced `data-theme=\"dark\"`: the canvas stays dark and the chrome follows the theme."
+  ],
+  "done": [
+   "Badges meet 4.5:1 text contrast in both themes.",
+   "`--hg-fg-5` is never used for informative text."
+  ],
+  "epic": "F",
+  "status": "todo"
+ },
+ {
+  "id": "APT-F03",
+  "title": "UI primitives",
+  "dep": [
+   "APT-F02"
+  ],
+  "proto": "ui-kit.jsx (`Btn`, `Seg`, `Slider`, `Switch`, `Icon`, `Popover`), toast in app.jsx",
+  "files": "app/src/home-apartment-cards.jsx or a new home-apartment-ui.jsx",
+  "build": [
+   "Reuse existing Home controls where they exist; add only what is missing.",
+   "Toast supports an action button (Undo) and a timeout."
+  ],
+  "done": [
+   "Each primitive is keyboard operable with visible focus.",
+   "Touch targets are at least 44 px on coarse pointers."
+  ],
+  "epic": "F",
+  "status": "todo"
+ },
+ {
+  "id": "APT-F04",
+  "title": "Escape and focus stack",
+  "dep": [],
+  "proto": "app.jsx keydown handler",
+  "files": "app/src/home-overlay.js",
+  "spec": "SPEC.md Escape rules; SPEC.md › Cancel, Return and Escape",
+  "build": [
+   "Escape cancels the innermost operation first: drag, tap-aim, draft, popover, setup tool, then selection. It never closes Apartment.",
+   "Focus returns to the control that started the operation.",
+   "With Close gone, step 6 of the ladder does nothing. Popovers, modals and text fields claim Escape first."
+  ],
+  "done": [
+   "A table test covers each level of the stack.",
+   "The ladder matches SPEC.md › Cancel, Return and Escape, step by step."
+  ],
+  "epic": "F",
+  "status": "todo"
+ },
+ {
+  "id": "APT-F05",
+  "title": "Per-home capability model",
+  "dep": [],
+  "proto": "data-sites.js (`capabilities`)",
+  "files": "app/src/home-site-registry.js, home-apartment-site-session.js",
+  "spec": "HANDOFF.md data gaps; SPEC.md › What persists; HANDOFF.md › Capability-driven variants",
+  "build": [
+   "Propose a capabilities object per home (HA connection, engineered fixtures, perception, JEV, cameras) from existing registry data. Schema change goes in the PR description first.",
+   "Unsaved work and selection are kept per home.",
+   "Variants are driven by the capability values in HANDOFF.md (engineered, perception, body, lights, assets, bench). Components never branch on the site id.",
+   "Persistence per SPEC › What persists: theme, layers, dock and detail across homes; selection, tab, proposals with undo, drafts, camera choice per home; orbit refits on switch."
+  ],
+  "done": [
+   "Switching homes never shows another home's devices, feed or saved aims.",
+   "Acceptance example \"Home isolation\" in HANDOFF.md passes."
+  ],
+  "epic": "F",
+  "status": "todo"
+ },
+ {
+  "status": "todo",
+  "epic": "F",
+  "id": "APT-F06",
+  "title": "Data states and ages",
+  "dep": [
+   "APT-F02",
+   "APT-F05"
+  ],
+  "proto": "`?echo=` and `?vic=` scenarios: draft, stale, held, replay, loading, failed; Tweaks panel",
+  "spec": "SPEC.md › Status semantics; HANDOFF.md › Data (analyzed_at, thresholds)",
+  "files": "home-apartment-site-session.js",
+  "build": [
+   "One place that turns raw data into states: HA connected or offline (with last reported time), local draft, loading, failed, and frame ages current (≤10 s), held (≤2 min), stale, expired, no session, replay.",
+   "Every surface reads these states; none computes its own."
+  ],
+  "done": [
+   "\"Connected\" always names the system.",
+   "Acceptance examples \"HA offline (Echo)\" and \"No session\" pass."
+  ]
+ },
+ {
+  "id": "APT-S01",
+  "title": "Apartment is the default route",
+  "dep": [
+   "APT-F01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria`",
+  "files": "app/src/home-app.jsx, home-apartment.jsx",
+  "build": [
+   "Open on Apartment. Remove the Close button.",
+   "Give Lab, metrics, people and anything else only reachable from the old menu a place in the top bar overflow or the slash menu."
+  ],
+  "done": [
+   "Every screen reachable before is still reachable, listed in the PR.",
+   "Deep links to old routes still work."
+  ],
+  "epic": "S",
+  "status": "todo",
+  "spec": "HANDOFF.md › Removal and consolidation"
+ },
+ {
+  "id": "APT-S02",
+  "title": "Top bar and home switcher",
+  "dep": [
+   "APT-S01",
+   "APT-F05"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=echo`, ui-shell.jsx top bar",
+  "files": "home-apartment.jsx",
+  "build": [
+   "\"Home\" title, Echo Park / Victoria switcher, status summary with a popover that says what is connected.",
+   "Switching keeps each home's unsaved work."
+  ],
+  "done": [
+   "Unavailable assets explain themselves and never silently switch homes."
+  ],
+  "epic": "S",
+  "status": "todo",
+  "spec": "SPEC.md › Status semantics"
+ },
+ {
+  "id": "APT-S03",
+  "title": "Room toolbar",
+  "dep": [
+   "APT-F01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768`, ui-shell.jsx toolbar",
+  "files": "home-apartment.jsx",
+  "build": [
+   "Cloud, Photo, Mesh mapped to the existing modes (Lit arrives in APT-V01). Camera views, Return to room, help popover with shortcuts.",
+   "Loading, progress and retry per mode.",
+   "Camera views (room poses) with Return to room. Photo unavailable shows Retry and Back to Cloud."
+  ],
+  "done": [
+   "Toolbar sits in the same place in both homes and never covers the selected fixture.",
+   "Acceptance example \"Photo missing\" passes."
+  ],
+  "epic": "S",
+  "status": "todo",
+  "spec": "SPEC.md › Status semantics (assets)"
+ },
+ {
+  "id": "APT-S04",
+  "title": "Right column: Controls and Chat tabs",
+  "dep": [
+   "APT-S01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&col=chat`",
+  "files": "home-apartment.jsx",
+  "build": [
+   "One right column with tabs Controls and Chat and an unread dot on Chat. Chat content arrives in APT-C01; ship with the existing chat mounted as is."
+  ],
+  "done": [
+   "Column width and room fit follow SPEC layout rules at 1920, 1366 and 1024 wide."
+  ],
+  "epic": "S",
+  "status": "todo",
+  "spec": "SPEC.md › Layout and responsive rules; SPEC.md › Home chat"
+ },
+ {
+  "id": "APT-S05",
+  "title": "Tablet and phone layouts",
+  "dep": [
+   "APT-S04"
+  ],
+  "proto": "`?vp=768x1024`, `?vp=390x844`",
+  "files": "home-apartment.jsx, CSS",
+  "build": [
+   "Phone: bottom sheet (peek, half, full) with Lights, Camera, Chat tabs. Tablet per SPEC.",
+   "Safe areas, scroll ownership, no panel collisions."
+  ],
+  "done": [
+   "Screenshots at 390x844, 768x1024, 1366x768 match the prototype's layout."
+  ],
+  "epic": "S",
+  "status": "todo",
+  "spec": "SPEC.md › Layout and responsive rules; SPEC.md › Keyboard and touch"
+ },
+ {
+  "status": "todo",
+  "epic": "S",
+  "id": "APT-S06",
+  "title": "Layers, legend, help and about",
+  "dep": [
+   "APT-S03"
+  ],
+  "proto": "ui-shell.jsx `LayersPopover`, `Legend`, `HelpModal`, `AboutModal`",
+  "spec": "SPEC.md › Keyboard and touch",
+  "files": "home-apartment.jsx",
+  "build": [
+   "Layers popover: pools, beams, named aims always, labels always, cameras, body observed, body inferred, body volume, uncertainty. Unavailable layers explain why.",
+   "Legend for in-room marks, shown on demand.",
+   "Help modal listing every shortcut (A, Z, Enter, N/P, ⌘Z, Esc, ?).",
+   "About: what is live, modeled, authored or recorded in this home."
+  ],
+  "done": [
+   "Layer choices persist across homes.",
+   "Help lists exactly the shortcuts that work."
+  ]
+ },
+ {
+  "id": "APT-R01",
+  "title": "Selection model and labels",
+  "dep": [
+   "APT-F01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&sel=vic-s4`",
+  "files": "home-apartment.jsx, home-3d/markers.js",
+  "build": [
+   "Click fixture or label selects; empty-canvas drag orbits; hover labels; selected emphasis; Escape deselects last.",
+   "Keyboard: Tab through fixtures, Enter selects.",
+   "N and P cycle through lights."
+  ],
+  "done": [
+   "Selection precedence matches SPEC.",
+   "Orbit, select and aim gestures never conflict.",
+   "Acceptance example \"Direct selection\" passes (without \"offers Close\")."
+  ],
+  "epic": "R",
+  "status": "todo",
+  "spec": "SPEC.md › Selection precedence; SPEC.md › Gestures"
+ },
+ {
+  "id": "APT-R02",
+  "title": "Room inspector",
+  "dep": [
+   "APT-R01",
+   "APT-F03"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=echo`",
+  "files": "home-apartment-cards.jsx",
+  "build": [
+   "Lights grouped by room with a switch per room heading, named aims list with Edit."
+  ],
+  "done": [
+   "Clicking a row selects the same object as clicking it in the room."
+  ],
+  "epic": "R",
+  "status": "todo",
+  "spec": "SPEC.md › Selection precedence"
+ },
+ {
+  "id": "APT-R03",
+  "title": "Quick controls",
+  "dep": [
+   "APT-R02"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria`, ui-inspector.jsx `QuickControls`",
+  "spec": "SPEC.md › Quick controls",
+  "files": "home-apartment-cards.jsx",
+  "build": [
+   "All on, All off, scene and script chips from the home's HA scenes and scripts (automations marked ▶), each with Undo in the toast."
+  ],
+  "done": [
+   "Undo restores the exact previous state.",
+   "Offline HA disables the chips with a reason."
+  ],
+  "epic": "R",
+  "status": "todo"
+ },
+ {
+  "status": "todo",
+  "epic": "R",
+  "id": "APT-R04",
+  "title": "Named aim inspector",
+  "dep": [
+   "APT-R01"
+  ],
+  "proto": "ui-inspector.jsx `TargetInspector`",
+  "spec": "SPEC.md › Selection precedence",
+  "build": [
+   "Selecting a named aim in the room or list opens its inspector: which lights use it, which can reach it, Aim a light here, Edit in Setup."
+  ],
+  "done": [
+   "Same inspector from the room, the list and a chat chip."
+  ]
+ },
+ {
+  "id": "APT-L01",
+  "title": "Inspector frame",
+  "dep": [
+   "APT-R01",
+   "APT-F03"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&sel=vic-s4&tab=light`",
+  "files": "home-apartment-aim.jsx (merge into it)",
+  "build": [
+   "Header, status badge, Light / Aim / Setup tabs, and a line saying what a change sends.",
+   "Consolidate home-lighting-target-panel, -live-panel, -dynamic-panel, home-live-room-controls and home-fixture-execution-panel into this inspector. List what each one became in the PR.",
+   "Provenance badges in the header (live, modeled, authored).",
+   "Retire the anchored control card and the `aim light` mode and its button. Remove Victoria's bottom-left fixture controls. Move debug statistics behind Details."
+  ],
+  "done": [
+   "No duplicate light controls remain on screen in either home."
+  ],
+  "epic": "L",
+  "status": "todo",
+  "spec": "HANDOFF.md › Removal and consolidation; HANDOFF.md › Shared component map"
+ },
+ {
+  "id": "APT-L02",
+  "title": "Cylinder channels: Spot, Down, Radial",
+  "dep": [
+   "APT-L01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&sel=vic-s4&tab=light`",
+  "files": "home-apartment-aim.jsx",
+  "build": [
+   "Spot and Down each have brightness and color temperature. Radial has a level and color temperature. Per-fixture All on and All off."
+  ],
+  "done": [
+   "Each channel maps to its own existing entity or command."
+  ],
+  "epic": "L",
+  "status": "todo",
+  "spec": "HANDOFF.md › Capability-driven variants (lights)"
+ },
+ {
+  "id": "APT-L03",
+  "title": "Radial ring panel",
+  "dep": [
+   "APT-L02",
+   "APT-Z04"
+  ],
+  "proto": "ui-inspector.jsx `RadialRing`",
+  "files": "home-apartment-aim.jsx",
+  "build": [
+   "Plan view, north up, turned to the zone-1 heading. Off/25/50/100 presets, Toward walls, Into the room, Show in room."
+  ],
+  "done": [
+   "Selecting a zone names what it faces."
+  ],
+  "epic": "L",
+  "status": "todo"
+ },
+ {
+  "id": "APT-L04",
+  "title": "Echo lights",
+  "dep": [
+   "APT-L01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=echo`",
+  "files": "home-apartment-aim.jsx",
+  "build": [
+   "Ceiling and plug lights use the same inspector with their available controls and HA entity line."
+  ],
+  "done": [
+   "Echo's existing engineered-light controls keep working."
+  ],
+  "epic": "L",
+  "status": "todo"
+ },
+ {
+  "id": "APT-A01",
+  "title": "Reticle drag on the scan mesh",
+  "dep": [
+   "APT-F01",
+   "APT-L01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&sel=vic-s4&tab=aim`",
+  "files": "home-apartment-aiming.js, home-3d/*",
+  "spec": "docs/APARTMENT-LIGHT-AIMING.md; SPEC.md › Gestures; SPEC.md › Aim lifecycle",
+  "build": [
+   "Drag the reticle: socket stays fixed, pick on the mesh, drag chip shows surface, distance and tilt. Invalid, blocked and out-of-reach states.",
+   "Snap to named aims nearby.",
+   "Validity reasons as in SPEC (out of reach with angle and limit, blocked, grazing)."
+  ],
+  "done": [
+   "Empty-canvas drag still orbits.",
+   "Cancel restores the previous aim.",
+   "Acceptance examples \"Drag aim\" and \"Unreachable\" pass."
+  ],
+  "epic": "A",
+  "status": "todo"
+ },
+ {
+  "id": "APT-A02",
+  "title": "Aim tab opens on drag",
+  "dep": [
+   "APT-A01"
+  ],
+  "proto": "app.jsx `onAim`",
+  "build": [
+   "Starting a drag or keyboard nudge switches to Aim; on phones it raises the sheet to half. Chat stays open if it was open."
+  ],
+  "done": [
+   "Dropping always leaves Set aim reachable."
+  ],
+  "epic": "A",
+  "status": "todo",
+  "spec": "SPEC.md › Aim lifecycle"
+ },
+ {
+  "id": "APT-A03",
+  "title": "Zones | Spot pill",
+  "dep": [
+   "APT-A01",
+   "APT-Z02"
+  ],
+  "proto": "scene.js `_placeAimUI`, `.apt-toolpill`",
+  "spec": "SPEC.md › Spot or zones (cylinders)",
+  "build": [
+   "Pill above a selected cylinder switches the in-room tool; tied to Light/Aim tabs; keys Z and A; cyan dot when an aim is pending."
+  ],
+  "done": [
+   "Pill hides during drags and never covers the reticle."
+  ],
+  "epic": "A",
+  "status": "todo"
+ },
+ {
+  "id": "APT-A04",
+  "title": "Set aim bar in the room",
+  "dep": [
+   "APT-A01"
+  ],
+  "proto": "scene.js `_placeAimUI`, `.apt-aimbar`",
+  "build": [
+   "After a drop, a bar by the point: target name, shadow note, Set aim, Discard. Enter and Escape."
+  ],
+  "done": [
+   "Works with Chat open or the column hidden.",
+   "Blocked shows only Discard."
+  ],
+  "epic": "A",
+  "status": "todo",
+  "spec": "SPEC.md › Spot or zones (cylinders)"
+ },
+ {
+  "id": "APT-A05",
+  "title": "Aim tab content",
+  "dep": [
+   "APT-A01"
+  ],
+  "proto": "ui-inspector.jsx `AimTab`",
+  "build": [
+   "Proposal, recall chips for named aims, Save as named aim, undo and redo.",
+   "⌘Z and ⇧⌘Z for undo and redo; Escape discards a proposal and ⌘Z restores it."
+  ],
+  "done": [
+   "Matches the simplified prototype; no extra sections."
+  ],
+  "epic": "A",
+  "status": "todo",
+  "spec": "SPEC.md › Aim lifecycle"
+ },
+ {
+  "id": "APT-A06",
+  "title": "Command ladder",
+  "dep": [
+   "APT-A05"
+  ],
+  "proto": "ui-inspector.jsx command section",
+  "spec": "SPEC.md › Command ladder (Aim tab)",
+  "files": "home-apartment-aim.jsx",
+  "build": [
+   "Intent, then modeled command, accepted execution and reported state. The exact generated payload on demand with copy. Use the canonical command builder; never a mock payload.",
+   "Variants per `engineered` capability: simulated, modeled, commissioned. Execution receipts `{accepted_at, reported_state, source}` (schema gap). Fold execution and lighting panels into this ladder."
+  ],
+  "done": [
+   "Victoria reads modeled-only until commissioning."
+  ],
+  "epic": "A",
+  "status": "todo"
+ },
+ {
+  "id": "APT-A07",
+  "title": "Named aim save states",
+  "dep": [
+   "APT-A05"
+  ],
+  "build": [
+   "Unsaved, saving, saved, conflict, changed scan or profile.",
+   "Resolve a conflict (keep mine, keep theirs) and confirm a target after the scan or profile changed."
+  ],
+  "done": [
+   "Each state appears with its copy from SPEC."
+  ],
+  "epic": "A",
+  "status": "todo",
+  "spec": "SPEC.md › Aim lifecycle; HANDOFF.md › Data (target state, geometry hash)"
+ },
+ {
+  "id": "APT-A08",
+  "title": "Tap and keyboard aiming",
+  "dep": [
+   "APT-A01"
+  ],
+  "build": [
+   "Tap-to-aim mode and arrow-key nudges as alternatives to dragging."
+  ],
+  "done": [
+   "Aiming is possible without a pointer drag."
+  ],
+  "epic": "A",
+  "status": "todo",
+  "spec": "SPEC.md › Keyboard and touch"
+ },
+ {
+  "status": "todo",
+  "epic": "A",
+  "id": "APT-A09",
+  "title": "Return to Auto",
+  "dep": [
+   "APT-L01"
+  ],
+  "spec": "SPEC.md › Cancel, Return and Escape",
+  "proto": "app.jsx `returnToAuto`",
+  "build": [
+   "A light changed by hand shows Manual with Return to Auto, which hands it back to adaptive lighting."
+  ],
+  "done": [
+   "\"Return to Auto\", \"Return to room\" and \"Close\" never share wording."
+  ]
+ },
+ {
+  "status": "todo",
+  "epic": "A",
+  "id": "APT-A10",
+  "title": "Named aim as an automation reference",
+  "dep": [
+   "APT-A05",
+   "APT-U04"
+  ],
+  "spec": "HANDOFF.md › Data (automation reference)",
+  "build": [
+   "Show how a named aim is used by automations: its stable id, a copyable reference `aim {fixture_id} → {target_id}`, and which automations use it. Propose the reference format first (schema gap)."
+  ],
+  "done": [
+   "Renaming an aim does not break the reference."
+  ]
+ },
+ {
+  "id": "APT-Z01",
+  "title": "Composer drawing and abstract fixtures",
+  "dep": [
+   "APT-F01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&sel=vic-s4&tab=light`, scene.js `_drawZones`",
+  "spec": "SPEC.md › Radial zones in the room (composer)",
+  "build": [
+   "Soft polar glow at fixture height, edge line, node per lit zone, ticks on the outer ring. Fixtures drawn as small orbs tinted by the channels that are on."
+  ],
+  "done": [
+   "Readable from any orbit angle in Cloud, Photo and Mesh."
+  ],
+  "epic": "Z",
+  "status": "todo"
+ },
+ {
+  "id": "APT-Z02",
+  "title": "Composer gesture",
+  "dep": [
+   "APT-Z01"
+  ],
+  "proto": "scene.js `_composeStartable`, `_composeMove`, `_endCompose`",
+  "build": [
+   "Press on hub or lit lobe, drag outward to brighten and inward to dim, sweep interpolation, pickup without jumps, zone readout by the cursor."
+  ],
+  "done": [
+   "Orbiting works outside hub and lobes.",
+   "Pinch and second pointer cancel cleanly.",
+   "The ring panel (APT-L03) is the non-drag alternative for every composer change."
+  ],
+  "epic": "Z",
+  "status": "todo"
+ },
+ {
+  "id": "APT-Z03",
+  "title": "Fades and command rate",
+  "dep": [
+   "APT-Z02"
+  ],
+  "proto": "scene.js `_fadeTick`",
+  "build": [
+   "Display eases with a 160 ms time constant. Commands go out at most every 100 ms with the driver's transition covering the gap.",
+   "Reduced motion: no easing, values snap."
+  ],
+  "done": [
+   "No visible jump entering a brighter or dimmer zone."
+  ],
+  "epic": "Z",
+  "status": "todo"
+ },
+ {
+  "id": "APT-Z04",
+  "title": "Zone facing",
+  "dep": [
+   "APT-F01"
+  ],
+  "proto": "scene.js `zoneFacing`",
+  "build": [
+   "Ray cast each zone direction against the scan mesh to name what it faces. Uses the per-fixture zone-1 heading (schema gap)."
+  ],
+  "done": [
+   "Toward walls lights the zones with a wall within 2.2 m."
+  ],
+  "epic": "Z",
+  "status": "todo",
+  "spec": "HANDOFF.md › Data (radial_zone1_heading_deg)"
+ },
+ {
+  "id": "APT-C01",
+  "title": "Chat in the column",
+  "dep": [
+   "APT-S04"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&col=chat`, ui-chat.jsx",
+  "files": "home-events.jsx, home-app.jsx",
+  "build": [
+   "Mount the existing chat feed, cards, slash dispatcher, voice, stop, preference review and Travel Mode in the Chat tab. Take only layout from the prototype.",
+   "Proactive messages set the unread dot on Chat."
+  ],
+  "done": [
+   "Every chat feature from before works in the tab.",
+   "Travel Mode still blocks all light output."
+  ],
+  "epic": "C",
+  "status": "todo",
+  "spec": "SPEC.md › Home chat"
+ },
+ {
+  "id": "APT-C02",
+  "title": "Entity chips",
+  "dep": [
+   "APT-C01",
+   "APT-R01"
+  ],
+  "build": [
+   "Lights and named aims in replies render as chips; hover highlights in the room, click selects."
+  ],
+  "done": [
+   "Chips resolve to the current home only."
+  ],
+  "epic": "C",
+  "status": "todo",
+  "spec": "SPEC.md › Home chat"
+ },
+ {
+  "id": "APT-C03",
+  "title": "Selection as context",
+  "dep": [
+   "APT-C01"
+  ],
+  "build": [
+   "Removable \"About <selection>\" chip sent with the message."
+  ],
+  "done": [
+   "\"Brighter\" with a light selected changes that light."
+  ],
+  "epic": "C",
+  "status": "todo",
+  "spec": "SPEC.md › Home chat"
+ },
+ {
+  "id": "APT-C04",
+  "title": "Chat aim proposals",
+  "dep": [
+   "APT-C01",
+   "APT-A04"
+  ],
+  "build": [
+   "Aim proposals from chat use origin \"chat\", preview in the room, and use the same Set aim and Discard path."
+  ],
+  "done": [
+   "Setting from the card or the room bar gives the same result."
+  ],
+  "epic": "C",
+  "status": "todo",
+  "spec": "SPEC.md › Home chat; SPEC.md › Aim lifecycle"
+ },
+ {
+  "id": "APT-C05",
+  "title": "Composer and header",
+  "dep": [
+   "APT-C01"
+  ],
+  "build": [
+   "Slash menu with keyboard completion, mic, Stop; header with explain last answer, copy transcript, new conversation."
+  ],
+  "done": [
+   "Existing slash commands unchanged."
+  ],
+  "epic": "C",
+  "status": "todo",
+  "spec": "SPEC.md › Home chat"
+ },
+ {
+  "id": "APT-U01",
+  "title": "Setup mode and rail",
+  "dep": [
+   "APT-L01",
+   "APT-F04"
+  ],
+  "proto": "ui-shell.jsx `SetupInspector`",
+  "files": "home-apartment-edit.jsx, home-apartment-calibrate.jsx",
+  "build": [
+   "Setup rail: Names, Named aims, Cameras and sensors, Home Assistant, plus the existing socket and equipment placement, wall references, tape inputs and measure.",
+   "Rail items: Devices and sockets, Names, Named aims, Zones, Fixture position, Home Assistant, Cameras and sensors. Calibration moves here."
+  ],
+  "done": [
+   "Existing edit and measure features keep working and saving."
+  ],
+  "epic": "U",
+  "status": "todo",
+  "spec": "HANDOFF.md › Migration stages (Setup rail)"
+ },
+ {
+  "id": "APT-U02",
+  "title": "Names",
+  "dep": [
+   "APT-U01"
+  ],
+  "proto": "ui-shell.jsx `NamesTool`",
+  "spec": "SPEC.md › Names (Setup › Names)",
+  "build": [
+   "Name and Label per light, live edit, Reset, duplicate warning. Stored with the Apartment model (schema gap)."
+  ],
+  "done": [
+   "Names never change HA entity names."
+  ],
+  "epic": "U",
+  "status": "todo"
+ },
+ {
+  "id": "APT-U03",
+  "title": "Home Assistant links",
+  "dep": [
+   "APT-U01"
+  ],
+  "proto": "ui-shell.jsx `HaLinks`",
+  "spec": "SPEC.md › Home Assistant links",
+  "build": [
+   "Match each light to its HA light, Linked/Shared/Not linked badge, Flash."
+  ],
+  "done": [
+   "Flash is the only output here and respects Travel Mode."
+  ],
+  "epic": "U",
+  "status": "todo"
+ },
+ {
+  "id": "APT-U04",
+  "title": "Named aim mapper",
+  "dep": [
+   "APT-U01",
+   "APT-F01"
+  ],
+  "proto": "ui-shell.jsx `TargetMapper`",
+  "spec": "SPEC.md › Mapping a named aim",
+  "build": [
+   "New, click a surface, auto-fit, name, type checks, shape, reach list, preview from a light, save, edit, delete."
+  ],
+  "done": [
+   "Saved aims appear in every light's Aim tab."
+  ],
+  "epic": "U",
+  "status": "todo"
+ },
+ {
+  "id": "APT-U05",
+  "title": "Named aim handles",
+  "dep": [
+   "APT-U04"
+  ],
+  "proto": "scene.js `_placeRHandles`, `_rectDrag`",
+  "build": [
+   "Corner resize, center move, height arrow on flat surfaces, floor drop line."
+  ],
+  "done": [
+   "Handles stay on the real surface plane."
+  ],
+  "epic": "U",
+  "status": "todo",
+  "spec": "SPEC.md › Mapping a named aim"
+ },
+ {
+  "id": "APT-U06",
+  "title": "Camera placement",
+  "dep": [
+   "APT-U01"
+  ],
+  "proto": "ui-shell.jsx `DevicePlacer`",
+  "spec": "SPEC.md › Placing cameras and sensors",
+  "build": [
+   "Mount, click to place, point at a spot, pan/tilt/lens/height, coverage frustum, Covers list. Hand-placed pose kept apart from calibration (schema gap)."
+  ],
+  "done": [
+   "Placing never overwrites calibrated extrinsics."
+  ],
+  "epic": "U",
+  "status": "todo"
+ },
+ {
+  "id": "APT-U07",
+  "title": "mmWave sensors",
+  "dep": [
+   "APT-U06"
+  ],
+  "build": [
+   "Same placer with field and range; \"Ordered, not connected\" until paired (schema gap)."
+  ],
+  "done": [
+   "No sensor appears connected without HA entities."
+  ],
+  "epic": "U",
+  "status": "todo",
+  "spec": "SPEC.md › Placing cameras and sensors; HANDOFF.md › Data (presence sensor)"
+ },
+ {
+  "status": "todo",
+  "epic": "U",
+  "id": "APT-U08",
+  "title": "Zone heading commissioning",
+  "dep": [
+   "APT-U01",
+   "APT-Z04"
+  ],
+  "proto": "Setup › Zones",
+  "spec": "HANDOFF.md › Data (radial_zone1_heading_deg)",
+  "build": [
+   "Blink zone 1 on the real fixture, then click where its light lands; store the heading. Until then the heading reads Authored."
+  ],
+  "done": [
+   "Composer and ring turn to the stored heading."
+  ]
+ },
+ {
+  "status": "todo",
+  "epic": "U",
+  "id": "APT-U09",
+  "title": "Fixture position and measurement",
+  "dep": [
+   "APT-U01"
+  ],
+  "proto": "Setup › Fixture position, Devices and sockets",
+  "files": "home-apartment-edit.jsx, home-equipment-registration.js",
+  "build": [
+   "Keep socket and equipment placement, named wall references, tape inputs and saved-state feedback, restyled into the rail."
+  ],
+  "done": [
+   "Every existing edit workflow still saves the same data."
+  ]
+ },
+ {
+  "id": "APT-P01",
+  "title": "Camera dock states",
+  "dep": [
+   "APT-S04"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&dock=default`, ui-dock.jsx",
+  "files": "home-apartment-den-perception.jsx, home-apartment-perception-*.js",
+  "build": [
+   "Collapsed, default, expanded and hidden, sharing the column with the inspector.",
+   "Echo and Victoria docks differ by `perception` capability, not by site.",
+   "Remove the live-feed full-viewport overlay and Victoria's separately styled perception panel. Collapsed shows a one-line summary; hidden leaves Show camera."
+  ],
+  "done": [
+   "Dock never covers the inspector or shrinks the room to a corner."
+  ],
+  "epic": "P",
+  "status": "todo",
+  "spec": "SPEC.md › Inspector and dock coexistence"
+ },
+ {
+  "id": "APT-P02",
+  "title": "Exact-frame viewer",
+  "dep": [
+   "APT-P01"
+  ],
+  "proto": "`prototype/index.html?vp=1366x768&home=victoria&dock=expanded`",
+  "spec": "handoffs/victoria-apartment-perception-view-contract-20261017.md; SPEC.md › Status semantics (frame ages); SPEC.md › Inspector and dock coexistence",
+  "build": [
+   "Analyzed frame with its own 2D skeleton and boxes; separate ages for live video and analyzed frame.",
+   "Replay is labeled with its recording date and scrubbable. Stale frames are dimmed and dashed and say \"Not used for lighting\"."
+  ],
+  "done": [
+   "An overlay never draws on a frame other than the one that produced it.",
+   "Acceptance example \"Frame honesty\" passes."
+  ],
+  "epic": "P",
+  "status": "todo"
+ },
+ {
+  "id": "APT-P03",
+  "title": "Inference and JEV",
+  "dep": [
+   "APT-P02"
+  ],
+  "proto": "ui-dock.jsx",
+  "build": [
+   "Model identity, age, results; JEV activity distribution, abstention, evidence window and reasons when supplied.",
+   "Simple and Detailed levels (`?detail=`), following Perception Lab. Details shows exact payloads, timestamps, frame association and registration."
+  ],
+  "done": [
+   "Detector confidence, pose scores and JEV probabilities are never merged into one gauge.",
+   "Acceptance example \"JEV abstains\" passes."
+  ],
+  "epic": "P",
+  "status": "todo",
+  "spec": "SPEC.md › Inspector and dock coexistence"
+ },
+ {
+  "id": "APT-P04",
+  "title": "Evidence to proposal link",
+  "dep": [
+   "APT-P03",
+   "APT-A05"
+  ],
+  "build": [
+   "Perception-origin proposals show their evidence; selecting one highlights the fixture and target.",
+   "Trace: Seen → Interpreted → Proposed → Did, each a button. Proposed selects the light and proposes with origin `perception`."
+  ],
+  "done": [
+   "\"Why is it aiming there\" is answerable in two clicks."
+  ],
+  "epic": "P",
+  "status": "todo",
+  "spec": "SPEC.md › Inspector and dock coexistence (Trace); HANDOFF.md › Data (proposal record)"
+ },
+ {
+  "id": "APT-P05",
+  "title": "Room-space body layer",
+  "dep": [
+   "APT-P02"
+  ],
+  "build": [
+   "Observed versus inferred joints, Follow where registration supports it.",
+   "Uncertainty halo; nominal volume labeled \"not measured\"; Follow disabled until continuous tracking exists."
+  ],
+  "done": [
+   "Labels say \"one analyzed frame\" unless tracking is real."
+  ],
+  "epic": "P",
+  "status": "todo",
+  "spec": "SPEC.md › Inspector and dock coexistence (Body in the room)"
+ },
+ {
+  "id": "APT-P06",
+  "title": "Perception Lab handoff",
+  "dep": [
+   "APT-P03"
+  ],
+  "files": "home-perception-lab.jsx",
+  "build": [
+   "Open in Lab, carrying session, time and selection where supported."
+  ],
+  "done": [
+   "Lab opens on the same frame."
+  ],
+  "epic": "P",
+  "status": "todo",
+  "spec": "docs/design/perception-lab-v8/README.md"
+ },
+ {
+  "id": "APT-V01",
+  "title": "Lit mode on the scan mesh",
+  "dep": [
+   "APT-S03"
+  ],
+  "proto": "scene.js `_litApply`, `_syncLit`",
+  "spec": "SPEC.md › Lit view; LIGHT-AND-BODY-RESEARCH.md",
+  "build": [
+   "Relight the existing mesh: lumen ratings to candela by beam angle, fixed exposure, spot crisp and down soft shadows. Cloud and splat stay unlit.",
+   "Later: IES files and lumen curves per channel (schema gap), WebGPU path per LIGHT-AND-BODY-RESEARCH.md."
+  ],
+  "done": [
+   "Labeled not photometric.",
+   "Frame rate acceptable on the target laptop."
+  ],
+  "epic": "V",
+  "status": "todo"
+ },
+ {
+  "id": "APT-V02",
+  "title": "One-bounce light",
+  "dep": [
+   "APT-V01"
+  ],
+  "proto": "scene.js VPL block",
+  "build": [
+   "Eight strongest lit patches become bounce lights."
+  ],
+  "done": [
+   "Toward walls visibly lights the room."
+  ],
+  "epic": "V",
+  "status": "todo",
+  "spec": "SPEC.md › Lit view"
+ },
+ {
+  "id": "APT-V03",
+  "title": "Body volume",
+  "dep": [
+   "APT-P05"
+  ],
+  "proto": "scene.js `_bodyCaps`, `_syncBodyVolume`",
+  "spec": "SPEC.md › Body volume",
+  "build": [
+   "Capsules and head sphere from pose joints; faint in Cloud/Mesh, shadow-casting in Lit.",
+   "Later: a fitted body-shape record per person (schema gap)."
+  ],
+  "done": [
+   "Inferred limbs are marked."
+  ],
+  "epic": "V",
+  "status": "todo"
+ },
+ {
+  "id": "APT-V04",
+  "title": "Body occlusion in aiming",
+  "dep": [
+   "APT-V03",
+   "APT-A04"
+  ],
+  "proto": "scene.js `_bodyBlock`, ui-inspector.jsx `ShadowNote`",
+  "build": [
+   "Solver tests beams against the body; chip and bar name the part; orange hit mark; offer a light that clears it."
+  ],
+  "done": [
+   "Uses the same body as Lit shadows."
+  ],
+  "epic": "V",
+  "status": "todo",
+  "spec": "SPEC.md › Body volume; docs/plans/first-live-den-replan-2026-10-15/FURNITURE-BODY-LIGHTING-OCCLUSION.md"
+ },
+ {
+  "id": "APT-Q01",
+  "title": "Viewport matrix",
+  "dep": [],
+  "build": [
+   "Screenshots at 1920x1080, 1366x768, 768x1024, 390x844 for both homes.",
+   "Run every acceptance example in HANDOFF.md at the end of the epic that owns it."
+  ],
+  "done": [
+   "No collisions between column, dock, toolbar and in-room controls."
+  ],
+  "epic": "Q",
+  "status": "todo",
+  "spec": "SPEC.md › Layout and responsive rules"
+ },
+ {
+  "id": "APT-Q02",
+  "title": "Keyboard, touch and motion",
+  "dep": [],
+  "build": [
+   "Focus order, 44 px targets, reduced motion disables easing and camera tweens."
+  ],
+  "done": [
+   "Every gesture has a non-drag alternative."
+  ],
+  "epic": "Q",
+  "status": "todo",
+  "spec": "SPEC.md › Keyboard and touch"
+ },
+ {
+  "id": "APT-Q03",
+  "title": "Light theme",
+  "dep": [],
+  "build": [
+   "All new UI through tokens."
+  ],
+  "done": [
+   "Light theme screenshots for the main states."
+  ],
+  "epic": "Q",
+  "status": "todo"
+ }
+]

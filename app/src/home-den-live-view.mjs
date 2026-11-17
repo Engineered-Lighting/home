@@ -178,14 +178,18 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     }
     function openBody(owned) {
         const started = performance.now(), source = new EventSource(config.body);
-        const connection = { source, started, serverTs: null, runId: null };
+        const connection = { source, started, serverTs: null, clockReceivedAt: null, runId: null };
         owned.connection = connection;
         const current = () => body === owned && owned.connection === connection && isCurrent() && engine === owned.engine;
         source.addEventListener('body_clock', message => {
+            const receivedAt = performance.now();
             if (!current() || connection.serverTs !== null) return;
             let sample;
             try { sample = JSON.parse(message.data); } catch (_) { return; }
-            if (sample && Object.keys(sample).length === 1 && Number.isFinite(sample.server_ts)) connection.serverTs = sample.server_ts;
+            if (sample && Object.keys(sample).length === 1 && Number.isFinite(sample.server_ts)) {
+                connection.serverTs = sample.server_ts;
+                connection.clockReceivedAt = receivedAt;
+            }
         });
         source.addEventListener('body', message => {
             if (!current() || connection.serverTs === null) return;
@@ -202,7 +206,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             if (old && ['run_id', 'track_epoch', 'content_revision', 'transform_id', 'mode', 'track_id'].some(key => event[key] !== old.event[key]))
                 clearBody(owned, 'scope_changed');
             const trace = latency?.receive('body', event, receivedAt,
-                { producer_age_at_receive_ms: (producerNow(connection, receivedAt) - event.capture_ts) * 1000 });
+                latency.captureAgeTiming(connection, event.capture_ts, receivedAt));
             latency?.mark(trace, 'decoded');
             if (event.content_revision !== owned.engine.contentRevision) { clearBody(owned, 'scope_changed'); return; }
             if (event.status === 'clear') { clearBody(owned, event.reason); return; }

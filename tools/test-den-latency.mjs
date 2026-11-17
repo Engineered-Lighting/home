@@ -1,9 +1,62 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDenLatencyTrace, DEN_LATENCY_LIMITS } from '../app/src/home-den-latency.mjs';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import { createDenLatencyTrace, DEN_LATENCY_LIMITS, producerCaptureAgeTiming } from '../app/src/home-den-latency.mjs';
 import { createLightingRenderEvidence } from '../app/src/home-3d/lighting-render-evidence.mjs';
 
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+test('request setup uncertainty includes either asymmetric transit and grows with the setup window', () => {
+    const connection = { started: 100, clockReceivedAt: 500, serverTs: 10 };
+    const timing = producerCaptureAgeTiming(connection, 10.4, 1000);
+    assert.ok(Math.abs(timing.producer_age_at_receive_midpoint_ms - 300) < 0.001);
+    assert.ok(Math.abs(timing.producer_clock_uncertainty_ms - 205.09) < 0.001);
+    assert.equal(timing.producer_clock_round_trip_bound_ms, 400);
+    for (const sampledAt of [100, 150, 450, 500]) {
+        const age = (connection.serverTs + (1000 - sampledAt) / 1000 - 10.4) * 1000;
+        assert.ok(age >= timing.producer_age_at_receive_interval_ms[0] && age <= timing.producer_age_at_receive_interval_ms[1]);
+    }
+    const queued = producerCaptureAgeTiming({ ...connection, clockReceivedAt: 900 }, 10.4, 1000);
+    assert.ok(queued.producer_clock_uncertainty_ms > timing.producer_clock_uncertainty_ms);
+    assert.equal(queued.producer_age_at_receive_ms, timing.producer_age_at_receive_ms, 'setup diagnostics preserve the original upper age');
+    for (const invalid of [null, undefined, NaN, Infinity, 99, 1001]) {
+        assert.deepEqual(producerCaptureAgeTiming({ ...connection, clockReceivedAt: invalid }, 10.4, 1000), {});
+    }
+});
+
+test('the actual authority clock and all expiry checks retain their conservative upper bound', () => {
+    const source = readFileSync(new URL('../app/src/home-den-live-view.mjs', import.meta.url), 'utf8');
+    const clockSource = source.slice(source.indexOf('function producerNow('), source.indexOf('function openBody('));
+    const authorityClock = runInNewContext('(' + clockSource + ')');
+    for (const clockReceivedAt of [200, 500, 900]) {
+        const connection = { started: 100, clockReceivedAt, serverTs: 10 };
+        const capture = 9.9, now = 1000, expiry = capture + 1;
+        const timing = producerCaptureAgeTiming(connection, capture, now);
+        assert.equal(timing.producer_age_at_receive_ms, (authorityClock(connection, now) - capture) * 1000);
+        assert.ok(authorityClock(connection, now) >= expiry, 'the upper clock expires the frame');
+        assert.ok(capture + timing.producer_age_at_receive_midpoint_ms / 1000 < expiry, 'using the midpoint for authority would extend this lease');
+    }
+    assert.match(source, /const producerTime = producerNow\(connection, now\);\s*if \(producerTime < event.capture_ts \|\| producerTime >= event.expires_ts\)/);
+    assert.match(source, /const now = producerNow\(owned.connection, performance.now\(\)\);\s*if \(now >= owned.ready.event.expires_ts\)/);
+    assert.match(source, /producerNow\(owned.connection, performance.now\(\)\) < ready.event.expires_ts/);
+    const clockCallback = source.slice(source.indexOf("source.addEventListener('body_clock'"), source.indexOf("source.addEventListener('body',"));
+    assert.ok(clockCallback.indexOf('const receivedAt = performance.now();') < clockCallback.indexOf('if (!current()'));
+});
+
+test('diagnostic clock intervals remain copied numeric metadata including uncertain negative lower bounds', () => {
+    const browser = createDenLatencyTrace({ now: () => 1000 });
+    const timing = producerCaptureAgeTiming({ started: 100, clockReceivedAt: 500, serverTs: 10 }, 10.7, 1000);
+    assert.ok(timing.producer_age_at_receive_interval_ms[0] < 0);
+    browser.receive('body', { run_id: 'clock-run', seq: 1, capture_ts: 10.7 }, 1000, timing);
+    const snapshot = browser.snapshot(), originalLower = snapshot.entries[0].producer_age_at_receive_interval_ms[0];
+    timing.producer_age_at_receive_interval_ms[0] = -999;
+    snapshot.entries[0].producer_age_at_receive_interval_ms[0] = -888;
+    const row = JSON.parse(browser.exportJson()).entries[0];
+    assert.equal(row.producer_age_at_receive_interval_ms[0], originalLower);
+    assert.equal(row.producer_clock_mapping, 'request_receive_interval');
+    assert.equal(row.capture_timing, 'producer_capture_estimate');
+});
 function fixture() {
     let at = 10, current = true, finish;
     const target = { isPoints: true, onAfterRender() { target.calls++; }, calls: 0 };

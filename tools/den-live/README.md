@@ -720,3 +720,22 @@ python -B -m unittest discover -s tools\den-live -p "test_ask.py"
   - the switch, and both of the monitor's steps.
 - **The label line:** sent for one person only, with its switch on, and a bad line doesn't stop the ask.
 - **The detector's channel:** stills replies never reach the rows' queue.
+
+## Virtual manual control
+
+Home checks the producer's additive `manual_protocol: 2` capability before sending manual writes. Each fixture publishes a `manual_revision`, including when it has no active hand hold. An active `hand` also carries its `hold_id`, latest `event_id`, revision and held fixture state.
+
+Home allocates a `client_seq` when a gesture starts and keeps a stable `hold_id` while the person holds the fixture. Settled `den-manual-1` events add `client_id`, `client_seq`, `hold_id` and `expected_revision`. Newer edits from that client and hold can advance together. Acquiring a different hold requires the current revision. A conflicting request receives HTTP 409 and the current authority. Retrying an event ID with different contents also conflicts.
+
+`POST /coordinator/virtual/manual/resume` takes `fixture_id`, `hold_id`, `expected_revision` and `request_id`. It releases only the matching hold revision. Home retains its local hold until the matching success response, and a newer gesture fences that response. An exact retry returns the recorded outcome.
+
+The producer records authority and learning together in its durable manual journal. Recovery retains held values and ordering across a new producer epoch. Home can restore that state without reporting another correction. Clearing preferences preserves current hand authority. Historical logs from before this protocol retain their learned preferences, while active ownership starts from the first new authority record.
+
+When the producer lacks protocol 2, Home keeps local hand control and shows learning as unsupported. Qualify Home and the producer together before enabling the new writes.
+
+The synthetic regression commands use no camera, model server or actuator.
+
+```powershell
+python -B -m unittest discover -s tools/den-live -p "test_manual_authority.py"
+node --test tools/test-den-spot-playback.mjs tools/test-den-manual-authority.mjs
+```

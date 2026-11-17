@@ -167,6 +167,8 @@ export function manualWords(holds) {
     if (!holds?.length) return '';
     const names = holds.map(hold => hold.label || hold.fixture_id);
     const list = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+    if (holds.some(hold => hold.resuming)) return `You're in control of ${list} · waiting for Resume`;
+    if (holds.some(hold => hold.resume_error)) return `You're in control of ${list} · Resume failed. Try Resume again`;
     const learning = holds.some(hold => hold.learning === 'pending' || hold.learning === 'recorded');
     return `You're in control of ${list}${learning ? ' · the coordinator will learn from this' : ''}`;
 }
@@ -402,6 +404,7 @@ export function createCoordinatorPanel({ url, lookOnly = false, spots, fetchImpl
         manualRow.hidden = !manual.length;
         setText(manualText, manualWords(manual));
         setText(manualWarning, handWarningWords(manual));
+        handBackButton.disabled = manual.some(hold => hold.resuming);
         const shown = state && { ...state, on: shownOn, stopped: shownStop };
         setText(summary, kind === 'unreachable' && !state ? 'Lighting coordinator · not answering' : summaryWords(shown));
         setText(error, controlProblem || problem);

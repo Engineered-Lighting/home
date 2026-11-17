@@ -30,8 +30,14 @@ function validSnapshot(value, home, site) {
         || !revision(value.stop_counter) || !object(value.fixtures)) return false;
     const rows = Object.values(value.fixtures);
     if (!rows.every(validRow) || ((!value.on || value.stopped) && rows.some(row => row.on))) return false;
+    if (value.manual_protocol === 2 && !rows.every(row => revision(row.manual_revision)
+        && (row.hand == null || validHand(row.hand) && row.hand.revision === row.manual_revision))) return false;
     if (value.valid_until_mono == null) return rows.every(row => !row.on && row.motion_phase === 'settled');
     return finite(value.valid_until_mono) && value.valid_until_mono >= value.sampled_mono;
+}
+
+function validHand(hand) {
+    return object(hand) && text(hand.hold_id) && text(hand.event_id) && revision(hand.revision) && object(hand.state);
 }
 
 /* The cue-to-light instrument's paint stamp (den program workstream 03, latency-budget.md "The instrument"): on the frame
@@ -152,18 +158,15 @@ const eventId = () => 'home-' + (globalThis.crypto?.randomUUID?.() ?? `${Date.no
 /* post(path, body) → Promise<{status, answer}>: the coordinator's writes through the gateway (home-den-live-view.mjs),
  * or null when this page sends none (look-only). */
 export function createSpotPlayback({ home, site, clock = () => performance.now(), onChange = () => {},
-    later = setTimeout, cancel = clearTimeout, post = null, makeEventId = eventId }) {
+    later = setTimeout, cancel = clearTimeout, post = null, makeEventId = eventId, clientId = eventId() }) {
     let overlay = null, applied = null, candidate = null, control = null, controlVersion = 0;
     let anchor = null, openedAt = null, transform = null, scan = null, highestSeq = -1, stopCounter = -1, timer = null;
     let renderOffset = null;   // Home's clock minus the coordinator's, in ms: the lowest transit seen, creeping up
     let unsubscribe = null;
     const hold = { off: null, stop: null };
-    /* fixture id → its latest manual report: {event_id, epoch, state (sending, recorded, not_recorded, unsupported,
-     * failed), from_seq, seen, why_not, learned}. A hold ends from den-live's snapshot only after that snapshot's epoch
-     * and seq (≥ from_seq) have shown the fixture's hand, and then show it null. */
+    // Each local gesture replaces its entry immediately, before it settles, fencing replies and queued retries.
     const manual = new Map();
-    // fixture id → the snapshot Home had applied just before a burst of changes started: den-live checks "before" at it.
-    const burstFrom = new Map();
+    const burstFrom = new Map(), sequences = new Map(), resumes = new Map(), releasedRevisions = new Map();
 
     function clear() {
         if (timer !== null) cancel(timer);
@@ -183,58 +186,109 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
     }
     function reportManual(change) {
         const id = change?.fixture_id;
-        if (typeof id !== 'string' || !post) return;
+        if (typeof id !== 'string') return;
         if (change.phase === 'start') {
-            if (applied) burstFrom.set(id, { epoch: applied.epoch, seq: applied.seq, subject: applied.subject, situation: applied.situation });
-            else burstFrom.delete(id);
+            const previous = manual.get(id), row = applied?.fixtures.find(fixture => fixture.fixture_id === id);
+            const serial = (sequences.get(id) || 0) + 1;
+            sequences.set(id, serial);
+            const sameHold = previous?.local && previous.client_id === clientId && !resumes.has(id);
+            const expected = Math.max(row?.manual_revision || 0, previous?.revision || 0);
+            const entry = { event_id: null, hold_id: sameHold ? previous.hold_id : eventId(), client_id: clientId,
+                client_seq: serial, revision: expected, local: true, protocol: applied?.manual_protocol,
+                epoch: applied?.epoch ?? null, request_epoch: applied?.epoch ?? null,
+                state: 'sending', from_seq: null, seen: false, why_not: null, learned: null };
+            resumes.delete(id);
+            manual.set(id, entry);
+            burstFrom.set(id, { entry, previous, snapshot: applied && { epoch: applied.epoch, seq: applied.seq },
+                subject: applied?.subject, situation: applied?.situation });
             return;
         }
         const from = burstFrom.get(id);
         burstFrom.delete(id);
-        if (!from) {   // no snapshot to learn against: the hold stands, and nothing is sent
-            manual.set(id, { event_id: null, epoch: null, state: 'unsent', from_seq: null, seen: false, why_not: null, learned: null });
+        if (!from || manual.get(id) !== from.entry) return;
+        const entry = from.entry;
+        if (!Object.keys(change.after || {}).length) {
+            manual.set(id, from.previous ? { ...from.previous } : { ...entry, state: 'unsent' });
+            onChange(); return;
+        }
+        if (!from.snapshot || !post || entry.protocol !== 2) {
+            entry.state = !from.snapshot ? 'unsent' : 'unsupported';
             onChange(); return;
         }
         const body = { schema: MANUAL_SCHEMA, event_id: makeEventId(), fixture_id: id, before: change.before, after: change.after,
-            at_ms: change.at_ms, snapshot: { epoch: from.epoch, seq: from.seq },
+            at_ms: change.at_ms, snapshot: from.snapshot, client_id: clientId, client_seq: entry.client_seq,
+            hold_id: entry.hold_id, expected_revision: entry.revision,
+            ...(object(change.held_state) ? { held_state: change.held_state } : {}),
             ...(from.subject !== undefined ? { subject: from.subject } : {}),
             ...(from.situation !== undefined ? { situation: from.situation } : {}) };
-        const entry = { event_id: body.event_id, epoch: from.epoch, state: 'sending', from_seq: null, seen: false, why_not: null, learned: null };
-        manual.set(id, entry);
+        entry.event_id = body.event_id;
         onChange();
-        void send(body, entry, 0);
+        entry.request = send(body, entry, 0);
+    }
+    function reportCurrent(id, entry) {
+        const ticket = resumes.get(id);
+        return manual.get(id) === entry || ticket?.target === entry && manual.get(id) === ticket.entry;
     }
     async function send(body, entry, attempt) {
+        if (!reportCurrent(body.fixture_id, entry)) return;
         let status = 0, answer = null;
         try { ({ status, answer } = await post('manual', body)); } catch (_) { status = 0; }
-        if (manual.get(body.fixture_id) !== entry) return;   // a newer change has its own report
+        // A later explicit Resume may cancel a draft and need this prior edit's own receipt.
+        entry.receipt = { status, answer };
+        if (!reportCurrent(body.fixture_id, entry)) return;
         if (status === 200 && answer?.ok === true && answer.event_id === body.event_id) {
             entry.state = answer.recorded === false ? 'not_recorded' : 'recorded';
             entry.from_seq = revision(answer.from_seq) ? answer.from_seq : null;
+            if (revision(answer.manual_revision)) entry.revision = Math.max(entry.revision, answer.manual_revision);
+            entry.authority_known = revision(answer.manual_revision);
+            entry.authority = validHand(answer.hand) ? answer.hand : null;
             if (text(answer.epoch)) entry.epoch = answer.epoch;   // the run den-live's from_seq counts in
             entry.why_not = typeof answer.why_not === 'string' ? answer.why_not.slice(0, 160) : null;
             entry.learned = answer.learned ?? null;
+        } else if (status === 409) {
+            entry.state = 'not_recorded';
+            entry.why_not = typeof answer?.error === 'string' ? answer.error.slice(0, 160) : 'manual_conflict';
+            entry.conflict_known = revision(answer?.manual_revision);
+            entry.conflict_revision = answer?.manual_revision;
+            entry.conflict = validHand(answer?.hand) ? answer.hand : null;
         } else if (status === 404 || status === 501) {
             // A den-live without the route: it can't learn, so the chip never promises it, and nothing is retried.
             entry.state = 'unsupported';
         } else if ((status === 0 || status >= 500) && attempt < MANUAL_RETRIES) {
-            later(() => { void send(body, entry, attempt + 1); }, 1000 * (attempt + 1));
-            return;
+            return new Promise(resolve => later(() => { void send(body, entry, attempt + 1).then(resolve); }, 1000 * (attempt + 1)));
         } else entry.state = 'failed';
         onChange();
     }
-    /* den-live releases a fixture at its next reason to act: once the snapshot has shown the hand Home reported, the
-     * first one in the same run that shows none ends Home's hold. */
+    function restoreRemoteHand(id, hand, value) {
+        if (overlay?.restoreVirtualFixtureHand?.(id, hand) !== true) return false;
+        manual.set(id, { ...hand, protocol: 2, local: false, epoch: value.epoch, state: 'recorded', seen: true,
+            from_seq: value.seq, why_not: null, learned: null });
+        return true;
+    }
+    // Durable revisions survive producer epochs. Only this edit's acknowledged hand can end this local hold.
     function endHands(value) {
-        for (const [id, entry] of manual) {
-            if (entry.from_seq === null || value.epoch !== entry.epoch || value.seq < entry.from_seq) continue;
-            const hand = value.fixtures[id]?.hand;
-            if (hand && typeof hand === 'object') entry.seen = true;
-            else if (entry.seen) {
+        if (value.manual_protocol !== 2) return true;
+        for (const [id, row] of Object.entries(value.fixtures)) {
+            if (burstFrom.has(id) || resumes.has(id)) continue;
+            const entry = manual.get(id), hand = row.hand;
+            if (row.manual_revision <= (releasedRevisions.get(id) ?? -1)) continue;
+            if (entry && row.manual_revision < entry.revision) continue;
+            if (hand && (!entry || !entry.local || entry.seen && entry.state === 'recorded' && hand.revision > entry.revision)) {
+                if (!entry || hand.revision > entry.revision || value.epoch !== entry.epoch
+                    || !overlay?.virtualFixtureHandHolds?.().some(hold => hold.fixture_id === id)) {
+                    if (!restoreRemoteHand(id, hand, value)) return false;
+                }
+            } else if (entry && hand?.hold_id === entry.hold_id && hand.event_id === entry.event_id
+                && hand.revision >= entry.revision && (value.epoch === entry.epoch || value.epoch !== entry.request_epoch)) {
+                entry.seen = true; entry.revision = hand.revision; entry.epoch = value.epoch; entry.from_seq = value.seq;
+                if (!overlay?.virtualFixtureHandHolds?.().some(hold => hold.fixture_id === id)
+                    && overlay?.restoreVirtualFixtureHand?.(id, hand) !== true) return false;
+            } else if (entry && !hand && entry.seen && row.manual_revision > entry.revision) {
                 manual.delete(id);
                 try { overlay?.releaseVirtualFixtureHand?.(id); } catch (_) { /* the next snapshot tries nothing more */ }
             }
         }
+        return true;
     }
     function disconnect() {
         openedAt = null; anchor = null; transform = null; scan = null; highestSeq = -1; renderOffset = null;
@@ -263,19 +317,84 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             // den-live's hand.warning in the snapshot drawn now: the held spot's beam crosses a head.
             const hand = applied?.fixtures?.find(fixture => fixture.fixture_id === row.fixture_id)?.hand;
             const warning = hand && typeof hand === 'object' && text(hand.warning) ? hand.warning.slice(0, 60) : null;
-            return { ...row, learning, why_not: entry?.why_not ?? null, warning };
+            return { ...row, learning, why_not: entry?.why_not ?? null, warning,
+                resuming: resumes.has(row.fixture_id), resume_error: entry?.resume_error ?? null };
         });
     }
-    /* Resume, or the coordinator turning on: hand every held fixture back, and tell den-live. */
+    // Keep the hand until its exact revision is released. New gestures retire an outstanding Resume ticket.
     function handBack() {
         let ids = [];
-        try { ids = overlay?.releaseVirtualFixtureHands?.() || []; } catch (_) { ids = []; }
+        try { ids = (overlay?.virtualFixtureHandHolds?.() || []).map(hold => hold.fixture_id); } catch (_) { ids = []; }
         for (const id of ids) {
-            manual.delete(id); burstFrom.delete(id);
-            if (post) void Promise.resolve().then(() => post('manual/resume', { fixture_id: id })).catch(() => {});
+            if (resumes.has(id)) continue;
+            const entry = manual.get(id);
+            const target = burstFrom.get(id)?.previous || entry;
+            burstFrom.delete(id);
+            overlay?.cancelVirtualFixtureHandReport?.(id);
+            if (!post || (applied?.manual_protocol ?? entry?.protocol) !== 2 || !target?.event_id) {
+                manual.delete(id); resumes.delete(id);
+                overlay?.releaseVirtualFixtureHand?.(id);
+                continue;
+            }
+            const ticket = { entry, target, request_id: eventId(), body: null };
+            entry.resume_error = null;
+            resumes.set(id, ticket);
+            void resumeHand(id, ticket, 0);
         }
         if (ids.length) onChange();
         return ids.length;
+    }
+    async function resumeHand(id, ticket, attempt) {
+        if (resumes.get(id) !== ticket || manual.get(id) !== ticket.entry) return;
+        if (attempt === 0 && ticket.target.request) await ticket.target.request;
+        if (resumes.get(id) !== ticket || manual.get(id) !== ticket.entry) return;
+        if (!ticket.body) {
+            const target = ticket.target;
+            const receipt = target.receipt;
+            const acknowledged = receipt?.status === 200 && receipt.answer?.ok === true
+                && receipt.answer.event_id === target.event_id && revision(receipt.answer.manual_revision);
+            let authority = target;
+            if (target.conflict_known) authority = target.conflict;
+            else if (acknowledged) authority = validHand(receipt.answer.hand) ? receipt.answer.hand : null;
+            else if (target.authority_known) authority = target.authority;
+            if (!authority) {
+                releasedRevisions.set(id, target.conflict_revision ?? receipt?.answer?.manual_revision ?? target.revision);
+                manual.delete(id); resumes.delete(id);
+                overlay?.releaseVirtualFixtureHand?.(id);
+                onChange(); return;
+            }
+            ticket.body = { fixture_id: id, hold_id: authority.hold_id, expected_revision: authority.revision,
+                request_id: ticket.request_id };
+        }
+        let status = 0, answer = null;
+        try { ({ status, answer } = await post('manual/resume', ticket.body)); } catch (_) { status = 0; }
+        if (resumes.get(id) !== ticket || manual.get(id) !== ticket.entry) return;
+        if (status === 200 && answer?.ok === true && answer.request_id === ticket.body.request_id
+            && answer.hold_id === ticket.body.hold_id && revision(answer.manual_revision)
+            && answer.manual_revision > ticket.body.expected_revision) {
+            releasedRevisions.set(id, answer.manual_revision);
+            resumes.delete(id);
+            const row = applied?.fixtures.find(fixture => fixture.fixture_id === id);
+            if (row?.manual_revision > answer.manual_revision && validHand(row.hand)) {
+                if (!restoreRemoteHand(id, row.hand, applied)) ticket.entry.resume_error = 'hand_restore_failed';
+            } else {
+                manual.delete(id);
+                overlay?.releaseVirtualFixtureHand?.(id);
+            }
+        } else if ((status === 0 || status >= 500) && status !== 501 && attempt < MANUAL_RETRIES) {
+            later(() => { void resumeHand(id, ticket, attempt + 1); }, 1000 * (attempt + 1));
+            return;
+        } else {
+            resumes.delete(id);
+            ticket.entry.why_not = typeof answer?.error === 'string' ? answer.error.slice(0, 160) : 'resume_unconfirmed';
+            ticket.entry.resume_error = ticket.entry.why_not;
+            if (status === 409 && revision(answer?.manual_revision)) {
+                ticket.entry.conflict_known = true;
+                ticket.entry.conflict_revision = answer.manual_revision;
+                ticket.entry.conflict = validHand(answer.hand) ? answer.hand : null;
+            }
+        }
+        onChange();
     }
     function block(kind) {
         const entry = { after: stopCounter };
@@ -324,7 +443,7 @@ export function createSpotPlayback({ home, site, clock = () => performance.now()
             const glide = row.glide && renderOffset !== null && localGlideCurve(row.glide, row.glide.start_mono * 1000 + renderOffset);
             return glide ? { ...row, glide_local: glide } : row;
         });
-        endHands(value);
+        if (!endHands(value)) { clear(); return; }
         if (!overlay.applyCoordinatorSpots(fixtures, scope.generation, { ambient: ambientOf(value.ambient) })) {
             overlay.applyCoordinatorSpots(null); clear(); return;
         }

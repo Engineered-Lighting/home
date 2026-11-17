@@ -1198,6 +1198,8 @@ export function createOverlay(apartmentRoot, { siteId } = {}) {
         get denSpotSnapshotOwned() { return virtualFixtures.coordinatorSpotScope() !== null; },
         applyCoordinatorSpots: virtualFixtures.applyCoordinatorSpots,
         holdVirtualFixtureForHand: virtualFixtures.holdForHand,
+        restoreVirtualFixtureHand: virtualFixtures.restoreHand,
+        cancelVirtualFixtureHandReport: virtualFixtures.cancelHandReport,
         releaseVirtualFixtureHand: virtualFixtures.releaseHand,
         releaseVirtualFixtureHands: virtualFixtures.releaseHands,
         virtualFixtureHandHolds: virtualFixtures.handHolds,

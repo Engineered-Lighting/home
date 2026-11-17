@@ -604,7 +604,7 @@ function buildFixture(item, state, depth, reducedMotion) {
 
     function updateBeam(view, channel, origin, direction, fullAngle, target) {
         const worldOrigin = origin.clone().add(item.anchor);
-        const hit = target ? { position: new THREE.Vector3(...target.point), normal: new THREE.Vector3(...target.normal),
+        const hit = target && unit(target.normal) ? { position: new THREE.Vector3(...target.point), normal: new THREE.Vector3(...target.normal),
             distance: worldOrigin.distanceTo(new THREE.Vector3(...target.point)), kind: target.kind || 'registered_mesh', index: -1 }
             : receivingPoint(item, worldOrigin, direction);
         const reach = hit ? hit.distance : 3;
@@ -828,8 +828,8 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         const from = hold.before;
         hold.before = null;
         const change = from && states.has(id) ? handDiff(from, handState(id)) : null;
-        if (!change) return;
-        const event = copy({ phase: 'settled', fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id, reason: hold.reason, ...change, at_ms: Date.now() });
+        const event = copy({ phase: 'settled', fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id,
+            reason: hold.reason, before: change?.before || {}, after: change?.after || {}, held_state: handState(id), at_ms: Date.now() });
         for (const listener of [...handListeners]) try { listener(event); } catch (_) { /* a listener never blocks the hand */ }
     }
     function releaseHold(id) {
@@ -1044,6 +1044,33 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
      * snapshot directs it again. A burst not settled yet is not reported. Returns the fixture ids handed back. */
     function releaseHand(fixtureId) { return releaseHold(fixtureId) ? [fixtureId] : []; }
     function releaseHands() { return [...handHolds.keys()].filter(releaseHold); }
+    function cancelHandReport(fixtureId) {
+        const hold = handHolds.get(fixtureId);
+        if (!hold) return;
+        if (hold.timer !== null) cancel(hold.timer);
+        hold.timer = null; hold.before = null;
+    }
+    // A producer restart or a new viewer restores a durable hand without reporting another correction.
+    function restoreHand(fixtureId, hand) {
+        if (disposed || !coordinatorOwned || status !== 'ready' || !states.has(fixtureId)
+            || !hand?.state || typeof hand.state !== 'object' || Array.isArray(hand.state)) return false;
+        const { target, ...patch } = hand.state;
+        if (target != null && (!vector(target.point) || target.normal != null && !unit(target.normal)
+            || target.surface_id != null && !identifier(target.surface_id)
+            || target.kind != null && !identifier(target.kind))) return false;
+        try {
+            const state = nextState(states.get(fixtureId), patch);
+            const savedTarget = target ? copy(target) : null;
+            cancelHandReport(fixtureId);
+            handHolds.set(fixtureId, { since: Date.now(), reason: 'restored', before: null, timer: null });
+            coordinatorPlays.delete(fixtureId);
+            states.set(fixtureId, state);
+            if (savedTarget) targets.set(fixtureId, savedTarget); else if ('target' in hand.state) targets.delete(fixtureId);
+            const view = views.get(fixtureId);
+            view.update(state, targets.get(fixtureId)); view.setMark('held'); trackPresentation(view);
+            return true;
+        } catch (_) { return false; }
+    }
     /* Read-only: the fixtures a person holds. */
     function handHoldsReadback() {
         return [...handHolds].map(([id, hold]) => ({ fixture_id: id, label: fixtures.find(item => item.id === id)?.label || id,
@@ -1057,7 +1084,7 @@ export function createEquipmentVirtualFixtures(parent, { binding = null, siteId 
         return () => handListeners.delete(listener);
     }
     return { root, setDocument, readback, interactionDescriptor, coordinatorSpotScope, applyCoordinatorSpots,
-        holdForHand, releaseHand, releaseHands, handHolds: handHoldsReadback, onHandChange,
+        holdForHand, restoreHand, cancelHandReport, releaseHand, releaseHands, handHolds: handHoldsReadback, onHandChange,
         advancePresentation(nowMs) {
             // The settled RAF path creates no arrays, iterators or snapshots.
             if (disposed || !presentationActive || !finite(nowMs)) return false;

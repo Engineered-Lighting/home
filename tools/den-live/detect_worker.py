@@ -211,6 +211,25 @@ def serve(detector, masks=None, state=None):
             bodies.close()
 
 
+def optional_head(row, header, *, estimate=None):
+    """A malformed optional fit never replaces the detector row or its reply with an error."""
+    calibration = header.get("head_calibration")
+    if calibration is None:
+        return None
+    try:
+        if estimate is None:
+            import head_pose
+            estimate = head_pose.estimate
+        result = estimate(row, calibration, header.get("frame_key"))
+        if (not isinstance(result, dict) or not isinstance(result.get("candidates"), list)
+                or len(result["candidates"]) > 64 or not isinstance(result.get("reasons"), dict)
+                or len(json.dumps(result, allow_nan=False)) > 65536):
+            raise ValueError("optional head result")
+        return result
+    except Exception:
+        return {"candidates": [], "reasons": {"worker_error": 1}}
+
+
 def serve_frames(detector, masks, stream, ring, bodies=None, *, state=None):
     np = detector.np
     kept, image_module = None, None
@@ -265,9 +284,16 @@ def serve_frames(detector, masks, stream, ring, bodies=None, *, state=None):
             row = detector.row_of(result, capture_ts=t, available_ts=ready, rgb_seq=seq,
                                   width=detect.WIDTH, height=detect.HEIGHT, boxes_version="yolo26s-8.4.0",
                                   keypoints_version=detector.pose.manifest["model_version"])
+            head_start = time.perf_counter()
+            head = optional_head(row, header)
+            head_fields = {}
+            if head is not None:
+                head_seconds = time.perf_counter() - head_start
+                row["available_ts"] += head_seconds
+                head_fields = {"head_candidates": head, "head_compute_s": round(head_seconds, 6)}
             health = masks.health() if masks is not None else {}
             say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1),
-                 **identity, **health})
+                 **identity, **health, **head_fields})
             if masks is not None:
                 try:
                     masks.submit(header["id"], header.get("frame_key"), np.ascontiguousarray(rgb[:, :, ::-1]), row)

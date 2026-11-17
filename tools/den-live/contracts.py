@@ -84,7 +84,7 @@ class HeadPoint:
 
 @dataclass(frozen=True)
 class Orientation3D:
-    """Current stereo landmark geometry in room axes. This describes anatomical direction, not eye gaze.
+    """Current landmark geometry in room axes, with its measured or fitted basis. This describes anatomical direction.
 
     Yaw is clockwise from +y and pitch is positive towards +z. angular_sd_deg is a conservative propagated
     covariance bound combined with a geometric-model floor, not a calibrated probability. No temporal carry.

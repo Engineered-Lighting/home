@@ -83,6 +83,7 @@ from collections import deque
 from pathlib import Path
 
 import person_fields
+import head_binding
 import room_labels
 import seated as seated_rule
 from body import head_mask_available
@@ -277,6 +278,11 @@ class DetectorWorker:
         self.gpu_why = first.get("gpu_why") if isinstance(first.get("gpu_why"), str) else None
         self.segmentation = {name.removeprefix("held_"): first[name]
                              for name in ("held_status", "held_device", "held_deadline_s", "held_why") if name in first}
+        self.head_calibration = None
+
+    def configure_head(self, calibration):
+        """Use the perception loop's already registered RGB geometry for optional head fitting."""
+        self.head_calibration = calibration
 
     def _read(self):
         try:
@@ -385,6 +391,8 @@ class DetectorWorker:
                       "delay_s": delay_s}
             if ref is not None:
                 header["frame_key"] = list(ref.key)
+                if ref.mode == "rgb" and self.head_calibration is not None:
+                    header["head_calibration"] = self.head_calibration
             try:
                 self.writes.put_nowait((header, bundle.data))
             except queue.Full:
@@ -499,6 +507,15 @@ class Perceiver:
         self.settings = tools.observe.Settings(method)
         self.settings.max_age_s = FRESH_S
         self.settings.max_gap_s = RGB_PAIR_S + 1e-9  # float rounding at the inclusive 67 ms boundary
+        self.head_calibration = {"k": list(self.camera.rig.rgb_k), "d": list(self.camera.rig.rgb_d),
+                                 "size": list(self.camera.rig.rgb_size), "transform_id": self.camera.transform_id,
+                                 "pixel_sd_px": self.settings.pixel_sigma_px,
+                                 "room_from_rgb": [[math.fsum(a * b for a, b in zip(room_row, rgb_row))
+                                                    for rgb_row in self.camera.rig.rotation]
+                                                   for room_row in self.camera.room_from_left[0]]}
+        self._head_detector = None
+        self.head_direction = {"frames": 0, "candidates": 0, "bound": 0, "published": 0,
+                               "frame_candidates": 0, "frame_bound": 0, "reasons": {}}
         self.track_method = tools.track_method.Method(str(track_method_path))
         self.floor = self.track_method.room["floor_m"]
         self.scope = {"transform_id": self.camera.transform_id, "content_revision": content_revision}
@@ -586,6 +603,7 @@ class Perceiver:
                 "transit_s_median": round(statistics.median(s for _, s in self.transits), 3) if self.transits else None,
                 **minute_figures("camera_age_s", self.camera_ages),
                 **minute_figures("capture_to_stream_s", self.capture_to_stream),
+                "head_direction": {**self.head_direction, "reasons": dict(self.head_direction["reasons"])},
                 **({"segmentation": dict(segmentation)} if segmentation else {})}
 
     def _transit(self, meta, bundle):
@@ -793,6 +811,11 @@ class Perceiver:
             self.camera.check_frame(meta.get("intrinsics"))
         except self.t.roommodel.RegistrationRefused as exc:
             raise Refused("the camera no longer matches the registration (%s); register again with step 2" % exc) from None
+        if self.detector is not getattr(self, "_head_detector", None):
+            configure = getattr(self.detector, "configure_head", None)
+            if configure is not None:
+                configure(self.head_calibration)
+            self._head_detector = self.detector
         if self.last_capture is not None and capture_mono - self.last_capture >= EPOCH_GAP_S:
             dark_since, light_since = self.dark_since, self.light_since   # the mode's own timers go on
             self._epoch()
@@ -871,7 +894,24 @@ class Perceiver:
         row = dict(row, available_ts=ref.rgb.host_s + max(0.0, now_mono - capture_mono))
         start_lift = time.monotonic()
         observations = self.t.observe.observe(row, meta, depth, self.camera, self.settings, offset_s=offset)
-        self._timing(now_mono, lift=time.monotonic() - start_lift, detector_model=reply.get("compute_s"))
+        head_packet = reply.get("head_candidates")
+        rgb_heads, binding_reasons = {}, {}
+        if head_packet is not None:
+            rgb_heads, binding_reasons = head_binding.bind_candidates(
+                row, observations, head_packet, frame_key=ref.key, transform_id=self.camera.transform_id,
+                rgb_from_left=self.camera.rig.rotation, room_from_left=self.camera.room_from_left[0],
+                capture_mono=capture_mono)
+        head_count, head_reasons = head_binding.diagnostics(head_packet) if head_packet is not None else (0, {})
+        health = self.head_direction
+        health["frames"] += 1
+        health["candidates"] += head_count
+        health["bound"] += len(rgb_heads)
+        health["frame_candidates"], health["frame_bound"] = head_count, len(rgb_heads)
+        for counts in (head_reasons, binding_reasons):
+            for reason, count in counts.items():
+                health["reasons"][reason] = health["reasons"].get(reason, 0) + count
+        self._timing(now_mono, lift=time.monotonic() - start_lift, detector_model=reply.get("compute_s"),
+                     head_model=reply.get("head_compute_s"))
         start_track = time.monotonic()
         self.counts["observations"] += len(observations)
         if any(o.get("validity") == "rejected:detector_result_expired" for o in observations):
@@ -942,6 +982,15 @@ class Perceiver:
             current_pose = pose if safe and stereo else None
             head_orientation = person_fields.head_orientation(current_pose, capture_mono,
                                                              registration_variance_m2=self.camera.error_bound_m ** 2)
+            if head_orientation is not None and not head_binding.valid_head_axes(head_orientation.forward,
+                                                                               head_orientation.up):
+                head_orientation = None
+                reasons = self.head_direction["reasons"]
+                reasons["orientation_invalid"] = reasons.get("orientation_invalid", 0) + 1
+            if head_orientation is None and safe:
+                head_orientation = rgb_heads.get(pose.get("obs_id"))
+                if head_orientation is not None:
+                    self.head_direction["published"] += 1
             torso_orientation = person_fields.torso_orientation(current_pose, capture_mono,
                                                                registration_variance_m2=self.camera.error_bound_m ** 2)
             position_observations = [o for o in sources if o.get("room_position")]

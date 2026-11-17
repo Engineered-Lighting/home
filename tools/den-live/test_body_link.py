@@ -257,6 +257,8 @@ class PipelineTests(unittest.TestCase):
         perceiver.run_id, perceiver.frame_id, perceiver.retired, perceiver.last_seq = "synthetic-run", 0, set(), 6
         perceiver.clock_reset_candidate = perceiver.last_input_mono = perceiver.calibration_id = None
         perceiver.associations, perceiver.hops = {}, {}
+        perceiver.head_direction = {"frames": 0, "candidates": 0, "bound": 0, "published": 0,
+                                   "frame_candidates": 0, "frame_bound": 0, "reasons": {}}
         perceiver.seated = Published()
         perceiver.facing = Facing(lambda _: None, 30.0)   # no facing sample from these fakes
         perceiver.speed = Speed()   # posture's floor speed

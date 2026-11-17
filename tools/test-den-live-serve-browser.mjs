@@ -48,6 +48,7 @@ let previewPort = null;
 const relaySockets = new Set();
 const fake = { streams: new Set(), bodies: new Set(), sockets: new Set(), actions: [], ws: [], labels: null,
   bodyAvailable: true, bodyStreaming: true, bodySeq: 0, haOffline: false, inference: null, subject: null,
+  eventIntervalMs: 200, bodyLeaseS: 1,
   control: { on: false, stopped: false, stop_counter: 0 }, epoch: 'fixture-epoch', seq: 0 };
 
 function json(res, value, status = 200) {
@@ -78,7 +79,7 @@ function openEvents(res, clients, write, headers = {}, first = '') {
   res.write('retry: 500\n\n');
   if (first) res.write(first);
   clients.add(res);
-  const timer = setInterval(() => write(res), 200);
+  const timer = setInterval(() => write(res), fake.eventIntervalMs);
   res.on('close', () => { clearInterval(timer); clients.delete(res); });
 }
 async function upstreamRequest(req, res) {
@@ -155,6 +156,7 @@ async function upstreamRequest(req, res) {
 function emitBody(out, reason) {
   const frame = measuredBodyEvent({ revision: den.revision, captured: Date.now() / 1000 - 0.05,
     seq: ++fake.bodySeq, reason });
+  if (frame.status === 'ready') frame.expires_ts = frame.capture_ts + fake.bodyLeaseS;
   out.write('event: body\ndata: ' + JSON.stringify(frame) + '\n\n');
 }
 
@@ -319,6 +321,10 @@ async function openHome(mobile, { latency = false } = {}) {
 
 inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draws through GPU completion', { timeout: 120000 }, async () => {
   const initial = { ...fake.control }, firstAction = fake.actions.length;
+  const initialInterval = fake.eventIntervalMs, initialLease = fake.bodyLeaseS;
+  // Give hosted software rendering a complete frame before the next packet supersedes it.
+  // This checks correlation and expiry using the installed producer's supported two-second lease.
+  fake.eventIntervalMs = 1000; fake.bodyLeaseS = 2;
   fake.control = { ...fake.control, on: true, stopped: false };
   try {
     for (const mobile of [false, true]) {
@@ -393,7 +399,7 @@ inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draw
       } finally { await context.close(); }
     }
     assert.equal(fake.actions.length, firstAction, 'timing and local downloads create no upstream writes');
-  } finally { fake.control = initial; }
+  } finally { fake.control = initial; fake.eventIntervalMs = initialInterval; fake.bodyLeaseS = initialLease; }
 });
 
 async function startPreview(config) {

@@ -28,7 +28,7 @@ def read(n):
         value += part
     return value
 time.sleep(float(sys.argv[2]))
-print(json.dumps({'ready': True}), flush=True)
+print(json.dumps({'ready': True, 'device': 'cpu'}), flush=True)
 while True:
     try:
         header = json.loads(read(struct.unpack('>I', read(4))[0]))
@@ -40,6 +40,7 @@ while True:
         continue
     key = header['frame_key'] if sys.argv[3] != 'wrong' else ['wrong-frame']
     print(json.dumps({'id': header['id'], 'frame_key': key,
+                      'inference_ms': float(sys.argv[1]) * 1000,
                       'person_masks': [{'score': .9, 'polygon': [[10, 20], [20, 20], [20, 30]]}],
                       'held_masks': [{'label': 'book', 'score': .8, 'polygon': [[1, 2], [3, 2], [3, 4]]}]}), flush=True)
 '''
@@ -71,6 +72,9 @@ class Process(unittest.TestCase):
         got = masks.wait(1, ["epoch", 2])
         self.assertEqual(got["segmentation_status"], "ok")
         self.assertEqual(got["held_masks"][0]["label"], "book")
+        self.assertEqual(got["timings_ms"]["segment_inference"], 20)
+        self.assertGreaterEqual(got["timings_ms"]["segment_queue"], 0)
+        self.assertEqual(masks.health()["held_device"], "cpu")
         self.assertNotEqual(masks.wait(2, ["epoch", 2])["segmentation_status"], "ok")
         self.assertNotEqual(masks.wait(1, ["new-epoch", 2])["segmentation_status"], "ok")
         masks.close()
@@ -139,6 +143,81 @@ class Process(unittest.TestCase):
             deadline, result = next(iter(masks.results.values()))
             masks.results[next(iter(masks.results))] = (time.monotonic() - 1, result)
         self.assertNotEqual(masks.wait(1, [1])["segmentation_status"], "ok")
+
+
+class Device(unittest.TestCase):
+    def test_default_cpu_skips_cuda_guard_and_auto_uses_existing_guard(self):
+        model = object()
+        detect = SimpleNamespace(gpu_usable=Mock(return_value=(False, "not free")))
+        held = SimpleNamespace(load=Mock(return_value=(model, None)))
+        cleanup = Mock()
+        self.assertEqual(A.load_segmenter("models", "state", "cpu", detect, held, release_cuda=cleanup),
+                         (model, "cpu", None, None))
+        detect.gpu_usable.assert_not_called()
+        held.load.assert_called_once_with("models", "cpu", state="state")
+        held.load.reset_mock()
+        self.assertEqual(A.load_segmenter("models", "state", "auto", detect, held, release_cuda=cleanup),
+                         (model, "cpu", None, "gpu_unavailable"))
+        detect.gpu_usable.assert_called_once()
+        held.load.assert_called_once_with("models", "cpu", state="state")
+        cleanup.assert_not_called()
+
+    def test_cuda_success_and_failed_warmup_cleanup_before_fresh_cpu_load(self):
+        detect = SimpleNamespace(gpu_usable=Mock(return_value=(True, None)))
+        model = object()
+        held = SimpleNamespace(load=Mock(return_value=(model, None)))
+        cleanup = Mock()
+        self.assertEqual(A.load_segmenter("models", "state", "auto", detect, held, release_cuda=cleanup),
+                         (model, "cuda:0", None, None))
+        held.load.assert_called_once_with("models", "cuda:0", state="state")
+        cleanup.assert_not_called()
+        for failed in [(None, "first warmup failed"), RuntimeError("private error text")]:
+            with self.subTest(failure=type(failed).__name__):
+                order = []
+                def load(_models, device, **kwargs):
+                    order.append(device)
+                    if device == "cuda:0":
+                        if isinstance(failed, Exception):
+                            raise failed
+                        return failed
+                    return model, None
+                cleanup = Mock(side_effect=lambda: order.append("cleanup"))
+                result = A.load_segmenter("models", "state", "auto", detect,
+                                          SimpleNamespace(load=load), release_cuda=cleanup)
+                self.assertEqual(result, (model, "cpu", None, "gpu_load_failed"))
+                self.assertEqual(order, ["cuda:0", "cleanup", "cpu"])
+                self.assertNotIn("private error text", str(result))
+
+    def test_failed_cpu_load_still_refuses_and_cleanup_failure_keeps_fallback(self):
+        detect = SimpleNamespace(gpu_usable=lambda: (True, None))
+        held = SimpleNamespace(load=Mock(side_effect=[(None, "warm failure"), (None, "cpu refused")]))
+        result = A.load_segmenter("models", "state", "auto", detect, held,
+                                  release_cuda=Mock(side_effect=RuntimeError("cleanup failed")))
+        self.assertEqual(result, (None, None, "cpu refused", "gpu_load_failed"))
+
+    def test_device_environment_and_truthful_child_health(self):
+        popen = subprocess.Popen
+        for requested, actual in [("cpu", "cpu"), ("auto", "cuda:0"), ("invalid", "cpu")]:
+            script = CHILD.replace("'device': 'cpu'", "'device': %r, 'fallback': 'gpu_unavailable'" % actual)
+            child = [sys.executable, "-u", "-c", script, ".01", "0", "ok"]
+            with self.subTest(requested=requested), patch.dict(os.environ, {"DEN_MASK_DEVICE": requested, "CUDA_VISIBLE_DEVICES": "2"}), \
+                    patch.object(A.subprocess, "Popen", wraps=popen) as spawned:
+                masks = A.Masks(".", ".", command=child)
+                try:
+                    wait_until(lambda: masks.status == "ready")
+                    self.assertEqual(masks.health()["held_device"], actual)
+                    self.assertEqual(masks.health()["held_why"], "gpu_unavailable")
+                    visibility = spawned.call_args.kwargs["env"]["CUDA_VISIBLE_DEVICES"]
+                    self.assertEqual(visibility, "2" if requested == "auto" else "")
+                finally:
+                    masks.close()
+        child = [sys.executable, "-u", "-c", "import json,time;print(json.dumps({'ready':True}),flush=True);time.sleep(2)"]
+        masks = A.Masks(".", ".", command=child)
+        try:
+            wait_until(lambda: masks.status == "ready")
+            self.assertIsNone(masks.health()["held_device"])
+        finally:
+            masks.close()
 
 
 class Lifetime(unittest.TestCase):
@@ -219,6 +298,33 @@ time.sleep(60)
 
 
 class Dispatch(unittest.TestCase):
+    def test_exact_mask_timings_and_body_wait_are_internal_reply_metadata(self):
+        replies = queue.Queue()
+        entered, release = threading.Event(), threading.Event()
+        class Mask:
+            def wait(self, worker_id, frame_key, **kwargs):
+                entered.set()
+                release.wait(1)
+                return {"frame_key": frame_key, "segmentation_status": "ok",
+                        "timings_ms": {"segment_queue": 15, "segment_inference": 80, "unknown": 99}}
+        class Channel:
+            def handle(self, header, kept):
+                return {"body_id": header["id"], "frame": {"unchanged": True}, "compute_s": .005}
+        bodies = A.Bodies(Mask(), replies.put, factory=Channel)
+        self.addCleanup(bodies.close)
+        bodies.submit({"kind": "body", "id": 1, "remaining_s": 1}, (1, b"bundle", ["frame", 1]))
+        self.assertTrue(entered.wait(1))
+        self.assertTrue(replies.empty())
+        release.set()
+        reply = replies.get(timeout=1)
+        self.assertEqual(reply["frame"], {"unchanged": True})
+        self.assertEqual(reply["timings_ms"]["segment_inference"], 80)
+        self.assertEqual(reply["timings_ms"]["segment_queue"], 15)
+        self.assertEqual(reply["timings_ms"]["body_compute"], 5)
+        self.assertGreaterEqual(reply["timings_ms"]["mask_wait"], 0)
+        self.assertLessEqual(reply["timings_ms"]["mask_wait"], 2000)
+        self.assertNotIn("unknown", reply["timings_ms"])
+
     def test_default_channel_receives_live_background_state(self):
         replies, states = queue.Queue(), []
         class Channel:

@@ -184,6 +184,52 @@ connections without it, so the option can be turned on or off at any time:
 tailscale serve --bg --tls-terminated-tcp=443 --proxy-protocol=1 127.0.0.1:5181
 ```
 
+### Full Home through Serve
+
+Set an exact `HOME_WEB_SERVE_ORIGIN` alongside the dedicated loopback `HOME_WEB_SERVE_PORT` and use TLS-terminated TCP with `--proxy-protocol=1`. The normal Home shell uses tailnet access for HTTP and WebSockets. See the [Full Home and Den run sheet](FULL-HOME-SERVE-RUN-SHEET.md) for the optional Den producer and cross-home card configuration, acceptance and rollback.
+
+### Legacy look-only rollback
+
+Any device on the tailnet can open Home without signing in and see the den's
+live view: the scan, its fixtures, and a marker per person from den-live
+(`HOME_WEB_DEN_LIVE=1`). The rules are in `web-gateway/look-only.mjs`.
+
+It needs two lines in the gateway's env file, `HOME_WEB_LOOK_ONLY=1` and
+`HOME_WEB_SERVE_PORT=5182`, and Serve forwarding to that port with the PROXY
+option:
+
+```bash
+tailscale serve --bg --tls-terminated-tcp=443 --proxy-protocol=1 127.0.0.1:5182
+```
+
+- **The Serve port** (5182) takes only loopback connections that start with a
+  PROXY line. With `--proxy-protocol=1`, that line is always Serve's own, so it
+  names the real client. A client can't put one of its own before it.
+- **If Serve forwards there without the option,** every connection is refused at
+  once and Home stops loading, rather than trusting what clients send. Put the
+  option back, or point Serve at 5181 again.
+- **The ordinary port** (5181) keeps working for anything on this host, and never
+  gives look-only.
+- **Who is look-only:** a device Serve names at a tailnet address (100.64.0.0/10
+  or fd7a:115c:a1e0::/48), with no session.
+- **What it may GET, and nothing else:**
+  - the app's code;
+  - the den's content pack, lighting layer and registration;
+  - den-live's state and stream, and its lighting coordinator's state;
+  - the lighting brain's den state and stream.
+- **One code file is redacted.** The site registry holds both homes' addresses
+  and coordinates, and is served with them removed. Code folders the view never
+  loads (the Home Agent, the spatial spike, tests) aren't served at all.
+- **Everything else still needs sign-in:** every write, every other site's data,
+  and every WebSocket.
+- **Streams:** each look-only device holds at most two of den-live's streams, and
+  all look-only devices together at most eight.
+- **A signed-in device** always gets full Home. A look-only page has a "Sign in"
+  link.
+
+Anyone you share a node with, or invite onto the tailnet, can watch the den
+this way. To close it, remove `HOME_WEB_LOOK_ONLY=1` and restart the gateway.
+
 Reference: https://tailscale.com/docs/reference/tailscale-cli/serve
 
 ## Service targets

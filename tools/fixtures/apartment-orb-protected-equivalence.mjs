@@ -1,14 +1,22 @@
-// Protected-equivalence fingerprint for the symbolic fixture's orb cosmetics.
-// Everything the orb must not change (readback, descriptors, pick inventory,
+// Protected-equivalence fingerprint for the symbolic fixture's drawn body.
+// Everything the body must not change (readback, descriptors, pick inventory,
 // sources, beam, receivers and their buffers) is recorded by value; only the
-// drawn body, its halo layers and the radial sector tint carriers are skipped.
-// The pinned JSON beside this file was recorded from the cylinder fixture at
-// 4a374e78 with protectedScenario() below.
+// drawn body and its glow layers are skipped. The pinned JSON beside this file
+// was recorded from the cylinder fixture at 4a374e78 with protectedScenario()
+// below, then re-recorded from 8a8e8422 when downward-emitter, downward-source-
+// glow and modeled-aim-source-glow joined the skipped names (its recorded_from).
 import crypto from 'node:crypto';
 
 // Drawn-body nodes the orb may replace. Their own contracts (sector visibility
 // and .1 x level opacity, the opaque core) are asserted directly in tests.
-export const ORB_COSMETIC_NAME = /^(?:symbolic-fixture-housing|tubular-diffuser|diffuser-(?:top|base)|radial-diffuser-sector-[1-6]|fixture-orb(?:-core)?|orb-halo-(?:downward|spotlight))$/;
+// The downlight's drawn ring and short cone (downward-emitter, downward-source-
+// glow) and the spot's flat source glow (modeled-aim-source-glow) joined them
+// when the fixture became a floating orb (the owner, 2026-11-14): they were
+// the lamp-like body around the orb, and the orb's own halo is the glow at the
+// source now. The emitter node and its position stay, because the Lit view
+// reads that position as the downlight's source; tests assert it directly. The
+// beam's cone and the light it lands stay protected.
+export const ORB_COSMETIC_NAME = /^(?:symbolic-fixture-housing|tubular-diffuser|diffuser-(?:top|base)|radial-diffuser-sector-[1-6]|fixture-orb(?:-core)?|orb-halo-(?:downward|spotlight)|downward-(?:emitter|source-glow)|modeled-aim-source-glow)$/;
 
 // Numbers are compared at 9 significant digits: a real protected change is far
 // larger, while the last bit of Math.pow/cos may differ between JS engines.
@@ -37,6 +45,17 @@ function material(value) {
     uniforms: value.uniforms ? Object.fromEntries(Object.entries(value.uniforms).map(([name, uniform]) => [name, snapshot(uniform.value)])) : null };
 }
 
+// The second home's lighting (2026-11-12) added spot_only and room_id after this pin was recorded. At their neutral
+// values (false, null), which every symbolic fixture here has, they are left out so the cylinder pin still holds; any
+// other value is kept and changes the fingerprint.
+const NEUTRAL_LATER_FIELDS = Object.freeze({ spot_only: false, room_id: null });
+function withoutNeutralLaterFields(value) {
+  if (!value || typeof value !== 'object') return value;
+  const out = { ...value };
+  for (const [key, neutral] of Object.entries(NEUTRAL_LATER_FIELDS)) if (Object.hasOwn(out, key) && out[key] === neutral) delete out[key];
+  return out;
+}
+
 export function protectedFingerprint(api) {
   api.root.updateMatrixWorld(true);
   const fixtures = api.root.children.map(root => {
@@ -45,14 +64,14 @@ export function protectedFingerprint(api) {
       if (ORB_COSMETIC_NAME.test(node.name)) return;
       const materials = Array.isArray(node.material) ? node.material : node.material ? [node.material] : [];
       nodes.push({ path, type: node.type, position: node.position.toArray(), quaternion: node.quaternion.toArray(), scale: node.scale.toArray(),
-        visible: node.visible, renderOrder: node.renderOrder, userData: clone(node.userData),
+        visible: node.visible, renderOrder: node.renderOrder, userData: clone(withoutNeutralLaterFields(node.userData)),
         geometry: geometry(node.geometry), materials: materials.map(material) });
       for (const child of node.children) visit(child, path + '/' + child.name);
     };
     visit(root, root.name);
     return { fixture_id: root.userData.fixture_id, nodes };
   });
-  const readback = api.readback();
+  const read = api.readback(), readback = { ...read, fixtures: read.fixtures.map(withoutNeutralLaterFields) };
   return clone({ readback,
     descriptors: readback.fixtures.map(item => api.interactionDescriptor(item.fixture_id)),
     picks: api.pickObjects().map(node => ({ name: node.name, userData: node.userData, position: node.position.toArray(),

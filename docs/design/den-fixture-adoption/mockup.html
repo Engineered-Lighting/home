@@ -1,0 +1,1028 @@
+<title>Den Fixture Adoption</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: Home's den as it would look mid-adoption. A dark room canvas (always dark, as in Home) beside a themed
+   panel; on a phone the panel becomes a sheet under the room. Tokens follow Home's (home-tokens.css, den-shell.css). */
+:root {
+  --hg-bg-0: #EFE9DC; --hg-bg-1: #F2EDE0; --hg-bg-2: #EAE3D2; --hg-bg-3: #F7F2E5;
+  --hg-fg-0: #1A1812; --hg-fg-1: #28251C; --hg-fg-2: #5E5848; --hg-fg-3: #6A6454; --hg-fg-4: #8A8270;
+  --hg-border-soft: rgba(26,24,18,.07); --hg-border: rgba(26,24,18,.13); --hg-border-strong: rgba(26,24,18,.24);
+  --hg-ice: #1F4FA8;
+  --apt-proposed: #0a6f86; --apt-ok: #1f6e48; --apt-attn: #8a4e13; --apt-blocked: #b33a37; --apt-warm: #8a5310;
+  --apt-fill: rgba(26,24,18,.035); --apt-fill-2: rgba(26,24,18,.07);
+  --btn-primary-fg: #ffffff;
+  --page: #E4DDCD; --device-edge: rgba(26,24,18,.22);
+  /* the room canvas stays dark in both themes */
+  --cv-bg: #050607; --cv-fg-0: #FFFFFF; --cv-fg-1: #EDEDED; --cv-fg-2: #A1A1A1; --cv-fg-3: #8F8F8F;
+  --cv-ice: #B8D8FF; --cv-warm: #FFDDB0; --cv-attn: #FFB45F; --cv-blocked: #FF625F; --cv-ok: #91E6BD;
+  --cv-glass: rgba(8,9,11,.78); --cv-line: rgba(255,255,255,.10); --cv-line-strong: rgba(255,255,255,.2);
+  --sans: "Geist", ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --ease: cubic-bezier(.2,.7,.2,1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --hg-bg-0: #000000; --hg-bg-1: #0A0A0A; --hg-bg-2: #111111; --hg-bg-3: #161616;
+    --hg-fg-0: #FFFFFF; --hg-fg-1: #EDEDED; --hg-fg-2: #A1A1A1; --hg-fg-3: #8F8F8F; --hg-fg-4: #767676;
+    --hg-border-soft: rgba(255,255,255,.06); --hg-border: rgba(255,255,255,.10); --hg-border-strong: rgba(255,255,255,.2);
+    --hg-ice: #B8D8FF;
+    --apt-proposed: #45dfff; --apt-ok: #91e6bd; --apt-attn: #ffb45f; --apt-blocked: #ff625f; --apt-warm: #ffddb0;
+    --apt-fill: rgba(255,255,255,.035); --apt-fill-2: rgba(255,255,255,.07);
+    --btn-primary-fg: #04161b;
+    --page: #050505; --device-edge: rgba(255,255,255,.14);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --hg-bg-0: #000000; --hg-bg-1: #0A0A0A; --hg-bg-2: #111111; --hg-bg-3: #161616;
+  --hg-fg-0: #FFFFFF; --hg-fg-1: #EDEDED; --hg-fg-2: #A1A1A1; --hg-fg-3: #8F8F8F; --hg-fg-4: #767676;
+  --hg-border-soft: rgba(255,255,255,.06); --hg-border: rgba(255,255,255,.10); --hg-border-strong: rgba(255,255,255,.2);
+  --hg-ice: #B8D8FF;
+  --apt-proposed: #45dfff; --apt-ok: #91e6bd; --apt-attn: #ffb45f; --apt-blocked: #ff625f; --apt-warm: #ffddb0;
+  --apt-fill: rgba(255,255,255,.035); --apt-fill-2: rgba(255,255,255,.07);
+  --btn-primary-fg: #04161b;
+  --page: #050505; --device-edge: rgba(255,255,255,.14);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--page); color: var(--hg-fg-1); font-family: var(--sans); font-size: 14px; line-height: 1.45;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px; }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--apt-proposed); outline-offset: 2px; }
+.wrap { max-width: 1240px; margin: 0 auto; display: grid; gap: 16px; }
+
+/* header and switches */
+.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; }
+.top h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: -.01em; color: var(--hg-fg-0); text-wrap: balance; }
+.top p { margin: 4px 0 0; color: var(--hg-fg-2); max-width: 62ch; }
+.switches { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.switch-group { display: flex; align-items: center; gap: 6px; }
+.switch-group > span { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--hg-fg-3); }
+.seg { display: inline-flex; border: 1px solid var(--hg-border); border-radius: 8px; padding: 2px; background: var(--apt-fill); gap: 2px; flex-wrap: wrap; }
+.seg button { border: 0; background: transparent; padding: 4px 9px; border-radius: 6px; font-size: 12.5px; cursor: pointer; color: var(--hg-fg-2); font-variant-numeric: tabular-nums; }
+.seg button[aria-pressed="true"] { background: var(--hg-bg-3); color: var(--hg-fg-0); box-shadow: 0 0 0 1px var(--hg-border); }
+
+/* the device */
+.stage { display: flex; justify-content: center; }
+.device { width: 100%; border: 1px solid var(--device-edge); border-radius: 14px; overflow: hidden; background: var(--hg-bg-1);
+  display: grid; grid-template-columns: minmax(0, 1fr) 384px; min-height: 560px; }
+.device[data-frame="phone"] { width: min(390px, 100%); grid-template-columns: minmax(0, 1fr); min-height: 0; border-radius: 26px; }
+.room { position: relative; background: var(--cv-bg); min-width: 0; align-self: stretch; display: flex; align-items: center; }
+.room-inner { position: relative; width: 100%; aspect-ratio: 800 / 500; }
+.room svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.device[data-frame="phone"] .room { align-self: start; }
+
+.labels { position: absolute; inset: 0; pointer-events: none; }
+.lab { position: absolute; transform: translate(-50%, 0); text-align: center; white-space: nowrap; pointer-events: none;
+  text-shadow: 0 0 8px #000, 0 0 3px #000; }
+.lab .nm { display: block; font-size: 12px; font-weight: 500; color: var(--cv-fg-0); }
+.lab .dt { display: block; font-family: var(--mono); font-size: 11px; color: var(--cv-fg-2); }
+.lab .tag { display: inline-block; margin-left: 4px; padding: 0 5px; border-radius: 4px; font-family: var(--mono); font-size: 10.5px;
+  border: 1px solid var(--cv-line-strong); color: var(--cv-fg-1); text-shadow: none; background: rgba(0,0,0,.45); }
+.lab .tag.attn { color: var(--cv-attn); border-color: rgba(255,180,95,.5); }
+.lab .tag.live { color: var(--cv-ok); border-color: rgba(145,230,189,.5); }
+.lab.sel .nm { color: var(--cv-ice); }
+.device[data-frame="phone"] .lab .nm { font-size: 11px; }
+.device[data-frame="phone"] .lab .dt { font-size: 10px; }
+.device[data-frame="phone"] .lab .wide, .device[data-frame="phone"] .lab .nmtext, .device[data-frame="phone"] .lab .tag { display: none; }
+.device[data-frame="phone"] .capsule { top: auto; bottom: 8px; left: 8px; gap: 4px; }
+.device[data-frame="phone"] .cap-row { font-size: 11px; padding: 3px 8px; }
+.device[data-frame="phone"] .cap-coord { display: none; }
+.device[data-frame="phone"] .banner { bottom: auto; top: 6px; }
+.hit { position: absolute; width: 44px; height: 44px; transform: translate(-50%, -50%); border-radius: 50%; border: 0; background: transparent;
+  cursor: pointer; pointer-events: auto; }
+.hit:focus-visible { outline: 1px solid var(--cv-ice); }
+
+.capsule { position: absolute; left: 12px; top: 12px; display: grid; gap: 6px; justify-items: start; max-width: calc(100% - 24px); }
+.cap-row { background: var(--cv-glass); border: 1px solid var(--cv-line); border-radius: 999px; padding: 4px 10px; color: var(--cv-fg-1);
+  font-size: 12px; display: flex; gap: 8px; align-items: center; backdrop-filter: blur(6px); }
+.cap-row .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cv-ok); }
+.cap-row .muted { color: var(--cv-fg-3); font-family: var(--mono); font-size: 11px; }
+.cap-found { border-color: rgba(184,216,255,.45); cursor: pointer; }
+.cap-found b { color: var(--cv-ice); font-weight: 500; }
+.banner { position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); background: var(--cv-glass); border: 1px solid rgba(255,180,95,.45);
+  color: var(--cv-attn); border-radius: 8px; padding: 4px 10px; font-size: 12px; white-space: nowrap; }
+.device[data-frame="phone"] .banner { font-size: 11px; bottom: 8px; }
+
+/* the panel */
+.panel { border-left: 1px solid var(--hg-border); background: var(--hg-bg-1); padding: 16px; display: grid; gap: 14px; align-content: start;
+  min-width: 0; max-height: 760px; overflow-y: auto; }
+.device[data-frame="phone"] .panel { border-left: 0; border-top: 1px solid var(--hg-border); max-height: 560px; border-radius: 16px 16px 0 0; }
+.panel h2 { margin: 0; font-size: 17px; font-weight: 600; color: var(--hg-fg-0); }
+.panel h3 { margin: 0; font-size: 15px; font-weight: 600; color: var(--hg-fg-0); text-wrap: balance; }
+.panel h4 { margin: 0; font-size: 13px; font-weight: 600; color: var(--hg-fg-0); }
+.panel p { margin: 0; }
+.sub { color: var(--hg-fg-2); font-size: 12.5px; }
+.meta { color: var(--hg-fg-3); font-size: 12px; }
+.mono { font-family: var(--mono); font-size: 11.5px; }
+.eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--hg-fg-3); }
+.head { display: flex; gap: 10px; align-items: flex-start; }
+.head .grow { flex: 1; min-width: 0; }
+.badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.badge { font-family: var(--mono); font-size: 11px; border: 1px solid var(--hg-border-strong); border-radius: 5px; padding: 1px 6px; color: var(--hg-fg-2); }
+.badge.virtual { color: var(--apt-warm); border-color: color-mix(in srgb, var(--apt-warm) 45%, transparent); }
+.badge.attn { color: var(--apt-attn); border-color: color-mix(in srgb, var(--apt-attn) 45%, transparent); }
+.badge.ok { color: var(--apt-ok); border-color: color-mix(in srgb, var(--apt-ok) 45%, transparent); }
+.tabs { display: flex; gap: 2px; border: 1px solid var(--hg-border); border-radius: 8px; padding: 2px; background: var(--apt-fill); }
+.tabs button { flex: 1; border: 0; background: transparent; padding: 5px 8px; border-radius: 6px; cursor: pointer; color: var(--hg-fg-2); font-size: 13px; }
+.tabs button[aria-selected="true"] { background: var(--hg-bg-3); color: var(--hg-fg-0); box-shadow: 0 0 0 1px var(--hg-border); }
+.section { display: grid; gap: 8px; }
+.section + .section { border-top: 1px solid var(--hg-border-soft); padding-top: 12px; }
+.btn { border: 1px solid var(--hg-border-strong); background: var(--apt-fill); border-radius: 7px; padding: 6px 11px; cursor: pointer; font-size: 13px; color: var(--hg-fg-1); }
+.btn:hover:not(:disabled) { background: var(--apt-fill-2); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.small { padding: 3px 8px; font-size: 12px; }
+.btn.primary { background: var(--apt-proposed); border-color: var(--apt-proposed); color: var(--btn-primary-fg); font-weight: 500; }
+.btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--apt-proposed); }
+.btn.link { border: 0; background: transparent; padding: 0; color: var(--apt-proposed); text-decoration: underline; text-underline-offset: 2px; font-size: 12.5px; }
+.btn.stop { background: var(--apt-blocked); border-color: var(--apt-blocked); color: #fff; font-weight: 600; min-width: 84px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.hold { position: relative; overflow: hidden; }
+.hold::after { content: ""; position: absolute; left: 0; bottom: 0; height: 3px; width: 0; background: currentColor; opacity: .7; }
+.hold.holding::after { width: 100%; transition: width 1.5s linear; }
+
+.rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.srow { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 8px; border-radius: 8px;
+  border: 1px solid transparent; background: transparent; width: 100%; text-align: left; cursor: pointer; color: inherit; }
+.srow:hover { background: var(--apt-fill); }
+.srow[aria-current="true"] { border-color: var(--hg-border-strong); background: var(--apt-fill); }
+.srow .nm { display: block; color: var(--hg-fg-0); font-weight: 500; font-size: 13.5px; }
+.srow .dt { display: block; color: var(--hg-fg-3); font-size: 12px; }
+.srow .right { display: grid; justify-items: end; gap: 3px; }
+.mark { width: 16px; height: 16px; display: block; }
+
+.callout { border: 1px solid var(--hg-border); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; background: var(--apt-fill); }
+.callout.ice { border-color: color-mix(in srgb, var(--hg-ice) 40%, transparent); }
+.callout.attn { border-color: color-mix(in srgb, var(--apt-attn) 45%, transparent); }
+.callout.ok { border-color: color-mix(in srgb, var(--apt-ok) 45%, transparent); }
+.toast { font-size: 12.5px; color: var(--hg-fg-1); border-left: 2px solid var(--apt-proposed); padding: 4px 10px; background: var(--apt-fill); border-radius: 0 6px 6px 0; }
+
+.rail { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.rail span { font-family: var(--mono); font-size: 10.5px; color: var(--hg-fg-4); border-top: 2px solid var(--hg-border); padding-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rail span.done { color: var(--hg-fg-2); border-color: var(--apt-ok); }
+.rail span.now { color: var(--hg-fg-0); border-color: var(--apt-proposed); }
+
+.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.checks li { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; gap: 8px; align-items: start; }
+.checks li .tick { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--hg-border-strong); margin-top: 1px; display: grid; place-items: center; font-size: 10px; color: transparent; }
+.checks li.ok .tick { border-color: var(--apt-ok); background: var(--apt-ok); color: var(--hg-bg-1); }
+.checks li.wait .tick { border-style: dashed; }
+.checks li.bad .tick { border-color: var(--apt-attn); color: var(--apt-attn); }
+.checks li b { font-weight: 500; color: var(--hg-fg-0); }
+.checks li .meta { display: block; }
+
+.card { border: 1px solid var(--hg-border); border-radius: 10px; padding: 12px; display: grid; gap: 10px; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 12.5px; }
+.kv dt { color: var(--hg-fg-3); }
+.kv dd { margin: 0; color: var(--hg-fg-1); min-width: 0; }
+.ok-t { color: var(--apt-ok); }
+.attn-t { color: var(--apt-attn); }
+.warm-t { color: var(--apt-warm); }
+
+.choices { display: grid; gap: 6px; }
+.choice { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; padding: 8px 10px; border: 1px solid var(--hg-border); border-radius: 8px; cursor: pointer; background: transparent; text-align: left; color: inherit; width: 100%; }
+.choice[aria-checked="true"] { border-color: var(--apt-proposed); background: var(--apt-fill); }
+.choice[aria-disabled="true"] { opacity: .5; cursor: default; }
+.choice .radio { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--hg-border-strong); margin-top: 2px; }
+.choice[aria-checked="true"] .radio { border: 4px solid var(--apt-proposed); }
+.choice b { font-weight: 500; color: var(--hg-fg-0); }
+.rec { font-family: var(--mono); font-size: 10.5px; color: var(--apt-ok); border: 1px solid color-mix(in srgb, var(--apt-ok) 45%, transparent); border-radius: 4px; padding: 0 4px; margin-left: 4px; }
+
+.plan svg, .dial svg, .target svg { display: block; width: 100%; height: auto; }
+.plan { border: 1px solid var(--hg-border); border-radius: 10px; background: var(--apt-fill); padding: 6px; }
+.dials { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.dial { border: 1px solid var(--hg-border); border-radius: 10px; padding: 8px; display: grid; gap: 4px; }
+.legend-line { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11.5px; color: var(--hg-fg-3); }
+.legend-line i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+.targets { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.target { border: 1px solid var(--hg-border); border-radius: 10px; padding: 8px; display: grid; gap: 4px; }
+.field { display: grid; gap: 4px; }
+.field label { font-size: 12px; color: var(--hg-fg-3); }
+.field input { border: 1px solid var(--hg-border-strong); background: var(--hg-bg-3); border-radius: 7px; padding: 7px 9px; color: var(--hg-fg-0); width: 100%; }
+.fields { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+details > summary { cursor: pointer; color: var(--apt-proposed); font-size: 12.5px; }
+.locks { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.locks li { border: 1px solid var(--hg-border); border-radius: 8px; padding: 8px 10px; display: grid; gap: 3px; }
+.locks li[data-open="true"] { border-color: color-mix(in srgb, var(--apt-ok) 50%, transparent); }
+.locks li b { font-weight: 500; color: var(--hg-fg-0); }
+.lockstate { font-family: var(--mono); font-size: 11px; }
+.physeg { display: inline-flex; gap: 2px; font-family: var(--mono); font-size: 11px; }
+.physeg span { padding: 1px 6px; border-radius: 4px; border: 1px solid var(--hg-border); color: var(--hg-fg-3); }
+.physeg span.on { color: var(--hg-fg-0); border-color: var(--apt-proposed); }
+.mockopt { display: flex; gap: 8px; align-items: flex-start; font-size: 12px; color: var(--hg-fg-3); border: 1px dashed var(--hg-border-strong); border-radius: 8px; padding: 8px; }
+.stopbar { display: flex; gap: 10px; align-items: center; position: sticky; top: -16px; background: var(--hg-bg-1); padding: 8px 0; z-index: 2; }
+.tests { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.tests li { border: 1px solid var(--hg-border); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; }
+.tests li .line { display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.notes section { border-top: 1px solid var(--hg-border); padding-top: 10px; display: grid; gap: 8px; align-content: start; }
+.notes h2 { margin: 0; font-size: 13px; font-family: var(--mono); font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--hg-fg-3); }
+.notes ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; color: var(--hg-fg-2); }
+.kinds { list-style: none; padding: 0 !important; margin: 0; display: grid; gap: 8px; }
+.kinds li { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; align-items: center; }
+.kinds svg { width: 40px; height: 28px; background: var(--cv-bg); border-radius: 6px; }
+
+@media (max-width: 760px) {
+  .device { grid-template-columns: minmax(0, 1fr); }
+  .device .panel { border-left: 0; border-top: 1px solid var(--hg-border); }
+  .fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@keyframes breathe { 0%, 100% { opacity: .25; } 50% { opacity: .9; } }
+.breathe { animation: breathe 2.2s var(--ease) infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spinner { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--hg-border-strong); border-top-color: var(--apt-proposed); animation: spin .9s linear infinite; vertical-align: -2px; }
+@media (prefers-reduced-motion: reduce) {
+  .breathe, .spinner { animation: none; }
+  .hold.holding::after { transition: none; width: 100%; }
+}
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Den fixture adoption</h1>
+      <p>A clickable mockup of adopting the robotic spotlights into Home's den, one socket at a time. The room, names and readings are invented. Nothing here talks to hardware.</p>
+    </div>
+    <div class="switches" id="switches"></div>
+  </header>
+  <div class="stage"><div class="device" id="device" data-frame="desktop">
+    <div class="room"><div class="room-inner" id="room">
+      <svg id="roomSvg" viewBox="0 0 800 500" role="img" aria-label="The den from above and behind the sofa, with its four ceiling sockets"></svg>
+      <div class="labels" id="labels"></div>
+      <div class="capsule" id="capsule"></div>
+      <div id="banner"></div>
+    </div></div>
+    <aside class="panel" id="panel" aria-live="polite"></aside>
+  </div></div>
+  <div class="notes">
+    <section>
+      <h2>Try</h2>
+      <ul>
+        <li><b>New fixture found · Adopt</b> in the room's capsule starts the main flow, into F3.</li>
+        <li>Each step has a <b>Try</b> line with its failures: not commissioned, a different bulb out, limits past the fixture's, and more.</li>
+        <li>After adopting, open <b>F3</b> for its states and its <b>Go live</b> card. The phase after the go can be previewed there.</li>
+        <li>The <b>Mix</b> switch shows 1 + 3 to 4 + 0. <b>Bulbs</b> shows Hue as it would set, or as set.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>Each socket, by kind</h2>
+      <ul class="kinds" id="kinds"></ul>
+    </section>
+    <section>
+      <h2>What stays off</h2>
+      <ul>
+        <li>Adopting needs no motion and no lit spot. The socket ends <b>virtual</b> until its go.</li>
+        <li>The bench comes first, before the fixture goes up. Test moves then wait for the transport (your go) and the socket's own switch, which den-live's sender enforces.</li>
+        <li>The spot lights only after its aim check. Until a fixture is live, its room light stands in for the bulb it replaced.</li>
+        <li>Stop works everywhere. Resume is always your press.</li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  // ---------- state ----------
+  const narrow = () => window.matchMedia("(max-width: 760px)").matches;
+  const S = {
+    frame: narrow() ? "phone" : "desktop",
+    mix: "0+4", rehearse: true, bulbsOn: false, fallback: false,
+    tab: "controls", selected: null, flow: null, newFound: true, adopted: false,
+    f3: "virtual", f4Mapped: true, mapOpen: false,
+    go: freshGo(), toast: "",
+  };
+  function freshGo() {
+    return { preview: false, physical: "off", transport: "lit", handsClear: false, tests: { rest: "", left: "", tilt: "", drill: "" }, stopped: false,
+      prep: [false, false], aim: "not_run", aimVariant: "pass", running: "", runStep: 0 };
+  }
+  // Rehearse the full set: the four virtual fixtures, whatever is installed (not during a swap).
+  const rehearsingNow = () => S.rehearse && !(S.flow && S.flow.swapStarted);
+  // A robotic socket serves the real room only when live: on, a lit transport, and its aim check passed.
+  const liveLitNow = () => S.adopted && S.go.physical === "on" && S.go.aim === "passed" && S.go.transport === "lit" && S.f3 !== "recheck" && !rehearsingNow();
+  const timers = new Set();
+  const later = (ms, fn) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
+  const clearTimers = () => { for (const t of timers) clearTimeout(t); timers.clear(); };
+
+  const IDS = ["F1", "F2", "F3", "F4"];
+  const HUE = { F1: "Corner bulb", F2: "Sofa bulb", F3: "Reading bulb", F4: "Art-side bulb" };
+  const ROBOT = { F1: "Corner spot", F2: "Sofa-end spot", F3: "Sofa spot", F4: "Art spot" };
+  const SETS = { "0+4": [], "1+3": ["F3"], "2+2": ["F2", "F3"], "3+1": ["F2", "F3", "F4"], "4+0": ["F1", "F2", "F3", "F4"] };
+  const COVER = { F1: "2 of 9", F2: "6 of 9", F3: "7 of 9", F4: "3 of 9" };
+
+  // ---------- room geometry (invented; drawing only) ----------
+  const P = (x, y, z) => [110 + x * 58 + y * 14, 478 - y * 30 - z * 96];
+  const SOCK = { F1: [2.5, 5.5], F2: [2.5, 1.8], F3: [7.5, 1.8], F4: [7.5, 5.5] };
+  const CEIL = 2.35;
+  const orbAt = id => P(SOCK[id][0], SOCK[id][1], CEIL);
+  const PAGE = [6.0, 1.3, 0.86], ART = [7.5, 7, 1.55];
+  const TARGETS = { A: [6.2, 2.6, 0.42], B: [8.8, 3.7, 0] };
+  const pts = arr => arr.map(p => P(...p).map(v => v.toFixed(1)).join(",")).join(" ");
+
+  // ---------- the plan: what each socket is and does now ----------
+  function kinds() {
+    const k = {};
+    const flow = S.flow;
+    let robots = rehearsingNow() ? IDS.slice() : SETS[S.mix].slice();
+    for (const id of IDS) k[id] = robots.includes(id) ? "robotic" : "hue";
+    if (flow && flow.swapStarted && !S.adopted) k.F3 = "calibrating";
+    return k;
+  }
+  function plan() {
+    const k = kinds(), r = {};
+    const rehearsing = rehearsingNow();
+    const f3Out = k.F3 === "calibrating" || (S.adopted && k.F3 === "robotic" && ["offline", "fault", "wrongboard"].includes(S.f3));
+    const f3Held = S.adopted && k.F3 === "robotic" && S.f3 === "held";
+    const f3Stopped = S.adopted && k.F3 === "robotic" && (S.f3 === "stopped" || S.go.stopped);
+    const aiming = S.go.running === "aim";
+    const testing = S.go.running.startsWith("test");
+    const noTask = S.fallback || f3Out || f3Stopped;
+    const mix = rehearsing ? "4+0" : S.mix;
+    if (mix === "0+4" || (mix === "1+3" && (noTask || k.F3 === "calibrating"))) {
+      r.F1 = { role: "fill", level: .35 };
+      r.F4 = { role: "accent", level: .2 };
+      if (k.F3 === "hue") { r.F3 = { role: "reading light", level: .6 }; r.F2 = { role: "glow", level: .25 }; }
+      else { r.F2 = { role: "reading light", level: .6 }; r.F3 = { role: f3Out ? "out of the plan" : "rests · glow", level: f3Out ? 0 : .2 }; }
+    } else if (mix === "1+3") {
+      r.F3 = { role: "task light", level: .7, beam: "page" };
+      r.F1 = { role: "fill", level: .35 }; r.F4 = { role: "accent", level: .2 };
+      // The real room: until F3 is live, its spot can't serve, so the bulb behind the reader reads (spec §6.3).
+      r.F2 = liveLitNow() ? { role: "glow", level: .25 } : { role: "reading light", level: .6 };
+    } else if (mix === "2+2") {
+      r.F3 = noTask ? { role: f3Out ? "out of the plan" : "rests · glow", level: f3Out ? 0 : .2 } : { role: "task light", level: .7, beam: "page" };
+      r.F2 = noTask ? { role: "task light", level: .65, beam: "page" } : { role: "standby", level: .2, standby: true };
+      r.F1 = { role: "fill", level: .35 }; r.F4 = { role: "glow", level: .25 };
+    } else if (mix === "3+1") {
+      r.F3 = noTask ? { role: f3Out ? "out of the plan" : "rests · glow", level: f3Out ? 0 : .2 } : { role: "task light", level: .7, beam: "page" };
+      r.F2 = noTask ? { role: "task light", level: .65, beam: "page" } : { role: "standby", level: .2, standby: true };
+      r.F4 = { role: "accent", level: .3, beam: "art" }; r.F1 = { role: "fill", level: .35 };
+    } else {
+      r.F3 = noTask ? { role: f3Out ? "out of the plan" : "rests · glow", level: f3Out ? 0 : .2 } : { role: "task light", level: .7, beam: "page" };
+      r.F2 = noTask ? { role: "task light", level: .65, beam: "page" } : { role: "standby", level: .2, standby: true };
+      r.F4 = { role: "accent", level: .3, beam: "art" }; r.F1 = { role: "rests · glow", level: .25 };
+    }
+    if (f3Held) r.F3 = { role: "in your hands", level: .55, beam: "page", held: true };
+    if (f3Stopped && k.F3 === "robotic") r.F3 = { role: "stopped", level: 0 };
+    if (aiming) r.F3 = { role: "aim check · in your hands", level: S.go.runStep >= 2 ? .3 : 0, beam: S.go.runStep >= 2 ? "target" : null, held: true };
+    if (testing) r.F3 = { role: "test move · in your hands", level: 0, held: true };
+    return { k, r, rehearsing };
+  }
+  function tagFor(id, k, rehearsing) {
+    if (k[id] === "calibrating") return { text: "swap in progress", cls: "attn" };
+    if (k[id] !== "robotic") return S.bulbsOn ? null : { text: "would set", cls: "" };
+    if (rehearsing) return { text: "rehearsal", cls: "" };
+    if (id === "F3" && S.adopted) {
+      if (S.f3 === "offline") return { text: "offline", cls: "attn" };
+      if (S.f3 === "fault") return { text: "fault", cls: "attn" };
+      if (S.f3 === "recheck") return { text: "new profile · dark until its aim check", cls: "attn" };
+      if (S.f3 === "wrongboard") return { text: "not its board", cls: "attn" };
+      if (S.go.physical === "on") return liveLitNow() ? { text: "live", cls: "live" } : { text: S.go.aim === "outofdate" ? "on · aim check out of date" : "on · moving dark", cls: "" };
+      if (S.go.physical === "tests") return { text: "tests · moves dark", cls: "" };
+      if (S.go.aim === "outofdate") return { text: "virtual · aim check out of date", cls: "attn" };
+    }
+    return { text: "virtual", cls: "" };
+  }
+  const nameOf = (id, k) => k[id] === "robotic" || k[id] === "calibrating" ? (id === "F3" && S.flow && !S.adopted ? (S.flow.name || ROBOT.F3) : ROBOT[id])
+    : (id === "F4" && !S.f4Mapped ? "bulb not mapped" : HUE[id]);
+  const pct = v => `${Math.round(v * 100)}%`;
+  function roleLine(id, k, r) {
+    const x = r[id] || { role: "rests", level: 0 };
+    if (k[id] === "calibrating") return "out of the plan";
+    if (k[id] === "hue") {
+      if (id === "F4" && !S.f4Mapped) return "not placed · den_lighting's own rules";
+      return `${x.role} · ${S.bulbsOn ? "" : "would set "}${pct(x.level)}`;
+    }
+    if (x.standby) return "standby · aimed, dark";
+    return x.level > 0 && !/rests|out of/.test(x.role) ? `${x.role} ${pct(x.level)}` : x.role;
+  }
+
+  // ---------- drawing the room ----------
+  const svg = document.getElementById("roomSvg");
+  function rng(seed) { return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+  const BODY = (() => {
+    const rand = rng(7), out = [];
+    const add = (n, f) => { for (let i = 0; i < n; i++) out.push(f()); };
+    add(60, () => { const a = rand() * 6.283, b = Math.acos(2 * rand() - 1), r = .1 * Math.cbrt(rand());
+      return [6.0 + r * Math.sin(b) * Math.cos(a), .82 + r * Math.sin(b) * Math.sin(a), 1.16 + r * Math.cos(b)]; });
+    add(140, () => [6.0 + (rand() - .5) * .38, .78 + (rand() - .5) * .18, .55 + rand() * .48]);
+    add(70, () => { const s = rand() < .5 ? -1 : 1; return [6.0 + s * (.1 + rand() * .1), .9 + rand() * .45, .5 + (rand() - .5) * .1]; });
+    add(50, () => { const s = rand() < .5 ? -1 : 1, t = rand(); return [6.0 + s * (.2 - t * .12), .85 + t * .4, .95 - t * .12]; });
+    return out.map(p => P(...p));
+  })();
+  function glowGrad(id, color, a) {
+    return `<radialGradient id="${id}"><stop offset="0" stop-color="${color}" stop-opacity="${a}"/><stop offset=".45" stop-color="${color}" stop-opacity="${a * .35}"/><stop offset="1" stop-color="${color}" stop-opacity="0"/></radialGradient>`;
+  }
+  function drawRoom() {
+    const { k, r, rehearsing } = plan();
+    const sel = S.selected || (S.flow ? (S.flow.socket || (S.flow.step === "find" || S.flow.step === "found" ? null : "F3")) : null);
+    let s = `<defs>${glowGrad("gWarm", "#ffd8a8", .95)}${glowGrad("gBulb", "#ffcf96", .55)}${glowGrad("gPool", "#ffd2a0", .5)}${glowGrad("gIce", "#b8d8ff", .6)}
+      <linearGradient id="gFloor" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#121418"/><stop offset="1" stop-color="#0a0b0d"/></linearGradient>
+      <linearGradient id="gBeam" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe2b8" stop-opacity=".55"/><stop offset="1" stop-color="#ffe2b8" stop-opacity=".1"/></linearGradient>
+      <marker id="arrowHead" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#ffddb0"/></marker></defs>`;
+    // floor, walls, furniture
+    s += `<polygon points="${pts([[0,0,0],[10,0,0],[10,7,0],[0,7,0]])}" fill="url(#gFloor)" stroke="rgba(255,255,255,.06)"/>`;
+    s += `<polygon points="${pts([[0,7,0],[10,7,0],[10,7,2.6],[0,7,2.6]])}" fill="#0c0d10" stroke="rgba(255,255,255,.07)"/>`;
+    s += `<polygon points="${pts([[0,0,0],[0,7,0],[0,7,2.6],[0,0,2.6]])}" fill="#0e0f12" stroke="rgba(255,255,255,.07)"/>`;
+    // floor pools from the room light
+    for (const id of IDS) {
+      const x = r[id]; if (!x || !(x.level > 0) || k[id] === "calibrating") continue;
+      if (k[id] === "hue" && !S.bulbsOn) continue;
+      const [fx, fy] = P(SOCK[id][0], SOCK[id][1], 0), rx = 70 + 110 * x.level;
+      s += `<ellipse cx="${fx}" cy="${fy}" rx="${rx}" ry="${rx * .34}" fill="url(#gPool)" opacity="${(.25 + .6 * x.level).toFixed(2)}"/>`;
+    }
+    s += `<polygon points="${pts([[6.6,7,1.2],[8.4,7,1.2],[8.4,7,1.95],[6.6,7,1.95]])}" fill="#16181d" stroke="rgba(255,255,255,.14)"/>`;
+    s += `<polygon points="${pts([[0.6,6.5,0],[2.4,6.5,0],[2.4,6.5,1.6],[0.6,6.5,1.6]])}" fill="#121318" stroke="rgba(255,255,255,.08)"/>`;
+    s += `<polygon points="${pts([[5,2.2,.42],[7.4,2.2,.42],[7.4,3,.42],[5,3,.42]])}" fill="#17191e" stroke="rgba(255,255,255,.1)"/>`;
+    s += `<polygon points="${pts([[5,2.2,0],[7.4,2.2,0],[7.4,2.2,.42],[5,2.2,.42]])}" fill="#101115"/>`;
+    // aim-check targets
+    if (S.go.physical !== "off" && S.adopted) {
+      for (const [key, p] of Object.entries(TARGETS)) {
+        const [tx, ty] = P(...p);
+        s += `<g stroke="#ffddb0" stroke-width="1.2" fill="none" opacity=".85"><ellipse cx="${tx}" cy="${ty}" rx="16" ry="6"/><path d="M${tx - 22} ${ty}h44M${tx} ${ty - 9}v18"/></g>
+          <text x="${tx + 20}" y="${ty - 8}" fill="#ffddb0" font-family="Geist Mono, monospace" font-size="11">${key}</text>`;
+      }
+    }
+    // beams (drawn under the sofa back so the reader sits in front)
+    for (const id of IDS) {
+      const x = r[id]; if (!x || !x.beam || !(x.level > 0) || k[id] !== "robotic") continue;
+      const [ox, oy] = orbAt(id);
+      const dest = x.beam === "page" ? PAGE : x.beam === "art" ? ART : TARGETS[S.go.running === "aim" && S.go.runStep >= 4 ? "B" : "A"];
+      const [px, py] = P(...dest), w = x.beam === "art" ? 18 : 15;
+      s += `<polygon points="${ox - 2},${oy} ${ox + 2},${oy} ${px + w},${py} ${px - w},${py}" fill="url(#gBeam)" opacity="${(.5 + x.level * .5).toFixed(2)}"/>`;
+      s += `<ellipse cx="${px}" cy="${py}" rx="${w + 6}" ry="${(w + 6) * .38}" fill="url(#gWarm)"/>`;
+    }
+    // sofa: seat, then back (nearer the viewer)
+    s += `<polygon points="${pts([[4.6,.55,.45],[8.4,.55,.45],[8.4,1.25,.45],[4.6,1.25,.45]])}" fill="#1a1c21" stroke="rgba(255,255,255,.08)"/>`;
+    // the reader: a synthetic point figure, no face
+    s += `<g fill="#b8d8ff" opacity=".55">${BODY.map(([x, y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="1.3"/>`).join("")}</g>`;
+    s += `<polygon points="${pts([[4.6,.25,0],[8.4,.25,0],[8.4,.25,.82],[4.6,.25,.82]])}" fill="#14161a" stroke="rgba(255,255,255,.08)"/>`;
+    s += `<polygon points="${pts([[4.6,.25,.82],[8.4,.25,.82],[8.4,.55,.82],[4.6,.55,.82]])}" fill="#1c1e23"/>`;
+    // standby: aimed and dark
+    for (const id of IDS) {
+      const x = r[id]; if (!x || !x.standby || k[id] !== "robotic") continue;
+      const [ox, oy] = orbAt(id), [px, py] = P(...PAGE);
+      s += `<line x1="${ox}" y1="${oy}" x2="${px}" y2="${py}" stroke="#ffddb0" stroke-dasharray="3 5" stroke-width="1" opacity=".35"/>`;
+    }
+    // the sockets
+    for (const id of IDS) s += drawSocket(id, k, r, sel === id);
+    // the front arrow while mounting
+    if (S.flow && S.flow.step === "mount") {
+      const yaw = (S.flow.yaw || 0) * Math.PI / 180, [sx, sy] = SOCK.F3;
+      const [ax, ay] = orbAt("F3"), [bx, by] = P(sx + Math.sin(yaw) * 1.1, sy + Math.cos(yaw) * 1.1, CEIL);
+      s += `<line x1="${ax}" y1="${ay}" x2="${bx}" y2="${by}" stroke="#ffddb0" stroke-width="2" marker-end="url(#arrowHead)"/>
+        <text x="${bx + 8}" y="${by - 4}" fill="#ffddb0" font-family="Geist Mono, monospace" font-size="11">front</text>`;
+    }
+    svg.innerHTML = s;
+    drawLabels(k, r, rehearsing, sel);
+  }
+  function drawSocket(id, k, r, selected) {
+    const [x, y] = orbAt(id), p = r[id] || { level: 0 };
+    let s = "";
+    if (selected) s += `<circle cx="${x}" cy="${y}" r="30" fill="url(#gIce)" opacity=".5"/><circle cx="${x}" cy="${y}" r="24" fill="none" stroke="#b8d8ff" stroke-opacity=".55" stroke-width="1"/>`;
+    if (S.flow && S.flow.step === "find" && !S.flow.found && !S.flow.socket) {
+      if (id === "F3") s += `<circle class="breathe" cx="${x}" cy="${y}" r="20" fill="none" stroke="#b8d8ff" stroke-width="1.2"/>`;
+    }
+    if (k[id] === "calibrating") {
+      return s + `<circle cx="${x}" cy="${y}" r="9" fill="none" stroke="#a1a1a1" stroke-width="1.4" stroke-dasharray="1.5 3.5"/>`;
+    }
+    if (k[id] === "hue") {
+      const rad = 22 + 40 * p.level;
+      if (S.bulbsOn) return s + `<circle cx="${x}" cy="${y}" r="${rad}" fill="url(#gBulb)"/><circle cx="${x}" cy="${y}" r="${rad * .32}" fill="url(#gBulb)"/>`;
+      return s + `<circle cx="${x}" cy="${y}" r="${rad * .7}" fill="url(#gBulb)" opacity=".28"/><circle cx="${x}" cy="${y}" r="${rad * .62}" fill="none" stroke="#ffcf96" stroke-opacity=".6" stroke-width="1.1" stroke-dasharray="4 4"/>`;
+    }
+    // robotic
+    const out = id === "F3" && S.adopted && ["offline", "fault", "wrongboard"].includes(S.f3);
+    const stopped = id === "F3" && S.adopted && (S.f3 === "stopped" || S.go.stopped);
+    const level = out || stopped ? 0 : p.level;
+    if (level > 0) s += `<circle cx="${x}" cy="${y}" r="${(16 + 30 * level).toFixed(1)}" fill="url(#gWarm)" opacity="${(.45 + .5 * level).toFixed(2)}"/>`;
+    const core = out ? "#2a2c30" : level > 0 ? "#f3e6d2" : "#3d3f43";
+    s += `<circle cx="${x}" cy="${y}" r="6.5" fill="${core}" stroke="rgba(255,255,255,.25)" stroke-width=".8"/>`;
+    if (p.standby) s += `<circle cx="${x}" cy="${y}" r="12" fill="none" stroke="#ffdfab" stroke-width="1.3" stroke-dasharray="3 3"/>`;
+    if (p.held) s += `<circle cx="${x}" cy="${y}" r="12" fill="none" stroke="#b8d8ff" stroke-width="1.5"/>`;
+    if (id === "F3" && S.adopted && S.f3 === "offline") s += `<circle cx="${x}" cy="${y}" r="12" fill="none" stroke="#8f8f8f" stroke-width="1.2" stroke-dasharray="2 3"/>`;
+    if (id === "F3" && S.adopted && (S.f3 === "fault" || S.f3 === "wrongboard")) s += `<path d="M${x + 12} ${y - 18}l6 6-6 6-6-6z" fill="#ffb45f"/>`;
+    if (stopped) s += `<rect x="${x - 3.5}" y="${y + 11}" width="7" height="7" fill="#ff625f"/>`;
+    if (id === "F3" && S.adopted && S.f3 === "recheck") s += `<circle cx="${x + 11}" cy="${y - 10}" r="3.2" fill="#ffb45f"/>`;
+    return s;
+  }
+  function drawLabels(k, r, rehearsing, sel) {
+    const box = document.getElementById("labels");
+    const html = IDS.map(id => {
+      const [x, y] = orbAt(id), tag = tagFor(id, k, rehearsing);
+      const left = (x / 800 * 100).toFixed(2), top = ((y + 22) / 500 * 100).toFixed(2), hitTop = (y / 500 * 100).toFixed(2);
+      const kindWord = k[id] === "hue" ? "Hue" : k[id] === "calibrating" ? "Robotic" : "Robotic";
+      return `<button class="hit" style="left:${left}%;top:${hitTop}%" data-act="select" data-id="${id}" aria-label="Open ${id}, ${kindWord}, ${esc(nameOf(id, k))}"></button>
+        <div class="lab${sel === id ? " sel" : ""}" style="left:${left}%;top:${top}%">
+          <span class="nm">${id}<span class="nmtext"> · ${esc(nameOf(id, k))}</span>${tag ? `<span class="tag ${tag.cls}">${tag.text}</span>` : ""}</span>
+          <span class="dt">${esc(roleLine(id, k, r))}<span class="wide">${k[id] === "hue" ? " · 2700 K" : ""}</span></span></div>`;
+    }).join("");
+    box.innerHTML = html;
+    const banner = document.getElementById("banner");
+    banner.innerHTML = rehearsing ? `<div class="banner">Rehearsing all four · not what's installed</div>` : "";
+  }
+  function drawCapsule() {
+    const { k } = plan();
+    const nR = IDS.filter(id => k[id] === "robotic").length;
+    const rehearsing = rehearsingNow();
+    const mixWord = rehearsing ? "rehearsing 4" : `${nR} robotic, ${4 - nR - (k.F3 === "calibrating" ? 1 : 0)} Hue`;
+    document.getElementById("capsule").innerHTML = `<div class="cap-row"><span class="dot"></span>Den · live <span class="muted">1 person · Reading</span></div>
+      <div class="cap-row cap-coord"><span class="muted">Coordinator · On · ${mixWord}</span></div>
+      ${S.newFound && !S.flow ? `<button class="cap-row cap-found" data-act="startFlow"><b>New fixture found</b> · Adopt</button>` : ""}`;
+  }
+
+  // ---------- small parts ----------
+  const esc = v => String(v).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  function markSvg(kind) {
+    if (kind === "hue") return `<svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="var(--apt-warm)" opacity=".28"/><circle cx="8" cy="8" r="4" fill="var(--apt-warm)" opacity=".55"/></svg>`;
+    if (kind === "calibrating") return `<svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.5" fill="none" stroke="var(--hg-fg-3)" stroke-width="1.4" stroke-dasharray="1.4 2.6"/></svg>`;
+    return `<svg class="mark" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="var(--apt-warm)" stroke-opacity=".6" stroke-width="1"/><circle cx="8" cy="8" r="3.4" fill="var(--hg-fg-1)"/></svg>`;
+  }
+  const tick = (state, label, meta, action = "") => `<li class="${state}"><span class="tick">${state === "ok" ? "✓" : state === "bad" ? "!" : ""}</span><span><b>${label}</b>${meta ? `<span class="meta">${meta}</span>` : ""}</span>${action}</li>`;
+  const holdBtn = (act, label, enabled, cls = "primary") => `<button class="btn hold ${cls}" data-hold="${act}" ${enabled ? "" : "disabled"}>${label}</button>`;
+  const toastHtml = () => S.toast ? `<p class="toast" role="status">${esc(S.toast)}</p>` : "";
+  function say(text) { S.toast = text; render(); }
+
+  // ---------- panel: Controls and Coordinator ----------
+  function renderControls() {
+    const { k, r, rehearsing } = plan();
+    const nR = IDS.filter(id => k[id] === "robotic").length, nH = IDS.filter(id => k[id] === "hue").length;
+    const anyVirtual = !rehearsing && IDS.some(id => k[id] === "robotic" && !(id === "F3" && S.adopted && S.go.physical !== "off"));
+    const movingDark = !rehearsing && S.adopted && k.F3 === "robotic" && S.go.physical !== "off" && !liveLitNow();
+    const rows = IDS.map(id => {
+      const tag = tagFor(id, k, rehearsing);
+      const kindWord = k[id] === "hue" ? "Hue" : k[id] === "calibrating" ? "Robotic · calibrating" : "Robotic";
+      return `<li><button class="srow" data-act="select" data-id="${id}" ${S.selected === id ? 'aria-current="true"' : ""}>
+        ${markSvg(k[id])}<span><span class="nm">${esc(nameOf(id, k))}</span><span class="dt">${id} · ${kindWord} · ${esc(roleLine(id, k, r))}</span></span>
+        <span class="right">${tag ? `<span class="badge ${tag.cls === "attn" ? "attn" : tag.cls === "live" ? "ok" : tag.text === "virtual" ? "virtual" : ""}">${tag.text}</span>` : ""}</span></button></li>`;
+    }).join("");
+    return `<div class="head"><div class="grow"><h2>Den lights</h2><p class="sub">${rehearsing ? "Rehearsing all four" : `${nR} robotic · ${nH} Hue`}${k.F3 === "calibrating" ? " · F3 mid-swap" : ""}</p></div>
+      <div class="badges">${anyVirtual ? `<span class="badge virtual">Virtual until the go</span>` : ""}${movingDark ? `<span class="badge attn">Moving dark</span>` : ""}</div></div>
+      ${tabsHtml()}
+      ${S.newFound && !S.flow ? `<div class="callout ice"><b>Board 2 joined Home Assistant.</b><span class="meta">It isn't in a socket yet.</span><div class="actions"><button class="btn primary" data-act="startFlow">Adopt it</button></div></div>` : ""}
+      <section class="section"><h4>Sockets</h4><ul class="rows">${rows}</ul>
+        ${!S.f4Mapped && k.F4 === "hue" ? mapBulbs() : ""}</section>
+      <section class="section"><label class="head" style="align-items:center"><input type="checkbox" id="rehearse" data-act="rehearse" ${S.rehearse ? "checked" : ""} ${S.flow ? "disabled" : ""}>
+        <span class="grow"><b style="font-weight:500">Rehearse the full set</b><span class="meta" style="display:block">${S.mix === "0+4" ? "On while no socket is robotic, so today's view stays until fixture 1." : S.rehearse ? "The four virtual fixtures, for testing. den-live sends nothing to the real ones while this is on." : "Off: Home shows what's installed. Turn it on any time, for testing."}</span></span></label></section>
+      <p class="meta">Virtual preview · nothing is sent to hardware.</p>${toastHtml()}`;
+  }
+  function mapBulbs() {
+    if (!S.mapOpen) return `<div class="actions"><span class="meta">F4's bulb isn't mapped yet.</span><button class="btn small" data-act="mapOpen">Map the bulbs</button></div>`;
+    return `<div class="callout"><b>Which bulb is in F4?</b><div class="choices">
+      ${["Art-side bulb", "Desk bulb"].map((b, i) => `<button class="choice" role="radio" aria-checked="${i === 0}" data-act="noop"><span class="radio"></span><span><b>${b}</b><span class="meta" style="display:block">den_lighting · not placed</span></span></button>`).join("")}</div>
+      <div class="actions"><button class="btn small" data-act="pulseBulb">Pulse it</button><button class="btn small primary" data-act="mapSave">Save F4</button></div>
+      <span class="meta">Pulse is your press: an ordinary light change through Home Assistant.</span></div>`;
+  }
+  function tabsHtml() {
+    return `<div class="tabs" role="tablist">${[["controls", "Controls"], ["coordinator", "Coordinator"]].map(([key, label]) =>
+      `<button role="tab" aria-selected="${S.tab === key}" data-act="tab" data-tab="${key}">${label}</button>`).join("")}</div>`;
+  }
+  function renderCoordinator() {
+    const { k, r, rehearsing } = plan();
+    const nR = IDS.filter(id => k[id] === "robotic").length;
+    const lines = IDS.map(id => {
+      const x = r[id] || {}, tag = tagFor(id, k, rehearsing);
+      const kindWord = k[id] === "hue" ? "Hue" : "Robotic";
+      return `<li style="display:grid;grid-template-columns:28px 64px minmax(0,1fr);gap:8px"><span class="mono">${id}</span><span class="mono">${kindWord}</span><span><b style="font-weight:500;color:var(--hg-fg-0)">${esc(nameOf(id, k))}</b><span class="meta" style="display:block">${esc(roleLine(id, k, r))}${x.level > 0 ? " · 2700 K" : ""}${tag && k[id] === "robotic" ? ` · ${tag.text}` : ""}</span></span></li>`;
+    }).join("");
+    const why = [];
+    for (const id of IDS) {
+      const x = r[id] || {};
+      if (k[id] !== "robotic") continue;
+      if (x.beam === "page") why.push(`${id} lights the close-up task, at ${pct(x.level)}`);
+      else if (x.standby) why.push(`${id} points at you, dark, ready`);
+      else if (x.beam === "art") why.push(`${id} lights the artwork, at ${pct(x.level)}`);
+      else if (/out of/.test(x.role)) why.push(`${id} not used: ${S.f3 === "offline" ? "offline" : S.f3 === "wrongboard" ? "not the board adopted here" : "a fault"}`);
+    }
+    if (!why.some(l => /close-up/.test(l))) why.push(S.fallback ? "No spot: in front of you" : "No spot: no robotic fixture can serve");
+    const fallbackBulb = IDS.find(id => k[id] === "hue" && r[id]?.role === "reading light");
+    if (fallbackBulb) why.push(`${fallbackBulb} is the reading light: the bulb behind you`);
+    if (rehearsing) why.push("Rehearsing: den-live sends nothing to the real fixtures");
+    else if (nR && !liveLitNow()) why.push("The real bulbs plan as if no spot serves: no robotic socket is live yet");
+    const realF3 = !rehearsing && S.adopted && k.F3 === "robotic" && S.go.physical !== "off";
+    const actuation = realF3 ? (liveLitNow() ? "Moving F3; the other spots in Home" : "Moving F3 dark; the other spots in Home") : "Moving the virtual spots in Home";
+    return `<div class="head"><div class="grow"><h2>Lighting coordinator</h2><p class="sub">On · Reading · ${rehearsing ? "rehearsing all four" : `${nR} robotic, ${4 - nR} Hue`}</p></div></div>
+      ${tabsHtml()}
+      <p class="meta">${actuation}</p>
+      <section class="section"><h4>Sockets</h4><ul class="rows" style="gap:8px">${lines}</ul>
+        ${nR ? `<p class="meta">Assumed for ${IDS.filter(id => k[id] === "robotic").join(", ")}: beam 20°, light output</p>` : ""}</section>
+      <section class="section"><h4>Why</h4><ul class="rows" style="gap:4px">${why.map(l => `<li class="sub">${esc(l)}</li>`).join("")}</ul>
+        ${S.mix === "1+3" && S.adopted ? `<label class="actions meta"><input type="checkbox" data-act="fallback" ${S.fallback ? "checked" : ""}> Show when F3 can't serve (its beam would cross your head)</label>` : ""}</section>
+      <section class="section"><h4>Learned</h4><p class="sub">Reading, evening: spot 10% dimmer; room glow 30% · 2700 K. Learned from you (3 changes)</p>
+        ${S.adopted ? `<p class="meta">The Reading bulb's learned levels carried over to F3's radials and downlight.</p>` : ""}</section>${toastHtml()}`;
+  }
+
+  // ---------- panel: one socket ----------
+  function renderSocket(id) {
+    const { k, r, rehearsing } = plan();
+    const back = `<button class="btn small" data-act="back">← All sockets</button>`;
+    if (k[id] === "hue") {
+      return `${back}<div class="head">${markSvg("hue")}<div class="grow"><h2>${esc(nameOf(id, k))}</h2><p class="sub">${id} · Hue · ${esc(roleLine(id, k, r))}</p></div></div>
+        <section class="section"><p class="sub">This bulb's own control goes through den_lighting and Home Assistant, as today.</p>
+        <div class="kv"><dt>Bulbs</dt><dd>${S.bulbsOn ? "On: the coordinator sets it" : "Off: shown as it would set"}</dd><dt>Learning</dt><dd>keyed by socket ${id}</dd></div></section>
+        <section class="section"><h4>Replace it with a robotic fixture</h4><p class="meta">Pairs a commissioned fixture and binds it to ${id}. Nothing moves while you adopt it.</p>
+        <div class="actions"><button class="btn primary" data-act="startFlow" data-socket="${id}">Adopt a fixture here</button></div></section>${toastHtml()}`;
+    }
+    if (k[id] === "calibrating") {
+      return `${back}<div class="head">${markSvg("calibrating")}<div class="grow"><h2>${esc(nameOf(id, k))}</h2><p class="sub">${id} · swap in progress</p></div></div>
+        <p class="sub">Out of the coordinator's plan. The other sockets cover its light.</p><div class="actions"><button class="btn primary" data-act="resumeFlow">Continue adopting</button></div>`;
+    }
+    const tag = tagFor(id, k, rehearsing);
+    const isF3 = id === "F3" && S.adopted;
+    let html = `${back}<div class="head">${markSvg("robotic")}<div class="grow"><h2>${esc(nameOf(id, k))}</h2><p class="sub">${id} · Robotic · ${esc(roleLine(id, k, r))}</p></div>
+      <div class="badges">${tag ? `<span class="badge ${tag.cls === "attn" ? "attn" : tag.cls === "live" ? "ok" : "virtual"}">${tag.text}</span>` : ""}</div></div>`;
+    if (rehearsing) return html + `<p class="sub">A rehearsal fixture: the four virtual sockets as today. Nothing is installed here.</p>${toastHtml()}`;
+    if (!isF3) return html + `<section class="section"><div class="kv"><dt>Board</dt><dd>${id === "F2" ? 3 : id === "F4" ? 4 : 5}</dd><dt>Go live</dt><dd>waits for the go</dd></div></section>${toastHtml()}`;
+    html += stateSection();
+    html += `<section class="section"><h4>Fixture</h4><dl class="kv"><dt>Board</dt><dd>2</dd><dt>Firmware</dt><dd>build 2031</dd><dt>Profile</dt><dd>3fa2</dd>
+      <dt>Can do</dt><dd>timed moves · fades · joins a flight · moves at rest</dd><dt>Lit travel</dt><dd>yes, from the record</dd><dt>Bench</dt><dd>sittings 2–4 dated</dd>
+      <dt>Room light</dt><dd>radials Z1–Z6 · downlight Z7 (assumed)</dd>
+      <dt>Beam</dt><dd class="attn-t">assumed 20° · not measured</dd><dt>Replaced</dt><dd>Reading bulb · its room light stands in until live</dd><dt>Last heard</dt><dd>${S.f3 === "offline" ? "4 min ago" : "3 s ago"}</dd></dl></section>`;
+    html += goLive();
+    html += `<section class="section"><div class="actions"><button class="btn small" data-act="takeDown">Take it down</button><span class="meta">Back to a bulb: the checklist in reverse.</span></div></section>${toastHtml()}`;
+    return html;
+  }
+  const STATES = [["virtual", "Normal"], ["held", "In your hands"], ["stopped", "Stopped"], ["offline", "Offline"], ["fault", "Fault"], ["recheck", "Re-commissioned"], ["wrongboard", "Not its board"]];
+  function stateSection() {
+    const words = {
+      virtual: ({ off: ["Virtual until its go", "The coordinator plans F3 and Home draws it. Nothing that moves it or lights its spot is sent. Its room light stands in for the Reading bulb.", ""],
+        tests: ["Tests · moves dark", "Only your Go live moves reach it. The coordinator still plans it virtually.", ""],
+        on: liveLitNow() ? ["Live", "The coordinator drives F3 and may light it.", ""] : ["On · moving dark", "The coordinator drives F3 dark until its aim check passes. The real bulbs still plan as if it can't serve.", ""] })[S.go.physical],
+      held: ["In your hands", "You changed its spot. The coordinator passes it by and learns from it.", `<button class="btn small" data-act="f3" data-v="virtual">Return to auto</button>`],
+      stopped: S.go.physical === "off" || !S.go.preview
+        ? ["Stopped · the spot is dark", "Stop survives a reboot. Its room light is untouched. At off, resume it in Home Assistant.", `<span class="meta">Resume it in Home Assistant: always your press.</span>`]
+        : ["Stopped · the spot is dark", "Stop survives a reboot. Its room light is untouched.", `<button class="btn small" data-act="f3" data-v="virtual">Resume</button><span class="meta">Always your press.</span>`],
+      offline: ["Offline since 21:40 · check its power", "It rejoins by itself. The other sockets cover its light now.", `<button class="btn small" data-act="f3" data-v="virtual">Reconnect to F3</button>`],
+      fault: ["Fault: a motion fault · dark and holding", "Check it, then Resume. A light fault needs a power cycle; anything else, a bench visit.", `<button class="btn small" data-act="f3" data-v="virtual">Resume</button>`],
+      recheck: ["New profile from the bench", "Same board, new profile: it was re-commissioned. den-live plans it from the new record; its aim check no longer matches, so the coordinator's moves stay dark until it passes again. Moves follow F3's switch.", `<button class="btn small primary" data-act="recordProfile">Record it</button><span class="meta">Acknowledges it. The switch is untouched.</span>`],
+      wrongboard: ["F3's board isn't the one adopted here", "A different board number answered for F3. Only Stop goes to it. Take it down and adopt the right one.", ""],
+    }[S.f3];
+    return `<section class="section"><div class="callout ${["offline", "fault", "recheck", "wrongboard"].includes(S.f3) ? "attn" : ""}"><b>${words[0]}</b><span class="meta">${words[1]}</span>${words[2] ? `<div class="actions">${words[2]}</div>` : ""}</div>
+      <div class="actions"><span class="meta">Mockup: try a state</span><div class="seg">${STATES.map(([v, l]) => `<button aria-pressed="${S.f3 === v}" data-act="f3" data-v="${v}">${l}</button>`).join("")}</div></div></section>`;
+  }
+
+  // ---------- Go live ----------
+  function goLive() {
+    const g = S.go, open2 = g.preview, phys = g.physical, lit = g.transport === "lit";
+    const testsDone = Object.values(g.tests).every(v => v === "pass");
+    const switchWords = { off: "Only Stop reaches it. Your first hold here is F3's go.", tests: "Your Go live presses, Stop and Resume.",
+      on: g.aim === "passed" && lit ? "The coordinator drives it, lit." : "The coordinator drives it, dark until its aim check passes." }[phys];
+    let h = `<section class="section"><h3>Go live</h3><p class="meta">Three locks. Nothing moves F3 or lights its spot until they're open, and its spot lights only after its aim check.</p><ol class="locks">
+      <li data-open="true"><b>1 · The bench, for board 2</b><span class="lockstate">Record valid ✓ · sittings 3 and 4 dated ✓</span></li>
+      <li data-open="${open2}"><b>2 · The transport, opened once</b><span class="lockstate">${open2 ? `On · ${lit ? "lit" : "dark"} · your first go` : "Off · waits for your go"}</span></li>
+      <li data-open="${phys !== "off"}"><b>3 · F3's own switch</b><span class="physeg">${["off", "tests", "on"].map(v => `<span class="${phys === v ? "on" : ""}">${v}</span>`).join("")}</span><span class="meta">${switchWords}</span></li></ol>`;
+    if (phys === "off") h += `<div class="actions">${holdBtn("allowTests", "Hold: allow test moves", open2)}</div>${open2 ? "" : `<p class="meta">Waits for the go. Built and shipped, disabled until then.</p>`}`;
+    h += `<label class="mockopt"><input type="checkbox" data-act="goPreview" ${g.preview ? "checked" : ""}><span>Preview after the go<br>Mockup only: pretends the transport is on.</span></label>`;
+    if (g.preview) h += `<div class="actions"><span class="meta">Transport:</span><div class="seg">${[["lit", "Lit"], ["dark", "Dark only"]].map(([v, l]) =>
+      `<button aria-pressed="${g.transport === v}" data-act="transport" data-v="${v}">${l}</button>`).join("")}</div></div>`;
+    h += `</section>`;
+    if (phys === "off") return h;
+    h += `<section class="section"><div class="stopbar"><button class="btn stop" data-act="stop">Stop</button><span class="meta">${g.stopped ? "Stopped · the spot is dark. Resume is yours." : "One Stop: here, the den's, or Home Assistant's on the board."}</span>${g.stopped ? `<button class="btn small" data-act="resume">Resume</button>` : ""}</div>
+      <h4>Dark test moves</h4>
+      <ul class="checks">${tick(g.handsClear ? "ok" : "wait", "Hands clear of the head; nobody under it", "The beam somewhere harmless.", g.handsClear ? "" : `<button class="btn small" data-act="handsClear">Done</button>`)}</ul>
+      <p class="meta">One at a time, each your press. Never repeated, and never learned from.</p><ol class="tests">
+      ${testRow("rest", "Go to rest, dark", "pan 0°, tilt 0°", 1.5)}${testRow("left", "Turn left 30°, dark", "then back", 1.2)}${testRow("tilt", "Tilt down 30°, dark", "then back", 1.1)}
+      <li><div class="line"><b style="font-weight:500">Stop drill</b>${g.tests.drill === "pass" ? `<span class="ok-t mono">Stop latched · Resume answered ✓</span>` : g.tests.drill === "stopped" ? `<span class="mono warm-t">Stopped mid-move. Now press Resume.</span>` : `<button class="btn small" data-act="drill" ${g.stopped || g.running || !g.handsClear ? "disabled" : ""}>Start a move, then Stop</button>`}</div></li></ol>`;
+    if (testsDone && phys === "tests") h += `<div class="actions">${holdBtn("goOn", "Hold: let the coordinator drive F3", true)}</div><p class="meta">It drives F3 dark until the aim check passes.</p>`;
+    h += `</section><section class="section"><h4>Aim check · a spot lit at rest</h4>`;
+    if (!testsDone) return h + `<p class="meta">After the dark test moves.</p></section>`;
+    if (!lit) return h + `<div class="callout attn"><b>The transport is dark: the aim check needs a lit go.</b></div></section>`;
+    h += `<ul class="checks">${["The den lit as usual, so the camera sees", "Nobody in the beam's path"].map((t, i) =>
+      tick(g.prep[i] ? "ok" : "wait", t, "", g.prep[i] ? "" : `<button class="btn small" data-act="prep" data-i="${i}">Done</button>`)).join("")}</ul>
+      <dl class="kv"><dt>Targets</dt><dd>A · the table top, where it serves the sofa<br>B · the floor, off to its side</dd><dt>Spot</dt><dd>lit at rest, 30%, on the board's 3 s lease</dd><dt>Floor</dt><dd>dark at once if a head comes near the beam</dd></dl>`;
+    if (g.running === "aim") {
+      const steps = ["Dark move to A", "Lit at rest, leased", "5 frames", "Dark move to B", "Lit at rest, leased", "5 frames"];
+      h += `<ul class="checks">${steps.map((t, i) => tick(i < g.runStep ? "ok" : "wait", t, "")).join("")}</ul>`;
+    } else if (g.aim === "not_run" || g.aim === "outofdate") {
+      h += `<div class="actions"><button class="btn primary" data-act="runAim" ${g.prep.every(Boolean) && !g.stopped ? "" : "disabled"}>Run aim check</button>
+        <span class="meta">Try:</span><div class="seg">${[["pass", "Passes"], ["turned", "Turned mount"], ["spread", "Spread"], ["head", "A head near the beam"]].map(([v, l]) =>
+        `<button aria-pressed="${g.aimVariant === v}" data-act="aimVariant" data-v="${v}">${l}</button>`).join("")}</div></div>`;
+    } else h += aimResult();
+    if (phys === "on" && g.aim === "passed") h += `<div class="callout ok"><b>Live.</b><span class="meta">The coordinator drives F3 and may light it. Lit travel still needs the record's lit travel and the eye-safety check.</span>
+      <div class="actions"><button class="btn small" data-act="physDown">Back to tests</button></div></div>`;
+    else if (phys === "on") h += `<div class="actions"><button class="btn small" data-act="physDown">Back to tests</button></div>`;
+    return h + `</section>`;
+  }
+  function testRow(key, label, meta, secs) {
+    const g = S.go, v = g.tests[key], busy = g.running === "test:" + key;
+    let right;
+    if (v === "pass" || v === "level") right = `<span class="${v === "pass" ? "ok-t" : "attn-t"} mono">done in ${(secs + .1).toFixed(1)} s${v === "pass" ? " ✓" : ""}</span>`;
+    else if (v === "ask") right = `<span class="mono">done in ${(secs + .1).toFixed(1)} s</span>`;
+    else if (busy) right = `<span class="mono"><span class="spinner"></span> predicted ${secs.toFixed(1)} s</span>`;
+    else right = `<button class="btn small" data-act="test" data-k="${key}" ${g.stopped || g.running || !g.handsClear ? "disabled" : ""}>Run</button>`;
+    let extra = "";
+    if (key === "rest" && v === "ask") extra = `<div class="actions"><span class="sub">Is the head level, facing its front?</span><button class="btn small" data-act="restYes">Yes</button><button class="btn small" data-act="restTurned">No, it's turned</button><button class="btn small" data-act="restLevel">No, not level</button></div>`;
+    if (key === "rest" && v === "level") extra = `<p class="attn-t sub">Not level: that's the zero, so it's a bench visit. F3 stays at tests.</p>`;
+    return `<li><div class="line"><span><b style="font-weight:500">${label}</b> <span class="meta">${meta}</span></span>${right}</div>${extra}</li>`;
+  }
+  function aimTarget(name, dots, ok) {
+    const c = 60, rr = 34;
+    return `<div class="target"><span class="eyebrow">Target ${name}</span><svg viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="${c}" cy="${c}" r="${rr}" fill="none" stroke="var(--hg-fg-3)" stroke-dasharray="3 4"/>
+      <path d="M${c - 8} ${c}h16M${c} ${c - 8}v16" stroke="var(--hg-fg-2)"/>
+      ${dots.map(([dx, dy]) => { const inside = Math.hypot(dx, dy) <= rr; return `<circle cx="${c + dx}" cy="${c + dy}" r="4" fill="${inside ? "var(--apt-ok)" : "var(--apt-attn)"}"/>`; }).join("")}</svg>
+      <span class="mono ${ok ? "ok-t" : "attn-t"}">${dots.filter(([dx, dy]) => Math.hypot(dx, dy) <= rr).length} of 5 within</span></div>`;
+  }
+  function aimResult() {
+    const g = S.go;
+    if (g.aim === "head") return `<div class="callout attn"><b>Dark: a head came near the beam.</b><span class="meta">The spot went out at once. People can stay in the room; the beam's path has to be clear.</span><div class="actions"><button class="btn small" data-act="rerunAim">Run again</button></div></div>`;
+    const sets = {
+      pass: [[[6, -4], [-8, 5], [3, 9], [-5, -7], [38, 12]], [[-6, 3], [9, -2], [-3, -10], [4, 6], [-12, 4]]],
+      turned: [[[-44, 2], [-48, -6], [-40, 8], [-46, 4], [-42, -3]], [[-50, 6], [-46, -2], [-52, 3], [-44, 9], [-49, -5]]],
+      spread: [[[30, -26], [-36, 10], [6, 4], [-10, 40], [38, 30]], [[-4, 6], [40, -10], [-34, -30], [8, 2], [26, 36]]],
+    }[g.aim === "passed" ? "pass" : g.aimVariant];
+    const ok = g.aim === "passed";
+    let words;
+    if (ok) words = `<div class="callout ok"><b>Passed: 4 of 5 and 5 of 5 within · off by 3 cm</b><span class="meta">Recorded with the beam width it used (20°, assumed). A measured width entered later marks it out of date.</span></div>`;
+    else if (g.aimVariant === "turned") words = `<div class="callout attn"><b>Both landed 3° to the left: the mount is turned.</b><span class="meta">Correcting saves the yaw in the sockets record. den-live has it at once, in a new run, and the check goes again.</span><div class="actions"><button class="btn small primary" data-act="fixYaw">Correct the yaw by 3°</button></div></div>`;
+    else words = `<div class="callout attn"><b>The spot moved around: 2 of 5 within.</b><span class="meta">If it repeats, the beam width may be wrong (assumed 20°): measure it at the bench.</span><div class="actions"><button class="btn small" data-act="rerunAim">Run again</button></div></div>`;
+    return `<div class="targets">${aimTarget("A", sets[0], ok)}${aimTarget("B", sets[1], ok)}</div><p class="meta">The predicted point is the cross; the dashed circle is half the beam's width at that throw. No frame is shown or leaves the server.</p>${words}`;
+  }
+  // ---------- the adoption flow ----------
+  const ORDER = ["find", "found", "socket", "mount", "checks", "name", "review", "done"];
+  const RAIL = ["Find", "Socket", "Mount", "Checks", "Name", "Adopt"];
+  const railIndex = step => ({ find: 0, found: 0, socket: 1, mount: 2, checks: 3, name: 4, review: 5, done: 6 })[step];
+  function newFlow(socket) {
+    return { step: "find", found: false, variant: "ok", socket: socket || null, bulb: socket ? HUE[socket] : null, ticks: [false, false, false, false, false],
+      swapStarted: false, waiting: false, stoppedAtPower: false, yaw: 0, wrongBulb: false, name: "Sofa spot", conflict: false };
+  }
+  function renderFlow() {
+    const f = S.flow, idx = railIndex(f.step);
+    const rail = `<div class="rail" aria-label="Steps">${RAIL.map((l, i) => `<span class="${i < idx ? "done" : i === idx ? "now" : ""}">${l}</span>`).join("")}</div>`;
+    const top = `<div class="head"><div class="grow"><p class="eyebrow">Adopt a fixture${f.socket ? ` · into ${f.socket}` : ""}</p></div>
+      ${f.step === "done" ? "" : `<button class="btn small" data-act="cancelFlow">${f.swapStarted ? "Put the bulb back" : "Cancel"}</button>`}</div>`;
+    return top + rail + ({ find: stepFind, found: stepFound, socket: stepSocket, mount: stepMount, checks: stepChecks, name: stepName, review: stepReview, done: stepDone })[f.step]() + toastHtml();
+  }
+  function stepFind() {
+    return `<h3>Power it and open joining</h3>
+      <p class="sub">Power the commissioned fixture near the den, before it goes up. Then open joining in Home Assistant: Zigbee → Add device.</p>
+      <ul class="checks">${tick("ok", "Home Assistant has the fixture integration", "The quirk and the c12 integration: your step, once.")}
+      ${tick("ok", "The bulb map places all four bulbs", "den_lighting's map: the one map.")}
+      ${tick("wait", "Looking for a new fixture", "Home only reads the device list. It never opens joining itself.", `<span class="spinner" aria-label="Looking"></span>`)}</ul>
+      <p class="meta">Already adopted: none</p>
+      <div class="actions"><button class="btn" data-act="joined">It's joined</button></div>`;
+  }
+  function stepFound() {
+    const f = S.flow;
+    const variants = [["ok", "Ready"], ["nodates", "Bench dates missing"], ["uncommissioned", "Not commissioned"], ["noanswer", "Not answering"], ["paired", "Paired again"], ["old", "Firmware too old"]];
+    let card;
+    if (f.variant === "ok" || f.variant === "nodates") card = `<div class="card"><div class="head">${markSvg("robotic")}<div class="grow"><b>Robotic fixture · board 2</b><p class="meta">EngineeredLight c12-v2 · last heard 2 s ago</p></div></div>
+      <dl class="kv"><dt>Record</dt><dd class="ok-t">valid</dd><dt>Firmware</dt><dd>build 2031</dd><dt>Profile</dt><dd>3fa2</dd><dt>Can do</dt><dd>timed moves · fades · joins a flight · moves at rest</dd>
+      <dt>Lit travel</dt><dd>yes, from the record</dd><dt>Bench</dt><dd>${f.variant === "ok" ? "sittings 2–4 dated ✓" : `<span class="attn-t">no dates for the shoot-out or the lit bench test</span>`} <button class="btn link" data-act="noop">Edit dates</button></dd></dl>
+      ${f.variant === "nodates" ? `<div class="callout attn"><b>Finish its bench sittings before it goes up.</b><span class="meta">You can still adopt it: adoption is virtual. The dates are lock 1 for the go.</span></div>` : ""}
+      <div class="actions"><button class="btn small" data-act="pulse">Pulse its room light</button><span class="meta">Low, room light only. Nothing moves; the spot stays dark.</span></div></div>`;
+    else if (f.variant === "uncommissioned") card = `<div class="callout attn"><b>Not commissioned</b><span class="sub">It works as nine ordinary lights, but its spot and motion stay off. Commission it at the bench in the one app, then come back.</span><div class="actions"><button class="btn small" data-act="cancelFlow">Leave it for now</button></div></div>`;
+    else if (f.variant === "noanswer") card = `<div class="callout"><b>It joined but isn't answering yet.</b><span class="sub">Asking again: 1 of 3, 5 s apart. It may still be booting.</span><div class="actions"><button class="btn small" data-act="variant" data-v="ok">Check again</button></div></div>`;
+    else if (f.variant === "paired") card = `<div class="callout ice"><b>This is F3's fixture, paired again.</b><span class="sub">Same board and MAC, a new Home Assistant device. Its profile hasn't changed.</span><div class="actions"><button class="btn small primary" data-act="reconnect">Reconnect to F3</button></div><span class="meta">Saves the new device link in the sockets record, so den-live's sender follows it at once. No re-adoption.</span></div>`;
+    else card = `<div class="callout attn"><b>Firmware update needed</b><span class="sub">Home needs firmware v2-b or later. Update it at the bench.</span></div>`;
+    return `<h3>Found a fixture</h3>${card}
+      <div class="actions"><span class="meta">Try:</span><div class="seg">${variants.map(([v, l]) => `<button aria-pressed="${f.variant === v}" data-act="variant" data-v="${v}">${l}</button>`).join("")}</div></div>
+      <div class="actions"><button class="btn primary" data-act="next" ${f.variant === "ok" || f.variant === "nodates" ? "" : "disabled"}>Continue</button></div>`;
+  }
+  function planSvg() {
+    const f = S.flow, { k } = plan();
+    const pos = { F1: [70, 50], F4: [230, 50], F2: [70, 130], F3: [230, 130] };
+    return `<div class="plan"><svg viewBox="0 0 300 180" role="img" aria-label="The den's four sockets from above">
+      <rect x="10" y="10" width="280" height="160" rx="6" fill="none" stroke="var(--hg-border-strong)"/>
+      <rect x="120" y="150" width="130" height="16" rx="3" fill="var(--apt-fill-2)" stroke="var(--hg-border)"/><text x="185" y="162" text-anchor="middle" font-size="9" fill="var(--hg-fg-3)" font-family="Geist Mono, monospace">sofa</text>
+      <rect x="140" y="98" width="80" height="26" rx="3" fill="var(--apt-fill)" stroke="var(--hg-border)"/>
+      <line x1="210" y1="12" x2="270" y2="12" stroke="var(--hg-fg-3)" stroke-width="3"/><text x="240" y="24" text-anchor="middle" font-size="9" fill="var(--hg-fg-3)" font-family="Geist Mono, monospace">art</text>
+      ${IDS.map(id => { const [x, y] = pos[id], on = f.socket === id;
+        return `<g><circle cx="${x}" cy="${y}" r="${on ? 13 : 10}" fill="${k[id] === "hue" ? "color-mix(in srgb, var(--apt-warm) 30%, transparent)" : "var(--hg-fg-1)"}" stroke="${on ? "var(--apt-proposed)" : "var(--hg-border-strong)"}" stroke-width="${on ? 2.5 : 1}"/>
+        <text x="${x}" y="${y + 4}" text-anchor="middle" font-size="10" font-weight="600" fill="var(--hg-fg-0)" font-family="Geist, sans-serif">${id}</text></g>`; }).join("")}</svg></div>`;
+  }
+  function stepSocket() {
+    const f = S.flow, installed = SETS[S.mix];
+    const choices = IDS.map(id => {
+      const robotic = installed.includes(id);
+      return `<button class="choice" role="radio" aria-checked="${f.socket === id}" ${robotic ? 'aria-disabled="true"' : ""} data-act="pickSocket" data-id="${id}">
+        <span class="radio"></span><span><b>${id} · ${robotic ? "Robotic" : "Hue"} · ${esc(robotic ? ROBOT[id] : HUE[id])}</b>${id === "F3" ? `<span class="rec">Light 1 goes here</span>` : ""}
+        <span class="meta" style="display:block">lights the sofa from ${COVER[id]} seats</span></span></button>`; }).join("");
+    const mapLine = f.socket ? `<div class="callout"><b>The map says the ${esc(HUE[f.socket])} is in ${f.socket}.</b><span class="meta">Not that bulb? Fix the map in den_lighting first. Home keeps no second map.</span></div>
+      <ul class="checks">${tick("ok", "Board 2 checked", "Its board number and MAC match what Home read.")}</ul>` : "";
+    return `<h3>Which socket?</h3>${planSvg()}<p class="meta">The coverage report counts the sofa seats each socket can light.</p>
+      <div class="choices" role="radiogroup">${choices}</div>${mapLine}
+      <p class="meta">Nothing is written yet. This is a draft.</p>
+      <div class="actions"><button class="btn" data-act="prev">Back</button><button class="btn primary" data-act="next" ${f.socket ? "" : "disabled"}>Continue</button></div>`;
+  }
+  function stepMount() {
+    const f = S.flow, t = f.ticks, bulb = f.bulb || "bulb";
+    const can = i => !t[i] && (i === 0 || t[i - 1]) && !f.wrongBulb;
+    const done = i => can(i) ? `<button class="btn small" data-act="tick" data-i="${i}">Done</button>` : "";
+    const line2 = t[1] ? (f.wrongBulb ? `<span class="attn-t">That was the Corner bulb: the map may be wrong.</span>` : `${esc(bulb)} · unavailable ✓`) : "Home watches Home Assistant for it to go.";
+    const power = t[4] ? (f.stoppedAtPower ? "It answered stopped. Resume it in Home Assistant when you like; adoption goes on." : `${f.socket} answers · ready ✓`) : f.waiting ? "Waiting for it to answer…" : "";
+    return `<h3>Mount it</h3><p class="sub">Your hands. Tick each line as you go.</p>
+      <ul class="checks">
+      ${tick(t[0] ? "ok" : "wait", "Make the socket safe", "Switch or breaker, as you do today.", done(0))}
+      ${tick(t[1] ? (f.wrongBulb ? "bad" : "ok") : "wait", `Take the ${esc(bulb)} out`, line2, f.wrongBulb ? `<button class="btn small" data-act="backToSocket">Back</button>` : done(1))}
+      ${tick(t[2] ? "ok" : "wait", `Point den_lighting's ${f.socket} at the fixture's room light`, "Your edit of the bulb map. Its room light stands in for the bulb until the go.", done(2))}
+      ${tick(t[3] ? "ok" : "wait", "Mount it level, front to the arrow", f.yaw ? `Front turned ${f.yaw}° from the model: saved with the adoption.` : "The arrow in the room shows its front.", can(3) ? `<span class="actions"><button class="btn small" data-act="yaw">It faces another way</button>${done(3)}</span>` : "")}
+      ${tick(t[4] ? "ok" : "wait", "Power it on", power, f.waiting ? `<span class="spinner"></span>` : can(4) ? `<button class="btn small" data-act="power">Done</button>` : "")}
+      </ul>
+      ${f.swapStarted ? `<div class="callout attn"><b>Swap started.</b><span class="meta">${f.socket} is out of the coordinator's plan, and the other sockets cover its light. Home now shows what's installed.</span></div>` : ""}
+      <div class="actions"><span class="meta">Try:</span><button class="btn small" data-act="wrongBulb" ${t[1] ? "disabled" : ""}>A different bulb goes out</button><button class="btn small" data-act="stoppedPower" ${can(4) && !f.waiting ? "" : "disabled"}>It answers stopped</button></div>
+      <div class="actions"><button class="btn primary" data-act="next" ${t.every(Boolean) && !f.wrongBulb ? "" : "disabled"}>Continue</button></div>`;
+  }
+  function arc(cx, cy, r, a0, a1) {
+    // angles in degrees, 0 = up, positive = counter-clockwise (left), as the fixture's pan
+    const pt = a => [cx - r * Math.sin(a * Math.PI / 180), cy - r * Math.cos(a * Math.PI / 180)];
+    const [x0, y0] = pt(a0), [x1, y1] = pt(a1), large = Math.abs(a1 - a0) > 180 ? 1 : 0, sweep = a1 > a0 ? 0 : 1;
+    return `M${x0.toFixed(2)} ${y0.toFixed(2)}A${r} ${r} 0 ${large} ${sweep} ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+  }
+  function dials() {
+    const pan = `<svg viewBox="0 0 120 120" aria-hidden="true">
+      <circle cx="60" cy="60" r="48" fill="none" stroke="var(--hg-border-strong)" stroke-width="2"/>
+      <path d="${arc(60, 60, 48, -175, 175)}" fill="none" stroke="var(--hg-ice)" stroke-width="3"/>
+      <path d="M60 60L60 22" stroke="var(--hg-fg-2)" stroke-width="1.2"/><text x="60" y="66" text-anchor="middle" font-size="8" fill="var(--hg-fg-3)" font-family="Geist Mono, monospace">front</text></svg>`;
+    const tArc = (r, a0, a1) => arc(20, 60, r, a0 - 90, a1 - 90);
+    const tilt = `<svg viewBox="0 0 120 120" aria-hidden="true">
+      <path d="${tArc(50, -95, 90)}" fill="none" stroke="var(--hg-border-strong)" stroke-width="2"/>
+      <path d="${tArc(50, -90, 85)}" fill="none" stroke="var(--hg-ice)" stroke-width="3"/>
+      <path d="M20 60H76" stroke="var(--hg-fg-2)" stroke-width="1.2"/><text x="80" y="63" font-size="8" fill="var(--hg-fg-3)" font-family="Geist Mono, monospace">level</text></svg>`;
+    return `<div class="dials"><div class="dial"><span class="eyebrow">Pan</span>${pan}<span class="mono">fixture ±180° · usable ±175°</span></div>
+      <div class="dial"><span class="eyebrow">Tilt</span>${tilt}<span class="mono">fixture −95° to 90° · usable −90° to 85°</span></div></div>
+      <div class="legend-line"><span><i style="background:var(--hg-border-strong)"></i>the fixture's range</span><span><i style="background:var(--hg-ice)"></i>inset 5°: what's used</span></div>`;
+  }
+  function stepChecks() {
+    return `<h3>Zero, limits and what it can do</h3>
+      <ul class="checks">${tick("ok", "Zero: set at the bench", "profile 3fa2. There's no homing move; the fixture checks itself at boot.")}${tick("ok", "Motors: the same as at the bench", "")}${tick("ok", "Both axes in range", "")}</ul>
+      <p class="meta">Its rest pose is checked by eye at the first dark test move, after the go.</p>
+      <section class="section"><h4>Limits: the fixture's own</h4>${dials()}<p class="meta">Home keeps no limits of its own for a robotic socket, so there's nothing to reconcile.</p></section>
+      <section class="section"><h4>What it can do</h4><dl class="kv"><dt>Moves</dt><dd>timed moves · fades · joins a flight · moves at rest</dd><dt>Lit travel</dt><dd>yes, from the record</dd>
+        <dt>Retargets mid-move</dt><dd>no</dd><dt>Spot warmth</dt><dd>one fixed white until its warmth map is measured</dd><dt>Room light</dt><dd>radials Z1–Z6 · downlight Z7 <span class="attn-t">(assumed from Light 1)</span></dd></dl>
+        <h4>Assumed</h4><dl class="kv"><dt>Beam width</dt><dd class="attn-t">20° · not measured</dd><dt>Light output</dt><dd class="attn-t">not measured</dd></dl>
+        <details><summary>Enter bench measurements</summary><div class="fields" style="margin-top:8px">
+          <div class="field"><label for="m-beam">Beam (°)</label><input id="m-beam" inputmode="decimal" placeholder="—"></div>
+          <div class="field"><label for="m-l1">Lux at 1 m</label><input id="m-l1" inputmode="decimal" placeholder="—"></div>
+          <div class="field"><label for="m-l2">at 2 m</label><input id="m-l2" inputmode="decimal" placeholder="—"></div>
+          <div class="field"><label for="m-l3">at 3 m</label><input id="m-l3" inputmode="decimal" placeholder="—"></div></div></details></section>
+      <div class="actions"><button class="btn" data-act="prev">Back</button><button class="btn primary" data-act="next">Continue</button></div>`;
+  }
+  function stepName() {
+    const f = S.flow;
+    return `<h3>Name it</h3><div class="field"><label for="fx-name">Name</label><input id="fx-name" data-input="name" value="${esc(f.name)}" maxlength="40"></div>
+      <p class="sub">Home shows it as <b id="namePreview">${f.socket} · ${esc(f.name || "…")}</b>. Board 2 appears only in its details, for the bench.</p>
+      <p class="meta">Home doesn't rename it in Home Assistant. You can, by hand.</p>
+      <div class="actions"><button class="btn" data-act="prev">Back</button><button class="btn primary" data-act="next">Continue</button></div>`;
+  }
+  function stepReview() {
+    const f = S.flow;
+    return `<h3>Adopt into ${f.socket}</h3>
+      <dl class="kv"><dt>Socket</dt><dd>${f.socket}, replacing the ${esc(f.bulb)}</dd><dt>Name</dt><dd>${esc(f.name)}</dd><dt>Board</dt><dd>2 · build 2031 · profile 3fa2</dd>
+        <dt>Bench</dt><dd>sittings 2–4 dated</dd><dt>Usable range</dt><dd>pan ±175° · tilt −90° to 85°</dd><dt>Assumed</dt><dd>beam 20°, light output</dd>
+        <dt>Mount yaw</dt><dd>${f.yaw ? `${f.yaw}° from the model` : "as modelled"}</dd>
+        <dt>Saves</dt><dd>one change to the sockets record, in den-live's folder: the socket, its board, name and yaw</dd></dl>
+      <div class="callout"><span class="sub">From now on the coordinator plans ${f.socket} as a robotic fixture, and Home draws it. <b>Nothing that moves it or lights its spot is sent until the go.</b> Until then, the real room treats ${f.socket} as a bulb socket: its room light stands in for the ${esc(f.bulb)}.</span></div>
+      ${f.conflict ? `<div class="callout attn"><b>The den's setup changed while you were adopting.</b><span class="meta">Review again: your draft is kept. Nothing was retried.</span><div class="actions"><button class="btn small" data-act="reviewAgain">Review again</button></div></div>` : ""}
+      <div class="actions"><button class="btn" data-act="prev">Back</button><button class="btn primary" data-act="adopt" ${f.conflict ? "disabled" : ""}>Adopt into ${f.socket}</button></div>
+      <div class="actions"><span class="meta">Try:</span><button class="btn small" data-act="conflict" ${f.conflict ? "disabled" : ""}>Someone else saved first</button></div>`;
+  }
+  function stepDone() {
+    const f = S.flow;
+    return `<div class="callout ok"><b>${f.socket} · ${esc(f.name)} · virtual</b><span class="sub">Saved. den-live had the new sockets revision at once and started a new run with it: 1 robotic, 3 Hue.</span></div>
+      <p class="sub">${S.go.preview ? `Next: ${f.socket}'s own switch, here.` : `Next: your go opens the transport. Then ${f.socket}'s own switch, here.`}</p>
+      <div class="actions"><button class="btn primary" data-act="openF3">Open ${f.socket}</button><button class="btn" data-act="closeFlow">See the den</button></div>`;
+  }
+  // ---------- render ----------
+  function renderSwitches() {
+    const seg = (label, key, opts) => `<div class="switch-group"><span>${label}</span><div class="seg" role="group" aria-label="${label}">${opts.map(([v, l]) =>
+      `<button aria-pressed="${String(S[key]) === String(v)}" data-act="set" data-k="${key}" data-v="${v}">${l}</button>`).join("")}</div></div>`;
+    document.getElementById("switches").innerHTML = seg("View", "frame", [["desktop", "Desktop"], ["phone", "Phone"]])
+      + seg("Mix", "mix", [["0+4", "0 + 4"], ["1+3", "1 + 3"], ["2+2", "2 + 2"], ["3+1", "3 + 1"], ["4+0", "4 + 0"]])
+      + seg("Bulbs", "bulbsOn", [["false", "Off"], ["true", "On"]]);
+  }
+  function render() {
+    document.getElementById("device").dataset.frame = S.frame;
+    renderSwitches(); drawRoom(); drawCapsule();
+    const panel = document.getElementById("panel");
+    const scroll = panel.scrollTop;
+    panel.innerHTML = S.flow ? renderFlow() : S.selected ? renderSocket(S.selected) : S.tab === "coordinator" ? renderCoordinator() : renderControls();
+    panel.scrollTop = scroll;
+  }
+  function kindsLegend() {
+    const item = (svgBody, text) => `<li><svg viewBox="0 0 40 28" aria-hidden="true">${svgBody}</svg><span>${text}</span></li>`;
+    document.getElementById("kinds").innerHTML =
+      item(`<circle cx="20" cy="14" r="12" fill="#ffd8a8" opacity=".35"/><circle cx="20" cy="14" r="4" fill="#f3e6d2"/>`, "<b>Robotic:</b> the orb, a small core in its glow. Tagged <b>virtual</b> until the go.")
+      + item(`<circle cx="20" cy="14" r="12" fill="#ffcf96" opacity=".35"/><circle cx="20" cy="14" r="6" fill="#ffcf96" opacity=".35"/>`, "<b>Hue:</b> a bulb's soft glow, no core and no beam.")
+      + item(`<circle cx="20" cy="14" r="9" fill="none" stroke="#ffcf96" stroke-dasharray="3 3"/>`, "<b>Would set:</b> a Hue bulb's plan while Bulbs is off.")
+      + item(`<circle cx="20" cy="14" r="6" fill="none" stroke="#a1a1a1" stroke-dasharray="1.5 3"/>`, "<b>Swap in progress:</b> out of the plan.")
+      + item(`<circle cx="20" cy="14" r="4" fill="#2a2c30" stroke="#888" stroke-width=".8"/><path d="M28 3l4 4-4 4-4-4z" fill="#ffb45f"/>`, "<b>Fault or offline:</b> grey core, a ring or the diamond.")
+      + item(`<circle cx="20" cy="14" r="4" fill="#3d3f43"/><circle cx="20" cy="14" r="8" fill="none" stroke="#ffdfab" stroke-dasharray="2.5 2.5"/>`, "<b>Standby:</b> aimed and dark, ready to cross-fade.");
+  }
+
+  // ---------- actions ----------
+  const A = {
+    set(d) {
+      const v = d.v === "true" ? true : d.v === "false" ? false : d.v;
+      if (d.k === "mix" && S.flow) { say("Finish or cancel the adoption first."); return; }
+      S[d.k] = v;
+      if (d.k === "mix") { S.adopted = v !== "0+4" && SETS[v].includes("F3"); S.rehearse = v === "0+4"; S.newFound = v === "0+4"; S.fallback = false;
+        S.f3 = "virtual"; S.go = freshGo(); S.selected = null; }
+      S.toast = ""; render();
+    },
+    tab(d) { S.tab = d.tab; S.toast = ""; render(); },
+    select(d) { if (S.flow) return; S.selected = S.selected === d.id ? null : d.id; S.toast = ""; render(); },
+    back() { S.selected = null; S.toast = ""; render(); },
+    rehearse() { S.rehearse = !S.rehearse; render(); },
+    fallback() { S.fallback = !S.fallback; render(); },
+    mapOpen() { S.mapOpen = true; render(); },
+    pulseBulb() { say("Pulsed the Art-side bulb. Watch F4 in the room."); },
+    mapSave() { S.f4Mapped = true; S.mapOpen = false; say("F4 is the Art-side bulb. The bulb map is complete."); },
+    startFlow(d) { clearTimers(); S.selected = null; S.toast = ""; S.flow = newFlow(d && d.socket); render(); later(2600, () => { if (S.flow && S.flow.step === "find") A.joined(); }); },
+    resumeFlow() { S.selected = null; render(); },
+    joined() { if (!S.flow) return; S.flow.found = true; S.flow.step = "found"; S.toast = ""; render(); },
+    variant(d) { S.flow.variant = d.v; S.toast = ""; render(); },
+    reconnect() { say("Reconnected to F3. Nothing else changed."); },
+    pulse() { say("Pulsed board 2's room light, low. Nothing moved."); },
+    pickSocket(d) { if (SETS[S.mix].includes(d.id)) return; S.flow.socket = d.id; S.flow.bulb = HUE[d.id]; render(); },
+    tick(d) {
+      const f = S.flow, i = Number(d.i); f.ticks[i] = true;
+      if (i === 1) { f.swapStarted = true; S.rehearse = false; S.toast = ""; }
+      render();
+    },
+    wrongBulb() { const f = S.flow; f.ticks[0] = true; f.ticks[1] = true; f.wrongBulb = true; f.swapStarted = true; S.rehearse = false; render(); },
+    backToSocket() { const f = S.flow; f.wrongBulb = false; f.ticks[1] = false; f.step = "socket"; say("Fix the map in den_lighting, then pick the socket again."); },
+    yaw() { S.flow.yaw = ((S.flow.yaw || 0) + 15) % 360; render(); },
+    power() { const f = S.flow; f.waiting = true; render(); later(1300, () => { if (!S.flow) return; f.waiting = false; f.ticks[4] = true; render(); }); },
+    stoppedPower() { const f = S.flow; f.ticks[4] = true; f.stoppedAtPower = true; render(); },
+    next() { const f = S.flow; f.step = ORDER[ORDER.indexOf(f.step) + 1]; S.toast = ""; render(); document.getElementById("panel").scrollTop = 0; },
+    prev() { const f = S.flow; let i = ORDER.indexOf(f.step) - 1; if (ORDER[i] === "found") i = Math.max(1, i); f.step = ORDER[i]; S.toast = ""; render(); },
+    conflict() { S.flow.conflict = true; render(); },
+    reviewAgain() { S.flow.conflict = false; say("Reloaded the den's setup. Your draft is unchanged."); },
+    adopt() {
+      const f = S.flow; S.adopted = true; S.mix = "1+3"; S.rehearse = false; S.newFound = false; S.f3 = "virtual";
+      f.step = "done"; S.toast = ""; render();
+    },
+    closeFlow() { clearTimers(); S.flow = null; S.toast = ""; render(); },
+    openF3() { clearTimers(); S.flow = null; S.selected = "F3"; S.toast = ""; render(); },
+    cancelFlow() {
+      clearTimers();
+      const f = S.flow;
+      if (f && f.swapStarted && !S.adopted) { S.flow = null; S.mix = "0+4"; S.rehearse = true; say(`Put the bulb back: ${f.socket} is a Hue socket again (a new revision).`); return; }
+      S.flow = null; S.toast = ""; render();
+    },
+    f3(d) { S.f3 = d.v; S.go.stopped = d.v === "stopped" ? S.go.stopped : false; S.toast = ""; render(); },
+    recordProfile() { S.f3 = "virtual"; if (S.go.aim === "passed") S.go.aim = "outofdate"; say("Recorded the new profile. The aim check is out of date, so F3's coordinator moves stay dark until it passes; its switch is unchanged."); },
+    takeDown() { S.mix = "0+4"; S.rehearse = true; S.adopted = false; S.selected = null; S.newFound = false; S.go = freshGo(); say("F3 is back to the Reading bulb. Board 2 keeps its bench measurements in Home."); },
+    goPreview() { S.go.preview = !S.go.preview; if (!S.go.preview) S.go = freshGo(); render(); },
+    allowTests() { S.go.physical = "tests"; say("F3 allows your test moves. The coordinator still plans it virtually."); },
+    goOn() { S.go.physical = "on"; say(liveLitNow() ? "Live: the coordinator drives F3, lit." : "F3 at on: the coordinator drives it, dark until its aim check passes."); },
+    transport(d) { S.go.transport = d.v; render(); },
+    handsClear() { S.go.handsClear = true; render(); },
+    physDown() { S.go.physical = "tests"; say("Back to tests, at once."); },
+    stop() { clearTimers(); const g = S.go; g.stopped = true;
+      if (g.running === "test:drill") g.tests.drill = "stopped";
+      g.running = ""; g.runStep = 0; if (g.aim === "running") g.aim = "not_run"; render(); },
+    resume() { const g = S.go; g.stopped = false; if (g.tests.drill === "stopped") g.tests.drill = "pass"; render(); },
+    test(d) {
+      const g = S.go; if (g.stopped || g.running) return; g.running = "test:" + d.k; render();
+      later(1500, () => { if (S.go !== g || g.running !== "test:" + d.k) return; g.running = ""; g.tests[d.k] = d.k === "rest" ? "ask" : "pass"; render(); });
+    },
+    restYes() { S.go.tests.rest = "pass"; render(); },
+    restTurned() { S.go.tests.rest = "pass"; say("Saved the turned yaw, 10°, in the sockets record. den-live has it now; the aim check will confirm it."); },
+    restLevel() { S.go.tests.rest = "level"; render(); },
+    drill() { const g = S.go; g.running = "test:drill"; render(); say("Moving dark… press Stop now."); },
+    prep(d) { S.go.prep[Number(d.i)] = true; render(); },
+    aimVariant(d) { S.go.aimVariant = d.v; render(); },
+    runAim() {
+      const g = S.go; if (g.stopped) return; g.running = "aim"; g.runStep = 0; g.aim = "running"; render();
+      const stepOn = () => { if (S.go !== g || g.running !== "aim") return; g.runStep += 1;
+        if (g.aimVariant === "head" && g.runStep >= 2) { g.running = ""; g.runStep = 0; g.aim = "head"; render(); return; }
+        if (g.runStep >= 6) { g.running = ""; g.aim = g.aimVariant === "pass" ? "passed" : "failed"; render(); return; }
+        render(); later(650, stepOn); };
+      later(650, stepOn);
+    },
+    fixYaw() { S.go.aimVariant = "pass"; S.go.aim = "not_run"; S.toast = "Saved the yaw, 3°, in the sockets record. den-live started a new run with it; running again."; A.runAim(); },
+    rerunAim() { S.go.aimVariant = "pass"; S.go.aim = "not_run"; A.runAim(); },
+    noop() {},
+  };
+  document.addEventListener("click", e => {
+    const el = e.target.closest("[data-act]");
+    if (!el || el.disabled || el.getAttribute("aria-disabled") === "true") return;
+    const fn = A[el.dataset.act]; if (!fn) return;
+    if (el.tagName === "INPUT" && el.type === "checkbox") { fn({ ...el.dataset }); return; }
+    e.preventDefault(); fn({ ...el.dataset });
+  });
+  document.addEventListener("input", e => {
+    const el = e.target; if (el.dataset.input !== "name" || !S.flow) return;
+    S.flow.name = el.value; const p = document.getElementById("namePreview"); if (p) p.textContent = `${S.flow.socket} · ${el.value || "…"}`;
+  });
+  // hold to confirm: 1.5 s of pointer or key press
+  let holdTimer = null, holdEl = null;
+  const holdStart = el => { if (el.disabled) return; holdCancel(); holdEl = el; el.classList.add("holding");
+    holdTimer = setTimeout(() => { const act = el.dataset.hold; holdCancel(); A[act] && A[act](); }, window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 900 : 1500); };
+  const holdCancel = () => { clearTimeout(holdTimer); holdTimer = null; if (holdEl) holdEl.classList.remove("holding"); holdEl = null; };
+  document.addEventListener("pointerdown", e => { const el = e.target.closest("[data-hold]"); if (el) { e.preventDefault(); holdStart(el); } });
+  ["pointerup", "pointercancel", "pointerleave"].forEach(type => document.addEventListener(type, e => { if (holdEl && (type !== "pointerleave" || e.target === holdEl)) holdCancel(); }, true));
+  document.addEventListener("keydown", e => { const el = e.target.closest && e.target.closest("[data-hold]"); if (el && (e.key === " " || e.key === "Enter") && !e.repeat) { e.preventDefault(); holdStart(el); } });
+  document.addEventListener("keyup", e => { if (holdEl && (e.key === " " || e.key === "Enter")) holdCancel(); });
+
+  kindsLegend();
+  render();
+})();
+</script>

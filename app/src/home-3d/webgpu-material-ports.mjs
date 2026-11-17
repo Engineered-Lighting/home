@@ -31,7 +31,7 @@ import * as THREE from 'three';
 import {
     Fn, If, Loop, Break, Discard, float, vec2, vec3, vec4, attribute, varying, texture, uv, select,
     reference, materialReference, uniform, materialColor, materialOpacity, positionLocal, positionGeometry,
-    positionView, normalViewGeometry, modelViewMatrix, modelWorldMatrix, cameraProjectionMatrix,
+    positionView, modelViewMatrix, modelWorldMatrix, cameraProjectionMatrix,
     screenUV, screenSize, getViewPosition, instancedBufferAttribute, context, sRGBTransferOETF,
     smoothstep, mix, step, sin, cos, fract, dot, length, max, min, clamp, abs, exp, pow, normalize,
     cross, dFdx, dFdy, instanceIndex,
@@ -222,13 +222,6 @@ function equipmentReceiver(nodeMaterial, { placeholderDepth, material }) {
     nodeMaterial.alphaTestNode = float(0.0005);
 }
 
-/* equipment-virtual-fixtures.mjs orbHaloShader (ORB_HALO_FALLOFF 2.5). */
-function equipmentOrbHalo(nodeMaterial) {
-    // GLSL's normalMatrix is view space; three's modelNormalMatrix is world.
-    const view = varying(positionView.negate(), 'vOrbHaloView');
-    nodeMaterial.opacityNode = materialOpacity.mul(pow(clamp(dot(normalViewGeometry, normalize(view)), 0, 1), 2.5));
-}
-
 // ---- ShaderMaterial ports (a NodeMaterial built for code generation) -------
 
 /* equipment-spotlight-visual.mjs createEquipmentSpotlightVisual, the volume. */
@@ -313,7 +306,6 @@ const ON_BEFORE_COMPILE_BUILDERS = Object.freeze({
     'scan-display-floor-0': scanDisplay(false),
     'scan-display-floor-1': scanDisplay(true),
     'equipment-receiver': equipmentReceiver,
-    'equipment-orb-halo': equipmentOrbHalo,
 });
 const SHADER_BUILDERS = Object.freeze({
     'equipment-beam': equipmentBeam,

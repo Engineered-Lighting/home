@@ -32,5 +32,18 @@ class TrialGuards(unittest.TestCase):
             config=self.config();config['manifest'][field]=value
             with self.subTest(field=field),self.assertRaises(ValueError):validate_config(config,1000)
 
+    def test_load_gate_not_stricter_than_supervisor_preflight(self):
+        # The supervisor admits a lease at its preflight GPU gate; a stricter
+        # worker load gate fails every admitted lease (seen 2026-11-11 with the
+        # V-JEPA live worker resident). Both are MiB of free GPU memory.
+        import re
+        from pathlib import Path
+        here=Path(__file__).resolve()
+        worker=re.findall(r"int\(free\[0\]\)<(\d+)",here.with_name('la_detector_app.py').read_text())
+        supervisor=re.findall(r"if free<(\d+):raise ValueError\('gpu memory headroom failed'\)",
+            (here.parents[2]/'..'/'tools'/'la-detector-trial'/'start_live.py').resolve().read_text())
+        self.assertEqual((len(worker),len(supervisor)),(1,1))
+        self.assertLessEqual(int(worker[0]),int(supervisor[0]))
+
 
 if __name__=='__main__':unittest.main()

@@ -39,6 +39,8 @@ const REPO = path.resolve(TOOLS, "..");
  * RegExp.test against repo-relative POSIX paths. Keep this map in sync with
  * new harnesses (a harness with no row here simply never auto-runs). */
 const MAP = [
+  [/^(?:app\/src\/(?:home-den-(?:latency|live-view|spot-playback)\.mjs|home-3d\/lighting-render-evidence\.mjs)|tools\/test-den-latency\.mjs)$/, ["test-den-latency.mjs"]],
+  [/^(?:app\/src\/home-den-latency\.mjs|tools\/(?:den-latency-report|test-den-latency-report)\.mjs)$/, ["test-den-latency-report.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-lights)\.jsx|tools\/test-home-full-ui-lights-browser\.mjs)$/, ["test-home-full-ui-lights-browser.mjs"]],
   [/^(?:tools\/fixtures\/home-full-ui-harness\.mjs|app\/src\/home-overlay\.js)$/, ["test-home-full-ui-lights-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs", "test-home-full-ui-connection-browser.mjs", "test-home-full-ui-simulation-browser.mjs", "test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
   [/^(?:app\/src\/home-app\.jsx|tools\/test-home-full-ui-connection-browser\.mjs)$/, ["test-home-full-ui-connection-browser.mjs"]],
@@ -70,6 +72,21 @@ const MAP = [
   [/^tools\/(?:test-apartment-shell-audit(?:-echo|-behaviour)?-browser|fixtures\/apartment-shell-audit(?:-server|-probes)?)\.mjs$/, ["test-apartment-shell-audit-browser.mjs", "test-apartment-shell-audit-echo-browser.mjs", "test-apartment-shell-audit-behaviour-browser.mjs"]],
   [/^app\/src\/home-3d\//, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
   [/^tools\/test-apartment-(?:picking|performance)\.mjs$/, ["test-apartment-picking.mjs", "test-apartment-performance.mjs"]],
+  // The live body: its frame contract, the Recording layer and its label rules.
+  [/^(?:app\/src\/home-3d\/apartment-body-frame\.mjs|tools\/test-apartment-body-frame\.mjs)$/, ["test-apartment-body-frame.mjs", "test-apartment-body-layer.mjs"]],
+  [/^(?:app\/src\/home-3d\/apartment-body-layer\.mjs|tools\/test-apartment-body-layer\.mjs)$/, ["test-apartment-body-layer.mjs"]],
+  [/^(?:app\/src\/home-3d\/apartment-body-(?:annotation-model|labels)\.mjs|tools\/test-apartment-body-annotation-model\.mjs)$/, ["test-apartment-body-annotation-model.mjs"]],
+  // Any body module: the ports rule (no GLSL without a WebGPU twin) and the twin itself.
+  [/^(?:app\/src\/home-3d\/apartment-body-[\w-]+\.mjs|tools\/test-apartment-body-webgpu\.mjs)$/, ["test-apartment-webgpu-ports.mjs", "test-apartment-body-webgpu.mjs"]],
+  [/^(?:app\/src\/home-den-spot-playback\.mjs|tools\/test-den-spot-playback\.mjs)$/, ["test-den-spot-playback.mjs"]],
+  [/^(?:app\/src\/home-den-spot-playback\.mjs|tools\/den-live\/(?:manual|preview|test_manual_authority)\.py|tools\/test-den-manual-authority\.mjs)$/, ["test-den-manual-authority.mjs"]],
+  // The live den view's people layer: markers from den-live's people stream.
+  [/^(?:app\/src\/home-3d\/apartment-people-layer\.mjs|tools\/test-apartment-people-layer\.mjs)$/, ["test-apartment-people-layer.mjs"]],
+  [/^(?:app\/src\/home-den-live-qwen\.mjs|tools\/test-den-live-qwen-line\.mjs)$/, ["test-den-live-qwen-line.mjs"]],
+  [/^(?:app\/src\/home-den-inference-model\.mjs|tools\/test-den-inference-model\.mjs)$/, ["test-den-inference-model.mjs"]],
+  [/^(?:app\/src\/home-den-(?:pipeline-layer|inference-model)\.mjs|tools\/test-den-pipeline-cards\.mjs)$/, ["test-den-pipeline-cards.mjs"]],
+  [/^(?:app\/src\/home-den-coordinator-panel\.mjs|tools\/test-den-coordinator-panel\.mjs)$/, ["test-den-coordinator-panel.mjs"]],
+  [/^(?:app\/src\/(?:home-den-(?:live-view|live-qwen|coordinator-panel|labels-view|inference-model|inference-caption|pipeline-layer)\.mjs|home-lighting-control\.js|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|serve-home|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/test-den-live-serve-browser(?:-part2)?\.mjs)$/, ["test-den-live-serve-browser.mjs", "test-den-live-serve-browser-part2.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/(?:run-apartment-beam-path-tests|test-apartment-beam-path-browser)\.mjs)$/, ["run-apartment-beam-path-tests.mjs", "test-apartment-beam-path-browser.mjs"]],
   [/^app\/src\/home-3d\/(?:engine\.js|picking\.js|apartment-ui-overlay-bridge\.mjs)$/, ["test-apartment-ui-overlay-bridge.mjs", "test-apartment-overlay-bridge-browser.mjs"]],
@@ -101,6 +118,7 @@ const MAP = [
   // Lighting's one HDR frame: the display pass, bloom and fixture faces (lit-display.mjs, lit-frame.mjs).
   [/^(?:app\/src\/home-3d\/lit-(?:display|exposure|model)\.mjs|tools\/(?:test-lit-display|fixtures\/lit-frame-proof)\.mjs)$/, ["test-lit-display.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:model|view)\.mjs|tools\/test-lit-model\.mjs)$/, ["test-lit-model.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
+  [/^(?:app\/src\/home-3d\/(?:pointcloud\.js|engine\.js|lit-(?:receivers|view|frame)\.mjs)|tools\/test-apartment-(?:lit-cloud-browser|point-xray)\.mjs)$/, ["test-apartment-lit-cloud-browser.mjs", "test-apartment-point-xray.mjs"]],
   [/^(?:app\/src\/home-3d\/lit-(?:bvh-bake|bvh-worker|view)\.mjs|tools\/(?:test-lit-bvh-bake(?:-browser)?\.mjs|fixtures\/lit-bake-scenes\.mjs))$/, ["test-lit-bvh-bake.mjs", "test-lit-bvh-bake-browser.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs"]],
   // L2: Lit's exposure and tone policy, and Lit on the WebGPU path (?renderer=webgpu-webgl).
   [/^(?:app\/src\/home-3d\/lit-exposure\.mjs|tools\/test-lit-exposure\.mjs)$/, ["test-lit-exposure.mjs", "test-apartment-lit-view.mjs", "test-apartment-lit-browser.mjs", "test-apartment-lit-webgpu-browser.mjs", "test-apartment-lit-webgpu-browser-part2.mjs", "test-apartment-lit-webgpu-browser-part3.mjs", "test-apartment-lit-webgpu-browser-part4.mjs", "test-apartment-lit-webgpu-browser-part5.mjs"]],
@@ -143,6 +161,7 @@ const MAP = [
   [/^app\/src\/home-apartment(?:-edit)?\.jsx$/, ["test-apartment-escape-stack.cjs", "test-apartment-escape-browser.mjs"]],
   [/^app\/src\/home-apartment\.jsx$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
   [/^tools\/test-apartment-room-selection(?:-browser)?\.mjs$/, ["test-apartment-room-selection.mjs", "test-apartment-room-selection-browser.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment\.jsx|home-3d\/(?:engine|pointcloud|assets)\.js)|tools\/test-apartment-slow-scan-browser\.mjs)$/, ["test-apartment-slow-scan-browser.mjs"]],
   [/^app\/src\/home-apartment(?:-cards|-edit)?\.jsx$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^tools\/test-apartment-room-inspector(?:-browser)?\.mjs$/, ["test-apartment-room-inspector.mjs", "test-apartment-room-inspector-browser.mjs"]],
   [/^(?:app\/src\/home-apartment(?:-setup|-edit)?\.jsx|app\/src\/home-apartment-setup-links\.js|tools\/(?:test-apartment-setup-rail-browser(?:-part[23])?|fixtures\/apartment-setup-(?:fixtures|rail-proof))\.mjs)$/, ["test-apartment-setup-rail-browser.mjs", "test-apartment-setup-rail-browser-part2.mjs", "test-apartment-setup-rail-browser-part3.mjs"]],
@@ -174,6 +193,7 @@ const MAP = [
   [/^(?:app\/src\/(?:home-apartment(?:-aim-library|-echo-aim|-chat-aim|-aim-proposals)\.js|home-apartment(?:-aim-library|-room-overlay|-aim)?\.jsx|home-app\.jsx|home-3d\/apartment-aim-presentation\.mjs)|tools\/test-apartment-(?:aim-library(?:-browser|-shell-browser)?|chat-aim)\.mjs)$/,
     ["test-apartment-aim-library.mjs", "test-apartment-aim-library-browser.mjs", "test-apartment-aim-library-shell-browser.mjs", "test-apartment-chat-aim.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:equipment-virtual-fixtures|equipment-spotlight-visual)\.mjs|tools\/test-apartment-aim-sweep\.mjs)$/, ["test-apartment-aim-sweep.mjs"]],
+  [/^(?:app\/src\/(?:home-apartment(?:-data)?\.(?:jsx|js)|home-3d\/(?:echo-virtual-lighting|equipment-virtual-fixtures|engine|pointcloud|lit-(?:layer-loader|receivers|view|frame|basis-blend|bvh-bake))\.m?js)|tools\/(?:test-echo-virtual-lighting(?:-receivers)?(?:-browser(?:-part2)?)?|fixtures\/apartment-lit-splats-browser-proof)\.mjs)$/, ["test-echo-virtual-lighting.mjs", "test-echo-virtual-lighting-browser.mjs", "test-echo-virtual-lighting-receivers-browser.mjs", "test-echo-virtual-lighting-receivers-browser-part2.mjs"]],
   // Every GLSL site and its WebGPU twin (?renderer=webgpu) move together.
   [/^(?:app\/src\/home-3d\/(?:webgpu-[\w-]+\.mjs|dollhouse-cutaway(?:-tsl|-material)?\.m?js|pointcloud\.js|modes\.js|photo-floor-support\.js|equipment-spotlight-visual\.mjs|equipment-virtual-fixtures\.mjs|apartment-directional-presentation\.mjs)|tools\/test-apartment-webgpu-ports\.mjs)$/, ["test-apartment-webgpu-ports.mjs"]],
   [/^(?:app\/src\/(?:index\.html|vendor\/three-0\.186\.1\/.+|home-3d\/(?:engine\.js|webgpu-[\w-]+\.mjs|dollhouse-cutaway-tsl\.mjs|gaussian-splat-[\w-]+\.mjs|splat-cutaway-tsl\.mjs))|tools\/test-apartment-webgpu-(?:renderer|mesh|photo)-browser(?:-part2)?\.mjs)$/, ["test-apartment-webgpu-renderer-browser.mjs", "test-apartment-webgpu-mesh-browser.mjs", "test-apartment-webgpu-mesh-browser-part2.mjs", "test-apartment-webgpu-photo-browser.mjs", "test-apartment-webgpu-photo-browser-part2.mjs"]],
@@ -194,6 +214,7 @@ const MAP = [
     "run-native-agent-security-tests", "run-web-gateway-lighting-brain-tests.mjs",
   ]],
   [/^tools\/run-web-gateway-lighting-brain-tests\.mjs$/, ["run-web-gateway-lighting-brain-tests.mjs"]],
+  [/^(?:web-gateway\/(?:server|den-live-route|serve-home|look-only|home-location|content-pack-route|equipment-registration|lighting-brain-route|lighting-layer)\.mjs|tools\/(?:run-web-gateway-look-only-tests|fixtures\/apartment-home-shell-fixtures)\.mjs)$/, ["run-web-gateway-look-only-tests.mjs"]],
   // Ahead-of-time JSX: the loaders, the build, the gateway's verified
   // manifest and the hooks that run the build on deploy and installer builds.
   [/^(?:app\/src\/(?:index\.html|home-feature-loader\.js|home-precompiled-jsx\.js|vendor\/babel-[^/]+\/.*)|web-gateway\/(?:server|precompiled-jsx)\.mjs|tools\/(?:build-app-jsx|lib\/precompiled-jsx|test-precompiled-jsx)\.mjs|tools\/deploy-home-web\.sh|app\/src-tauri\/tauri\.conf\.json)$/, ["test-precompiled-jsx.mjs"]],
@@ -239,7 +260,10 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * shell-audit, room-guide, WebGPU-renderer, Lit and M2 browser weights are
  * hosted times from run 39350126935 (L5, #347), rounded up; the Lit splats,
  * WebGPU photo, aim, chat, m2, directional, setup-rail, overlay and composer
- * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up. */
+ * weights are hosted times from run 39379967940 (L4 #374 on main), rounded up.
+ * test-apartment-chat-context.cjs is a unit suite that took 131 s hosted on run 43597090472 (#441); it counted as
+ * 1 s before, as an unmeasured non-browser item. Room selection took 90 to 146 s hosted on #441's runs, and the den
+ * Serve suite 166 to 180 s whole, so it runs as two parts of about 100 s each. */
 const SHARD_WEIGHT_S = {
   "run-people-agent-tray-ui-tests.cjs": 60,
   "run-people-bridge-ui-tests.cjs": 45,
@@ -263,7 +287,11 @@ const SHARD_WEIGHT_S = {
   "test-apartment-directional-browser.mjs": 80,
   "test-apartment-directional-browser-part2.mjs": 90,
   "test-precompiled-jsx.mjs": 90,
-  "test-apartment-room-selection-browser.mjs": 111,
+  "test-apartment-room-selection-browser.mjs": 150,
+  "test-apartment-slow-scan-browser.mjs": 60,
+  "test-apartment-lit-cloud-browser.mjs": 60,
+  "test-den-live-serve-browser.mjs": 120,
+  "test-den-live-serve-browser-part2.mjs": 120,
   "test-apartment-overlay-bridge-browser.mjs": 100,
   "test-apartment-beam-path-browser.mjs": 40,
   "test-apartment-room-inspector-browser.mjs": 80,
@@ -274,6 +302,7 @@ const SHARD_WEIGHT_S = {
   "test-apartment-lit-webgpu-browser.mjs": 135,
   "test-apartment-lit-webgpu-browser-part2.mjs": 130,
   "test-apartment-composer-comfort-browser.mjs": 55,
+  "test-apartment-chat-context.cjs": 135,
   "test-apartment-setup-saves-browser.mjs": 110,
   "test-apartment-setup-rail-browser.mjs": 70,
   "test-apartment-setup-read-only-browser.mjs": 60,

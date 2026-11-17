@@ -70,12 +70,12 @@ function authoredGlb() {
   binHead.writeUInt32LE(binary.length, 0); binHead.writeUInt32LE(0x004e4942, 4);
   return Buffer.concat([head, padded, binHead, binary]);
 }
-function installPack(packs, site) {
+function installPack(packs, site, { seedDevices = null } = {}) {
   const revision = 'authored-' + site + '-r1', directory = path.join(packs, site, revision), rows = authoredPositions();
   fs.mkdirSync(directory, { recursive: true });
-  const seed = { schema_version: 1, revision: 7, exists: true, site, zones: [], devices: site === 'echo' ? [{
+  const seed = { schema_version: 1, revision: 7, exists: true, site, zones: [], devices: seedDevices ?? (site === 'echo' ? [{
     id: 'authored-echo-light', type: 'light', name: 'Authored Echo light', ha_entity_id: 'light.authored_echo', pos: null,
-  }] : [], targets: [],
+  }] : []), targets: [],
     meta: { frame: 'z_up_metric_floor0', site_id: site, authored_test: true } };
   const files = {
     'frame.json': Buffer.from(JSON.stringify({ site, frame: 'z_up_metric_floor0', units: 'm', extents_m: [4,4,2.5], splat_baked: true })),

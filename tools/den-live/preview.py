@@ -96,6 +96,7 @@ class Preview:
             raise ValueError("invalid persisted Stop counter")
         revision = controls.get("control_revision", 0)
         self.control_revision = revision if type(revision) is int and revision >= 0 else 0
+        self.manual_control_revisions = controls.get("manual_revisions", {})
         self.control_lock, self.settings_lock, self.lock = threading.Lock(), threading.Lock(), threading.RLock()
         self.epoch = uuid.uuid4().hex
         self.seq = self.decision_seq = 0
@@ -182,9 +183,196 @@ class Preview:
         self.manual_log = manual.Log(self.folder)
         lines = self.manual_log.read()
         self.learning = fixture_learning.Learning.replay(lines)
-        self.manual_replies = {line["event"]["event_id"]: self._replayed(line) for line in lines
-                               if isinstance(line["event"].get("event_id"), str)}
+        self.manual_meta = {name: {"revision": 0, "upgraded": False, "hold_id": None, "state": {}}
+                            for name in self.rows}
+        self.manual_fingerprints, self.manual_replies, self.manual_resumes = {}, {}, {}
+        self.manual_dirty = self.manual_transaction = False
+        self.manual_authority_unavailable = False
+        self._restore_manual(lines)
+        if isinstance(self.manual_control_revisions, dict):
+            for name, revision in self.manual_control_revisions.items():
+                if name in self.manual_meta and type(revision) is int and revision > self.manual_meta[name]["revision"]:
+                    self.manual_meta[name]["revision"] = revision
+                    self.manual_meta[name]["hold_id"] = None
+                    self.hands = {key: hand for key, hand in self.hands.items() if key[0] != name}
+                    self.manual_dirty = True
+        if self.manual_log.unreadable:
+            self.problem = "manual authority journal is unreadable"
+            self.stopped = True
+            self.manual_authority_unavailable = True
+        for line in lines:
+            event = line.get("event")
+            if event is not None:
+                try:
+                    checked = manual.parse(event)
+                    if checked["fixture_id"] not in self.rows:
+                        raise ValueError("unknown fixture receipt")
+                    self.manual_fingerprints[checked["event_id"]] = manual.fingerprint(checked)
+                    self.manual_replies[checked["event_id"]] = self._replayed(line)
+                except (KeyError, TypeError, ValueError):
+                    self.manual_log.skipped += 1
+            if "resume" in line:
+                try:
+                    request, reply = line["resume"], line["reply"]
+                    if (not isinstance(request.get("request_id"), str) or
+                            not manual.EVENT_ID.fullmatch(request["request_id"]) or
+                            request.get("fixture_id") not in self.rows or not isinstance(reply, dict)):
+                        raise ValueError("invalid Resume receipt")
+                    self.manual_resumes[request["request_id"]] = {
+                        "fingerprint": manual.fingerprint(request), "reply": reply}
+                except (KeyError, TypeError, ValueError, AttributeError):
+                    self.problem = "manual authority Resume receipt is invalid"
+                    self.stopped = self.manual_authority_unavailable = True
+                    self.manual_log.skipped += 1
+        for event_id, reply in list(self.manual_replies.items()):
+            if not isinstance(reply, dict):
+                self.manual_replies.pop(event_id)
+                self.problem = "manual authority receipt is invalid"
+                self.stopped = self.manual_authority_unavailable = True
+                continue
+            name = reply.get("fixture_id")
+            reply.update(epoch=self.epoch, from_seq=0)
+            if name in self.rows:
+                reply.update(hand=self._hand_record(name), manual_revision=self.manual_meta[name]["revision"])
         self._publish(self.clock())
+
+    def _manual_checkpoint(self, *, history=False):
+        # Runtime episode objects and monotonic timestamps never cross a process boundary.
+        hands = [{"fixture": name, "part": part,
+                  "hold": {key: value for key, value in hand.items()
+                           if key not in ("episode", "binding", "since_mono")}}
+                 for (name, part), hand in self.hands.items()]
+        checkpoint = {"schema": "den-manual-checkpoint-1", "authority": {
+            "binding": self.binding, "control_revision": self.control_revision,
+            "fixtures": self.manual_meta, "hands": hands,
+            "learning": [{"fixture": name, "group": group, "record": record}
+                         for (name, group), record in self.hold_learning.items()]}}
+        if history:
+            # Clear carries receipts once. Ordinary event/checkpoint records contain only current ownership.
+            checkpoint["dedupe"] = {"fingerprints": self.manual_fingerprints, "replies": self.manual_replies,
+                                    "resumes": self.manual_resumes}
+        return checkpoint
+
+    def _restore_manual(self, lines):
+        for line in lines:
+            saved = line.get("authority")
+            if not isinstance(saved, dict):
+                continue
+            try:
+                fixtures = saved["fixtures"]
+                for name, meta in fixtures.items():
+                    if (type(meta["revision"]) is not int or not 0 <= meta["revision"] <= 9007199254740991 or
+                            type(meta["upgraded"]) is not bool):
+                        raise ValueError("invalid manual revision")
+                    if meta.get("hold_id") is not None:
+                        if not isinstance(meta["hold_id"], str) or not manual.EVENT_ID.fullmatch(meta["hold_id"]):
+                            raise ValueError("invalid saved hold id")
+                        if meta["upgraded"] and (not isinstance(meta.get("client_id"), str) or
+                                                 not manual.EVENT_ID.fullmatch(meta["client_id"]) or
+                                                 type(meta.get("client_seq")) is not int or meta["client_seq"] < 1):
+                            raise ValueError("invalid saved ordering")
+                    if meta.get("state"):
+                        manual._state(meta["state"], "saved state")
+                hands = {}
+                for item in saved["hands"]:
+                    name, part, hand = item["fixture"], item["part"], dict(item["hold"])
+                    if name not in self.rows or part not in ("spot", "radials", "downward"):
+                        continue
+                    if not all(key in hand for key in ("event_id", "task_light", "task", "task_seen", "ends", "lit")):
+                        raise ValueError("invalid saved hold")
+                    if (any(type(hand[key]) is not bool for key in ("task_light", "task", "task_seen", "lit")) or
+                            hand["ends"] not in ("next_cue", "task_end", "task_start", "episode_end")):
+                        raise ValueError("invalid saved hold policy")
+                    if (not fixtures.get(name, {}).get("hold_id") or not isinstance(hand["event_id"], str) or
+                            not manual.EVENT_ID.fullmatch(hand["event_id"])):
+                        raise ValueError("saved hold has no owner")
+                    hand.update(episode=None, binding=None, since_mono=self.clock(), recovering=True)
+                    if hand.get("cue") is not None:
+                        hand["cue"] = tuple(hand["cue"])
+                        hand["settled"] = False
+                    hands[(name, part)] = hand
+                self.manual_meta.update({name: copy.deepcopy(meta) for name, meta in fixtures.items() if name in self.rows})
+                if "dedupe" in line:
+                    self.manual_fingerprints = dict(line["dedupe"].get("fingerprints", {}))
+                    self.manual_replies = dict(line["dedupe"].get("replies", {}))
+                    self.manual_resumes = dict(line["dedupe"].get("resumes", {}))
+                    if any(not isinstance(item, dict) or not isinstance(item.get("reply"), dict) or
+                           not isinstance(item.get("fingerprint"), str) for item in self.manual_resumes.values()):
+                        raise ValueError("invalid saved Resume receipt")
+                matches = saved.get("binding") == self.binding and saved.get("control_revision") == self.control_revision
+                self.hands = hands if matches and self.on and not self.stopped else {}
+                learning = {}
+                for item in saved.get("learning", []):
+                    group, record = item["group"], item["record"]
+                    required = ({"task_light", "unlit", "page", "target_m", "lux_before", "key", "origin", "learn", "last"}
+                                if group == "spot" else {"ambient", "key", "origin", "learn", "zones"})
+                    if group not in ("spot", "glow") or not isinstance(record, dict) or not required <= set(record):
+                        raise ValueError("invalid saved correction")
+                    if item["fixture"] in self.rows:
+                        learning[(item["fixture"], group)] = record
+                self.hold_learning = learning if self.hands else {}
+                for name, meta in self.manual_meta.items():
+                    if not any(fixture == name for fixture, _part in self.hands):
+                        meta["hold_id"] = None
+                    elif meta.get("state"):
+                        self._adopt_aim(name, meta["state"])
+                        self.rows[name]["reason"] = "hand"
+            except (KeyError, TypeError, ValueError, AttributeError):
+                self.problem = "manual authority journal is invalid"
+                self.stopped = True
+                self.manual_authority_unavailable = True
+
+    def _persist_manual(self):
+        if self.manual_authority_unavailable:
+            return False
+        if not self.manual_dirty or self.manual_transaction:
+            return True
+        try:
+            self.manual_log.append(self._manual_checkpoint())
+        except OSError:
+            self.problem = "manual authority journal write failed"
+            return False
+        self.manual_dirty = False
+        return True
+
+    def _manual_conflict(self, name, error="manual_revision_conflict"):
+        return 409, {"ok": False, "error": error, "manual_revision": self.manual_meta[name]["revision"],
+                     "hand": self._hand_record(name), "epoch": self.epoch, "from_seq": self.seq}
+
+    def _manual_order(self, event):
+        meta = self.manual_meta[event["fixture_id"]]
+        if "client_id" not in event:
+            return "manual_version_required" if meta["upgraded"] else None
+        same = (meta.get("hold_id") == event["hold_id"] and meta.get("client_id") == event["client_id"])
+        if same:
+            if event["expected_revision"] > meta["revision"]:
+                return "manual_revision_conflict"
+            return "manual_sequence_conflict" if event["client_seq"] <= meta.get("client_seq", 0) else None
+        if event["expected_revision"] != meta["revision"]:
+            return "manual_revision_conflict"
+        return None
+
+    def _manual_state(self, event):
+        name = event["fixture_id"]
+        meta, row = self.manual_meta[name], self.latest["fixtures"][name]
+        state = meta.get("state") if meta.get("hold_id") else None
+        if not state:
+            ambient = self.latest.get("ambient") or {"level": 0, "cct_k": self.core.CCT_K}
+            light = {"on": ambient["level"] > 0, "brightness": ambient["level"], "color_temp_kelvin": ambient["cct_k"]}
+            state = {"pan_deg": row["pan_deg"], "tilt_deg": row["tilt_deg"],
+                     "spotlight": {"on": row["on"], "brightness": row["level"], "color_temp_kelvin": row["cct_k"]},
+                     "radials": [{"number": n, **light} for n in range(1, 7)], "downward": light}
+        state = manual.merge_state(state, event.get("held_state", {}))
+        return manual.merge_state(state, event["after"])
+
+    def _manual_before_transaction(self, name):
+        return (dict(self.rows[name]), {key: dict(hand) for key, hand in self.hands.items()},
+                copy.deepcopy(self.hold_learning), copy.deepcopy(self.manual_meta), self.manual_dirty)
+
+    def _manual_rollback(self, name, saved):
+        row, self.hands, self.hold_learning, self.manual_meta, self.manual_dirty = saved
+        self.rows[name].clear()
+        self.rows[name].update(row)
 
     def _read(self, name, fallback):
         try:
@@ -784,6 +972,10 @@ class Preview:
         2026-11-14): a new camera epoch or a re-identified track drops den-live's episode, and the hold waits for the
         person and carries on with their next episode. The episode ending ends the task's light only on evidence:
         they're seen standing, fresh frames showed the den empty, or the task had already ended when it was lost."""
+        if hand.get("recovering"):
+            if self.track is None:
+                return None
+            hand["recovering"] = False
         if self.episode is not hand["episode"]:
             if hand["task_light"] and standing:
                 return "stood_up"
@@ -805,12 +997,21 @@ class Preview:
         return why
 
     def _end_hand(self, hold):
+        saved = self._manual_before_transaction(hold[0]) if not self.manual_transaction else None
         del self.hands[hold]
+        name = hold[0]
+        if hasattr(self, "manual_meta"):
+            self.manual_meta[name]["revision"] += 1
+            if not any(fixture == name for fixture, _part in self.hands):
+                self.manual_meta[name]["hold_id"] = None
+            self.manual_dirty = True
         if hold[1] == "spot" and self.rows[hold[0]]["reason"] == "hand":
             self.rows[hold[0]]["reason"] = "waiting_for_task"
         group = self._group(hold[1])
         if not any(name == hold[0] and self._group(part) == group for name, part in self.hands):
             self.hold_learning.pop((hold[0], group), None)
+        if saved is not None and not self._persist_manual():
+            self._manual_rollback(hold[0], saved)
 
     @staticmethod
     def _group(part):
@@ -831,7 +1032,7 @@ class Preview:
         plan = plan or {}
         for part in manual.parts(event["after"]):
             previous = self.hands.get((name, part))
-            hand = {"event_id": event["event_id"], "since_mono": previous["since_mono"] if previous else now,
+            hand = {**(previous or {}), "event_id": event["event_id"], "since_mono": previous["since_mono"] if previous else now,
                     "episode": previous["episode"] if previous else self.episode,
                     "binding": previous["binding"] if previous else self.track_binding,
                     "task": previous["task"] if previous else self.task_until() is not None,
@@ -891,7 +1092,12 @@ class Preview:
         if not holds:
             return None
         newest = max(holds.values(), key=lambda hand: hand["since_mono"])
-        return {"event_id": newest["event_id"], "parts": sorted(holds),
+        meta = self.manual_meta.get(name, {})
+        return {"event_id": meta.get("event_id", newest["event_id"]), "parts": sorted(holds),
+                "hold_id": meta.get("hold_id"), "revision": meta.get("revision", 0),
+                "client_id": meta.get("client_id"), "client_seq": meta.get("client_seq"),
+                "state": copy.deepcopy(meta.get("state", {})),
+                "recovering": any(hand.get("recovering", False) for hand in holds.values()),
                 "since_mono": min(hand["since_mono"] for hand in holds.values()),
                 "ends": {part: hand["ends"] for part, hand in sorted(holds.items())},
                 "warning": self._hand_warning(name)}
@@ -1096,10 +1302,12 @@ class Preview:
         return None
 
     def _replayed(self, line):
-        """The reply a retry of a logged event gets after a restart: recorded, learned as it was, and no hold (holds
-        don't outlive the run that made them)."""
+        """An event keeps its receipt while ownership is reconciled against the recovered current run."""
         return {"ok": True, "event_id": line["event"]["event_id"], "recorded": True, "learned": bool(line.get("learn")),
-                "why_not": line.get("why_not"), "hand": None, "epoch": self.epoch, "from_seq": 0}
+                "fixture_id": line["event"]["fixture_id"],
+                "why_not": line.get("why_not"), "hand": self._hand_record(line["event"]["fixture_id"]),
+                "manual_revision": self.manual_meta.get(line["event"]["fixture_id"], {}).get("revision", 0),
+                "epoch": self.epoch, "from_seq": 0}
 
     def manual_change(self, data):
         """POST /coordinator/manual (plan 04b): one settled change the owner made to a fixture in Home. It's recorded
@@ -1111,11 +1319,19 @@ class Preview:
         except ValueError as error:
             return 400, {"ok": False, "error": str(error)}
         with self.lock:
-            known = self.manual_replies.get(event["event_id"])
-            if known is not None:
-                return 200, known
+            if self.manual_authority_unavailable:
+                return 503, {"ok": False, "error": "manual_authority_unavailable"}
             if event["fixture_id"] not in self.rows:
                 return 400, {"ok": False, "error": "unknown fixture"}
+            known = self.manual_replies.get(event["event_id"])
+            if known is not None:
+                if self.manual_fingerprints.get(event["event_id"]) != manual.fingerprint(event):
+                    return self._manual_conflict(event["fixture_id"], "event_id_conflict")
+                return 200, known
+            name = event["fixture_id"]
+            conflict = self._manual_order(event)
+            if conflict:
+                return self._manual_conflict(name, conflict)
             now = self.clock()
             self._expire(now)
             context, learn, why, extra = self._learning_inputs(event, now)
@@ -1123,22 +1339,40 @@ class Preview:
                     "received_wall_ms": round(self.wall() * 1000), "context": context, "key": context.get("key"),
                     "learn": learn, "why_not": why, "keys": extra["keys"] or None,
                     "supersedes": extra["supersedes"] or None}
+            state = self._manual_state(event)
+            saved = self._manual_before_transaction(name)
+            self.manual_transaction = True
+            hand = self._hold(event, now, extra["plan"], True)
+            meta = self.manual_meta[name]
+            meta.update(revision=meta["revision"] + 1, state=state, event_id=event["event_id"])
+            if "client_id" in event:
+                meta.update(upgraded=True, client_id=event["client_id"], client_seq=event["client_seq"])
+            meta["hold_id"] = event.get("hold_id", event["event_id"]) if hand else None
+            self._adopt_aim(name, event["after"])
+            state["pan_deg"], state["tilt_deg"] = (-value / 100 for value in self.rows[name]["current"])
+            reply = {"ok": True, "event_id": event["event_id"], "recorded": True, "learned": bool(learn),
+                     "fixture_id": name,
+                     "why_not": why, "hand": self._hand_record(name), "manual_revision": meta["revision"],
+                     "epoch": self.epoch, "from_seq": self.seq + 1}
+            line["authority"] = self._manual_checkpoint()["authority"]
             try:
                 self.manual_log.append(line)
                 recorded = True
             except OSError:
                 self.problem, recorded = "manual log write failed", False
+                self._manual_rollback(name, saved)
+            finally:
+                self.manual_transaction = False
             if recorded and learn:
                 self.learning.apply(context["key"], learn, event["at_ms"], event["event_id"], extra["supersedes"],
                                     extra["keys"])
-            hand = self._hold(event, now, extra["plan"], recorded)
-            self._adopt_aim(event["fixture_id"], event["after"])
-            self._evaluate(now)
-            reply = {"ok": recorded, "event_id": event["event_id"], "recorded": recorded,
-                     "learned": bool(recorded and learn), "why_not": why if recorded else "log_write_failed",
-                     "hand": hand and self._hand_record(event["fixture_id"]), "epoch": self.epoch, "from_seq": self.seq}
             if recorded:
+                self.manual_dirty = False
+                self.manual_fingerprints[event["event_id"]] = manual.fingerprint(event)
                 self.manual_replies[event["event_id"]] = reply
+                self._evaluate(now)
+            else:
+                reply = {**reply, "ok": False, "recorded": False, "learned": False, "why_not": "log_write_failed"}
         return (200 if recorded else 503), reply
 
     def manual_resume(self, data):
@@ -1147,13 +1381,54 @@ class Preview:
         if not isinstance(data, dict) or not isinstance(data.get("fixture_id"), str):
             return 400, {"ok": False, "error": "expected fixture_id"}
         with self.lock:
+            if self.manual_authority_unavailable:
+                return 503, {"ok": False, "error": "manual_authority_unavailable"}
             if data["fixture_id"] not in self.rows:
                 return 400, {"ok": False, "error": "unknown fixture"}
+            name = data["fixture_id"]
+            meta = self.manual_meta[name]
+            request_id = data.get("request_id")
+            if request_id is not None:
+                if (set(data) != {"request_id", "fixture_id", "hold_id", "expected_revision"} or
+                        not isinstance(request_id, str) or not manual.EVENT_ID.fullmatch(request_id) or
+                        not isinstance(data.get("hold_id"), str) or not manual.EVENT_ID.fullmatch(data["hold_id"]) or
+                        type(data.get("expected_revision")) is not int or data["expected_revision"] < 0):
+                    return 400, {"ok": False, "error": "invalid manual Resume guard"}
+                known = self.manual_resumes.get(request_id)
+                if known:
+                    if known["fingerprint"] != manual.fingerprint(data):
+                        return self._manual_conflict(name, "request_id_conflict")
+                    return 200, {**known["reply"], "epoch": self.epoch, "from_seq": self.seq}
+                if meta.get("hold_id") != data["hold_id"] or meta["revision"] != data["expected_revision"]:
+                    return self._manual_conflict(name)
+            elif meta["upgraded"]:
+                return self._manual_conflict(name, "manual_version_required")
+            elif set(data) != {"fixture_id"}:
+                return 400, {"ok": False, "error": "invalid manual Resume guard"}
+            saved = self._manual_before_transaction(name)
+            self.manual_transaction = True
             released = sorted(part for name, part in self.hands if name == data["fixture_id"])
             for part in released:
                 self._end_hand((data["fixture_id"], part))
+            # Even an already empty fixture advances its fence for the acknowledged request.
+            if not released:
+                meta["revision"] += 1
+            reply = {"ok": True, "released": released, "epoch": self.epoch, "from_seq": self.seq + 1,
+                     "manual_revision": meta["revision"], "request_id": request_id, "hold_id": data.get("hold_id")}
+            self.manual_transaction = False
+            checkpoint = self._manual_checkpoint()
+            if request_id is not None:
+                checkpoint.update(resume=data, reply=reply)
+            try:
+                self.manual_log.append(checkpoint)
+            except OSError:
+                self._manual_rollback(name, saved)
+                return 503, {"ok": False, "error": "manual authority journal write failed"}
+            if request_id is not None:
+                self.manual_resumes[request_id] = {"fingerprint": manual.fingerprint(data), "reply": reply}
+            self.manual_dirty = False
             self._evaluate(self.clock())
-            return 200, {"ok": True, "released": released, "epoch": self.epoch, "from_seq": self.seq}
+            return 200, reply
 
     def learned_clear(self, data=None):
         """POST /coordinator/learned/clear: forget what the owner taught. The fixtures' log is kept as
@@ -1161,12 +1436,16 @@ class Preview:
         one. The light in use goes back to the page and the house glow at once."""
         stamp = datetime.datetime.fromtimestamp(self.wall(), datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         with self.lock:
+            if self.manual_authority_unavailable:
+                return 503, {"ok": False, "error": "manual_authority_unavailable"}
+            previous_learning = self.hold_learning
+            self.hold_learning = {}
             try:
-                self.manual_log.archive(stamp)
+                self.manual_log.reset(stamp, self._manual_checkpoint(history=True))
             except OSError:
+                self.hold_learning = previous_learning
                 return 503, {"ok": False, "error": "learned clear failed"}
             self.learning = fixture_learning.Learning()
-            self.manual_replies = {}
             self.hold_learning = {}   # a hold's first change is gone with the log: nothing left for it to supersede
             self.spot_applied = self.room_cue = None
             self._evaluate(self.clock())
@@ -1825,6 +2104,7 @@ class Preview:
                                 problem=readback.get("problem"))
 
     def _publish(self, now):
+        self._persist_manual()
         self.seq += 1
         fixtures = {}
         directing = self.on and not self.stopped
@@ -1842,6 +2122,7 @@ class Preview:
             # Additive fields (contract 0: the schema id stays): the glide the board is flying, for Home to draw on the
             # same S-curve, and the ramp its level train is sampling.
             fixtures[name] = {"on": level > 0, "level": level, "cct_k": self.core.CCT_K,
+                              "manual_revision": self.manual_meta[name]["revision"],
                               "pan_deg": -row["current"][0] / 100, "tilt_deg": -row["current"][1] / 100,
                               "target_m": row["target"], "target_basis": row["basis"],
                               "reason": "stopped" if self.stopped else "off" if not self.on else row["reason"],
@@ -1864,6 +2145,7 @@ class Preview:
         self._snapshot_entry(now, fixtures, ambient)
         self._plan_bulbs(now, ambient)   # the bulbs follow the same ambient record Home draws (contract 7)
         self.latest = {"schema": "den-virtual-spots-1", "home": "den", "site": self.site, "epoch": self.epoch, "seq": self.seq,
+                       "manual_protocol": 2,
                        "binding": self.binding, "subject": self._subject(), "sampled_mono": now, "valid_until_mono": until,
                        "on": self.on, "stopped": self.stopped, "stop_counter": self.stop_counter, "fixtures": fixtures,
                        "ambient": ambient, "bulbs": self._bulb_record()}
@@ -1910,7 +2192,8 @@ class Preview:
         return {"on": self.on, "stopped": self.stopped, "stop_counter": self.stop_counter}
 
     def _persisted(self):
-        return {**self._controls(), "control_revision": self.control_revision}
+        return {**self._controls(), "control_revision": self.control_revision,
+                "manual_revisions": {name: meta["revision"] for name, meta in self.manual_meta.items()}}
 
     def routes(self):
         routes = {("GET", "/coordinator"): self.state, ("POST", "/coordinator/switch"): self.switch,
@@ -1925,6 +2208,7 @@ class Preview:
     def state(self, _body=None):
         with self.lock:
             current = {**self._controls(), "snapshot": self.latest, "decision": self.latest_decision,
+                       "manual_protocol": 2,
                        "server_mono": self.clock(), "settings": dict(self.settings), "problem": self.problem,
                        "trace_event_index": self.trace_committed, "trace_complete": self.trace_complete,
                        "bulbs_on": self.bulbs_on, "bulb_plan": self._bulb_record(),
@@ -1980,6 +2264,10 @@ class Preview:
 
     def _control(self, action, counter=None):
         with self.lock:
+            if action == "resume" and self.manual_authority_unavailable:
+                return 503, {"ok": False, "error": "manual_authority_unavailable", **self._controls()}
+            if action == "on" and self.on:
+                return 200, {"ok": True, **self._controls()}
             if action == "resume" and counter != self.stop_counter:
                 return 409, {"ok": False, **self._controls()}
             if action == "resume" and not self.stopped:
@@ -1994,6 +2282,11 @@ class Preview:
             now = self.clock()
             self._drop_track()
             self.hands.clear()   # Off and Stop end every hand hold: den-live directs nothing, so there's nothing to hold
+            for meta in self.manual_meta.values():
+                if meta.get("hold_id") is not None or meta["upgraded"]:
+                    meta["revision"] += 1
+                    meta["hold_id"] = None
+                    self.manual_dirty = True
             self.hold_learning.clear()
             self.room_cue = None
             receipts = []

@@ -10,6 +10,7 @@ Standard library only. No clock, no network.
 """
 
 import json
+import hashlib
 import math
 import os
 import re
@@ -95,7 +96,9 @@ def parse(data):
         raise ValueError("expected a den-manual-1 object")
     if len(json.dumps(data, allow_nan=False, separators=(",", ":"))) > MAX_BYTES:
         raise ValueError("larger than 8 KB")
-    allowed = {"schema", "event_id", "fixture_id", "before", "after", "at_ms", "snapshot", "subject", "situation"}
+    ordering = {"client_id", "client_seq", "hold_id", "expected_revision"}
+    allowed = {"schema", "event_id", "fixture_id", "before", "after", "at_ms", "snapshot", "subject", "situation",
+               "held_state", *ordering}
     if set(data) - allowed:
         raise ValueError(f"unknown keys {sorted(set(data) - allowed)}")
     if data.get("schema") != SCHEMA:
@@ -116,9 +119,42 @@ def parse(data):
     for key in ("subject", "situation"):
         if data.get(key) is not None and not isinstance(data[key], (dict, str)):
             raise ValueError(f"{key} must be what Home showed, or absent")
+    extra = {}
+    if ordering & set(data):
+        if not ordering <= set(data):
+            raise ValueError("manual ordering fields must appear together")
+        for key in ("client_id", "hold_id"):
+            if not isinstance(data[key], str) or not EVENT_ID.fullmatch(data[key]):
+                raise ValueError(f"{key} is malformed")
+        for key, low in (("client_seq", 1), ("expected_revision", 0)):
+            if type(data[key]) is not int or not low <= data[key] <= 9007199254740991:
+                raise ValueError(f"{key} must be an integer >= {low}")
+        extra = {key: data[key] for key in ordering}
+    if "held_state" in data:
+        extra["held_state"] = _state(data["held_state"], "held_state")
     return {"schema": SCHEMA, "event_id": data["event_id"], "fixture_id": data["fixture_id"], "before": before,
             "after": after, "at_ms": data["at_ms"], "snapshot": {"epoch": snapshot["epoch"], "seq": snapshot["seq"]},
-            "subject": data.get("subject"), "situation": data.get("situation")}
+            "subject": data.get("subject"), "situation": data.get("situation"), **extra}
+
+
+def fingerprint(data):
+    return hashlib.sha256(json.dumps(data, sort_keys=True, allow_nan=False, separators=(",", ":")).encode()).hexdigest()
+
+
+def merge_state(previous, patch):
+    """Merge actual hand values independently of whether a correction can be learned."""
+    result = json.loads(json.dumps(previous))
+    for key, value in patch.items():
+        if key == "radials":
+            zones = {zone["number"]: zone for zone in result.get(key, [])}
+            for zone in value:
+                zones[zone["number"]] = {**zones.get(zone["number"], {}), **zone}
+            result[key] = list(zones.values())
+        elif key in ("spotlight", "downward") and value is not None:
+            result[key] = {**(result.get(key) or {}), **value}
+        else:
+            result[key] = value
+    return result
 
 
 def parts(state):
@@ -136,6 +172,7 @@ class Log:
     def __init__(self, folder):
         self.path = Path(folder) / self.NAME
         self.skipped = 0   # lines read() couldn't use: torn, corrupt, or not an event
+        self.unreadable = False
 
     def append(self, line):
         """One line, fsynced. A torn tail (a crash or a full disk mid-write) is closed off with a newline first, so the
@@ -163,12 +200,14 @@ class Log:
         """Every whole event line, in order. Torn, corrupt or undecodable lines are skipped and counted, and a log that
         can't be read at all reads as empty: the log never stops the coordinator from starting."""
         self.skipped = 0
+        self.unreadable = False
         try:
             raw = self.path.read_bytes()
         except FileNotFoundError:
             return []
         except OSError:
             self.skipped = 1
+            self.unreadable = True
             return []
         lines = []
         for chunk in raw.split(b"\n"):
@@ -179,11 +218,31 @@ class Log:
             except (UnicodeDecodeError, ValueError):
                 self.skipped += 1
                 continue
-            if isinstance(line, dict) and isinstance(line.get("event"), dict):
+            if isinstance(line, dict) and (isinstance(line.get("event"), dict) or
+                                          line.get("schema") == "den-manual-checkpoint-1"):
                 lines.append(line)
             else:
                 self.skipped += 1
         return lines
+
+    def reset(self, stamp, checkpoint):
+        """Keep the previous journal and atomically replace it with a durable clear checkpoint."""
+        archive = self.path.with_name(f"manual-events-{stamp}.jsonl")
+        n = 1
+        while archive.exists():
+            archive = self.path.with_name(f"manual-events-{stamp}-{n}.jsonl")
+            n += 1
+        if self.path.exists():
+            with archive.open("xb") as kept:
+                kept.write(self.path.read_bytes())
+                kept.flush()
+                os.fsync(kept.fileno())
+        replacement = self.path.with_suffix(".reset")
+        with replacement.open("wb") as target:
+            target.write((json.dumps(checkpoint, sort_keys=True, allow_nan=False) + "\n").encode())
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(replacement, self.path)
 
     def archive(self, stamp):
         """Clear: keep the old log as manual-events-<stamp>.jsonl, and start empty."""

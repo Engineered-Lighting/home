@@ -351,7 +351,8 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
             pts.visible = v;
             pts.traverse?.((object) => {
                 for (const material of Array.isArray(object.material) ? object.material : object.material ? [object.material] : []) {
-                    material.depthWrite = depthWrite;
+                    // The x-ray look's copy points never write depth; x-ray has no depth by design.
+                    material.depthWrite = material.userData?.noDepthWrite ? false : depthWrite;
                 }
             });
         }
@@ -908,6 +909,7 @@ export function createModes({ apartmentRoot, pointsMaterial, sim, assetCandidate
 
         getMesh() { return state.mesh; },
         getCollision() { return state.collision; },
+        getMeshNearCut() { return state.meshNearCut.value; },
         setMeshNearCut(v) { state.meshNearCut.value = v; },
         setDollhouseCutaway(policy, worldToLocal) {
             if (disposed) return;

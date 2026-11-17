@@ -26,7 +26,8 @@ const APT_ROOM_OVERLAY_CSS = `
 /* Home's press feedback scales every pressed button (home-tokens.css), which
    would replace this position: a held reticle jumped to the top-left. */
 .apt-room-overlay button.apt-room-at:not(:disabled):active{transform:translate(var(--apt-x),var(--apt-y)) translate(-50%,-50%);transition:none}
-.apt-room-overlay .apt-room-label{pointer-events:auto;display:flex;align-items:center;gap:6px;height:24px;padding:0 9px 0 8px;border-radius:12px;background:rgba(8,9,11,.74);border:1px solid rgba(255,255,255,.12);color:#EDEDED;font:500 12px/1 "Geist","Inter",sans-serif;white-space:nowrap;cursor:pointer}
+.apt-room-overlay .apt-room-label{pointer-events:auto;display:flex;align-items:center;gap:6px;height:24px;padding:0 9px 0 8px;border-radius:12px;background:rgba(8,9,11,.74);border:1px solid rgba(255,255,255,.12);color:#EDEDED;font:500 12px/1 "Geist","Inter",sans-serif;white-space:nowrap;cursor:grab;touch-action:none}
+.apt-room-overlay .apt-room-label:active{cursor:grabbing}
 .apt-room-overlay .apt-room-label[data-state="hover"]{border-color:rgba(184,216,255,.5);color:#fff}
 .apt-room-overlay .apt-room-label[data-state="selected"]{border-color:#B8D8FF;color:#fff;background:rgba(14,18,24,.9)}
 .apt-room-overlay .apt-room-label .dot{width:6px;height:6px;border-radius:50%;background:#4b4b4b}

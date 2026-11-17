@@ -124,3 +124,39 @@ If a change intentionally has no release note, mark the PR with the
     failed units, use explicit resource limits, and keep a rollback path.
   - This approval does not bypass tool approval review or any enforced
     execution boundary.
+
+## Continuous den-live, with no admission soak (virtual only)
+
+- On November 12, 2026, the system owner approved continuous operation of
+  `den-live` on the LA AI host (`EngineeredLightingServer1`, alias
+  `hav-ubuntu`), with no admission soak ("So we can just run it"). The LA
+  host's GPU exists for the owner's inference first. This covers:
+  - den-live pulling frames from the den camera;
+  - person detection, tracking and the live skeleton;
+  - its people stream;
+  - its Qwen asks to the local vLLM;
+  - its reviewed deploys, restarts and rollbacks.
+- **Qwen is asked only while someone is there.** den-live asks only while
+  the den's Frigate occupancy sensor reads on (or did within the last 2
+  minutes, because Frigate can lose a person sitting still) and den-live sees a
+  person seated. With occupancy off or unknown it asks nothing. It asks at most
+  once every 2 s, at most 30 a minute, one request at a time.
+- **No soak.** The one-soak-per-release admission in the section above does
+  not apply to den-live releases. Each host operation still follows the AI
+  host rules:
+  - recheck health and failed units;
+  - keep explicit resource limits (den-live's unit is capped at
+    `MemoryMax=3G` and `CPUQuota=150%`);
+  - keep a rollback path.
+- **Its guards today are its own limits:** one Qwen request at a time, at
+  least 2 s apart, at most 30 a minute, and the unit's memory and CPU caps.
+- **den-live can follow the background monitor's back-off,** once it can read
+  the monitor's level: it slows its Qwen asks at step 1 and stops them at
+  step 2, and a monitor that's configured but has gone quiet counts as step 1.
+  The monitor's status isn't readable by den-live's service user yet, so it
+  doesn't follow it yet.
+- den-live never clears failures, rewrites incident baselines or restarts
+  unrelated services.
+- **Physical output stays disabled.** This approval is virtual-only, as above.
+- This approval does not bypass tool approval review or any enforced execution
+  boundary.

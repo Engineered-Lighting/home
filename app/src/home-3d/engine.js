@@ -324,7 +324,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         photoFloorSupport: cutawayEligible,
         ...(nodeRenderer ? { loadAdapters: { ...nodeRenderer.modeAdapters, ...loadAdapters } } : {}),
     });
-    const overlay = markersM.createOverlay(apartmentRoot);
+    const overlay = markersM.createOverlay(apartmentRoot, { siteId });
     /* The collision proxy's scanned floor and ceiling heights (not its
      * bounding box, which stray triangles stretch), once per collision
      * object, for the cut-away pick filters. */
@@ -468,6 +468,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         try { layer.dispose(); } catch (_) { /* Other layers and renderer cleanup still run. */ }
         finally { uiLayers.delete(layer); presentationUiLayers.delete(layer); }
     };
+    function captureWithoutLiveBody(draw) {
+        const hidden = apartmentRoot.children.filter(child => child.visible && child.userData.excludeFromApartmentCapture);
+        for (const child of hidden) child.visible = false;
+        try { return draw(); }
+        finally { for (const child of hidden) child.visible = true; }
+    }
     const equipmentCutaway = bindEquipmentCutawayRegistration({
         overlay, sceneIdentity, manifest: pinnedPack,
         enabled: cutawayEligible && !window.HomeLiveSceneShadow?.active,
@@ -786,6 +792,23 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         throw lastErr || new Error('no point asset reachable');
     }
 
+    /* The x-ray Cloud look (pointcloud.js): WebGL on desktop-class devices,
+     * unless this browser opted out. The classic cloud shows until the
+     * worker's features arrive, and stays if they never do. Phones keep the
+     * classic cloud until the look has been measured there. */
+    let xrayLook = null;
+    const xrayBuffer = new THREE.Vector2(), xrayTarget = new THREE.Vector3(), xrayForward = new THREE.Vector3();
+    function startXrayLook(target) {
+        if (nodeRenderer || pointcloudM.xrayLookOptedOut()) return;
+        const tier = adaptiveM.selectClientPerformanceTarget({ navigatorRef, windowRef: window });
+        if (tier === 'mobile60' || tier === 'mobile30') return;
+        pointcloudM.attachXrayLook(target, pointsMaterial, { renderer, scene, camera, signal: lifetimeController.signal })
+            .then((look) => { if (disposed) look.detach(); else xrayLook = look; })
+            .catch((error) => {
+                if (error?.name !== 'AbortError') console.warn('[home-3d] x-ray cloud unavailable; classic cloud kept', error);
+            });
+    }
+
     const pointsPromise = (async () => {
         const result = await loadPoints();
         if (disposed) {
@@ -797,6 +820,7 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         apartmentRoot.add(points);
         fitNow();
         emit('loaded', { total: result.total });
+        startXrayLook(points);
         return points;
     })();
 
@@ -805,10 +829,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
 
     // ---- render loop with frame governor ----
     let running = false;
-    const lightingRenderEvidence = lightingEvidenceM.createLightingRenderEvidence({ renderer,
+    let presenting = false;
+    const lightingRenderEvidence = lightingEvidenceM.createLightingRenderEvidence({ renderer, monotonicMs: () => performance.now(),
         isVisible: () => {
-            if (!running || disposed || document.hidden || !canvas.isConnected
-                || overlay.virtualFixturesReadback?.().visible !== true || !canvas.getClientRects().length) return false;
+            if (!running || disposed || document.hidden || !canvas.isConnected || !canvas.getClientRects().length) return false;
             const rect = canvas.getBoundingClientRect(), style = window.getComputedStyle(canvas);
             return style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0
                 && rect.bottom > 0 && rect.right > 0 && rect.top < window.innerHeight && rect.left < window.innerWidth;
@@ -896,6 +920,19 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             pointsMaterial.uniforms.uMaxPointPx.value = limits.maxPointPx;
             pointsMaterial.uniforms.uDepthFloor.value = limits.depthFloor;
         }
+        if (xrayLook) {
+            // the orbit centre, in the apartment frame: the camera looks at it from orbitR away
+            camera.getWorldDirection(xrayForward);
+            camera.getWorldPosition(xrayTarget).addScaledVector(xrayForward, orbitR).applyMatrix4(cutawayInverse);
+            const viewportPx = renderer.getDrawingBufferSize(xrayBuffer).y;
+            const css = renderer.getSize(xrayBuffer);
+            xrayLook.update({
+                viewportPx, cssWidth: css.x, cssHeight: css.y,
+                cameraLocal: cutawayCamera.toArray(), targetLocal: xrayTarget.toArray(),
+                // the same moments Home's own cutaway stands down: a held camera pose, live view, calibration
+                cut: !inCamPose && !dollhouseContext.live && !dollhouseContext.calibrating,
+            });
+        }
         if (modes.setMeshNearCut) {
             // melt near geometry at room zoom, but NEVER while sitting at a
             // camera's pose (the wall behind the camera must stay solid so the
@@ -916,8 +953,12 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 catch (_) { retireUiLayer(layer); }
             }
         }
-        renderer.render(scene, camera);
-        lightingRenderEvidence.afterRender();
+        xrayLook?.prepass();
+        try {
+            presenting = true;
+            renderer.render(scene, camera);
+            lightingRenderEvidence.afterRender();
+        } finally { presenting = false; }
 
         const renderTimeMs = Math.max(0, performance.now() - now);
         frameTimes.push(frameTimeMs);
@@ -954,8 +995,13 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         pointsMaterial, pointsPromise,
         requestLightingRenderEvidence(context = {}) {
             return lightingRenderEvidence.request({ ...context,
+                isCurrent: () => overlay.virtualFixturesReadback?.().visible === true && context.isCurrent?.() === true,
                 isReady: () => overlay.virtualFixturesPresentationActive?.() !== true });
         },
+        requestPresentationRenderEvidence(context = {}) {
+            return lightingRenderEvidence.request(context);
+        },
+        isPresentationFrame: () => presenting,
         gpu: gpuName,
         /* 'webgl', or 'webgpu' / 'webgpu-webgl2' behind ?renderer=webgpu. */
         rendererBackend: nodeRenderer ? (nodeRenderer.backend === 'webgpu' ? 'webgpu' : 'webgpu-webgl2') : 'webgl',
@@ -964,6 +1010,14 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         siteId,
         contentRevision,
         sceneIdentity,
+        async loadEchoVirtualLighting(savedModel) {
+            if (siteId !== 'echo' || sim || !pinnedPack?.sceneAvailable || disposed) return null;
+            const [source, frame] = await Promise.all([sib('echo-virtual-lighting.mjs'), readSceneFrame()]);
+            if (disposed) return null;
+            return source.createEchoVirtualLightingDocument({
+                pack: pinnedPack, frame, savedModel, digest: window.HomeEquipmentRegistration?.digest,
+            });
+        },
         getEquipmentCutawayRegistrationStatus: () => equipmentCutaway.status(),
         async prepareDeskTargetSurface(binding) {
             await modes.preload(['mesh']);
@@ -972,6 +1026,35 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
         deskTargetSurfaceReference(binding) { return deskSurfacePicking.reference(binding); },
         deskTargetSurfaceHit(clientX, clientY, binding) {
             return deskSurfacePicking.surfaceHit(clientX, clientY, binding);
+        },
+        pickEchoSpotlightBeam(clientX, clientY) {
+            if (siteId !== 'echo' || modes.mode !== 'mesh' || !litWanted || litMode !== 'mesh') return null;
+            const volumes = overlay.virtualFixtureBeamPickObjects();
+            if (!volumes.length) return null;
+            const intervals = new Map();
+            for (const hit of picking.pick(volumes, clientX, clientY, { doubleSided: true })) {
+                if (!intervals.has(hit.object)) intervals.set(hit.object, []);
+                intervals.get(hit.object).push(hit.distance);
+            }
+            if (!intervals.size) return null;
+
+            // Use the rendered mesh and the same near and cutaway filters as
+            // the depth pass. The aim target still uses the registered proxy.
+            const mesh = modes.getMesh();
+            const near = Math.max(camera.near, modes.getMeshNearCut());
+            const policy = modes.debugInfo?.().dollhouseCutaway;
+            const point = new THREE.Vector3();
+            const blocker = mesh?.visible && picking.pick([mesh], clientX, clientY).find(hit => {
+                if (-point.copy(hit.point).applyMatrix4(camera.matrixWorldInverse).z < near) return false;
+                return cutawayM.dollhouseKeep(apartmentRoot.worldToLocal(point.copy(hit.point)).toArray(), policy) >= .5;
+            });
+            const opaqueDistance = blocker ? blocker.distance : Infinity;
+            let distance = Infinity, id = null;
+            for (const [volume, hits] of intervals) {
+                const candidate = overlay.visibleSpotlightBeamDistance(volume, picking.raycaster.ray, hits, opaqueDistance);
+                if (candidate < distance) { distance = candidate; id = volume.userData.fixture_id; }
+            }
+            return id;
         },
         /* Under the dollhouse cut-away the viewer looks down into the room, so
          * a tap on visible floor must not land on the collision ceiling above
@@ -1115,7 +1198,8 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
                 if (disposed || signal?.aborted || nodeRenderer.isLost()) return null;
                 // The same per-frame splat work as frame(): sort for this camera.
                 modes.tickSplat?.(camera, performance.now() / 1000);
-                const frame = await nodeRenderer.capture({ scene, camera, scale, signal });
+                // The node renderer queues its draw before awaiting the readback.
+                const frame = await captureWithoutLiveBody(() => nodeRenderer.capture({ scene, camera, scale, signal }));
                 return disposed || signal?.aborted ? null : frame;
             }
             if (disposed || signal?.aborted || renderer.getContext().isContextLost()) return null;
@@ -1127,7 +1211,10 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             // Render and copy in one task: the default framebuffer need not be
             // preserved between frames. This does not advance the camera clock.
             modes.tickSpark?.(camera, performance.now() / 1000);
-            renderer.render(scene, camera);
+            captureWithoutLiveBody(() => {
+                xrayLook?.prepass();
+                renderer.render(scene, camera);
+            });
             const source = renderer.domElement;
             const width = Math.max(1, Math.round(source.width * Math.min(1, Math.max(0.01, scale))));
             const height = Math.max(1, Math.round(source.height * Math.min(1, Math.max(0.01, scale))));
@@ -1418,6 +1505,9 @@ export async function createEngine({ canvas, hostEl, sim = false, siteId = null,
             engine.setRunning(false);
             disposed = true;
             lightingRenderEvidence.dispose();
+            // its light target is not in the scene graph the sweep below disposes
+            try { xrayLook?.detach(); } catch (_) { /* the sweep still runs */ }
+            xrayLook = null;
             for (const layer of uiLayers) retireUiLayer(layer);
             equipmentCutaway.dispose();
             unsubscribePerformanceBudget();

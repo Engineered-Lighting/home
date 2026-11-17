@@ -82,6 +82,19 @@ test('dispose cancels pending polling and requests are bounded', async () => {
     assert.equal(f.time.size(), 0);
 });
 
+test('submission observers use the actual frame and abort removes a pending diagnostic fence', async () => {
+    const f = fixture(), controller = new AbortController(), submitted = [];
+    const pending = f.evidence.request({ isCurrent: () => true, signal: controller.signal,
+        onSubmitted: value => submitted.push(value) });
+    f.time.advance(12); f.evidence.afterRender();
+    assert.deepEqual(submitted, [{ frame_id: 1, frame_submitted_at_ms: 12, frame_submitted_mono_ms: 12 }]);
+    controller.abort();
+    assert.equal((await pending).reason, 'renderer_scope_changed');
+    assert.equal(f.time.size(), 0); assert.equal(f.calls.filter(row => row[0] === 'delete').length, 1);
+    const already = f.evidence.request({ isCurrent: () => true, signal: controller.signal });
+    assert.equal((await already).ok, false); f.evidence.dispose();
+});
+
 test('renderer evidence is wired after the ordinary render and remains opt-in in Home', () => {
     const engine = fs.readFileSync(new URL('../app/src/home-3d/engine.js', import.meta.url), 'utf8');
     const home = fs.readFileSync(new URL('../app/src/home-apartment.jsx', import.meta.url), 'utf8');

@@ -91,7 +91,10 @@ class PreviewManualTest(unittest.TestCase):
 
     def log(self):
         path = Path(self.path) / "coordinator" / "manual-events.jsonl"
-        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+        if not path.exists():
+            return []
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        return [record for record in records if "event" in record]
 
     def learned(self):
         return self.preview.state()[1]["learned_from_you"]
@@ -353,7 +356,7 @@ class PreviewManualTest(unittest.TestCase):
             raw.write(b'\xff\xfe{"event": {"event_id": "torn')
         self.dim(name, level=.1)
         restarted = self.make_preview()
-        self.assertEqual(len(restarted.manual_log.read()), 2)
+        self.assertEqual(len([line for line in restarted.manual_log.read() if "event" in line]), 2)
         self.assertEqual(restarted.state()[1]["manual_log"]["skipped"], 1)
         self.assertEqual(restarted.learning.public(), self.preview.learning.public())
 
@@ -468,7 +471,8 @@ class PreviewManualTest(unittest.TestCase):
         self.preview = self.make_preview()
         self.assertEqual(self.learned(), learned)
         status, reply = self.preview.manual_change(data)
-        self.assertEqual((status, reply["recorded"], reply["learned"], reply["hand"]), (200, True, True, None))
+        self.assertEqual((status, reply["recorded"], reply["learned"]), (200, True, True))
+        self.assertEqual(reply["hand"]["event_id"], data["event_id"])
         self.assertEqual(len(self.log()), 1)
 
     def test_resume_gives_the_fixture_back_and_it_lights_again(self):

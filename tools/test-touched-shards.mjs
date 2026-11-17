@@ -55,6 +55,19 @@ test('People action browsers and both precision contracts are included in the co
   assert.ok(fs.readFileSync(path.join(root,'tools/test-apartment-lit-splats-native-browser-part4.mjs'),'utf8').includes("phase:'calibration'"));
   assert.ok(fs.readFileSync(path.join(root,'tools/fixtures/apartment-lit-splats-browser-proof.mjs'),'utf8').includes("phase==='calibration'?12:1"));
 });
+
+test('Den latency collection and reporting select their regression harnesses', () => {
+  const collector = planOf(['--files', 'app/src/home-den-latency.mjs']);
+  assert.ok(collector.includes('test-den-latency.mjs'));
+  assert.ok(collector.includes('test-den-latency-report.mjs'));
+  for (const file of ['app/src/home-den-live-view.mjs', 'app/src/home-den-spot-playback.mjs',
+    'app/src/home-3d/lighting-render-evidence.mjs']) {
+    assert.ok(planOf(['--files', file]).includes('test-den-latency.mjs'), file);
+  }
+  for (const file of ['tools/den-latency-report.mjs', 'tools/test-den-latency-report.mjs']) {
+    assert.ok(planOf(['--files', file]).includes('test-den-latency-report.mjs'), file);
+  }
+});
 function assertExactCover(argv, counts) {
   const full = planOf(argv);
   assert.equal(new Set(full).size, full.length, 'the unsharded plan names each item once');
@@ -85,9 +98,9 @@ const FILE_SETS = [
   ['tools/run-touched-harnesses.mjs'], ['web-gateway/server.mjs', 'app/src/index.html'],
 ];
 
-test('for the actual base, every worker count 1..8 partitions the unsharded --list exactly', () => {
+test('for the actual base, every worker count 1..16 partitions the unsharded --list exactly', () => {
   const base = actualBase();
-  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6, 7, 8]);
+  const full = assertExactCover(['--base', base], [1, 2, 3, 4, 5, 6, 7, 8, 12, 16]);
   const listed = run(['--base', base, '--list']).stdout.split('\n')[0];
   assert.match(listed, new RegExp(`^\\[touched-harnesses\\] \\d+ changed files → ${full.filter(name => name !== 'check-jsx.js').length} harnesses`));
 });

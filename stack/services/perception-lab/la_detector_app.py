@@ -136,8 +136,12 @@ def create_la_detector_app():
                 raise ValueError('Runtime differs from the successful saved trial')
         free=subprocess.run(['nvidia-smi','--query-gpu=memory.free','--format=csv,noheader,nounits'],
             capture_output=True,text=True,check=True,timeout=5).stdout.strip().splitlines()
-        if len(free)!=1 or not free[0].isdigit() or int(free[0])<32768:
-            raise ValueError('At least 32GiB GPU headroom required before loading')
+        # Owner 2026-11-11: 16 GiB (was 32), the supervisor preflight's gate since
+        # 2026-09-29, so the ~3 GiB V-JEPA live worker can coexist. This worker's
+        # allocator is capped at 512 MiB below; 32 GiB refused every den lease
+        # while V-JEPA ran (about 32.1 GiB free).
+        if len(free)!=1 or not free[0].isdigit() or int(free[0])<16384:
+            raise ValueError('At least 16GiB GPU headroom required before loading')
         import torch
         torch.set_num_threads(1)
         # Torch allocator bound only; does not isolate whole-process CUDA memory.

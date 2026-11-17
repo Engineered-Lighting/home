@@ -300,7 +300,7 @@
    * this to inspect the current authoritative revision before a local draft is
    * eligible to publish. It deliberately does not mutate either browser
    * cache: comparing live state must never make the recovery draft disappear. */
-  async function getAuthoritativeModel({ endpoint, token, siteId = "echo", contentRevision } = {}) {
+  async function getAuthoritativeModel({ endpoint, token, siteId = "echo", contentRevision, signal } = {}) {
     if (siteId !== "echo") return { ok: false, site_read_only: true, error: "This home has no configured model authority" };
     if (rehearsalIsolated()) return { ok: false, rehearsal: true, error: "Authoritative reads are disabled in rehearsal" };
     if (!endpoint || !token) return { ok: false, credentials_required: true };
@@ -308,7 +308,7 @@
       const base = endpoint.replace(/\/+$/, "");
       const fetcher = window.tauriFetch || fetch;
       const r = await fetcher(`${base}/api/extended_openai_conversation/apartment_model`, {
-        headers: { Authorization: `Bearer ${token}` }, cache: "no-store",
+        headers: { Authorization: `Bearer ${token}` }, cache: "no-store", signal,
       });
       if (!r.ok) return { ok: false, status: r.status, error: `HTTP ${r.status}` };
       const raw = await r.json();

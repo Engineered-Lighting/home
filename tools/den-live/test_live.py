@@ -181,14 +181,15 @@ class PersonStateLog(unittest.TestCase):
     FRAME_KEYS = {'service_run_id', 'camera_epoch', 'frame_id', 'capture_mono', 'arrival_mono', 'capture_ts',
                   'transform_id', 'scan_revision', 'depth_calibration_sha256'}
     TRACK_KEYS = {'track_id', 'state', 'xy_m', 'sigma_m', 'position_basis', 'current_obs_ids', 'association',
-                  'supported_pose', 'seated', 'body_facing', 'head_point_m', 'wrists_m', 'posture'}
+                  'supported_pose', 'seated', 'body_facing', 'head_point_m', 'wrists_m', 'posture',
+                  'head_orientation', 'torso_orientation'}
     WORDS = {'den-person-state-1', 'confirmed', 'coasting', 'stereo', 'plane', 'coast', 'confident', 'ambiguous',
              'supported', 'hips', 'head', 'fresh', 'stale', 'starting', 'offline', 'refused', 'degraded', 'present',
-             'empty', 'unknown', 'sitting'}
+             'empty', 'unknown', 'sitting', 'stereo_face_axis', 'stereo_torso_plane'}
 
     @staticmethod
     def snapshot(run='a' * 32, seq=7):
-        from contracts import BodyFacing, FrameRef, HeadPoint, PlaneRef, SeatedState, TrackEvidence, TrackingSnapshot
+        from contracts import BodyFacing, FrameRef, HeadPoint, Orientation3D, PlaneRef, SeatedState, TrackEvidence, TrackingSnapshot
         frame = FrameRef(run, 2, 41, 'camera-session', 'rgb', PlaneRef(9, 1.0, 1.0, 640, 360), None, None, 'c' * 64,
                          'den-oak@2026-11-13.1', 'scan-r4', 1234.56789, 1234.6789, 1_800_000_000.123456)
         pose = {'left_hip': ((1.0, 2.0, 0.5), 'supported'), 'nose': ((1.0, 2.1, 1.12345), 'supported')}
@@ -196,7 +197,9 @@ class PersonStateLog(unittest.TestCase):
                               'confident', 3, 1230.5, pose, near='on the sofa', seated=SeatedState(True, 1231.25, 'hips'),
                               body_facing=BodyFacing(271.23456, 8.04, 1234.56789, 4),
                               head_point_m=HeadPoint((1.0, 2.1, 1.12345), 3), wrists_m={'left_wrist': (0.9, 2.3, 0.6543)},
-                              posture='sitting')
+                              posture='sitting',
+                              head_orientation=Orientation3D((0, 1, 0), (0, 0, 1), 0, 0, 20.04,
+                                                             1234.56789, (0, 1, 2, 3, 4), 'stereo_face_axis'))
         return TrackingSnapshot(run, 2, seq, frame, 'fresh', 'too dark', 'present', (track,), track.track_id, 4)
 
     def test_each_snapshot_is_one_numbers_only_line_with_the_contracts_fields_and_an_anchor(self):
@@ -239,6 +242,9 @@ class PersonStateLog(unittest.TestCase):
         self.assertEqual(track['head_point_m'], {'xyz': [1.0, 2.1, 1.123], 'n': 3})
         self.assertEqual(track['wrists_m'], {'left_wrist': [0.9, 2.3, 0.654]})
         self.assertEqual(track['posture'], 'sitting')
+        self.assertEqual(track['head_orientation']['as_of_mono'], 1234.568)
+        self.assertEqual(track['head_orientation']['angular_sd_deg'], 20.0)
+        self.assertIsNone(track['torso_orientation'])
         self.assertEqual((track['xy_m'], track['supported_pose']['nose']), ([1.235, -0.5], [[1.0, 2.1, 1.123], 'supported']))
         self.assertEqual((line['frame']['capture_mono'], line['frame']['depth_calibration_sha256']), (1234.568, 'c' * 64))
         self.assertEqual((line['eligibility_revision'], line['seq']), (9, 7))
@@ -280,7 +286,8 @@ class PersonStateLog(unittest.TestCase):
             log.write(self.snapshot(seq=seq))
         size = lambda name: (day / name).stat().st_size
         self.assertLessEqual(size('person-state.jsonl'), 4000)
-        self.assertGreater(size('person-state.jsonl'), 4000 - 1000, 'it filled its day, a line short at most')
+        refused_line = json.dumps(person_state.serialise(self.snapshot(seq=seq)), sort_keys=True, separators=(',', ':')) + '\n'
+        self.assertGreater(size('person-state.jsonl') + len(refused_line), 4000, 'the next complete line exceeds the day cap')
         kept = (day / 'person-state.jsonl').read_text(encoding='utf-8').splitlines()
         self.assertEqual(len(kept), seq, 'the anchor and every snapshot before the cap')
         log.write(self.snapshot(seq=seq + 1))
@@ -458,7 +465,8 @@ class Perceiving(unittest.TestCase):
         self.assertLess(math.dist(last['xy_m'], truth(READING)), 0.3, last['xy_m'])
         self.assertEqual(last['state'], 'confirmed')
         self.assertEqual(set(last), {'track_id', 'state', 'xy_m', 'sigma_m', 'heading_deg', 'age_s', 'near', 'service_run_id',
-                                     'camera_epoch', 'association_revision', 'seated', 'posture', 'who'},
+                                     'camera_epoch', 'association_revision', 'seated', 'posture', 'who',
+                                     'head_orientation', 'torso_orientation'},
                          'no joints, no image, no name')
         # Home's caption: perception's seated and posture, and a who slot nothing fills yet. The reader sits.
         self.assertEqual((last['seated'], last['posture'], last['who']), (True, 'sitting', None))

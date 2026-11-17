@@ -22,6 +22,7 @@ class BodyLink:
         self.min_interval_s = min_interval_s
         self.lock = threading.Lock()
         self.scope = self.track = self.binding = self.pending = None
+        self.association_revision = None
         self.setting_up = self.bound = None
         self.reset_learning = True
         self.request_id, self.generation = 0, 0
@@ -45,9 +46,10 @@ class BodyLink:
             self.stream.publish_body(self.scope, reason=reason)
             self.last_clear = reason
 
-    def _scope(self, scope, binding, track):
-        if (scope, binding, track) != (self.scope, self.binding, self.track):
+    def _scope(self, scope, binding, track, association_revision=None):
+        if (scope, binding, track, association_revision) != (self.scope, self.binding, self.track, self.association_revision):
             self.scope, self.binding, self.track = scope, binding, track
+            self.association_revision = association_revision
             self.last_sent = self.last_clear = self.shown_until = None
             self._clear("scope_changed")
 
@@ -57,9 +59,9 @@ class BodyLink:
                 self._scope(scope, None, None)
             self._clear(reason)
 
-    def prepare(self, scope, binding, track):
+    def prepare(self, scope, binding, track, association_revision=None):
         with self.lock:
-            self._scope(scope, binding, track)
+            self._scope(scope, binding, track, association_revision)
 
     def _finish_setup(self, reply):
         if self.setting_up is None or reply.get("binding") != self.setting_up:
@@ -145,7 +147,8 @@ class BodyLink:
             if self.closed:
                 return False
             binding = setup["binding"]
-            self._scope(scope, binding, person["track_id"] if person is not None else None)
+            self._scope(scope, binding, person["track_id"] if person is not None else None,
+                        person.get("association_revision") if person is not None else None)
             if self.stopped is not None:
                 self._clear("unavailable")
                 return False
@@ -169,7 +172,7 @@ class BodyLink:
                 self.request_id += 1
                 header = {"kind": "body", "id": frame_id, "request_id": self.request_id, "now": capture_mono,
                           "frame_key": frame_key, "binding": binding, "observation": observation, "person": person,
-                          "reset_learning": self.reset_learning}
+                          "reset_learning": self.reset_learning, "remaining_s": capture_mono + BODY_LEASE_S - now}
                 previous_sent = self.last_sent
                 self.pending = {**header, "generation": self.generation, "capture_mono": capture_mono}
                 self.reset_learning = False

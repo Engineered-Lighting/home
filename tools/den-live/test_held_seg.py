@@ -1,168 +1,109 @@
-"""The held-object pass's own rules: which instances it keeps, and when its weights load. A fake Ultralytics result."""
+"""The optional pinned adapter's bounds and class, wrist and polygon validation."""
 import hashlib
-import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import cv2
 import numpy as np
 
-import held_seg
-
-NAMES = {0: "person", 57: "couch", 67: "cell phone", 73: "book"}
+import held_seg as H
 
 
-def keypoints(wrist=(300.0, 200.0), score=0.9):
-    points = [[100.0, 100.0, 0.9]] * 17
-    points[9] = [wrist[0], wrist[1], score]
-    points[10] = [wrist[0] + 40, wrist[1], score]
-    return points
-
-
-def row(**kwargs):
-    return {"detections": [{"class": "person", "score": 0.9, "box_xyxy": [0, 0, 1, 1], "keypoints": keypoints(**kwargs)},
-                           {"class": "person", "score": 0.4, "box_xyxy": [0, 0, 1, 1], "keypoints": None}]}
-
-
-def square(x, y, size=40):
+def square(x=280, y=180, size=40):
     return np.array([[x, y], [x + size, y], [x + size, y + size], [x, y + size]], np.float32)
 
 
-def result(*instances):
-    """instances: (class id, score, polygon)."""
-    tensor = lambda values: SimpleNamespace(tolist=lambda: list(values))
-    return SimpleNamespace(names=NAMES, boxes=SimpleNamespace(cls=tensor(i[0] for i in instances),
-                                                              conf=tensor(i[1] for i in instances)),
-                           masks=SimpleNamespace(xy=[i[2] for i in instances]))
+def result(*items):
+    def tensor(values):
+        return SimpleNamespace(tolist=lambda: list(values))
+    return SimpleNamespace(names={0: "person", 57: "couch", 67: "cell phone", 73: "book"},
+                           boxes=SimpleNamespace(cls=tensor(i[0] for i in items), conf=tensor(i[1] for i in items)),
+                           masks=SimpleNamespace(xy=[i[2] for i in items]))
 
 
-class Instances(unittest.TestCase):
-    def test_keeps_a_holdable_thing_at_a_wrist_and_nothing_else(self):
-        got = held_seg.instances(result((73, 0.9, square(290, 190)),        # a book in the hand
-                                        (67, 0.9, square(10, 10)),           # a phone across the room
-                                        (57, 0.9, square(280, 180)),         # the couch under the hand
-                                        (73, 0.2, square(300, 200)),         # a book the model barely saw
-                                        (0, 0.9, square(290, 190))), row(), cv2)
-        self.assertEqual([(i["label"], i["score"]) for i in got], [("book", 0.9)])
-        self.assertEqual(len(got[0]["polygon"]), 4)
+def row(wrist=(300, 200, 0.9)):
+    points = [None] * 17
+    points[9] = list(wrist)
+    return {"detections": [{"class": "person", "keypoints": points}]}
 
-    def test_no_scored_wrist_or_no_masks_keeps_nothing(self):
-        self.assertEqual(held_seg.instances(result((73, 0.9, square(290, 190))), row(score=0.1), cv2), [])
-        self.assertEqual(held_seg.instances(SimpleNamespace(names=NAMES, boxes=None, masks=None), row(), cv2), [])
-        self.assertEqual(held_seg.instances(result((73, 0.9, square(290, 190))), {"detections": []}, cv2), [])
 
-    def test_a_long_outline_keeps_at_most_max_polygon_vertices(self):
+class Masks(unittest.TestCase):
+    def test_person_masks_and_only_holdable_near_a_supported_wrist(self):
+        masks = H.instances(result((0, .8, square()), (73, .9, square()), (57, .9, square()),
+                                   (73, .9, square(20, 20)), (67, .2, square())), row(), cv2)
+        self.assertEqual(len(masks["person_masks"]), 1)
+        self.assertEqual(masks["person_masks"][0]["box_xyxy"], [280, 180, 320, 220])
+        self.assertEqual([m["label"] for m in masks["held_masks"]], ["book"])
+
+    def test_person_needs_no_wrist_but_held_object_does(self):
+        masks = H.instances(result((0, .8, square()), (73, .9, square())), row((300, 200, .1)), cv2)
+        self.assertEqual(len(masks["person_masks"]), 1)
+        self.assertEqual(masks["held_masks"], [])
+
+    def test_nonfinite_bad_and_oversized_outputs_are_bounded(self):
         angles = np.linspace(0, 2 * np.pi, 1000, endpoint=False)
-        circle = np.stack([300 + 30 * np.cos(angles), 200 + 30 * np.sin(angles)], axis=1).astype(np.float32)
-        got = held_seg.instances(result((73, 0.8, circle)), row(), cv2)
-        self.assertEqual(len(got[0]["polygon"]), held_seg.MAX_POLYGON)
+        circle = np.stack([300 + 30 * np.cos(angles), 200 + 30 * np.sin(angles)], axis=1)
+        items = [(73, .9, circle)] * 20 + [(0, .8, square())] * 20
+        items += [(0, float("nan"), square()), (73, .9, square() * float("nan"))]
+        masks = H.instances(result(*items), row(), cv2)
+        self.assertEqual(len(masks["held_masks"]), H.MAX_HELD_MASKS)
+        self.assertEqual(len(masks["person_masks"]), H.MAX_PERSON_MASKS)
+        self.assertTrue(all(len(m["polygon"]) == H.MAX_POLYGON for m in masks["held_masks"]))
+        for wrist in ((float("nan"), 20, .9), (300, 200, 1.1), (-1, 200, .9)):
+            self.assertEqual(H.instances(result((73, .9, square())), row(wrist), cv2)["held_masks"], [])
 
-
-class Loading(unittest.TestCase):
-    def test_off_until_pinned_present_and_matching(self):
-        with tempfile.TemporaryDirectory() as folder:
-            models = Path(folder)
-            self.assertEqual(held_seg.load(models, "cpu", pinned=None), (None, "no held-object weights are pinned"))
-            self.assertIsNone(held_seg.load(models, "cpu", pinned="0" * 64)[0])
-            weights = models / held_seg.HELD_WEIGHTS
-            weights.write_bytes(b"fictional weights")
-            self.assertEqual(held_seg.load(models, "cpu", pinned="0" * 64)[1], "the held-object weights aren't the pinned ones")
-            pinned = hashlib.sha256(weights.read_bytes()).hexdigest()
-            loaded, model = [], SimpleNamespace(predict=lambda image, **kw: [result()])
-            segmenter, why = held_seg.load(models, "cuda:0", pinned=pinned,
-                                           yolo=lambda path, task: loaded.append((Path(path).name, task)) or model)
+    def test_missing_or_wrong_weights_never_import_or_start_model(self):
+        import detect_worker
+        with tempfile.TemporaryDirectory() as folder, patch("held_async.Masks") as start:
+            masks, fields = detect_worker.optional_masks(folder, folder)
+            self.assertIsNone(masks)
+            self.assertFalse(fields["held"])
+            start.assert_not_called()
+            path = Path(folder) / H.HELD_WEIGHTS
+            path.write_bytes(b"synthetic weights")
+            loaded = []
+            factory = lambda path, task: loaded.append((Path(path).name, task)) or SimpleNamespace(
+                predict=lambda image, **kwargs: [result()])
+            self.assertIsNone(H.load(folder, yolo=factory)[0])
+            pin = hashlib.sha256(path.read_bytes()).hexdigest()
+            model, why = H.load(folder, pinned=pin, yolo=factory)
             self.assertIsNone(why)
-            self.assertEqual(loaded, [(held_seg.HELD_WEIGHTS, "segment")])
-            self.assertEqual((segmenter.model, segmenter.device), (model, "cuda:0"))
+            self.assertEqual((model.device, loaded), ("cpu", [(H.HELD_WEIGHTS, "segment")]))
+        self.assertEqual(H.HELD_SHA256, "3da1d83e31caec96f9300eb4064f4f62882c133c7c264d63dfe61a7c197837a4")
 
-    def test_the_pin_is_the_published_weights(self):
-        self.assertEqual(held_seg.HELD_SHA256, "3da1d83e31caec96f9300eb4064f4f62882c133c7c264d63dfe61a7c197837a4")
-        local = Path(sys.prefix) / "models" / held_seg.HELD_WEIGHTS   # the detector venv's, where it was downloaded
-        if local.is_file():
-            self.assertEqual(held_seg.sha256(local), held_seg.HELD_SHA256)
-
-    def test_a_segmenter_runs_one_pass_and_keeps_its_instances(self):
+    def test_live_predict_arguments_and_first_run_failure_are_preserved(self):
         calls = []
-        model = SimpleNamespace(predict=lambda image, **kw: calls.append(kw) or [result((73, 0.9, square(290, 190)))])
-        got = held_seg.Segmenter(model, "cuda:0")(np.zeros((360, 640, 3), np.uint8), row(), cv2)
-        self.assertEqual([i["label"] for i in got], ["book"])
-        self.assertEqual(calls, [{"verbose": False, "device": "cuda:0", "conf": held_seg.SCORE_MIN}])
+        model = SimpleNamespace(predict=lambda image, **kwargs: calls.append((image.shape, kwargs)) or [result()])
+        segmenter = H.Segmenter(model, "cpu", state=".")
+        segmenter(np.zeros((360, 640, 3), np.uint8), row(), cv2)
+        self.assertEqual(calls, [((360, 640, 3), {"verbose": False, "device": "cpu", "conf": H.SCORE_MIN})])
 
-    def test_a_pass_that_cannot_run_says_so_at_load(self):
-        """On LA a predict that needs a writable ./runs raised on every frame and the frame held nothing, silently."""
-        class Unwritable:
-            def __init__(self, path, task):
-                pass
+        def broken(image, **kwargs):
+            raise PermissionError("private source path")
 
-            def predict(self, image, **kw):
-                raise PermissionError(13, "Permission denied", "runs")
         with tempfile.TemporaryDirectory() as folder:
-            models = Path(folder)
-            (models / held_seg.HELD_WEIGHTS).write_bytes(b"fictional weights")
-            pinned = hashlib.sha256(b"fictional weights").hexdigest()
-            segmenter, why = held_seg.load(models, "cuda:0", pinned=pinned, yolo=Unwritable, state=models)
-            self.assertIsNone(segmenter)
+            path = Path(folder) / H.HELD_WEIGHTS
+            path.write_bytes(b"synthetic weights")
+            pin = hashlib.sha256(path.read_bytes()).hexdigest()
+            model, why = H.load(folder, pinned=pin, yolo=lambda *a, **k: SimpleNamespace(predict=broken), state=folder)
+            self.assertIsNone(model)
             self.assertEqual(why, "the held-object pass failed its first run (PermissionError)")
-            import detect_worker
-            from functools import partial
-            _, fields = detect_worker.held_pass(models, None, load=partial(held_seg.load, pinned=pinned, yolo=Unwritable))
-            self.assertEqual(fields, {"held": False, "held_why": "the held-object pass failed its first run (PermissionError)"})
 
-
-class FailureCount(unittest.TestCase):
-    def test_a_raising_pass_is_counted_by_type_and_said_once_a_minute(self):
+    def test_live_failure_log_keeps_type_counts_and_minute_cadence(self):
         now = [0.0]
-        failures = held_seg.Failures(clock=lambda: now[0])
+        failures = H.Failures(clock=lambda: now[0])
         for _ in range(5):
-            now[0] += 2.0
+            now[0] += 2
             self.assertIsNone(failures.count("PermissionError"))
-        self.assertIsNone(failures.count(None))
-        now[0] += 60.0
-        line = failures.count("PermissionError")
-        self.assertEqual(line, "den-live: in the last 70 s the held-object pass failed 6 times (PermissionError 6); "
-                               "those frames held nothing")
-        now[0] += 61.0
-        self.assertIsNone(failures.count(None), "a quiet minute says nothing")
-
-    def test_the_worker_counts_a_raising_pass_and_logs_it(self):
-        source = (Path(held_seg.__file__).parent / "detect_worker.py").read_text(encoding="utf-8")
-        self.assertIn("kept, failed = (*kept[:3], []), type(exc).__name__", source)
-        self.assertIn("line = held_failures.count(failed)", source)
-        self.assertNotIn("except Exception:  # the pass is on, this frame found nothing", source)
-
-
-class ReadyLine(unittest.TestCase):
-    """detect_worker's ready line says whether the held-object pass is on, and why not."""
-
-    def test_on_with_the_pinned_file_off_without(self):
-        import detect_worker
-        from functools import partial
-        with tempfile.TemporaryDirectory() as folder:
-            models = Path(folder)
-            fake = lambda path, task: SimpleNamespace(predict=lambda image, **kw: [result()])
-            segmenter, fields = detect_worker.held_pass(models, {"boxes": "cuda:0"}, load=partial(held_seg.load, yolo=fake))
-            self.assertIsNone(segmenter)
-            self.assertEqual(fields, {"held": False, "held_why": "the held-object weights aren't in the models folder"})
-            (models / held_seg.HELD_WEIGHTS).write_bytes(b"fictional weights")
-            pinned = hashlib.sha256(b"fictional weights").hexdigest()
-            segmenter, fields = detect_worker.held_pass(models, {"boxes": "cuda:0"},
-                                                        load=partial(held_seg.load, pinned=pinned, yolo=fake))
-            self.assertEqual((fields, segmenter.device), ({"held": True}, "cuda:0"))
-            _, fields = detect_worker.held_pass(models, None, load=partial(held_seg.load, yolo=fake))
-            self.assertEqual(fields, {"held": False, "held_why": "the held-object weights aren't the pinned ones"})
-            _, fields = detect_worker.held_pass(models, None, load=partial(held_seg.load, pinned=None, yolo=fake))
-            self.assertEqual(fields, {"held": False, "held_why": "no held-object weights are pinned"})
-
-    def test_a_load_that_raises_is_off_with_its_type_name_only(self):
-        import detect_worker
-
-        def broken(models, device):
-            raise RuntimeError("text that never reaches the line")
-        segmenter, fields = detect_worker.held_pass(Path("."), None, load=broken)
-        self.assertIsNone(segmenter)
-        self.assertEqual(fields, {"held": False, "held_why": "the held-object pass didn't load (RuntimeError)"})
+        now[0] = 70
+        self.assertEqual(failures.count("PermissionError"),
+                         "den-live: in the last 70 s the held-object pass failed 6 times (PermissionError 6); "
+                         "those frames held nothing")
+        now[0] = 131
+        self.assertIsNone(failures.count())
 
 
 if __name__ == "__main__":

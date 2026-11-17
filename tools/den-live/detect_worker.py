@@ -37,6 +37,7 @@ import os
 import re
 import struct
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -80,6 +81,7 @@ def read_frame(stream):
 
 
 PROTOCOL = None   # the pipe the loop reads; nothing else may write to it
+PROTOCOL_LOCK = threading.Lock()
 
 
 def own_stdout():
@@ -127,8 +129,24 @@ def available(capture_ts, delay_s, compute_s):
 
 
 def say(value):
-    PROTOCOL.write(json.dumps(value, separators=(",", ":")) + "\n")
-    PROTOCOL.flush()
+    with PROTOCOL_LOCK:
+        PROTOCOL.write(json.dumps(value, separators=(",", ":")) + "\n")
+        PROTOCOL.flush()
+
+
+def optional_masks(models, state):
+    """The pinned optional model loads on its own CPU process, without holding up ready or detection."""
+    try:
+        import held_seg
+        import held_async
+        why = held_seg.weights_reason(models)
+        if why:
+            return None, {"held": False, "held_status": "off", "held_why": why}
+        return held_async.Masks(models, Path(state) / "segmentation"), {
+            "held": True, "held_device": "cpu", "held_status": "loading", "held_deadline_s": held_async.MASK_S}
+    except Exception as exc:
+        return None, {"held": False, "held_status": "error",
+                      "held_why": "the optional pass didn't start (%s)" % type(exc).__name__}
 
 
 def held_pass(models, devices, *, load=None, state=None):
@@ -160,7 +178,7 @@ def main(argv=None):
     try:
         have = detect.installed()
         pinned = detect.lock_for(have)
-        detect.contain(args.state)
+        detect.contain(state)
         wrong = detect.unlocked(pinned["versions"], have)
         if wrong:
             raise detect.Refused("the detector's venv is not its lock's (%d differences)" % len(wrong))
@@ -168,16 +186,34 @@ def main(argv=None):
     except detect.Refused as exc:
         say({"refused": str(exc)[:200]})
         return 2
-    np = detector.np
-    segmenter, held = held_pass(models, detector.devices, state=state)
-    held_failures = None
-    if segmenter is not None:
-        import held_seg
-        held_failures = held_seg.Failures()
+    masks, held = optional_masks(models, state)
     say({"ready": True, "load_ms": round(detector.load_ms), "warm_ms": round(detector.warm_ms), "devices": detector.devices,
          **({"gpu_why": detector.gpu_why} if detector.gpu_why and args.device == "auto" else {}), **held})
+    try:
+        return serve(detector, masks, state)
+    finally:
+        if masks is not None:
+            masks.close()
+
+
+def serve(detector, masks=None, state=None):
+    """Detect and serve stills immediately. The optional body owner captures its own exact bundle."""
     stream = sys.stdin.buffer
-    kept, bodies, ring, image_module = None, None, stills.Ring(), None
+    bodies = None
+    if masks is not None:
+        import held_async
+        bodies = held_async.Bodies(masks, say, state=state)
+    try:
+        return serve_frames(detector, masks, stream, stills.Ring(), bodies, state=state)
+    finally:
+        if masks is not None:
+            masks.close()
+            bodies.close()
+
+
+def serve_frames(detector, masks, stream, ring, bodies=None, *, state=None):
+    np = detector.np
+    kept, image_module = None, None
     guards = Guards()
     while True:
         got = read_frame(stream)
@@ -194,6 +230,9 @@ def main(argv=None):
             say(stills.handle(header, ring, np, image_module, detector.decode, detector.check.read_bundle))
             continue
         if data is None:   # the live body: set up once, then the body of the frame kept below
+            if masks is not None:
+                bodies.submit(header, kept)
+                continue
             if bodies is None:
                 try:
                     import body
@@ -226,17 +265,15 @@ def main(argv=None):
             row = detector.row_of(result, capture_ts=t, available_ts=ready, rgb_seq=seq,
                                   width=detect.WIDTH, height=detect.HEIGHT, boxes_version="yolo26s-8.4.0",
                                   keypoints_version=detector.pose.manifest["model_version"])
-            say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1), **identity})
-            if segmenter is not None:   # after the row is on its way: tracking's timing is its own
-                failed = None
+            health = masks.health() if masks is not None else {}
+            say({"id": header["id"], "row": row, "compute_s": round(compute_s, 4), "luma": round(luma, 1),
+                 **identity, **health})
+            if masks is not None:
                 try:
-                    import cv2
-                    kept = (*kept[:3], segmenter(np.ascontiguousarray(rgb[:, :, ::-1]), row, cv2))
-                except Exception as exc:  # the pass is on, this frame holds nothing: counted, never the frame's end
-                    kept, failed = (*kept[:3], []), type(exc).__name__
-                line = held_failures.count(failed)
-                if line:
-                    print(line, file=sys.stderr, flush=True)
+                    masks.submit(header["id"], header.get("frame_key"), np.ascontiguousarray(rgb[:, :, ::-1]), row)
+                except Exception:
+                    # Optional submission cannot turn an already sent tracking row into a second reply.
+                    pass
         except Exception as exc:  # one bad frame is a reply, not the end; a type name only, never its text
             reply = {"id": header.get("id"), "error": type(exc).__name__, **identity}
             if type(exc).__name__ == "RowError":   # den-observe's schema reasons: fixed words, no frame data

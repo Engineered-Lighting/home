@@ -48,6 +48,7 @@ let previewPort = null;
 const relaySockets = new Set();
 const fake = { streams: new Set(), bodies: new Set(), sockets: new Set(), actions: [], ws: [], labels: null,
   bodyAvailable: true, bodyStreaming: true, bodySeq: 0, haOffline: false, inference: null, subject: null,
+  eventIntervalMs: 200, bodyLeaseS: 1,
   control: { on: false, stopped: false, stop_counter: 0 }, epoch: 'fixture-epoch', seq: 0 };
 
 function json(res, value, status = 200) {
@@ -78,7 +79,7 @@ function openEvents(res, clients, write, headers = {}, first = '') {
   res.write('retry: 500\n\n');
   if (first) res.write(first);
   clients.add(res);
-  const timer = setInterval(() => write(res), 200);
+  const timer = setInterval(() => write(res), fake.eventIntervalMs);
   res.on('close', () => { clearInterval(timer); clients.delete(res); });
 }
 async function upstreamRequest(req, res) {
@@ -155,6 +156,7 @@ async function upstreamRequest(req, res) {
 function emitBody(out, reason) {
   const frame = measuredBodyEvent({ revision: den.revision, captured: Date.now() / 1000 - 0.05,
     seq: ++fake.bodySeq, reason });
+  if (frame.status === 'ready') frame.expires_ts = frame.capture_ts + fake.bodyLeaseS;
   out.write('event: body\ndata: ' + JSON.stringify(frame) + '\n\n');
 }
 
@@ -297,10 +299,11 @@ after(async () => {
   if (folder) fs.rmSync(folder, { recursive: true, force: true });
 });
 
-async function openHome(mobile, { latency = false } = {}) {
+async function openHome(mobile, { latency = false, deviceScaleFactor = 1 } = {}) {
   // The service worker is blocked, as in the other Home browser suites: its one takeover reload per build otherwise lands
   // at an unpredictable point in a case and aborts whatever it was doing.
   const context = await browser.newContext({ ignoreHTTPSErrors: true, hasTouch: mobile, isMobile: mobile, serviceWorkers: 'block',
+    deviceScaleFactor,
     viewport: mobile ? { width: 390, height: 844 } : { width: 1366, height: 768 } });
   await context.route('**/*', route => {
     const url = route.request().url();
@@ -319,10 +322,15 @@ async function openHome(mobile, { latency = false } = {}) {
 
 inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draws through GPU completion', { timeout: 120000 }, async () => {
   const initial = { ...fake.control }, firstAction = fake.actions.length;
+  const initialInterval = fake.eventIntervalMs, initialLease = fake.bodyLeaseS;
+  // Give hosted software rendering a complete frame before the next packet supersedes it.
+  // This checks correlation and expiry using the installed producer's supported two-second lease.
+  fake.eventIntervalMs = 1000; fake.bodyLeaseS = 2;
   fake.control = { ...fake.control, on: true, stopped: false };
   try {
     for (const mobile of [false, true]) {
-      const { page, context } = await openHome(mobile, { latency: true });
+      // Keep full logical desktop/phone layouts while bounding software-renderer pixel work.
+      const { page, context } = await openHome(mobile, { latency: true, deviceScaleFactor: 0.5 });
       try {
         await page.waitForFunction(() => {
           const rows = window.HomeDenLatency?.snapshot().entries || [];
@@ -393,7 +401,7 @@ inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draw
       } finally { await context.close(); }
     }
     assert.equal(fake.actions.length, firstAction, 'timing and local downloads create no upstream writes');
-  } finally { fake.control = initial; }
+  } finally { fake.control = initial; fake.eventIntervalMs = initialInterval; fake.bodyLeaseS = initialLease; }
 });
 
 async function startPreview(config) {
@@ -619,6 +627,9 @@ inPart(2, 'the mobile Den draws a face-free figure, and Stop holds the visible s
     try {
       await other.bringToFront();
       await other.goto(page.url(), { waitUntil: 'domcontentloaded' });
+      await other.waitForFunction(() => window.HomeServe?.active === true && !!window.HomeLightingControl
+        && window.__APT_ENGINE?.siteId === 'victoria' && window.HomeDenLiveView?.status()?.mounted === true,
+      null, { timeout: 60000 });
       await other.waitForFunction(() => !document.hidden && window.HomeDenLiveView?.status()?.spot?.stopped === true);
       const observed = await other.evaluate(() => window.HomeDenLiveView.status().spot.stop_counter);
       await page.bringToFront();
@@ -636,7 +647,10 @@ inPart(2, 'the mobile Den draws a face-free figure, and Stop holds the visible s
       assert.equal(staleResume, 409, 'a second tab cannot resume past a newer Stop');
       assert.ok((await readDrawn()).every(on => on === false));
     } catch (error) {
-      const otherState = await other.evaluate(() => ({ hidden: document.hidden, den: window.HomeDenLiveView?.status() }));
+      const otherState = await other.evaluate(() => ({ hidden: document.hidden, den: window.HomeDenLiveView?.status(),
+        engine: !!window.__APT_ENGINE, ready_state: document.readyState,
+        boot: window.__bootState ? { done: window.__bootState.done, loaded: window.__bootState.loaded,
+          total: window.__bootState.total, failed: !!window.__bootState.failed } : null }));
       error.message += '\nOther tab: ' + JSON.stringify(otherState);
       throw error;
     } finally { await other.close(); }

@@ -518,6 +518,16 @@ python -B -X utf8 tools\den-live\test_service.py
 - The scan page's spots mode runs on the authored room.
 - The service's end-to-end test needs the venv and a prepared den-sim set. The release's needs the venv's models and rtmlib's wheel. The scan page's needs Node.
 
+## Current-frame masks and orientation
+
+The existing registration supplies the RGB intrinsics, distortion, stereo-to-RGB transform and room transform for instance-mask reprojection. The local `yolo26s-seg.pt` supplies person and held-object masks. Its pinned SHA256 is `3da1d83e31caec96f9300eb4064f4f62882c133c7c264d63dfe61a7c197837a4`, from the reviewed v8.4.0 artifact. The release verifies the model against that digest. Inference and frame storage stay on the local hosts.
+
+Segmentation uses a separate CPU process with one compute thread, one active image and one pending image that is replaced by the newest frame. Only the body thread waits for an exact-frame mask, within the remaining capture lease and the 0.75 s mask deadline. A hung optional worker is terminated. Detector, pose and still requests keep their own dispatch. `health.segmentation` reports the optional worker's state and device.
+
+A person mask must uniquely match the current measured torso. Held-object confirmation uses measured depth near a supported wrist and continuity of the same surface across distinct frames. Its identity includes service run, camera epoch, track, association revision, mode and registered depth profile. Missing or ambiguous current evidence resets confirmation. The measured v2 stream carries kind 5 object points and an optional detector label. Phone/remote confusion uses Home's generic held-object marker. Body and object together share the 16,384-point limit. Every point retains its current source-pixel key. The registered head policy applies to both body and object points.
+
+`TrackEvidence` and the people stream also carry optional `head_orientation` and `torso_orientation`. Each estimate includes unit `forward` and `up` vectors in the registered room frame, yaw clockwise from +Y, pitch positive upward, `angular_sd_deg`, source joint indices, `as_of_mono`, and a basis. Estimates require fresh, confidently associated stereo joints. Head direction uses a coarse five-landmark anatomical axis. Its 20-degree uncertainty floor and the torso's 8-degree floor are conservative model assumptions pending measured replay qualification. Eye gaze needs its own evidence. Missing, inconsistent or excessively uncertain joints produce null estimates.
+
 ## Labels for your den
 
 You label the den's objects in Home: the sofa, the desk, each painting, the 3D printer. den-live keeps the one document (`den-room-labels-1`, `room_labels.py`) and serves it on the stream server: `GET` and `PUT /api/den-live/v1/homes/den/labels`. A save replaces the whole document, a compare-and-swap on its revision. The lighting coordinator reads the labels in this process (`Store.confirmed()`), and the Qwen ask gets one line about the seated person from `line_for()`, for example "Seated at the desk, beside the 3D printer.".

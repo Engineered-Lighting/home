@@ -83,6 +83,24 @@ class HeadPoint:
 
 
 @dataclass(frozen=True)
+class Orientation3D:
+    """Current stereo landmark geometry in room axes. This describes anatomical direction, not eye gaze.
+
+    Yaw is clockwise from +y and pitch is positive towards +z. angular_sd_deg is a conservative propagated
+    covariance bound combined with a geometric-model floor, not a calibrated probability. No temporal carry.
+    The containing TrackingSnapshot supplies the exact frame and track/association binding.
+    """
+    forward: tuple[float, float, float]
+    up: tuple[float, float, float]
+    yaw_deg: float
+    pitch_deg: float
+    angular_sd_deg: float
+    as_of_mono: float
+    source_joint_ids: tuple[int, ...]
+    basis: str
+
+
+@dataclass(frozen=True)
 class TrackEvidence:
     track_id: str
     state: str
@@ -100,6 +118,8 @@ class TrackEvidence:
     head_point_m: HeadPoint | None = None   # None with fewer than two face joints
     wrists_m: Mapping[str, tuple[float, float, float]] = field(default_factory=lambda: MappingProxyType({}))
     posture: str | None = None   # person_fields.POSTURES: sitting, standing, walking or unclear
+    head_orientation: Orientation3D | None = None
+    torso_orientation: Orientation3D | None = None
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,7 @@ so that run's *_mono times join the *_ts times of the ask log and the trace (con
 import time
 
 from ask import AskLog
+from person_fields import orientation_projection
 
 SCHEMA = "den-person-state-1"
 FILE = "person-state.jsonl"
@@ -61,7 +62,18 @@ def track_record(track):
                                                         "as_of_mono": _number(facing.as_of_mono), "n": facing.n},
             "head_point_m": None if head is None else {"xyz": [_number(v) for v in head.xyz], "n": head.n},
             "wrists_m": {name: [_number(v) for v in xyz] for name, xyz in sorted(track.wrists_m.items())},
-            "posture": track.posture}
+            "posture": track.posture,
+            "head_orientation": orientation_record(track.head_orientation),
+            "torso_orientation": orientation_record(track.torso_orientation)}
+
+
+def orientation_record(value):
+    record = orientation_projection(value)
+    if record is not None:
+        record["as_of_mono"] = _number(value.as_of_mono)
+        for key in ("yaw_deg", "pitch_deg", "angular_sd_deg"):
+            record[key] = _number(record[key], 1)
+    return record
 
 
 def serialise(snapshot):

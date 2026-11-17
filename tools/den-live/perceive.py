@@ -275,6 +275,8 @@ class DetectorWorker:
         self.load_ms = first.get("load_ms")
         self.devices = first.get("devices") if isinstance(first.get("devices"), dict) else None   # where each model runs
         self.gpu_why = first.get("gpu_why") if isinstance(first.get("gpu_why"), str) else None
+        self.segmentation = {name.removeprefix("held_"): first[name]
+                             for name in ("held_status", "held_device", "held_deadline_s", "held_why") if name in first}
 
     def _read(self):
         try:
@@ -413,6 +415,9 @@ class DetectorWorker:
             raise Stop("the detector wrote something that isn't its protocol") from None
         if reply.get("id") != frame_id or (key is not None and reply.get("frame_key") != key):
             raise Stop("the detector answered out of turn")
+        for name in ("held_status", "held_device", "held_deadline_s", "held_why"):
+            if name in reply:
+                self.segmentation[name.removeprefix("held_")] = reply[name]
         with self.dispatch_lock:
             self.pending = None
         return reply
@@ -574,12 +579,14 @@ class Perceiver:
             values = sorted(value for _, value in samples)
             timings[stage] = {"n": len(values), "p50": round(statistics.median(values), 1),
                               "p95": round(values[math.ceil(len(values) * 0.95) - 1], 1)}
+        segmentation = getattr(getattr(self, "detector", None), "segmentation", None)
         return {"timings_ms": timings, "fps_in": round((len(self.arrivals) - 1) / seconds, 2) if seconds > 0 else None,
                 "dropped_per_min": len(self.drops),
                 "lag_s_median": round(statistics.median(lag for _, lag in self.lags), 3) if self.lags else None,
                 "transit_s_median": round(statistics.median(s for _, s in self.transits), 3) if self.transits else None,
                 **minute_figures("camera_age_s", self.camera_ages),
-                **minute_figures("capture_to_stream_s", self.capture_to_stream)}
+                **minute_figures("capture_to_stream_s", self.capture_to_stream),
+                **({"segmentation": dict(segmentation)} if segmentation else {})}
 
     def _transit(self, meta, bundle):
         """Legacy wall-clock packaging-to-arrival estimate for display; never used as a freshness bound."""
@@ -682,17 +689,22 @@ class Perceiver:
                 self.body.clear("head_mask_unavailable", scope=scope)
                 return None
             person["head_evidence"] = value.head_evidence
+            person["association_revision"] = value.track.get("association_revision")
+            person["association_status"] = value.track.get("association")
+            person["mask_association_status"] = value.track.get("mask_association_status", person["association_status"])
+            person["mode"] = value.mode
         rotation, translation = self.camera.room_from_left
+        rig = self.camera.rig
         setup = {"binding": binding, "left_k": list(self.camera.rig.left_k[:4]),
                  "room_from_left": [[list(r) for r in rotation], list(translation)]}
+        if all(hasattr(rig, name) for name in ("rgb_k", "rgb_d", "rotation", "translation", "rgb_size")):
+            setup["rgb"] = {"k": list(rig.rgb_k), "d": list(rig.rgb_d),
+                            "from_left": [[list(r) for r in rig.rotation], list(rig.translation)],
+                            "size": list(rig.rgb_size)}
         if self.depth_scale != 1.0:   # body.py takes none as 1.0, so at 1.0 the setup is as it always was
             setup["depth_scale"] = self.depth_scale
-        rig = self.camera.rig
-        if all(hasattr(rig, name) for name in ("rgb_k", "rgb_d", "rotation", "translation", "rgb_size")):
-            # The RGB camera, for the held object: body.py finds which depth pixels a holdable mask covers.
-            setup["rgb"] = {"k": list(rig.rgb_k), "d": list(rig.rgb_d), "size": list(rig.rgb_size),
-                            "from_left": [[list(r) for r in rig.rotation], list(rig.translation)]}
-        self.body.prepare(scope, binding, person["track_id"] if person else None)
+        self.body.prepare(scope, binding, person["track_id"] if person else None,
+                          person.get("association_revision") if person else None)
         return dict(frame_key=value.frame_key, scope=scope, setup=setup, capture_mono=value.capture_earliest_mono,
                     observation=value.observation, person=person)
 
@@ -927,6 +939,9 @@ class Perceiver:
             facing = self.facing.update(track_id, revision, capture_mono, pose if stereo else None)
             seated = self.seated.update(track_id, revision, capture_mono, stereo)
             posture = person_fields.posture(seated, stereo, self.speed.update(track_id, capture_mono, tuple(marker["xy_m"])))
+            current_pose = pose if safe and stereo else None
+            head_orientation = person_fields.head_orientation(current_pose, capture_mono)
+            torso_orientation = person_fields.torso_orientation(current_pose, capture_mono)
             position_observations = [o for o in sources if o.get("room_position")]
             if not position_observations:
                 basis = "coast"
@@ -937,7 +952,8 @@ class Perceiver:
                                           basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
                                           revision, since, MappingProxyType(stereo), marker.get("near"),
                                           seated=seated, body_facing=facing, head_point_m=person_fields.head_point(stereo),
-                                          wrists_m=person_fields.wrists(stereo), posture=posture))
+                                          wrists_m=person_fields.wrists(stereo), posture=posture,
+                                          head_orientation=head_orientation, torso_orientation=torso_orientation))
             # The people projection carries the person binding (contract 2): run, epoch, track id, revision; and its
             # arrow is body_facing's, gone when that expires.
             # For Home's caption: seated and posture, as perception has them, and a who slot that nothing fills
@@ -945,6 +961,8 @@ class Perceiver:
             marker.update(service_run_id=self.run_id, camera_epoch=self.sessions, association_revision=revision,
                           heading_deg=None if facing is None else round(facing.deg, 1),
                           seated=bool(seated and seated.state), posture=posture, who=None)
+            marker.update(head_orientation=person_fields.orientation_projection(head_orientation),
+                          torso_orientation=person_fields.orientation_projection(torso_orientation))
             if safe and stereo and ref.depth is not None:
                 depth_mono = ref.depth.host_s + offset
                 if (abs(ref.depth.host_s - ref.rgb.host_s) <= RGB_PAIR_S + 1e-9
@@ -968,7 +986,11 @@ class Perceiver:
         self.speed.keep([e.track_id for e in evidence])
         possible_person = any(o["kind"] in ("person_box", "keypoints") for o in observations)
         presence = "present" if candidates else "unknown" if possible_person or tracks else "empty"
-        self._submit_body(prepared, observations=observations, tracks=tracks, supported=supported, association=association)
+        body_tracks = [{**track, "association_revision": item.association_revision,
+                        "mask_association_status": item.association_status}
+                       for track, item in zip(tracks, evidence)]
+        self._submit_body(prepared, observations=observations, tracks=body_tracks, supported=supported,
+                          association=association)
         snapshot_event = self._snapshot(event, ref=ref, status="fresh", presence=presence, tracks=evidence)
         return snapshot_event
 

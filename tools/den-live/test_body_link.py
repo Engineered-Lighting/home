@@ -166,6 +166,20 @@ class LinkTests(unittest.TestCase):
         self.submit(observation="empty", person=None)
         self.assertTrue(self.detector.headers[-1]["reset_learning"])
 
+    def test_same_track_revision_change_rejects_old_body_reply(self):
+        self.setup_worker()
+        self.submit(person={**PERSON, "association_revision": 1})
+        old = self.detector.headers[-1]
+        self.link.prepare(SCOPE, BINDING, PERSON["track_id"], 2)
+        self.detector.reply(header=old)
+        self.assertEqual(self.events[-1][1], dict(reason="scope_changed"))
+        self.assertFalse(any("frame" in event for _, event in self.events))
+        self.now += 0.5
+        self.assertTrue(self.submit(person={**PERSON, "association_revision": 2}))
+        self.assertTrue(self.detector.headers[-1]["reset_learning"])
+        self.detector.reply()
+        self.assertEqual(self.events[-1][1]["frame"], FRAME)
+
 
 class PipelineTests(unittest.TestCase):
     def test_exact_key_comes_from_retained_bundle_metadata(self):
@@ -203,8 +217,20 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(request["setup"], SETUP)
         self.assertEqual(request["frame_key"], "exact")
         self.assertEqual(request["person"]["head_evidence"], evidence)
+        rgb = dict(k=[400, 400, 320, 180, 0], d=[0] * 8,
+                   from_left=[[[1, 0, 0], [0, 1, 0], [0, 0, 1]], [0.03, 0, 0]], size=[640, 360])
+        perceiver.camera.rig = SimpleNamespace(left_k=SETUP["left_k"], rgb_k=rgb["k"], rgb_d=rgb["d"],
+                                              rotation=rgb["from_left"][0], translation=rgb["from_left"][1],
+                                              rgb_size=rgb["size"])
+        from dataclasses import replace
+        rgb_data = replace(data, mode="rgb", track={**track, "association_revision": 7})
+        rgb_request = perceiver._body_request(rgb_data)
+        self.assertEqual(rgb_request["setup"]["rgb"], rgb)
+        self.assertEqual(rgb_request["person"]["association_revision"], 7)
+        self.assertEqual(rgb_request["person"]["association_status"], "confident")
+        self.assertEqual(rgb_request["person"]["mode"], "rgb")
         perceiver.depth_scale = 0.971   # step 2's depth scale reaches the figure's depth through the setup
-        self.assertEqual(perceiver._body_request(data)["setup"], {**SETUP, "depth_scale": 0.971})
+        self.assertEqual(perceiver._body_request(data)["setup"], {**SETUP, "rgb": rgb, "depth_scale": 0.971})
 
     def pipeline_process(self, mode, provider):
         calls = []
@@ -264,9 +290,11 @@ class PipelineTests(unittest.TestCase):
         kind, data = calls[1]
         self.assertEqual((kind, data["mode"]), ("provider", "rgb"))
         self.assertEqual(data["observations"][0]["obs_id"], "current-pose")
-        self.assertEqual(data["tracks"], event["tracks"])
+        self.assertEqual(data["tracks"], [{**event["tracks"][0], "mask_association_status": "ambiguous"}])
         self.assertEqual(data["supported"], [{"current-pose"}])
         self.assertEqual(data["association"], {"synthetic-run-e3-one": ("confident", 99.0)})
+        self.assertEqual(data["tracks"][0]["association_revision"], 0)
+        self.assertEqual(data["tracks"][0]["mask_association_status"], "ambiguous")
         self.assertEqual(calls[2], ("submit", 42, {"frame_key": key, "mode": "rgb"}))
 
     def test_ir_body_submission_survives_legacy_rgb_darkness(self):
@@ -362,6 +390,13 @@ class StreamTests(unittest.TestCase):
         self.assertIsNone(self.stream.body_for_write(old, client))
         self.assertEqual([item[0]["status"] for item in client.events], ["clear", "ready"])
         self.assertEqual(self.stream.body_latest[0]["status"], "ready")
+
+    def test_measured_object_label_survives_stream_allowlist(self):
+        obj = dict(label="book", confidence=0.91, source="detector")
+        self.assertTrue(self.stream.publish_body(SCOPE, frame={**FRAME, "object": obj, "private_masks": []}, capture_mono=100))
+        ready = self.stream.body_latest[0]
+        self.assertEqual(ready["object"], obj)
+        self.assertNotIn("private_masks", ready)
 
     def test_missing_provider_leaves_people_and_spot_routes_available(self):
         self.stream.body_available = False

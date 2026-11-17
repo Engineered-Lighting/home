@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import perceive  # noqa: E402
 import person_fields as pf  # noqa: E402
 import sofa_check as sc  # noqa: E402
-from contracts import PERCEPTION_S, BodyFacing, HeadPoint, SeatedState  # noqa: E402
+from contracts import PERCEPTION_S, BodyFacing, HeadPoint, Orientation3D, SeatedState, TrackEvidence  # noqa: E402
 from test_live import TOOLS  # noqa: E402
 
 SHOULDER_HALF, HIP_HALF = 0.20, 0.17
@@ -165,6 +165,144 @@ class Posture(unittest.TestCase):
         self.assertAlmostEqual(s.update("t", 11.6, (0.4, 0.0)), 0.0, msg="the window keeps 10.6-11.6 only")
         s.keep(["u"])
         self.assertIsNone(s.update("t", 11.8, (0.4, 0.0)), "a track not in the frame is forgotten")
+
+
+class MeasuredOrientation(unittest.TestCase):
+    @staticmethod
+    def head(yaw=0.0, pitch=0.0, var=0.000001):
+        """A symmetric face with its anatomical forward axis tilted about local right, then turned in room z."""
+        a, p = math.radians(yaw), math.radians(pitch)
+
+        def transform(x, y, z):
+            forward = y * math.cos(p) - z * math.sin(p)
+            height = y * math.sin(p) + z * math.cos(p)
+            return (1.0 + x * math.cos(a) + forward * math.sin(a),
+                    2.0 - x * math.sin(a) + forward * math.cos(a), 1.6 + height)
+        # Eye/ear centre is just above the nose. Their average gives the coarse face-forward proxy.
+        points = ((0, 0.12, -0.02), (-0.032, 0.08, 0.02), (0.032, 0.08, 0.02),
+                  (-0.075, 0, 0), (0.075, 0, 0))
+        return {"kind": "keypoints", "joint_set": "coco17",
+                "joints_room": [entry(j, transform(*xyz), var=var) for j, xyz in enumerate(points)]}
+
+    def test_head_anatomical_direction_rotates_in_room_and_has_a_model_floor(self):
+        for yaw, pitch in ((0, 0), (90, -30), (355, 25), (180, 0)):
+            value = pf.head_orientation(self.head(yaw, pitch), 12.5)
+            self.assertIsInstance(value, Orientation3D)
+            self.assertAlmostEqual(pf.turn(value.yaw_deg, yaw), 0, places=6)
+            self.assertAlmostEqual(value.pitch_deg, pitch, places=6)
+            self.assertAlmostEqual(math.hypot(*value.forward), 1.0)
+            self.assertAlmostEqual(math.hypot(*value.up), 1.0)
+            self.assertAlmostEqual(sum(a * b for a, b in zip(value.forward, value.up)), 0)
+            self.assertGreater(value.angular_sd_deg, pf.HEAD_MODEL_SD_DEG)
+            self.assertEqual((value.as_of_mono, value.source_joint_ids, value.basis),
+                             (12.5, (0, 1, 2, 3, 4), "stereo_face_axis"))
+        self.assertIsNone(pf.head_orientation(self.head(pitch=89), 12.5), "vertical direction has no useful yaw")
+
+    def test_head_requires_complete_consistent_measured_landmarks(self):
+        for j in pf.HEAD_ORIENTATION_JOINTS:
+            pose = self.head()
+            pose["joints_room"] = [e for e in pose["joints_room"] if e["j"] != j]
+            self.assertIsNone(pf.head_orientation(pose, 1))
+        for key, value in (("lift", "plane:floor"), ("status", "uncertain"), ("xyz", [0, float("nan"), 1]),
+                           ("cov", None), ("cov", [[1, 2, 0], [2, 1, 0], [0, 0, 1]])):
+            pose = self.head()
+            pose["joints_room"][0][key] = value
+            self.assertIsNone(pf.head_orientation(pose, 1), (key, value))
+        pose = self.head()
+        pose["joints_room"].append(pose["joints_room"][0])
+        self.assertIsNone(pf.head_orientation(pose, 1), "duplicate landmark ids")
+        pose = self.head()
+        pose["joints_room"][1]["xyz"], pose["joints_room"][2]["xyz"] = (
+            pose["joints_room"][2]["xyz"], pose["joints_room"][1]["xyz"])
+        self.assertIsNone(pf.head_orientation(pose, 1), "eyes and ears contradict left/right")
+        pose = self.head()
+        pose["joints_room"][0]["xyz"][1] = 1.9
+        self.assertIsNone(pf.head_orientation(pose, 1), "nose behind ears contradicts eye direction")
+
+    def test_torso_uses_full_plane_and_rejects_degenerate_or_conflicting_joints(self):
+        value = pf.torso_orientation(body(72, var=0.000001), 10)
+        self.assertAlmostEqual(value.yaw_deg, 72)
+        self.assertAlmostEqual(value.pitch_deg, 0)
+        self.assertEqual(value.basis, "stereo_torso_plane")
+        self.assertEqual(value.source_joint_ids, (5, 6, 11, 12))
+        self.assertGreater(value.angular_sd_deg, pf.TORSO_MODEL_SD_DEG)
+        pose = body(0, var=0.000001)
+        for e in pose["joints_room"][:2]:
+            e["xyz"][1] += 0.20
+        leaning = pf.torso_orientation(pose, 10)
+        self.assertAlmostEqual(leaning.pitch_deg, -math.degrees(math.atan2(0.20, 0.5)))
+        for pose in (body(0, hips=False), body(0, shoulders=False), body(0, hips_deg=180),
+                     body(0, lift="plane:floor"), body(0, status="uncertain")):
+            self.assertIsNone(pf.torso_orientation(pose, 10))
+        pose = body(0)
+        pose["joints_room"][1]["xyz"] = pose["joints_room"][0]["xyz"][:]
+        self.assertIsNone(pf.torso_orientation(pose, 10), "zero-width shoulders")
+
+    def test_covariance_increases_uncertainty_and_excessive_noise_abstains(self):
+        for build, function in ((self.head, pf.head_orientation),
+                                (lambda var: body(20, var=var), pf.torso_orientation)):
+            quiet = function(build(var=0.000001), 10)
+            noisy = function(build(var=0.0001), 10)
+            self.assertIsNotNone(noisy)
+            self.assertGreater(noisy.angular_sd_deg, quiet.angular_sd_deg)
+            self.assertIsNone(function(build(var=0.05), 10))
+        pose = self.head()
+        pose["joints_room"][0]["cov"][0][1] = 1
+        self.assertIsNone(pf.head_orientation(pose, 10), "nonsymmetric covariance")
+
+    def test_projection_preserves_current_measurement_and_old_constructor_defaults(self):
+        value = pf.head_orientation(self.head(), 10)
+        projected = pf.orientation_projection(value)
+        self.assertEqual(projected["as_of_mono"], 10)
+        self.assertEqual(projected["source_joint_ids"], [0, 1, 2, 3, 4])
+        self.assertEqual(projected["forward"], list(value.forward))
+        self.assertIsNone(pf.orientation_projection(None))
+        self.assertIsNone(pf.head_orientation(None, 10))
+        old = TrackEvidence("t", "confirmed", (1, 2), 0.1, "stereo", ("o",), "confident", 1, 10, {})
+        self.assertEqual((old.head_orientation, old.torso_orientation), (None, None))
+
+
+class OrientationIntegration(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import fixture_rgb
+        cls.scene = fixture_rgb.Scene()
+        cls.addClassCleanup(cls.scene.close)
+
+    def test_normal_perception_projects_only_current_safe_orientation(self):
+        from unittest.mock import patch
+        p = self.scene.perceiver()
+        poses = []
+        original = p.t.observe.observe
+
+        def add_covariant_geometry(*args, **kwargs):
+            observations = original(*args, **kwargs)
+            for obs in observations:
+                if obs["kind"] == "keypoints":
+                    obs["joints_room"] = body(45, var=0.000001)["joints_room"] + MeasuredOrientation.head()["joints_room"]
+                    poses.append(obs)
+            return observations
+
+        with patch.object(p.t.observe, "observe", side_effect=add_covariant_geometry):
+            for i in range(17):
+                at = 100 + i / 5
+                bundle, reply = self.scene.sample(at, i)
+                event = p.finish(p.prepare(bundle, at), reply, {"status": "ok"}, at + 0.04)
+                if p.snapshot.tracks and p.snapshot.tracks[0].association_status != "confident":
+                    self.assertIsNone(p.snapshot.tracks[0].head_orientation)
+            track, frame = p.snapshot.tracks[0], p.snapshot.frame
+            self.assertTrue(poses)
+            self.assertIsNotNone(track.head_orientation)
+            self.assertIsNotNone(track.torso_orientation)
+            self.assertEqual(track.head_orientation.as_of_mono, frame.capture_mono)
+            self.assertEqual(event["tracks"][0]["head_orientation"], pf.orientation_projection(track.head_orientation))
+            self.assertEqual(event["tracks"][0]["torso_orientation"], pf.orientation_projection(track.torso_orientation))
+            at = 103.4
+            bundle, reply = self.scene.sample(at, 17, extra=True)
+            p.finish(p.prepare(bundle, at), reply, {"status": "ok"}, at + 0.04)
+            self.assertTrue(p.snapshot.tracks)
+            self.assertTrue(all(t.head_orientation is None and t.torso_orientation is None for t in p.snapshot.tracks),
+                            "ambiguous people never carry previous orientation forward")
 
 
 if __name__ == "__main__":

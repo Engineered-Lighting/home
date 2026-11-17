@@ -12,7 +12,10 @@ rule: lift stereo, status supported, a room position):
   as_of_mono it's None, and it starts again whenever the track's association_revision moves. Degrees are clockwise
   from +y, as den-track's are.
 - head_point_m {xyz, n}: the median (each axis) of the stereo-supported face joints, nose, eyes and ears; None with
-  fewer than two. A position only: nothing measures a head direction.
+  fewer than two. A position only.
+- head_orientation and torso_orientation: current metric landmark axes, with propagated covariance and an explicit
+  anatomical-model uncertainty floor. Missing, contradictory or uncertain geometry abstains. The head direction
+  describes coarse anatomy. Eye gaze requires separate evidence.
 - wrists_m: the stereo-supported wrists, {left_wrist: xyz, right_wrist: xyz}, each only when it's there.
 
 - posture: one closed word, from what perception measures, in Qwen's own words for subject_posture (den-live-scene-2)
@@ -29,7 +32,7 @@ import statistics
 from collections import deque
 from types import MappingProxyType
 
-from contracts import PERCEPTION_S, BodyFacing, HeadPoint
+from contracts import PERCEPTION_S, BodyFacing, HeadPoint, Orientation3D
 from seated import body_joints, standing_evidence
 
 WINDOW_S = 1.0       # the circular median's window, ending at the newest sample
@@ -43,6 +46,180 @@ SPEED_S = 1.0        # over this long: the newest position against the oldest wi
 MIN_SPAN_S = 0.5
 SHOULDERS = (5, 6)   # coco17 indices, den-observe's joints_room j
 HIPS = (11, 12)
+HEAD_ORIENTATION_JOINTS = (0, 1, 2, 3, 4)
+TORSO_ORIENTATION_JOINTS = (*SHOULDERS, *HIPS)
+# These floors describe uncalibrated anatomical proxies. Landmark noise adds to them.
+HEAD_MODEL_SD_DEG, HEAD_MAX_SD_DEG = 20.0, 45.0
+TORSO_MODEL_SD_DEG, TORSO_MAX_SD_DEG = 8.0, 30.0
+
+
+def _difference(a, b):
+    return tuple(x - y for x, y in zip(a, b))
+
+
+def _midpoint(a, b):
+    return tuple((x + y) / 2 for x, y in zip(a, b))
+
+
+def _dot(a, b):
+    return math.fsum(x * y for x, y in zip(a, b))
+
+
+def _unit(a):
+    length = math.hypot(*a)
+    return tuple(x / length for x in a) if length > 1e-8 else None
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0])
+
+
+def _perpendicular(vector, right):
+    along = _dot(vector, right)
+    return tuple(x - along * r for x, r in zip(vector, right))
+
+
+def _covariance(value):
+    """Accept a finite symmetric positive-semidefinite 3x3 covariance, including zero uncertainty."""
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        return False
+    if any(not isinstance(row, (list, tuple)) or len(row) != 3 for row in value):
+        return False
+    if any(type(x) not in (int, float) or not math.isfinite(x) for row in value for x in row):
+        return False
+    scale = max(1e-15, max(abs(x) for row in value for x in row))
+    # Even a 100 m uncertainty cannot support the sub-metre anatomical axes below. Bound arithmetic too.
+    if scale > 10000:
+        return False
+    tolerance = scale * 1e-9
+    if any(value[i][i] < 0 for i in range(3)):
+        return False
+    if any(abs(value[i][j] - value[j][i]) > tolerance for i in range(3) for j in range(i)):
+        return False
+    if any(value[i][i] * value[j][j] - value[i][j] ** 2 < -scale * tolerance
+           for i in range(3) for j in range(i)):
+        return False
+    a, b, c = value[0]
+    _, d, e = value[1]
+    _, _, f = value[2]
+    return a * d * f + 2 * b * c * e - a * e * e - d * c * c - f * b * b >= -scale ** 2 * tolerance
+
+
+def _orientation_joints(pose, ids):
+    if (not pose or pose.get("kind") != "keypoints" or pose.get("joint_set") != "coco17"
+            or pose.get("validity", "valid") != "valid"):
+        return None
+    joints = {}
+    for entry in pose.get("joints_room") or ():
+        if not isinstance(entry, dict):
+            return None
+        j = entry.get("j")
+        if j not in ids:
+            continue
+        xyz = entry.get("xyz")
+        if (j in joints or not _stereo(entry) or not isinstance(xyz, (list, tuple)) or len(xyz) != 3
+                or any(type(v) not in (int, float) or not math.isfinite(v) for v in xyz)
+                or not _covariance(entry.get("cov"))):
+            return None
+        joints[j] = entry
+    return joints if len(joints) == len(ids) else None
+
+
+def _torso_axes(points):
+    left, right, left_hip, right_hip = (points[j] for j in TORSO_ORIENTATION_JOINTS)
+    shoulders, hips = _difference(right, left), _difference(right_hip, left_hip)
+    rising = _difference(_midpoint(left, right), _midpoint(left_hip, right_hip))
+    if not (0.15 <= math.hypot(*shoulders) <= 0.75 and 0.10 <= math.hypot(*hips) <= 0.65
+            and 0.15 <= math.hypot(*rising) <= 0.90):
+        return None
+    lateral, hip_lateral, up = _unit(shoulders), _unit(hips), _unit(rising)
+    if (_dot(lateral, hip_lateral) < math.cos(math.radians(HIP_AGREE_DEG))
+            or abs(_dot(lateral, up)) > 0.8):
+        return None
+    forward = _unit(_cross(up, lateral))
+    return forward, _unit(_cross(lateral, forward))
+
+
+def _head_axes(points):
+    """A coarse face-forward proxy from ear centre towards the nose/eye centre, with no fitted face model."""
+    nose, left_eye, right_eye, left_ear, right_ear = (points[j] for j in HEAD_ORIENTATION_JOINTS)
+    ear_axis, eye_axis = _difference(right_ear, left_ear), _difference(right_eye, left_eye)
+    if not (0.08 <= math.hypot(*ear_axis) <= 0.25 and 0.025 <= math.hypot(*eye_axis) <= 0.10):
+        return None
+    right, eye_right = _unit(ear_axis), _unit(eye_axis)
+    if _dot(right, eye_right) < math.cos(math.radians(30)):
+        return None
+    ears, eyes = _midpoint(left_ear, right_ear), _midpoint(left_eye, right_eye)
+    to_nose = _perpendicular(_difference(nose, ears), right)
+    to_eyes = _perpendicular(_difference(eyes, ears), right)
+    if not (0.025 <= math.hypot(*to_nose) <= 0.20 and 0.025 <= math.hypot(*to_eyes) <= 0.20):
+        return None
+    if _dot(_unit(to_nose), _unit(to_eyes)) < math.cos(math.radians(60)):
+        return None
+    forward = _unit(_perpendicular(_difference(_midpoint(nose, eyes), ears), right))
+    return forward, _unit(_cross(right, forward))
+
+
+def _angular_noise(points, joints, axes):
+    """Propagate full covariance through the local direction Jacobians.
+
+    Summing each joint's standard-deviation bound allows unknown cross-joint correlation. For each joint the
+    larger forward/up directional variance is used, so shoulder-axis uncertainty is retained too.
+    """
+    bound, step = 0.0, 1e-5
+    for j, xyz in points.items():
+        columns = []
+        for axis in range(3):
+            plus, minus = list(xyz), list(xyz)
+            plus[axis] += step
+            minus[axis] -= step
+            hi, lo = axes({**points, j: plus}), axes({**points, j: minus})
+            if hi is None or lo is None:
+                return math.inf
+            columns.append(tuple(tuple((a - b) / (2 * step) for a, b in zip(h, l)) for h, l in zip(hi, lo)))
+        covariance = joints[j]["cov"]
+        variances = [math.fsum(_dot(columns[a][direction], columns[b][direction]) * covariance[a][b]
+                              for a in range(3) for b in range(3)) for direction in range(2)]
+        bound += math.sqrt(max(0.0, *variances))
+    return math.degrees(bound)
+
+
+def _orientation(pose, t, ids, axes, model_sd, max_sd, basis):
+    joints = _orientation_joints(pose, ids)
+    if joints is None or type(t) not in (int, float) or not math.isfinite(t):
+        return None
+    points = {j: joints[j]["xyz"] for j in ids}
+    directions = axes(points)
+    if directions is None:
+        return None
+    forward, up = directions
+    horizontal = math.hypot(*forward[:2])
+    angular_sd = math.hypot(model_sd, _angular_noise(points, joints, axes))
+    if horizontal < 0.20 or not math.isfinite(angular_sd) or angular_sd > max_sd:
+        return None
+    return Orientation3D(forward, up, math.degrees(math.atan2(forward[0], forward[1])) % 360,
+                         math.degrees(math.atan2(forward[2], horizontal)), angular_sd, float(t), ids, basis)
+
+
+def head_orientation(pose, t):
+    """Current measured coarse head direction. Missing, contradictory or noisy five-landmark geometry abstains."""
+    return _orientation(pose, t, HEAD_ORIENTATION_JOINTS, _head_axes, HEAD_MODEL_SD_DEG,
+                        HEAD_MAX_SD_DEG, "stereo_face_axis")
+
+
+def torso_orientation(pose, t):
+    """Current shoulder/hip-plane direction and uncertainty, independent of the held body_facing summary."""
+    return _orientation(pose, t, TORSO_ORIENTATION_JOINTS, _torso_axes, TORSO_MODEL_SD_DEG,
+                        TORSO_MAX_SD_DEG, "stereo_torso_plane")
+
+
+def orientation_projection(value):
+    """JSON-safe measured orientation for the people projection, preserving the typed estimate's timestamp."""
+    if value is None:
+        return None
+    return {"forward": list(value.forward), "up": list(value.up), "yaw_deg": value.yaw_deg,
+            "pitch_deg": value.pitch_deg, "angular_sd_deg": value.angular_sd_deg,
+            "as_of_mono": value.as_of_mono, "source_joint_ids": list(value.source_joint_ids), "basis": value.basis}
 
 
 def _stereo(entry):

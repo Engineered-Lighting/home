@@ -9,6 +9,7 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -445,9 +446,15 @@ class HeldObjectTest(unittest.TestCase):
     learned = BodyTest.learned
 
     def held_frame(self, maker, fixture, held, key="fixture-7", track="fixture-track"):
-        person = dict(subject(fixture, frame_key=key), track_id=track)
-        return maker.step(fixture[1], observation="person", person=person, now=20, frame_key=key, binding=BINDING,
-                          held=held)
+        sequence = getattr(maker, "fixture_sequence", 0) + 1
+        maker.fixture_sequence = sequence
+        key = ["fixture-run", 1, sequence]
+        person = dict(subject(fixture, frame_key=key), track_id=track, association_revision=1,
+                      association_status="confident", mode="rgb")
+        masks = None if held is None else {"frame_key": key, "segmentation_status": "ok",
+                                         "held_masks": held, "person_masks": []}
+        return maker.step(fixture[1], observation="person", person=person, now=20 + sequence * 0.2,
+                          frame_key=key, binding=BINDING, masks=masks)
 
     def test_a_held_book_becomes_blue_points_with_its_label_from_the_second_frame(self):
         fixture, book, phone = holding()
@@ -564,9 +571,12 @@ class DepthHeldTest(unittest.TestCase):
         for step in range(3):
             moved = {**joints, "left_wrist": [(np.asarray(joints["left_wrist"][0]) + [0, 0, 0.2 * (step % 2)]).tolist(),
                                                "supported"]}
-            person = dict(subject((bg, depth, head, bounds, moved)), track_id="fixture-track")
-            frame, _ = maker.step(depth, observation="person", person=person, now=20 + step * 0.2, frame_key="fixture-7",
-                                  binding=BINDING, held=[])
+            key = ["fixture-run", 1, step + 1]
+            person = dict(subject((bg, depth, head, bounds, moved), frame_key=key), track_id="fixture-track",
+                          association_revision=1, association_status="confident", mode="rgb")
+            masks = {"frame_key": key, "segmentation_status": "ok", "held_masks": [], "person_masks": []}
+            frame, _ = maker.step(depth, observation="person", person=person, now=20 + step * 0.2, frame_key=key,
+                                  binding=BINDING, masks=masks)
             self.assertFalse((self.kinds(frame) == B.KIND_OBJECT).any(), "a hand moving 1 m/s isn't holding still")
 
     def test_a_seg_named_object_comes_first(self):
@@ -681,6 +691,211 @@ class KeptBackgroundTest(unittest.TestCase):
         self.assertEqual((self.state / B.BACKGROUND_FILE).read_bytes(), b"not a background", "no state: nothing kept")
 
 
+class MaskGeometryTest(unittest.TestCase):
+    learned = BodyTest.learned
+
+    def test_the_live_head_shown_permission_is_preserved_and_stays_bound_to_its_frame(self):
+        fixture = scene("standing")
+        maker = self.learned(fixture)
+        key = ["fixture-run", 1, 1]
+        person = subject(fixture, frame_key=key)
+        person["head_evidence"] = {"frame_key": key, "binding": BINDING, "head": B.HEAD_SHOWN}
+        frame, why = maker.step(fixture[1], observation="person", person=person, now=20,
+                                frame_key=key, binding=BINDING)
+        self.assertIsNone(why)
+        self.assertTrue(fixture[2].ravel()[decode(frame)["key"].ravel()].any())
+        person["head_evidence"]["frame_key"] = ["fixture-run", 1, 2]
+        self.assertEqual(maker.step(fixture[1], observation="person", person=person, now=20,
+                                    frame_key=key, binding=BINDING), (None, "head_mask_unavailable"))
+    def maker(self):
+        rgb = {"k": [FX, FY, CX, CY, 0], "d": [],
+               "from_left": [np.eye(3).tolist(), [0, 0, 0]], "size": [B.WIDTH, B.HEIGHT]}
+        return B.BodyMaker(np, cv2, left_k=(FX, FY, CX, CY), room_from_left=(R, T), rgb=rgb)
+
+    def held_scene(self):
+        fixture = scene()
+        fixture[1][204:228, 364:392] = 1900
+        fixture[4]["right_elbow"] = [world(365, 195, 2030).tolist(), "supported"]
+        fixture[4]["right_wrist"] = [world(375, 216, 1900).tolist(), "supported"]
+        return fixture
+
+    def sample(self, maker, fixture, sequence, *, revision=1, mode="rgb", binding=BINDING, status="confident",
+               held=None, person_masks=None, mask_key=None, mask_status=None):
+        key = ["fixture-run", 1, sequence]
+        person = subject(fixture, frame_key=key)
+        person.update(association_revision=revision, association_status=status, mode=mode)
+        if mask_status is not None:
+            person["mask_association_status"] = mask_status
+        person["head_evidence"]["binding"] = binding
+        masks = {"frame_key": key if mask_key is None else mask_key, "segmentation_status": "ok",
+                 "held_masks": [{"label": "book", "score": 0.91,
+                                  "polygon": [[364, 204], [391, 204], [391, 227], [364, 227]]}] if held is None else held,
+                 "person_masks": [] if person_masks is None else person_masks}
+        return maker.step(fixture[1], observation="person", person=person, now=20 + sequence * 0.2,
+                          frame_key=key, binding=binding, masks=masks)
+
+    def test_same_instance_needs_two_distinct_current_frames_and_every_object_point_is_measured(self):
+        fixture = self.held_scene()
+        maker = self.learned(fixture)
+        first, why = self.sample(maker, fixture, 1)
+        self.assertIsNone(why)
+        self.assertFalse(np.any(decode(first)["kind"] == B.KIND_OBJECT))
+        repeated, _ = self.sample(maker, fixture, 1)
+        self.assertFalse(np.any(decode(repeated)["kind"] == B.KIND_OBJECT))
+        frame, why = self.sample(maker, fixture, 2)
+        self.assertIsNone(why)
+        self.assertEqual(frame["object"], {"label": "book", "confidence": 0.91, "source": "detector"})
+        actual = decode(frame)
+        keys = actual["key"].ravel()
+        self.assertGreater(int((actual["kind"] == B.KIND_OBJECT).sum()), 20)
+        self.assertTrue(np.all(np.diff(keys.astype(np.int64)) > 0))
+        rows, cols = np.divmod(keys, B.WIDTH)
+        np.testing.assert_array_equal(actual["position_mm"], np.rint(world(cols, rows, fixture[1][rows, cols]) * 1000))
+        self.assertFalse(fixture[2].ravel()[keys].any())
+
+    def test_revision_mode_scope_and_unsafe_association_break_object_confirmation(self):
+        for change in ({"revision": 2}, {"mode": "infrared"}, {"binding": {**BINDING, "profile": "new"}},
+                       {"status": "ambiguous"}):
+            with self.subTest(change=change):
+                fixture = self.held_scene()
+                maker = self.learned(fixture)
+                self.sample(maker, fixture, 1)
+                frame, why = self.sample(maker, fixture, 2, **change)
+                if change.get("status") == "ambiguous":
+                    self.assertEqual(why, "ambiguous")
+                else:
+                    self.assertIsNone(why)
+                    self.assertFalse(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+                frame, _ = self.sample(maker, fixture, 3)
+                self.assertFalse(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+
+    def test_wrong_frame_masks_cannot_confirm_or_draw_an_object(self):
+        fixture = self.held_scene()
+        maker = self.learned(fixture)
+        self.sample(maker, fixture, 1)
+        frame, why = self.sample(maker, fixture, 2, mask_key=["fixture-run", 1, 1])
+        self.assertIsNone(why)
+        self.assertNotIn("object", frame)
+        self.assertTrue(np.all(decode(frame)["kind"] == 0))
+        frame, _ = self.sample(maker, fixture, 3)
+        self.assertFalse(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+
+    def test_ambiguous_mask_association_clears_objects_while_raw_body_association_remains_confident(self):
+        fixture = self.held_scene()
+        maker = self.learned(fixture)
+        self.sample(maker, fixture, 1)
+        confirmed, _ = self.sample(maker, fixture, 2)
+        self.assertTrue(np.any(decode(confirmed)["kind"] == B.KIND_OBJECT))
+        frame, why = self.sample(maker, fixture, 3, mask_status="ambiguous")
+        self.assertIsNone(why)
+        self.assertGreater(frame["points"]["count"], 300)
+        self.assertNotIn("object", frame)
+        self.assertTrue(np.all(decode(frame)["kind"] == 0))
+        frame, why = self.sample(maker, fixture, 4)
+        self.assertIsNone(why)
+        self.assertFalse(np.any(decode(frame)["kind"] == B.KIND_OBJECT), "the ambiguous frame reset confirmation")
+
+    def test_competing_instances_and_missing_current_depth_cannot_keep_an_object(self):
+        fixture = self.held_scene()
+        maker = self.learned(fixture)
+        self.sample(maker, fixture, 1)
+        mask = {"label": "book", "score": 0.9, "polygon": [[364, 204], [391, 204], [391, 227], [364, 227]]}
+        frame, why = self.sample(maker, fixture, 2, held=[mask, dict(mask)])
+        self.assertIsNone(why)
+        self.assertFalse(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+        frame, _ = self.sample(maker, fixture, 3)
+        self.assertFalse(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+        frame, _ = self.sample(maker, fixture, 4)
+        self.assertTrue(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+        fixture[1][204:228, 364:392] = 0
+        frame, why = self.sample(maker, fixture, 5)
+        self.assertIsNone(why)
+        self.assertFalse(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+
+    def test_phone_remote_confusion_has_measured_points_and_a_generic_marker(self):
+        fixture = self.held_scene()
+        maker = self.learned(fixture)
+        for sequence, label in enumerate(("remote", "cell phone"), 1):
+            mask = {"label": label, "score": 0.6, "polygon": [[364, 204], [391, 204], [391, 227], [364, 227]]}
+            frame, why = self.sample(maker, fixture, sequence, held=[mask])
+        self.assertIsNone(why)
+        self.assertIsNone(frame["object"])
+        self.assertTrue(np.any(decode(frame)["kind"] == B.KIND_OBJECT))
+
+    def test_optional_masks_cannot_bypass_the_shoulder_cut(self):
+        fixture = self.held_scene()
+        maker = self.learned(fixture)
+        for sequence in (1, 2):
+            key = ["fixture-run", 1, sequence]
+            person = cut_subject(fixture, frame_key=key)
+            person.update(association_revision=1, association_status="confident", mode="rgb")
+            masks = {"frame_key": key, "segmentation_status": "ok", "person_masks": [],
+                     "held_masks": [{"label": "book", "score": 0.9,
+                                     "polygon": [[364, 204], [391, 204], [391, 227], [364, 227]]},
+                                    {"label": "book", "score": 0.99,
+                                     "polygon": [[290, 80], [350, 80], [350, 145], [290, 145]]}]}
+            frame, why = maker.step(fixture[1], observation="person", person=person, now=20 + sequence * 0.2,
+                                    frame_key=key, binding=BINDING, masks=masks)
+        self.assertIsNone(why)
+        rows, cols = np.divmod(decode(frame)["key"].ravel(), B.WIDTH)
+        cut = B.cut_pixels(B.torso_cut(person["head_evidence"], frame_key=key, binding=BINDING), fixture[1], FX)
+        self.assertFalse(B.cut_side(cols, rows, cut).any())
+        self.assertFalse(fixture[2][rows, cols].any())
+
+    def test_same_label_on_another_surface_does_not_reuse_identity(self):
+        history = B.ObjectHistory()
+        owner = ("run", 1, "track", 1, "rgb", "profile")
+        self.assertFalse(history.observe(owner, 1, 1.0, ((0.0, 0.0, 2.0), frozenset({1, 2}), "left_wrist")))
+        self.assertFalse(history.observe(owner, 2, 1.2, ((0.2, 0.0, 2.0), frozenset({3, 4}), "left_wrist")))
+        self.assertTrue(history.observe(owner, 3, 1.4, ((0.21, 0.0, 2.0), frozenset({3, 4}), "left_wrist")))
+        self.assertFalse(history.observe(owner, 4, 1.6, ((0.21, 0.0, 2.0), frozenset({3, 4}), "right_wrist")))
+        self.assertFalse(history.observe(owner, 5, 2.3, ((0.21, 0.0, 2.0), frozenset({3, 4}), "right_wrist")))
+
+    def test_one_common_cap_keeps_both_kinds_and_unique_pixel_keys(self):
+        fixture = self.held_scene()
+        maker = self.learned(fixture)
+        with patch.object(B, "MAX_POINTS", 600), patch.object(B, "OBJECT_MAX_POINTS", 250):
+            self.sample(maker, fixture, 1)
+            frame, why = self.sample(maker, fixture, 2)
+        self.assertIsNone(why)
+        actual = decode(frame)
+        self.assertLessEqual(frame["points"]["count"], 600)
+        self.assertGreater((actual["kind"] == 0).sum(), 0)
+        self.assertGreater((actual["kind"] == B.KIND_OBJECT).sum(), 0)
+        self.assertTrue(np.all(np.diff(actual["key"].ravel().astype(np.int64)) > 0))
+
+    def test_person_mask_removes_touching_furniture_and_competing_masks_clear(self):
+        fixture = self.held_scene()
+        fixture[1][150:182, 260:292] = 2000
+        maker = self.learned(fixture)
+        mask = {"score": 0.9, "polygon": [[292, 130], [394, 130], [394, 290], [292, 290]]}
+        frame, why = self.sample(maker, fixture, 1, person_masks=[mask])
+        self.assertIsNone(why)
+        rows, cols = np.divmod(decode(frame)["key"].ravel(), B.WIDTH)
+        self.assertFalse(np.any((rows >= 150) & (rows < 182) & (cols < 292)))
+        self.assertEqual(self.sample(maker, fixture, 2, person_masks=[mask, mask]), (None, "ambiguous"))
+
+    def test_registered_rgb_projection_uses_extrinsics_and_visibility(self):
+        maker = self.maker()
+        maker.rgb["t"][0] = 0.1
+        depth = np.full((B.HEIGHT, B.WIDTH), 2000, np.float32)
+        mask = np.zeros((B.HEIGHT, B.WIDTH), np.uint8)
+        mask[200:205, 340:345] = 1
+        selected = maker._mask_pixels(depth, mask, 0, 0)
+        self.assertTrue(selected[202, 322])
+        self.assertFalse(selected[202, 342])
+        # Several left rays land in the same RGB pixel. Only the nearer measured surface survives.
+        maker.rgb["k"] = [1.0, 1.0, 320.0, 200.0, 0.0]
+        maker.rgb["t"][0] = 0.0
+        depth.fill(0)
+        depth[200, 320], depth[200, 321] = 2000, 3000
+        mask.fill(1)
+        selected = maker._mask_pixels(depth, mask, 0, 0)
+        self.assertTrue(selected[200, 320])
+        self.assertFalse(selected[200, 321])
+
+
+
 class ChannelTest(unittest.TestCase):
     def test_reply_binds_request_frame_and_calibration_and_rebind_drops_background(self):
         ch = B.BodyChannel()
@@ -710,6 +925,10 @@ class ChannelTest(unittest.TestCase):
 
         class Maker:
             np = np
+            stats = {}
+
+            def reset_objects(self):
+                pass
 
             def step(self, depth, **kw):
                 seen.append(depth)

@@ -38,10 +38,10 @@ class Detector:
     def setup(self):
         self.on_body({"body_ready": True, "binding": self.headers[-1]["setup"]["binding"]})
 
-    def reply(self, *, header=None, frame=FRAME, why=None):
+    def reply(self, *, header=None, frame=FRAME, why=None, **fields):
         header = header or self.headers[-1]
         self.on_body(dict(body_id=header["id"], request_id=header["request_id"], frame_key=header["frame_key"],
-                          binding=header["binding"], frame=frame, why=why))
+                          binding=header["binding"], frame=frame, why=why, **fields))
 
 
 class LinkTests(unittest.TestCase):
@@ -49,8 +49,9 @@ class LinkTests(unittest.TestCase):
         self.detector = Detector()
         self.events = []
         self.now = 100.0
+        self.monotonic = 500.0
         stream = SimpleNamespace(publish_body=self.publish)
-        self.link = BodyLink(self.detector, stream=stream, clock=lambda: self.now)
+        self.link = BodyLink(self.detector, stream=stream, clock=lambda: self.now, monotonic=lambda: self.monotonic)
 
     def publish(self, scope, **event):
         self.events.append((scope, event))
@@ -76,6 +77,80 @@ class LinkTests(unittest.TestCase):
         self.detector.reply()
         self.assertEqual(self.events[-1], (SCOPE, dict(frame=FRAME, capture_mono=99.9)))
         self.assertFalse(self.submit(frame_id=9))
+
+    def test_timings_are_numeric_bounded_and_missing_stages_stay_missing(self):
+        self.setup_worker()
+        self.submit()
+        self.monotonic += .125
+        self.detector.reply(compute_s=.02, timings_ms={"body_queue": 0, "mask_wait": 90.5,
+            "segment_queue": float("nan"), "segment_inference": True, "body_compute": -1,
+            "unknown_stage": 50, "body_roundtrip": 900})
+        summary = self.link.timing_summary()
+        self.assertEqual(summary["samples"], 1)
+        self.assertEqual(set(summary["timings_ms"]), {"body_queue", "mask_wait", "body_compute", "body_roundtrip"})
+        self.assertEqual(summary["timings_ms"]["body_roundtrip"]["p50"], 125)
+        self.assertEqual(summary["timings_ms"]["body_compute"]["p50"], 20)
+        self.assertEqual(summary["timings_ms"]["body_queue"]["p50"], 0)
+        self.assertEqual(summary["clock"], "host_monotonic")
+        summary["timings_ms"]["mask_wait"]["p50"] = 999
+        self.assertEqual(self.link.timing_summary()["timings_ms"]["mask_wait"]["p50"], 90.5)
+        self.now += .3
+        self.submit(frame_id=9)
+        self.detector.reply(timings_ms={"mask_wait": float("inf"), "segment_inference": 2001, "body_compute": False})
+        self.assertEqual(self.link.timing_summary()["timings_ms"]["mask_wait"]["n"], 1)
+        self.now += .3
+        self.submit(frame_id=10)
+        self.detector.reply(timings_ms={"segment_inference": 10 ** 400})
+        self.assertNotIn("segment_inference", self.link.timing_summary()["timings_ms"])
+
+    def test_observer_health_includes_summary_without_changing_body_frames(self):
+        import run_local
+        self.setup_worker()
+        self.submit()
+        self.detector.reply(timings_ms={"mask_wait": 25, "body_compute": 5})
+        observe = run_local.evidence_observer(None, None, body=self.link)
+        event = observe({"health": {"existing": True}}, SimpleNamespace())
+        self.assertTrue(event["health"]["existing"])
+        self.assertEqual(event["health"]["body_timings"]["timings_ms"]["mask_wait"]["p50"], 25)
+        self.assertEqual(self.events[-1][1]["frame"], FRAME)
+        plain = run_local.evidence_observer(None, None)({"health": {}}, SimpleNamespace())
+        self.assertNotIn("body_timings", plain["health"])
+
+    def test_rejected_or_unpublished_replies_add_no_timing_samples(self):
+        self.setup_worker()
+        self.submit()
+        self.detector.reply(header={**self.detector.headers[-1], "frame_key": "wrong"}, timings_ms={"mask_wait": 25})
+        self.assertEqual(self.link.timing_summary()["samples"], 0)
+        self.now += .3
+        self.submit(frame_id=9)
+        self.link.clear("ambiguous")
+        self.detector.reply(timings_ms={"mask_wait": 25})
+        self.assertEqual(self.link.timing_summary()["samples"], 0)
+        self.now += .3
+        self.submit(frame_id=10)
+        self.now += BODY_LEASE_S
+        self.detector.reply(timings_ms={"mask_wait": 25})
+        self.assertEqual(self.link.timing_summary()["samples"], 0)
+        self.now += .3
+        self.submit(frame_id=11)
+        with patch.object(self.link.stream, "publish_body", return_value=False):
+            self.detector.reply(timings_ms={"mask_wait": 25})
+        self.assertEqual(self.link.timing_summary()["samples"], 0)
+
+    def test_timing_ring_retains_one_hundred_samples_and_resets_on_owner_change(self):
+        self.setup_worker()
+        for frame_id in range(101):
+            self.now += .25
+            self.monotonic += .25
+            self.submit(frame_id=frame_id)
+            self.monotonic += .001
+            self.detector.reply(timings_ms={"mask_wait": frame_id})
+            self.detector.reply(timings_ms={"mask_wait": 900})
+        summary = self.link.timing_summary()
+        self.assertEqual(summary["samples"], 100)
+        self.assertEqual(summary["timings_ms"]["mask_wait"], {"n": 100, "p50": 50.5, "p95": 95.0, "max": 100.0})
+        self.link.prepare(SCOPE, BINDING, "another-track")
+        self.assertEqual(self.link.timing_summary()["samples"], 0)
 
     def test_a_one_frame_miss_keeps_the_last_frame_until_its_lease_ends(self):
         self.setup_worker()

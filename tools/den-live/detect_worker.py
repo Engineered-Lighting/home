@@ -135,7 +135,7 @@ def say(value):
 
 
 def optional_masks(models, state):
-    """The pinned optional model loads on its own CPU process, without holding up ready or detection."""
+    """The pinned optional model loads in isolation, without holding up ready or detection."""
     try:
         import held_seg
         import held_async
@@ -143,7 +143,7 @@ def optional_masks(models, state):
         if why:
             return None, {"held": False, "held_status": "off", "held_why": why}
         return held_async.Masks(models, Path(state) / "segmentation"), {
-            "held": True, "held_device": "cpu", "held_status": "loading", "held_deadline_s": held_async.MASK_S}
+            "held": True, "held_device": None, "held_status": "loading", "held_deadline_s": held_async.MASK_S}
     except Exception as exc:
         return None, {"held": False, "held_status": "error",
                       "held_why": "the optional pass didn't start (%s)" % type(exc).__name__}

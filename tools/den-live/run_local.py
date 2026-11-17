@@ -481,7 +481,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
         person = None if person_log is None else person_state.Log(person_log)
         # The day files' writers: lines skipped at the day's cap go on the status line.
         logs = [log for log in (person, getattr(asker[0], "log", None) if asker else None) if log is not None]
-        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None, person)
+        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None, person, body=link)
         loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observer)
         out.start()
         src.start()
@@ -538,7 +538,7 @@ def occupancy_health(asker):
         return {"effective": "unknown", "why": "Frigate's word couldn't be read (%s)" % type(exc).__name__}
 
 
-def evidence_observer(asker, lighting, person_log=None):
+def evidence_observer(asker, lighting, person_log=None, *, body=None):
     """Deliver current typed tracking before any reply tied to that snapshot. person_log (a person_state.Log) gets the
     same snapshot the coordinator gets, the ask's eligibility on it, and never stops the loop. Each event's health
     gets occupancy (occupancy_health): Frigate's own word, for Home's Frigate card."""
@@ -563,6 +563,8 @@ def evidence_observer(asker, lighting, person_log=None):
         finally:
             if person_log is not None:
                 person_log.write(current)
+        if body is not None:
+            event.setdefault("health", {})["body_timings"] = body.timing_summary()
         return event
     return observe
 

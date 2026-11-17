@@ -1,4 +1,4 @@
-"""Bounded optional CPU segmentation and serial body dispatch, independent of detection.
+"""Bounded optional segmentation and serial body dispatch, independent of detection.
 
 One subprocess loads the pinned model, with one inference in flight and one latest
 pending image. Deadlines include waiting and I/O. A timeout disables and kills this
@@ -23,6 +23,40 @@ MASK_S, LOAD_S = 0.75, 20.0
 BODY_RESERVE_S = 0.10
 MAX_REPLY, MAX_HEADER, IMAGE_BYTES = 256 * 1024, 128 * 1024, 640 * 360 * 3
 PARENT_PID_ENV = "DEN_MASK_PARENT_PID"
+
+
+def _timing(value):
+    return type(value) in (int, float) and 0 <= value <= 2000 and math.isfinite(value)
+
+
+def _release_cuda_cache():
+    import gc
+    import torch
+    gc.collect()
+    torch.cuda.empty_cache()
+
+
+def load_segmenter(models, state, device, detect, held_seg, *, release_cuda=_release_cuda_cache):
+    """Auto uses the tracking detector's existing CUDA resource gate, with a fresh CPU model on load failure."""
+    fallback = None
+    if device == "auto":
+        usable, _why = detect.gpu_usable()
+        if usable:
+            try:
+                segmenter, _why = held_seg.load(models, "cuda:0", state=state)
+                if segmenter is not None:
+                    return segmenter, "cuda:0", None, None
+            except Exception:
+                pass
+            try:
+                release_cuda()
+            except Exception:
+                pass
+            fallback = "gpu_load_failed"
+        else:
+            fallback = "gpu_unavailable"
+    segmenter, why = held_seg.load(models, "cpu", state=state)
+    return segmenter, "cpu" if segmenter is not None else None, why, fallback
 
 
 def arm_parent_lifetime():
@@ -52,8 +86,10 @@ def identity(worker_id, frame_key):
 class Masks:
     def __init__(self, models, state, *, command=None, timeout=MASK_S, load_timeout=LOAD_S):
         self.timeout, self.load_timeout = timeout, load_timeout
+        self.requested_device = "auto" if os.environ.get("DEN_MASK_DEVICE", "cpu").strip().lower() == "auto" else "cpu"
         self.command = command or [sys.executable, "-B", str(Path(__file__).resolve()), "--worker",
-                                   "--models", str(Path(models).resolve()), "--state", str(Path(state).resolve())]
+                                   "--models", str(Path(models).resolve()), "--state", str(Path(state).resolve()),
+                                   "--device", self.requested_device]
         self.condition = threading.Condition()
         self.pending = self.inflight = self.process = None
         self.results = OrderedDict()
@@ -61,6 +97,8 @@ class Masks:
         self.status = "loading"
         self.failures, self.last_error = 0, None
         self.refused = None
+        self.device = None
+        self.fallback = None
         self.thread = threading.Thread(target=self._run, name="den-optional-masks", daemon=True)
         self.thread.start()
 
@@ -86,10 +124,12 @@ class Masks:
 
     def health(self):
         with self.condition:
+            reason = self.refused or self.fallback
             return {"held": self.status in ("loading", "ready"), "held_status": self.status,
-                    "held_device": "cpu", "held_deadline_s": self.timeout, "held_failures": self.failures,
+                    "held_device": self.device, "held_deadline_s": self.timeout, "held_failures": self.failures,
+                    **({"held_fallback": self.fallback} if self.fallback else {}),
                     **({"held_error": self.last_error} if self.last_error else {}),
-                    **({"held_why": self.refused} if self.refused else {})}
+                    **({"held_why": reason} if reason else {})}
 
     def wait(self, worker_id, frame_key, max_wait_s=MASK_S):
         """Wait only on the body's thread, and only for this frame's original deadline."""
@@ -149,8 +189,10 @@ class Masks:
     def _run(self):
         process = reader = writer = None
         try:
-            env = dict(os.environ, CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
+            env = dict(os.environ, OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
                        OPENBLAS_NUM_THREADS="1", NUMEXPR_NUM_THREADS="1")
+            if self.requested_device == "cpu":
+                env["CUDA_VISIBLE_DEVICES"] = ""
             env[PARENT_PID_ENV] = str(os.getpid())
             process = subprocess.Popen(self.command, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                        stderr=None, env=env, close_fds=True,
@@ -173,6 +215,8 @@ class Masks:
                         self.last_error = error
                 raise RuntimeError("optional load")
             with self.condition:
+                self.device = ready.get("device") if ready.get("device") in ("cpu", "cuda:0") else None
+                self.fallback = ready.get("fallback") if ready.get("fallback") in ("gpu_unavailable", "gpu_load_failed") else None
                 self.status = "ready"
                 self.condition.notify_all()
             while True:
@@ -189,6 +233,7 @@ class Masks:
                         self.inflight = None
                         self.condition.notify_all()
                     continue
+                segment_queue_ms = (time.monotonic() - (deadline - self.timeout)) * 1000
                 header = json.dumps({"id": worker_id, "frame_key": frame_key, "row": row},
                                     separators=(",", ":"), allow_nan=False).encode("utf-8")
                 pixels = image.tobytes()
@@ -212,6 +257,13 @@ class Masks:
                     if not isinstance(result.get("person_masks"), list) or not isinstance(result.get("held_masks"), list):
                         raise ValueError("optional result")
                     metadata = {"person_masks": result["person_masks"], "held_masks": result["held_masks"]}
+                    timings = {}
+                    if _timing(segment_queue_ms):
+                        timings["segment_queue"] = round(segment_queue_ms, 3)
+                    if _timing(result.get("inference_ms")):
+                        timings["segment_inference"] = round(float(result["inference_ms"]), 3)
+                    if timings:
+                        metadata["timings_ms"] = timings
                 with self.condition:
                     if error is not None:
                         self.failures += 1
@@ -309,16 +361,27 @@ class Bodies:
                     result = {"body_refused": type(exc).__name__, "binding": (header.get("setup") or {}).get("binding")}
             else:
                 try:
+                    timings = {"body_queue": round((time.monotonic() - queued) * 1000, 3)}
                     if kept is not None and self.masks is not None:
                         remaining = header.get("remaining_s", MASK_S + BODY_RESERVE_S)
                         if type(remaining) not in (int, float) or not math.isfinite(remaining):
                             remaining = 0.0
                         budget = max(0.0, remaining - (time.monotonic() - queued) - BODY_RESERVE_S)
+                        wait_started = time.monotonic()
                         metadata = self.masks.wait(kept[0], kept[2], max_wait_s=budget)
+                        timings["mask_wait"] = round((time.monotonic() - wait_started) * 1000, 3)
+                        if metadata.get("frame_key") == kept[2] and metadata.get("segmentation_status") == "ok":
+                            measured = metadata.get("timings_ms")
+                            if isinstance(measured, dict):
+                                timings.update({key: measured[key] for key in ("segment_queue", "segment_inference")
+                                                if _timing(measured.get(key))})
                         kept = (*kept[:3], metadata)
                     with self.condition:
                         current = generation == self.generation and not self.stopped
                     result = channel.handle(header, kept) if current else self._reply(header, "scope_changed")
+                    if type(result.get("compute_s")) in (int, float) and _timing(result["compute_s"] * 1000):
+                        timings["body_compute"] = round(result["compute_s"] * 1000, 3)
+                    result["timings_ms"] = {key: value for key, value in timings.items() if _timing(value)}
                 except Exception as exc:
                     result = {**self._reply(header, "optional_body_error"), "error": type(exc).__name__}
             with self.condition:
@@ -360,6 +423,7 @@ def worker_main(argv=None):
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--models", required=True)
     parser.add_argument("--state", required=True)
+    parser.add_argument("--device", choices=("cpu", "auto"), default="cpu")
     args = parser.parse_args(argv)
     models = Path(args.models).resolve()
     protocol = os.fdopen(os.dup(sys.stdout.fileno()), "w", encoding="utf-8", newline="\n")
@@ -385,12 +449,12 @@ def worker_main(argv=None):
         import held_seg
         torch.set_num_threads(1)
         cv2.setNumThreads(1)
-        segmenter, why = held_seg.load(models, "cpu", state=args.state)
+        segmenter, device, why, fallback = load_segmenter(models, args.state, args.device, detect, held_seg)
         if segmenter is None:
             say({"refused": why})
             return 2
         failures = held_seg.Failures()
-        say({"ready": True, "device": "cpu"})
+        say({"ready": True, "device": device, **({"fallback": fallback} if fallback else {})})
     except Exception as exc:
         say({"error": type(exc).__name__})
         return 2
@@ -405,6 +469,7 @@ def worker_main(argv=None):
                 raise ValueError("optional image")
             image = np.frombuffer(_read_exact(sys.stdin.buffer, size), np.uint8).reshape(360, 640, 3)
             error = None
+            inference_started = time.monotonic()
             try:
                 masks = segmenter(image, header["row"], cv2)
             except Exception as exc:
@@ -413,7 +478,8 @@ def worker_main(argv=None):
             line = failures.count(error)
             if line:
                 print(line, file=sys.stderr, flush=True)
-            say({"id": header["id"], "frame_key": header["frame_key"], **masks})
+            say({"id": header["id"], "frame_key": header["frame_key"],
+                 "inference_ms": round((time.monotonic() - inference_started) * 1000, 3), **masks})
         except EOFError:
             return 0
         except Exception as exc:

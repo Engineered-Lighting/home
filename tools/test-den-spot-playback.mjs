@@ -55,6 +55,24 @@ test('connect time bounds a delayed snapshot and replay cannot extend the lease'
     assert.equal(drawn(), null, 'the first event can already be expired at receipt');
 });
 
+test('optional timing observes validated scheduling, successful apply and clear without changing playback', () => {
+    const phases = [], scope = { generation: 1, binding: { content_revision: binding.scan_revision },
+        equipment_revision: binding.equipment_revision, equipment_digest: binding.equipment_digest, fixture_ids: [fixture] };
+    let drawn = null;
+    const player = createSpotPlayback({ home: 'den', site: 'victoria', clock: () => 1000,
+        later: () => 1, cancel() {}, onPlayback(phase, value) { phases.push([phase, value?.epoch, value?.seq]); },
+    });
+    player.attach({ coordinatorSpotScope: () => scope, applyCoordinatorSpots: rows => { drawn = rows; return true; } });
+    player.connect(1000); player.anchor({ epoch: lit.epoch, server_mono: 10 });
+    player.tracking(binding.transform_id, binding.scan_revision); phases.length = 0;
+    player.receive(lit);
+    assert.deepEqual(phases.map(row => row[0]), ['decoded', 'scheduled', 'applied']);
+    assert.ok(phases.every(row => row[1] === lit.epoch && row[2] === lit.seq));
+    assert.ok(drawn[0].on); player.disconnect(); assert.equal(phases.at(-1)[0], 'clear');
+    const throwing = createSpotPlayback({ home: 'den', site: 'victoria', onPlayback() { throw Error('observer'); } });
+    assert.doesNotThrow(() => throwing.disconnect());
+});
+
 test('Stop survives reconnect, rejects an older counter and retains the last MOVE link', () => {
     const { player, connect, drawn } = setup();
     player.receive(lit);

@@ -92,7 +92,7 @@ function backend(t) {
 
 function home(snapshot, rpc) {
     let listener, sequence = 0;
-    const posts = [], pending = new Set(), hands = new Map();
+    const posts = [], playback = [], pending = new Set(), hands = new Map();
     const binding = snapshot.binding;
     const scope = { generation: 1, binding: { content_revision: binding.scan_revision },
         equipment_revision: binding.equipment_revision, equipment_digest: binding.equipment_digest,
@@ -108,6 +108,7 @@ function home(snapshot, rpc) {
     };
     const player = createSpotPlayback({ home: 'den', site: 'victoria', clock: () => 1000,
         clientId: 'wire-home-client', makeEventId: () => `wire-event-${++sequence}`,
+        onPlayback(phase, value) { playback.push({ phase, epoch: value?.epoch, seq: value?.seq }); },
         later: () => 1, cancel() {},
         async post(operation, body) {
             posts.push({ operation, body: structuredClone(body) });
@@ -124,7 +125,7 @@ function home(snapshot, rpc) {
         }
         player.receive(state.snapshot);
     }
-    return { player, posts, hands, receive,
+    return { player, posts, playback, hands, receive,
         edit(id, before, after) {
             hands.set(id, { fixture_id: id, hand: { state: structuredClone(after) } });
             listener({ phase: 'start', fixture_id: id });
@@ -160,6 +161,9 @@ test('Home edits, restart recovery and fenced Resume agree with the actual virtu
     assert.equal(restarted.wire_encoded_count, edited.wire_encoded_count, 'recovery issues no fixture command');
     first.receive(restarted, true);
     assert.equal(first.hands.get(name).hand.state.spotlight.brightness, 0.35);
+    assert.deepEqual(first.playback.slice(-3), ['decoded', 'scheduled', 'applied'].map(phase => ({
+        phase, epoch: restarted.snapshot.epoch, seq: restarted.snapshot.seq,
+    })), 'latency evidence retains the recovered producer epoch and snapshot identity');
     const fresh = home(restarted.snapshot, rpc);
     fresh.receive(restarted, true);
     assert.equal(fresh.hands.get(name).hand.state.spotlight.brightness, 0.35);

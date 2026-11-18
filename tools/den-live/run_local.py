@@ -43,6 +43,7 @@ sys.path.insert(0, str(HERE))
 import body_link  # noqa: E402  the live body, made in the detector's process and never waited for
 import body_profiles  # noqa: E402  the record of the profile's passing head-cut score
 import body_rgb  # noqa: E402
+import enrichment_link  # noqa: E402
 import perceive  # noqa: E402
 import person_state  # noqa: E402  contract 2's den-person-state-1 log, the LA service's only
 import register_now as rn  # noqa: E402  the method file's numbers: the gate, and whether the camera's correction is required
@@ -383,10 +384,27 @@ def start_body(perceiver, out, detector, body_input):
     return link
 
 
+def model_stages(detector, asker, now):
+    """Only the process handshake proves local residency; external vLLM remains unknown here."""
+    alive = detector.proc.poll() is None
+    devices = detector.devices or {}
+    rows = []
+    for name, role, model, key in (("den-yolo", "detection", "YOLO26s", "boxes"),
+                                  ("den-pose", "pose", "RTMPose-m", "pose")):
+        rows.append(dict(id=name, role=role, state="ready" if alive else "unavailable", configured=True,
+                         provisioned=True, loaded=alive, device=devices.get(key) if alive else None,
+                         model_id=model, model_revision=None, reason="worker_handshake" if alive else "worker_exited",
+                         observed_mono=now, valid_until_mono=now + 2))
+    rows.append(dict(id="qwen-policy", role="lighting_policy", state="externally_managed", configured=asker is not None,
+                     provisioned=None, loaded=None, device=None, model_id=None, model_revision=None,
+                     reason="separate_vllm_ownership", observed_mono=now, valid_until_mono=now + 2))
+    return rows
+
+
 def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, registration, state, detector_argv, stream_port,
           busy, until, status_every_s, require_correction=None, after_start=None, detector_log="detector.log", body=True,
           labels=None, asks=None, coordinator=None, body_input=None, body_profile=None, person_log=None,
-          reinstall=False):
+          reinstall=False, enrichment=None, native_motion_clock=False):
     """Run the shared local/service live loop with optional labels, Qwen and the lighting coordinator.
 
     registration(transform_id) is what step 2's qualified receipt says about the room model's registration,
@@ -430,7 +448,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
                                        track_method_path=method_copy, home="den", content_revision=revision,
                                        require_source_correction=require, source_correction=source_correction,
                                        depth_scale=registered["depth_scale"],   # every depth plane, before any lift
-                                       reinstall=reinstall)
+                                       reinstall=reinstall, native_motion_clock=native_motion_clock)
     except perceive.Stop as exc:
         raise Refusal(str(exc)) from None
     perceiver.labels = labels   # each marker's near phrase, from the same labels the page edits
@@ -440,7 +458,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
     if (body_input is None and body_profile is not None and body_profile.scan_revision == revision
             and body_profile.transform_id == perceiver.camera.transform_id):
         body_input = body_rgb.RgbBodyInput(body_profile, perceiver.camera)
-    detector = out = src = loop = cleanup = link = asker = lighting = None
+    detector = out = src = loop = cleanup = link = asker = lighting = bridge = None
     try:
         say("Starting the detector (about half a minute)...")
         try:
@@ -479,10 +497,18 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
                 lighting[0].connect(out.publish_spot)
                 out.routes.update(lighting[0].routes())
         person = None if person_log is None else person_state.Log(person_log)
+        try:
+            bridge = enrichment_link.Bridge(enrichment, camera_id=camera_id,
+                on_hint=getattr(lighting[0], "offer_intent", None) if lighting else None,
+                base_stages=lambda now: model_stages(detector, asker, now))
+        except Exception as exc:
+            say("Movement intent is off: it didn't start (%s). The markers go on." % type(exc).__name__)
+            bridge = enrichment_link.Bridge(camera_id=camera_id, base_stages=lambda now: model_stages(detector, asker, now))
         # The day files' writers: lines skipped at the day's cap go on the status line.
         logs = [log for log in (person, getattr(asker[0], "log", None) if asker else None) if log is not None]
-        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None, person, body=link)
-        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observer)
+        observer = evidence_observer(asker[0] if asker else None, lighting[0] if lighting else None, person, body=link,
+                                     enrichment=bridge)
+        loop = perceive.Loop(src, mailbox, perceiver, out.publish, observe=observer, frame_sink=bridge.offer_frame)
         out.start()
         src.start()
         loop.start()
@@ -502,6 +528,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
                 "received": mailbox.received, "status": status_line(perceiver, out.latest, logs),
                 "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped},
                 "asks": None if asker is None else dict(asker[0].counts),
+                "enrichment": None if bridge is None else dict(bridge.counts),
                 "coordinator": None if lighting is None else dict(lighting[0].counts)}
     finally:
         for thread in (loop, src):
@@ -512,6 +539,8 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
                 thread.join(5)
         if asker is not None:
             asker[1]()
+        if bridge is not None:
+            bridge.close()
         if lighting is not None:
             lighting[1]()
         if detector is not None:
@@ -538,7 +567,7 @@ def occupancy_health(asker):
         return {"effective": "unknown", "why": "Frigate's word couldn't be read (%s)" % type(exc).__name__}
 
 
-def evidence_observer(asker, lighting, person_log=None, *, body=None):
+def evidence_observer(asker, lighting, person_log=None, *, body=None, enrichment=None):
     """Deliver current typed tracking before any reply tied to that snapshot. person_log (a person_state.Log) gets the
     same snapshot the coordinator gets, the ask's eligibility on it, and never stops the loop. Each event's health
     gets occupancy (occupancy_health): Frigate's own word, for Home's Frigate card."""
@@ -565,6 +594,8 @@ def evidence_observer(asker, lighting, person_log=None, *, body=None):
                 person_log.write(current)
         if body is not None:
             event.setdefault("health", {})["body_timings"] = body.timing_summary()
+        if enrichment is not None:
+            event = enrichment.decorate(event, current)
         return event
     return observe
 

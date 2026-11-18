@@ -1,0 +1,115 @@
+{
+  "schema": "den.model-profile/v1",
+  "adapter_bundle_sha256": "c00001fdef22fbaffbaa1238267d4a37adf32ab3592f7da67159caa4d49cce5d",
+  "id": "vjepa-lm-qwen3-4b",
+  "role": "benchmark_control",
+  "backend": "vjepa_lm",
+  "repository": "kkt94/Llama-V-JEPA-LM-Qwen3-4B",
+  "revision": "da5e0c682b1df2877dce25082bfa322c94ee0970",
+  "admission_status": "not_admitted",
+  "admission_gaps": [
+    "No local complete snapshot/provisioning receipt is installed.",
+    "Remaining null file hashes require bounded provisioning, explicit remote-code review, and receipt pinning.",
+    "Research/non-commercial release terms require operator acceptance.",
+    "Shared Blackwell runtime, observed load peak, latency, and sustained resource use are unvalidated."
+  ],
+  "license": {
+    "publisher_use": "research_and_noncommercial",
+    "metadata": "apache-2.0",
+    "bundled": [
+      "LICENSE_QWEN3",
+      "LICENSE_VJEPA2",
+      "LICENSE_LLAMA3_2",
+      "USE_POLICY_LLAMA3_2.md"
+    ],
+    "source": "https://huggingface.co/kkt94/Llama-V-JEPA-LM-Qwen3-4B/blob/da5e0c682b1df2877dce25082bfa322c94ee0970/README.md"
+  },
+  "files": {
+    ".gitattributes": null,
+    "LICENSE_LLAMA3_2": null,
+    "LICENSE_QWEN3": null,
+    "LICENSE_VJEPA2": null,
+    "NOTICE_LLAMA3_2": null,
+    "README.md": null,
+    "USE_POLICY_LLAMA3_2.md": null,
+    "chat_template.jinja": null,
+    "config.json": null,
+    "configuration_jepa_llm.py": null,
+    "merges.txt": null,
+    "model.safetensors.index.json": null,
+    "modeling_jepa_llm.py": null,
+    "processing_jepa_llm.py": null,
+    "requirements.txt": null,
+    "tokenizer.json": "aeb13307a71acd8fe81861d94ad54ab689df773318809eed3cbe794b4492dae4",
+    "tokenizer_config.json": null,
+    "vjepa2_1_encoder.py": null,
+    "vocab.json": null,
+    "model-00001-of-00003.safetensors": "ab77ecd9775d48de6fb8fbe423c7004873d3ca191454ed3ab57538973d0eb868",
+    "model-00002-of-00003.safetensors": "3d3f7b66f8d552fc8024617bd4a613ddb345fa4f8cde87364f2db3e39894e0df",
+    "model-00003-of-00003.safetensors": "98808f4353bb8abb161d4d38f53e49d0ebdf3bd6f1373ea4c9038dd402c3255c"
+  },
+  "weights_total_bytes": 10137419384,
+  "runtime": {
+    "python": "3.12",
+    "torch": "2.13.0",
+    "cuda": "13.0",
+    "transformers": "5.10.4",
+    "safetensors": "0.8.0",
+    "tokenizers": "0.22.2",
+    "huggingface-hub": "1.33.0",
+    "numpy": "2.5.2",
+    "jinja2": "3.1.6",
+    "eva-decord": "0.6.1"
+  },
+  "execution": {
+    "frames": 32,
+    "image_size": 384,
+    "precision": "bfloat16",
+    "max_new_tokens": 64,
+    "max_questions_per_clip": 1,
+    "trained_combined_context_tokens": 2560,
+    "attention": "native_torch_sdpa",
+    "gpu_reservation_bytes": 15032385536,
+    "minimum_free_bytes": 17179869184,
+    "cpu_threads": 4,
+    "memory_max_bytes": 25769803776,
+    "memory_swap_max_bytes": 0,
+    "tasks_max": 128,
+    "io_read_bytes_per_second": 104857600,
+    "lifetime_seconds": 1800,
+    "idle_seconds": 120,
+    "host_minimum_available_bytes": 8589934592,
+    "cold_host_reservation_bytes": 25769803776,
+    "load_strategy": "cpu_then_cuda_low_cpu_mem_usage",
+    "startup_timeout_seconds": 600
+  },
+  "auto_model": "modeling_jepa_llm.JepaLlmModel",
+  "auto_config": "configuration_jepa_llm.JepaLlmConfig",
+  "tokenizer_revision": "da5e0c682b1df2877dce25082bfa322c94ee0970",
+  "inputs": {
+    "format": "rgb_ppm_p6",
+    "sampling": "causal_slot_center_sample_hold/v1",
+    "duration_seconds": [
+      4,
+      8
+    ],
+    "fixed_square_roi": true,
+    "additional_center_crop": false
+  },
+  "outputs": {
+    "choices": [
+      "continue",
+      "stop",
+      "turn_left",
+      "turn_right",
+      "unclear"
+    ],
+    "score_semantics": "raw_uncalibrated_option_letter_logits",
+    "authority": "semantic_prior_only",
+    "metric_trajectory": false
+  },
+  "sources": [
+    "https://huggingface.co/kkt94/Llama-V-JEPA-LM-Qwen3-4B/tree/da5e0c682b1df2877dce25082bfa322c94ee0970",
+    "https://arxiv.org/html/2611.17831v1"
+  ]
+}

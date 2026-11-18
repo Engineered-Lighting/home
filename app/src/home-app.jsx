@@ -774,7 +774,7 @@ function HomeHeader({
   // means voice mode is broken (no identity/media events, no s2s WS).
   // Both null = unknown (first probe pending) — hide pill.
   const sidecarDown = sidecarOnline === false;
-  const bridgeDown = bridgeOnline === false;
+  const bridgeDown = window.homeVoiceEnabled?.() === true && bridgeOnline === false;
   // Tray v5: global header state is now layered. "online" means
   // core app + HA + bridge + sidecar all reachable. If HA is online
   // but a downstream is down, we show "degraded" (not "offline") so
@@ -1877,7 +1877,7 @@ function _toneFromPct(pct, warnAt = 70, critAt = 90) {
 }
 
 function _aiBoxTone(metrics, bridgeHealth) {
-  if (!bridgeHealth?.ha_connected) return "warn";
+  if (window.homeVoiceEnabled?.() === true && !bridgeHealth?.ha_connected) return "warn";
   const vramPct = metrics.vramMax ? (metrics.vram / metrics.vramMax) * 100 : null;
   return _toneFromPct(vramPct);
 }
@@ -2480,7 +2480,7 @@ function MetricsStrip({
     let modelTone = "idle", modelState = "unknown";
     if (hasLiveModelName(metrics.model)) {
       modelState = metrics.model;
-      if (bridgeOnline === false) modelTone = "crit";
+      if (window.homeVoiceEnabled?.() === true && bridgeOnline === false) modelTone = "crit";
       else if (bridgeHealth?.ha_connected === false) modelTone = "warn";
       else if (bridgeHealth?.warmup_complete === false) modelTone = "warn";
       else modelTone = "ok";
@@ -2499,21 +2499,23 @@ function MetricsStrip({
     else items.push({ label: "metrics-sidecar", state: "unknown", tone: "idle" });
     // HAOS
     const haUp = connection === "online";
-    const bridgeSeesHa = bridgeHealth?.ha_connected;
+    const bridgeSeesHa = window.homeVoiceEnabled?.() === true ? bridgeHealth?.ha_connected : haUp;
     if (haUp && bridgeSeesHa) items.push({ label: "haos", state: "connected", tone: "ok" });
     else if (haUp || bridgeSeesHa) items.push({ label: "haos", state: "degraded", tone: "warn" });
     else if (connection === "auth_invalid") items.push({ label: "haos", state: window.HomeServe?.active ? "unavailable" : "bad token", tone: "crit" });
     else items.push({ label: "haos", state: "offline", tone: "crit" });
     // Bridge — value carries uptime when warm, plain state otherwise
     const upStr = fmtUptime(bridgeHealth?.uptime_s);
-    if (bridgeOnline === false) items.push({ label: "bridge", state: "offline", tone: "crit" });
+    if (window.homeVoiceEnabled?.() !== true) items.push({ label: "bridge", state: "disabled", tone: "idle" });
+    else if (bridgeOnline === false) items.push({ label: "bridge", state: "offline", tone: "crit" });
     else if (bridgeHealth?.warmup_complete === true) {
       items.push({ label: "bridge", state: upStr ? `warm · ${upStr}` : "warm", tone: "ok" });
     }
     else if (bridgeHealth?.warmup_complete === false) items.push({ label: "bridge", state: "warming", tone: "warn" });
     else items.push({ label: "bridge", state: "unknown", tone: "idle" });
     // TTS
-    if (bridgeOnline === false) items.push({ label: "tts", state: "offline", tone: "crit" });
+    if (window.homeVoiceEnabled?.() !== true) items.push({ label: "tts", state: "disabled", tone: "idle" });
+    else if (bridgeOnline === false) items.push({ label: "tts", state: "offline", tone: "crit" });
     else if (bridgeHealth?.tts_engine) items.push({ label: "tts", state: bridgeHealth.tts_engine, tone: "ok" });
     else items.push({ label: "tts", state: "unknown", tone: "idle" });
     // Frigate — proxy: stats sensors populated OR camera labels arriving in last 60s
@@ -2640,7 +2642,8 @@ function MetricsStrip({
 
     // Bridge/API badge
     let bridgeBadge;
-    if (!bridgeHealth) bridgeBadge = { text: "offline", tone: "crit" };
+    if (window.homeVoiceEnabled?.() !== true) bridgeBadge = { text: "disabled", tone: "idle" };
+    else if (!bridgeHealth) bridgeBadge = { text: "offline", tone: "crit" };
     else if (bridgeHealth.ha_connected === false) bridgeBadge = { text: "degraded", tone: "warn" };
     else if (bridgeHealth.warmup_complete === false) bridgeBadge = { text: "warming", tone: "warn" };
     else if (stale.length > 0) bridgeBadge = { text: `${stale.length} stale media`, tone: "warn" };
@@ -2933,10 +2936,11 @@ function MetricsStrip({
     else if (sidecarOnline === false) reachItems.push({ label: "ai box", state: "offline", tone: "crit" });
     else reachItems.push({ label: "ai box", state: "unknown", tone: "idle" });
     const haUp = connection === "online";
-    if (haUp && bridgeHealth?.ha_connected) reachItems.push({ label: "haos", state: "connected", tone: "ok" });
+    if (haUp && (window.homeVoiceEnabled?.() !== true || bridgeHealth?.ha_connected)) reachItems.push({ label: "haos", state: "connected", tone: "ok" });
     else if (haUp || bridgeHealth?.ha_connected) reachItems.push({ label: "haos", state: "degraded", tone: "warn" });
     else reachItems.push({ label: "haos", state: "offline", tone: "crit" });
-    if (bridgeOnline === true) reachItems.push({ label: "bridge", state: "online", tone: "ok" });
+    if (window.homeVoiceEnabled?.() !== true) reachItems.push({ label: "bridge", state: "disabled", tone: "idle" });
+    else if (bridgeOnline === true) reachItems.push({ label: "bridge", state: "online", tone: "ok" });
     else if (bridgeOnline === false) reachItems.push({ label: "bridge", state: "offline", tone: "crit" });
     else reachItems.push({ label: "bridge", state: "unknown", tone: "idle" });
 
@@ -4645,6 +4649,7 @@ function InputRow({ value, onChange, onSend, voice, onMicToggle, isStreaming, on
  * voices per-session with /voice <name>. */
 
 function MicButton({ state, onClick, mobile = false }) {
+  const enabled = window.homeVoiceEnabled?.() === true;
   const isOff = state === "inactive";
   const isErr = state === "no-mic" || state === "error";
   const isListening = state === "listening";
@@ -4669,7 +4674,9 @@ function MicButton({ state, onClick, mobile = false }) {
 
   return (
     <button
-      aria-label={state === "inactive" ? "Start voice mode" : "Stop voice mode (" + state + ")"}
+      aria-label={!enabled ? "Voice disabled — type a message" : state === "inactive" ? "Start voice mode" : "Stop voice mode (" + state + ")"}
+      disabled={!enabled}
+      title={!enabled ? "Voice disabled — typed chat is available" : undefined}
       aria-pressed={state !== "inactive"}
       className="hg-focusable"
       onClick={onClick}
@@ -4716,6 +4723,7 @@ function MicButton({ state, onClick, mobile = false }) {
  * `{type: "state", state: "..."}` WS control messages on the s2s channel.
  * Listening/inactive are driven locally by the mic state. */
 function VoiceBanner({ voice, onRetry }) {
+  if (window.homeVoiceEnabled?.() !== true) return null;
   if (voice.state === "inactive") return null;
   // v6.2: transient states (listening / speaking / transcribing /
   // thinking) are now displayed inline in the MetricsStrip summary so
@@ -8043,6 +8051,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     // not " find office" → empty cmd.
     const [cmd, ...rest] = raw.trim().slice(1).trim().split(/\s+/);
     const arg = rest.join(" ");
+    if (["voice", "voices", "s2s"].includes(cmd) && window.homeVoiceEnabled?.() !== true) {
+      addEvent({ kind: "system", text: "Voice is disabled. Typed chat and lighting controls are available.", tone: "info" });
+      return true;
+    }
     if (window.HomeServe?.active && (["connect", "endpoint", "forget-ha", "token", "metrics", "profile", "service", "stack-token"].includes(cmd)
         || (cmd === "s2s" && arg && !arg.startsWith("voice ")))) {
       addEvent({ kind: "system", text: "Connections for this Home are managed on the server.", tone: "info" });
@@ -10192,6 +10204,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
     setS2sMode(false);
   }, []);
   const startS2sMode = useCallback(async () => {
+    if (window.homeVoiceEnabled?.() !== true) {
+      addEvent({ kind: "system", text: "Voice is disabled. Type a message instead.", tone: "info" });
+      return;
+    }
     if (!window.startS2SRun) {
       addEvent({ kind: "system", text: "s2s module not loaded", tone: "warn" });
       return;
@@ -10421,6 +10437,10 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
    * The bridge defaults voice_mode=true on attach so we don't need a
    * separate set_voice_mode message. */
   const toggleMic = useCallback(() => {
+    if (window.homeVoiceEnabled?.() !== true) {
+      stopS2sMode("inactive");
+      return;
+    }
     const idle = voice.state === "inactive" || voice.state === "no-mic";
     if (idle) startS2sMode();
     else stopS2sMode("inactive");
@@ -10827,7 +10847,7 @@ function HomeNormalApp({ density = "airy", metricsStyle = "ticker", initialEvent
         }
       }
       // Bridge — also capture full body for MetricsStrip
-      if (bridgeUrl) {
+      if (bridgeUrl && window.homeVoiceEnabled?.() === true) {
         try {
           const r2 = await tauriFetch(`${bridgeUrl}/healthz`, requestOptions);
           if (!cancelled) {

@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { qualifiedRunnerTemp, createEnvironmentDirectory, cleanupEnvironmentDirectory, hostedPython312, verifyPython312 } from './test-den-model-topology.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const runner = path.join(root, 'tools', 'run-touched-harnesses.mjs');
@@ -81,6 +82,130 @@ function assertExactCover(argv, counts) {
   }
   return full;
 }
+
+test('model presentation and shared fixtures select explicit experimental browser acceptance', () => {
+  const units = ['test-den-model-runtime.mjs', 'test-den-forecast-layer.mjs', 'test-den-pipeline-cards.mjs'];
+  const sources = ['model-runtime', 'forecast-layer', 'live-view', 'pipeline-layer'].map(name => `app/src/home-den-${name}.mjs`);
+  sources.push('tools/fixtures/den-model-pipeline.mjs', 'tools/test-den-model-runtime.mjs', 'tools/test-den-forecast-layer.mjs');
+  for (const file of sources) {
+    const plan = planOf(['--files', file]);
+    assert.ok(units.every(name => plan.includes(name)), file);
+    assert.equal(plan.filter(name => name === 'test-den-model-pipeline-browser.mjs').length, 1, file);
+  }
+  sources.push('tools/test-den-model-pipeline-browser.mjs', 'tools/test-den-live-serve-browser.mjs', 'tools/test-den-live-serve-browser-part2.mjs');
+  const plan = assertExactCover(['--files', sources.join(',')], [1, 3, 16]);
+  assert.equal(plan.filter(name => name === 'test-den-model-pipeline-browser.mjs').length, 1);
+});
+
+test('voice caller startup and recovery changes select the fake-only retirement guard', () => {
+  const files = ['stack/.env.example', 'stack/docker-compose.yml', 'stack/scripts/stack.sh',
+    'stack/services/supervisor/main.py', 'stack/services/supervisor/retire_voice.py',
+    'stack/services/supervisor/test_retire_voice.py', 'stack/services/video-labeler/videolabeler/gpuexclusive.py',
+    'stack/services/video-labeler/tests/test_gpuexclusive.py', 'ha-config/packages/homeai_good_morning.yaml',
+    'tools/test-voice-retirement-contracts.py', 'tools/test-supervisor-service-actions.py', 'tools/test-den-voice-retirement.mjs'];
+  for (const file of files) assert.equal(planOf(['--files', file]).filter(name => name === 'test-den-voice-retirement.mjs').length, 1, file);
+  assertExactCover(['--files', files.join(',')], [1, 3, 16]);
+});
+
+test('walking lighting contracts guard every provider and consumer seam exactly once across shards', () => {
+  const guard = 'test-den-walking-lighting.mjs';
+  const modules = ['walking', 'walking_intent', 'walking_intent_receipts', 'intent', 'motion', 'motion_native_clock', 'preview', 'contracts', 'direction',
+    'model_projection', 'perceive', 'person_state', 'stream'];
+  const files = modules.flatMap(name => [`tools/den-live/${name}.py`, `tools/den-live/test_${name}.py`]);
+  files.push('tools/den-live/test_preview_walking.py', `tools/${guard}`);
+  files.push('tools/den-live/native_clock_fixture.json');
+  for (const file of files) {
+    const plan = planOf(['--files', file]);
+    assert.equal(plan.filter(name => name === guard).length, 1, 'the complete walking contracts guard ' + file);
+  }
+  const full = assertExactCover(['--files', files.join(',')], [1, 2, 3, 5]);
+  assert.equal(full.filter(name => name === guard).length, 1, 'combining all seams never drops or duplicates the guard');
+});
+
+test('model topology contracts guard worker, enrichment, installer and replay seams without replacing walking guards', () => {
+  const guard = 'test-den-model-topology.mjs';
+  const files = ['tools/den-models/den_models/runtime.py', 'tools/den-models/den_models/resources.py',
+    'tools/den-models/den_models/specialists.py', 'tools/den-models/profiles/specialists/rtmw-l-384.json',
+    'tools/den-models/requirements-test.lock', 'tools/den-models/tests/test_runtime.py',
+    ...['motion', 'contracts', 'perceive', 'enrichment_link', 'run_service', 'install_la', 'path_replay',
+      'test_enrichment_service', 'test_enrichment_install', 'test_path_replay', 'test_motion_native_clock'].map(name => `tools/den-live/${name}.py`),
+    'tools/den-live/fixtures/path-replay-contract.json', 'tools/den-live/native_clock_fixture.json',
+    'stack/services/den-live/install.sh', `tools/${guard}`];
+  for (const file of files) {
+    const plan = planOf(['--files', file]);
+    assert.equal(plan.filter(name => name === guard).length, 1, 'CPU topology guard selects ' + file);
+  }
+  const motionPlan = planOf(['--files', 'tools/den-live/motion.py']);
+  assert.ok(motionPlan.includes('test-den-walking-lighting.mjs'));
+  const full = assertExactCover(['--files', files.join(',')], [1, 3, 5]);
+  assert.equal(full.filter(name => name === guard).length, 1);
+});
+
+test('CI-only fixture preparation qualifies a real temporary scope and cleans only owned directories', () => {
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'den-model-ci-scope-test-')));
+  try {
+    const environment = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Linux', RUNNER_ENVIRONMENT: 'github-hosted',
+      RUNNER_TEMP: temporary, GITHUB_WORKSPACE: root };
+    assert.equal(qualifiedRunnerTemp(environment, { platform: 'linux' }), temporary);
+    assert.equal(qualifiedRunnerTemp({ ...environment, GITHUB_ACTIONS: 'false' }, { platform: 'linux' }), null);
+    assert.equal(qualifiedRunnerTemp({ ...environment, RUNNER_ENVIRONMENT: 'self-hosted' }, { platform: 'linux' }), null);
+    assert.equal(qualifiedRunnerTemp({ ...environment, RUNNER_TEMP: root }, { platform: 'linux' }), null);
+    const own = createEnvironmentDirectory(temporary), unrelated = path.join(temporary, 'unrelated');
+    fs.mkdirSync(unrelated);
+    assert.throws(() => cleanupEnvironmentDirectory(temporary, unrelated), /Refusing cleanup/);
+    cleanupEnvironmentDirectory(temporary, own);
+    assert.equal(fs.existsSync(own), false);
+    assert.equal(fs.existsSync(unrelated), true);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('hosted fixtures select completed CPython 3.12 instead of the runner default', () => {
+  const temporaryRoot = fs.realpathSync(os.tmpdir());
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, 'den-python312-'));
+  const checkout = path.join(directory, 'checkout'), runnerTemp = path.join(directory, 'runner-temp');
+  const cache = path.join(directory, 'toolcache');
+  for (const folder of [checkout, runnerTemp, cache]) fs.mkdirSync(folder);
+  const env = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Linux', RUNNER_ENVIRONMENT: 'github-hosted',
+    GITHUB_WORKSPACE: checkout, RUNNER_TEMP: runnerTemp, RUNNER_TOOL_CACHE: cache };
+  const options = { platform: 'linux', arch: 'x64', repo: checkout };
+  const install = (version, complete = true) => {
+    const home = path.join(cache, 'Python', version, 'x64');
+    fs.mkdirSync(path.join(home, 'bin'), { recursive: true });
+    const executable = path.join(home, 'bin', 'python');
+    fs.writeFileSync(executable, 'synthetic executable marker', { mode: 0o755 });
+    if (complete) fs.writeFileSync(home + '.complete', '');
+    return executable;
+  };
+  try {
+    install('3.14.4');
+    assert.throws(() => hostedPython312(env, options), /Preinstalled CPython 3.12/);
+    install('3.12.1');
+    const expected = install('3.12.16');
+    install('3.12.99', false);
+    assert.equal(hostedPython312(env, options), expected, 'newest completed supported patch, ignoring 3.14 and incomplete installs');
+    assert.throws(() => hostedPython312({ ...env, RUNNER_ENVIRONMENT: 'self-hosted' }, options), /qualified Linux x64/);
+    assert.throws(() => hostedPython312(env, { ...options, arch: 'arm64' }), /qualified Linux x64/);
+    assert.throws(() => hostedPython312({ ...env, RUNNER_TOOL_CACHE: checkout }, options), /toolcache scope/);
+    const identity = { implementation: 'cpython', version: [3, 12], platform: 'linux', machine: 'x86_64' };
+    verifyPython312(identity, true);
+    assert.throws(() => verifyPython312({ ...identity, version: [3, 14] }, true), /CPython 3.12/);
+    assert.throws(() => verifyPython312({ ...identity, machine: 'aarch64' }, true), /Linux x86_64/);
+    if (process.platform !== 'win32') {
+      const escaped = install('3.12.17');
+      fs.unlinkSync(escaped);
+      const outside = path.join(directory, 'outside-python');
+      fs.writeFileSync(outside, 'escaped executable', { mode: 0o755 });
+      fs.symlinkSync(outside, escaped);
+      assert.throws(() => hostedPython312(env, options), /escaped its toolcache home/);
+    }
+  } finally {
+    assert.equal(path.dirname(directory), temporaryRoot);
+    assert.ok(path.basename(directory).startsWith('den-python312-'));
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 const git = argv => execFileSync('git', argv, { cwd: root, encoding: 'utf8' }).trim();
 function actualBase() {

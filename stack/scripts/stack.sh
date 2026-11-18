@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local Home Assistant voice assistant stack — single-command control.
+# Local Home Assistant AI stack. VOICE_ENABLED=1 explicitly opts into voice.
 #
 #   bash scripts/stack.sh up        # ensure all services running + healthy + smoke-test (default)
 #   bash scripts/stack.sh down      # stop all services
@@ -16,7 +16,17 @@ STACK_DIR="${STACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
 cd "$STACK_DIR"
 
 CMD="${1:-up}"
-SERVICES=(vllm wyoming-parakeet kokoro-tts wyoming-kokoro vision-sidecar metrics-sidecar)
+VOICE_ENABLED="${VOICE_ENABLED:-0}"
+case "$VOICE_ENABLED" in 0|1) ;; *) echo "VOICE_ENABLED must be 0 or 1" >&2; exit 2 ;; esac
+SERVICES=(vllm vision-sidecar metrics-sidecar)
+COMPOSE_ARGS=()
+if [ "$VOICE_ENABLED" = 1 ]; then
+  COMPOSE_ARGS=(--profile voice)
+  SERVICES+=(wyoming-parakeet kokoro-tts chatterbox-tts wyoming-kokoro)
+fi
+# An inherited COMPOSE_PROFILES (or a .env default) must not revive retired
+# voice/S2S services during an ordinary start. Voice needs the explicit flag.
+compose() { COMPOSE_PROFILES="" docker compose "${COMPOSE_ARGS[@]}" "$@"; }
 
 c_green() { printf '\033[32m%s\033[0m\n' "$*"; }
 c_red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -59,11 +69,20 @@ smoke_test() {
     c_red "  vllm /v1/models: FAIL"; ok=0
   fi
 
-  # Kokoro
-  if curl -fsS -m 5 http://localhost:8880/v1/models >/dev/null 2>&1; then
-    c_green "  kokoro /v1/models: OK"
+  if [ "$VOICE_ENABLED" = 1 ]; then
+    # Kokoro and Chatterbox
+    if curl -fsS -m 5 http://localhost:8880/v1/models >/dev/null 2>&1; then
+      c_green "  kokoro /v1/models: OK"
+    else
+      c_red "  kokoro /v1/models: FAIL"; ok=0
+    fi
+    if curl -fsS -m 5 http://localhost:8881/v1/audio/voices >/dev/null 2>&1; then
+      c_green "  chatterbox /v1/audio/voices: OK"
+    else
+      c_red "  chatterbox /v1/audio/voices: FAIL"; ok=0
+    fi
   else
-    c_red "  kokoro /v1/models: FAIL"; ok=0
+    c_dim "  voice: disabled (VOICE_ENABLED=1 to opt in)"
   fi
 
   # Vision sidecar — camera frame grabber + multimodal proxy to vllm.
@@ -80,18 +99,20 @@ smoke_test() {
     c_red "  metrics-sidecar /healthz: FAIL"; ok=0
   fi
 
-  # Wyoming Parakeet TCP
-  if (echo > /dev/tcp/localhost/10300) 2>/dev/null; then
-    c_green "  wyoming-parakeet :10300: OPEN"
-  else
-    c_red "  wyoming-parakeet :10300: closed"; ok=0
-  fi
+  if [ "$VOICE_ENABLED" = 1 ]; then
+    # Wyoming Parakeet TCP
+    if (echo > /dev/tcp/localhost/10300) 2>/dev/null; then
+      c_green "  wyoming-parakeet :10300: OPEN"
+    else
+      c_red "  wyoming-parakeet :10300: closed"; ok=0
+    fi
 
-  # Wyoming Kokoro bridge TCP
-  if (echo > /dev/tcp/localhost/10301) 2>/dev/null; then
-    c_green "  wyoming-kokoro :10301: OPEN"
-  else
-    c_red "  wyoming-kokoro :10301: closed"; ok=0
+    # Wyoming Kokoro bridge TCP
+    if (echo > /dev/tcp/localhost/10301) 2>/dev/null; then
+      c_green "  wyoming-kokoro :10301: OPEN"
+    else
+      c_red "  wyoming-kokoro :10301: closed"; ok=0
+    fi
   fi
 
   # LAN-priority rule (regression check — should auto-install via systemd)
@@ -116,7 +137,7 @@ smoke_test() {
 case "$CMD" in
   up)
     echo "==> Bringing up the stack (idempotent — safe to re-run)"
-    docker compose up -d 2>&1 | grep -vE "^\s*$"
+    compose up -d 2>&1 | grep -vE "^\s*$"
     echo
     echo "==> Waiting for health (per service, up to 3 min each)"
     for s in "${SERVICES[@]}"; do
@@ -127,21 +148,21 @@ case "$CMD" in
     ;;
   down)
     echo "==> Stopping all services"
-    docker compose down
+    compose down
     c_green "Stopped."
     ;;
   restart)
-    "$0" down
-    "$0" up
+    VOICE_ENABLED="$VOICE_ENABLED" bash "$0" down
+    VOICE_ENABLED="$VOICE_ENABLED" bash "$0" up
     ;;
   status)
-    docker compose ps
+    compose ps
     echo
     smoke_test || true
     ;;
   logs)
     SVC="${2:?usage: stack.sh logs <service>}"
-    docker compose logs --tail 100 -f "$SVC"
+    compose logs --tail 100 -f "$SVC"
     ;;
   *)
     echo "Usage: $0 {up|down|restart|status|logs <service>}" >&2

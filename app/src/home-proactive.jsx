@@ -123,6 +123,7 @@
   // `now` is injected so the function has no clock of its own (testable).
   function evaluateProactive(event, ctx, now) {
     const C = PROACTIVE_CONSTANTS;
+    if (ctx?.voiceEnabled !== true) return { allow: false, reason: "voice-disabled" };
     // 1 — malformed
     if (!event || !event.type) return { allow: false, reason: "malformed" };
     if (event.type === "room_entered" && !event.room) return { allow: false, reason: "malformed" };
@@ -339,6 +340,8 @@
         }
       }
       return {
+        voiceEnabled: typeof env.voiceEnabled === "function"
+          ? env.voiceEnabled() === true : window.homeVoiceEnabled?.() === true,
         modes: {
           sleep: !!ctxOverride.sleep,
           dnd: !!ctxOverride.dnd,
@@ -361,6 +364,11 @@
       return String(tpl || "").replace(/\{(\w+)\}/g, (m, k) => (vars && vars[k] != null ? vars[k] : m));
     }
     function speak(kind, vars, opts) {
+      if (!(typeof env.voiceEnabled === "function"
+          ? env.voiceEnabled() === true : window.homeVoiceEnabled?.() === true)) {
+        flashTransient("suppressed", "voice-disabled");
+        return;
+      }
       opts = opts || {};
       const now = Date.now();
       ledger.lastProactiveSpeakTs = now;
@@ -504,6 +512,7 @@
     function onArrivalTimeout() {
       if (phase !== "arrival_pending_confirmation" || !arrival) return;
       const person = arrival.displayName;
+      const arrivingPerson = arrival.person;
       const level = sightingLevel;
       arrival = null;
       if (level === "weak-identity" || level === "person-unidentified") {
@@ -511,11 +520,20 @@
         emitFeed("Arrival likely (unconfirmed) — no spoken welcome.");
         flashTransient("suppressed", "unconfirmed");
       } else if (!frigateOnlineRef.current && ARRIVAL_GPS_ONLY_FALLBACK) {
-        // Frigate is down — GPS is all we have; speak anyway
+        // Frigate is down — GPS is all we have. Apply the same speech
+        // policy before claiming a welcome or consuming its cooldown.
         const now = Date.now();
-        ledger.lastWelcomeTs = now; _writeWelcomedAt(now);
-        emitFeed(`Welcome home, ${person} — spoken (GPS only, Frigate offline).`);
-        speak("welcome", { name: person }, { person });
+        const verdict = evaluateProactive({
+          type: "person_arrived_home", person: arrivingPerson, display_name: person, confidence: 1,
+        }, buildCtx({}, now), now);
+        if (verdict.allow) {
+          ledger.lastWelcomeTs = now; _writeWelcomedAt(now);
+          emitFeed(`Welcome home, ${person} — spoken (GPS only, Frigate offline).`);
+          speak("welcome", { name: person }, { person });
+        } else {
+          emitDiag(`GPS-only welcome suppressed: ${verdict.reason}`);
+          flashTransient("suppressed", verdict.reason);
+        }
       } else {
         // Frigate up but never saw you — genuinely couldn't confirm
         emitDiag("arrival window closed — no visual confirmation, no greeting");

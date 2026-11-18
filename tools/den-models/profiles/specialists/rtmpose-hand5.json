@@ -1,0 +1,83 @@
+{
+  "schema": "den.specialist-profile/v1",
+  "admission_status": "not_admitted",
+  "admission_scope": "none",
+  "production_admitted": false,
+  "execution": {
+    "cpu_threads": 2,
+    "memory_max_bytes": 2147483648,
+    "memory_swap_max_bytes": 0,
+    "tasks_max": 64,
+    "io_read_bytes_per_second": 104857600,
+    "maximum_seconds": 60
+  },
+  "observed_peak_host_bytes": null,
+  "observed_peak_gpu_bytes": null,
+  "id": "rtmpose-hand5",
+  "role": "hand_21_candidate",
+  "backend": "rtmlib_ort_cpu",
+  "model_file": "pose.onnx",
+  "archive": "publisher.zip",
+  "files": {
+    "pose.onnx": null,
+    "publisher.zip": null
+  },
+  "repository": "open-mmlab/mmpose",
+  "revision": "759b39c13fea6ba094afc1fa932f51dc1b11cbf9",
+  "artifact_url": "https://download.openmmlab.com/mmpose/v1/projects/rtmposev1/onnx_sdk/rtmpose-m_simcc-hand5_pt-aic-coco_210e-256x256-74fb594_20230320.zip",
+  "runtime": {
+    "python": "3.12",
+    "rtmlib": "0.0.16",
+    "onnxruntime": "1.23.2",
+    "opencv-python": "4.11.0.86",
+    "numpy": "2.3.5"
+  },
+  "runtime_source_pins": {
+    "rtmlib": "03a1693e59e4f7cd84582c0fb30459b3bf18ad42",
+    "onnxruntime": "a83fc4d58cb48eb68890dd689f94f28288cf2278"
+  },
+  "io": {
+    "input_format": "bgr_uint8_from_rgb_ppm",
+    "input_size_wh": [
+      256,
+      256
+    ],
+    "mean": [
+      123.675,
+      116.28,
+      103.53
+    ],
+    "std": [
+      58.395,
+      57.12,
+      57.375
+    ],
+    "bbox_padding": 1.25,
+    "simcc_split_ratio": 2,
+    "keypoints": 21,
+    "output_order": "simcc_x_then_simcc_y",
+    "output_shapes_inferred_not_serialized": [
+      [
+        1,
+        21,
+        512
+      ],
+      [
+        1,
+        21,
+        512
+      ]
+    ],
+    "hand5_semantics": "five_training_datasets_not_five_joints",
+    "output_coordinates": "original_image_pixels_not_room_metres"
+  },
+  "admission_gaps": [
+    "Publisher archive/ONNX SHA256 unresolved; no archive graph serialized or inspected.",
+    "Explicit hand crop required; no implicit RTMDet download or hand association.",
+    "Preprocessing/decoding parity, resource peaks and runtime closure need reviewed local receipts."
+  ],
+  "sources": [
+    "https://github.com/Tau-J/rtmlib/blob/03a1693e59e4f7cd84582c0fb30459b3bf18ad42/rtmlib/tools/solution/hand.py",
+    "https://github.com/Tau-J/rtmlib/blob/03a1693e59e4f7cd84582c0fb30459b3bf18ad42/rtmlib/tools/pose_estimation/rtmpose.py"
+  ]
+}

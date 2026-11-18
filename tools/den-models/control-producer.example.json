@@ -1,0 +1,16 @@
+{
+  "schema": "den.model-control-config/v1",
+  "vllm_port": 8000,
+  "ops_status_file": "/var/lib/den-ops-monitor/status.json",
+  "ops_host": "la-host",
+  "dependencies_file": "/run/home-den-model-input/source/source.json",
+  "control_file": "/run/home-den-models/control.json",
+  "execution_lease_file": "/run/home-den-models/gpu-execution.lease",
+  "gpu_selector": "0",
+  "shared_gid": null,
+  "trusted_source_uids": null,
+  "ops_owner_uid": null,
+  "poll_seconds": 0.25,
+  "http_timeout_seconds": 0.25,
+  "ops_max_age_seconds": 90
+}

@@ -171,6 +171,20 @@ observe_tree="$(find "${release}/trees" -mindepth 1 -maxdepth 1 -type d -name 'o
 [[ -n "${observe_tree}" ]] || refuse "the release has no observe tree"
 say "Release ${want:0:12}: every file matches its SHA256SUMS."
 
+# Optional model inputs are pre-provisioned by their own reviewed deployment.
+# Validate them before detector preparation, settings writes or a service switch.
+# The helper only inspects: no groups, external directories or Den state are
+# created, chmodded or chowned. Never echo its exception text or private paths.
+if ! "${python}" -B -c 'import sys
+sys.path.insert(0, sys.argv[1])
+try:
+    import install_la
+    install_la.target_optional_inputs(sys.argv[2], sys.argv[3])
+except BaseException:
+    sys.exit(2)' "${release}/tools/den-live" "${here}/settings.json" "${here}"; then
+  refuse "optional model or walking inputs have not been safely provisioned"
+fi
+
 # ---- 3. the models ---------------------------------------------------------------------------------------------
 for pair in "yolo26s.pt:${yolo_sha}" "rtmpose-m-body7.onnx:${pose_sha}" "artifact.json:${manifest_sha}" \
             "yolo26s-seg.pt:${held_sha}"; do
@@ -269,6 +283,15 @@ if [[ -s "${here}/ha-token.txt" ]]; then
 else
   rm -f -- "${etc}/private/ha-token.txt"
   say "The Qwen ask: off (no Home Assistant token came with this install)."
+fi
+# This is a separate credential from Home Assistant and the camera. Omission
+# disables enrichment and removes the old credential; no worker is deployed or
+# loaded by this installer.
+if [[ -s "${here}/model-worker-token.txt" ]]; then
+  install -m 0600 -o root -g root -- "${here}/model-worker-token.txt" "${etc}/private/model-worker-token.txt"
+  say "Optional model input credential installed root-only. The worker remains separately managed."
+else
+  rm -f -- "${etc}/private/model-worker-token.txt"
 fi
 # Your labels from the PC, when install_la.py brought them: a root-only seed the service copies into its own state once,
 # only while it has no labels (run_service.seed_labels). Without one, an old seed goes; the service's own labels stay.

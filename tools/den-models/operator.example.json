@@ -1,0 +1,15 @@
+{
+  "schema": "den.model-operator/v1",
+  "profile_id": "vjepa-lm-qwen3-8b",
+  "snapshot_root": "/srv/home-den-models/snapshots",
+  "receipt_root": "/srv/home-den-models/receipts",
+  "frame_root": "/run/home-den-model-input/frames",
+  "cache_root": "/var/cache/home-den-models",
+  "control_state_file": "/run/home-den-models/control.json",
+  "execution_lease_file": "/run/home-den-models/gpu-execution.lease",
+  "residency_file": "/run/home-den-models/residency.json",
+  "token_file": "/run/home-den-models/bearer.token",
+  "gpu_selector": "0",
+  "io_device": "259:0",
+  "port": 9461
+}

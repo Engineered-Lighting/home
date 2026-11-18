@@ -385,13 +385,19 @@ export async function runShellBrowserProof({ part }) {
       assert.equal(await page.locator('#apt-home-tab-camera').isVisible(), narrow);
       checks.push({ stage: narrow ? 'phone_keyboard_visible_tabs' : 'desktop_keyboard_skips_hidden_camera_tab' });
     }
-    async function phoneComposerBounds() {
+    async function phoneComposerBounds({ voiceEnabled = false } = {}) {
+      const voiceLabel = voiceEnabled ? 'Start voice mode' : 'Voice disabled — type a message';
       const controls = [page.locator('.apt-home-chat'), page.getByRole('combobox', { name: 'Command input', exact: true }),
-        page.getByRole('button', { name: 'Send', exact: true }), page.getByRole('button', { name: 'Start voice mode', exact: true })];
+        page.getByRole('button', { name: 'Send', exact: true }), page.getByRole('button', { name: voiceLabel, exact: true })];
+      assert.equal(await page.evaluate(() => window.homeVoiceEnabled?.() === true), voiceEnabled);
+      assert.equal(await page.getByRole('button', { name: 'Start voice mode', exact: true }).count(), voiceEnabled ? 1 : 0);
+      assert.equal(await controls[1].isEnabled(), true, 'typed chat remains available with voice off or explicitly enabled');
+      assert.equal(await controls[2].isEnabled(), true, 'an authored typed draft can still be sent');
+      assert.equal(await controls[3].isDisabled(), !voiceEnabled, 'only an explicit voice opt-in enables the mic');
       // Read the four independent rectangles in one actual layout frame. The
       // named controls below still use the same strict role locators for focus.
-      const bounds = await page.evaluate(() => ['.apt-home-chat', 'input[aria-label="Command input"]',
-        'button[aria-label="Send"]', 'button[aria-label="Start voice mode"]'].map((selector, index) => {
+      const bounds = await page.evaluate(label => ['.apt-home-chat', 'input[aria-label="Command input"]',
+        'button[aria-label="Send"]', `button[aria-label="${label}"]`].map((selector, index) => {
         const nodes = document.querySelectorAll(selector);
         if (nodes.length !== 1) throw Error('expected one phone composer control: ' + selector);
         const node = nodes[0], rect = node.getBoundingClientRect();
@@ -404,19 +410,20 @@ export async function runShellBrowserProof({ part }) {
         if (index === 1 && node.getAttribute('role') !== 'combobox') throw Error('wrong Command input role');
         if (!node.getClientRects().length || getComputedStyle(node).visibility !== 'visible') return null;
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-      }));
+      }), voiceLabel);
       const viewport = page.viewportSize();
-      receipt.phone_composer = { viewport, bounds };
+      receipt.phone_composer = { viewport, bounds, voice_enabled: voiceEnabled };
       for (const [index, rect] of bounds.entries()) {
         assert.ok(rect, 'phone composer control ' + index + ' is visible');
         assert.ok(rect.width > 0 && rect.height > 0 && rect.x >= -.5 && rect.y >= -.5
           && rect.x + rect.width <= viewport.width + .5 && rect.y + rect.height <= viewport.height + .5,
         'phone composer control ' + index + ' stays inside viewport: ' + JSON.stringify(rect));
       }
-      for (const control of controls.slice(1)) {
+      for (const control of controls.slice(1, voiceEnabled ? 4 : 3)) {
         await control.focus(); assert.equal(await control.evaluate(element => element === document.activeElement), true);
       }
-      checks.push({ stage: 'phone_chat_composer_send_and_mic_inside_viewport', viewport, bounds });
+      checks.push({ stage: voiceEnabled ? 'phone_chat_composer_send_and_mic_inside_viewport'
+        : 'phone_chat_composer_typed_chat_available_voice_off', viewport, bounds, voice_enabled: voiceEnabled });
     }
     async function waitSite(site) {
       await waitForDirectionalReadiness(page, site => window.__HOME_APARTMENT_SITE_API?.readback().phase === 'ready'
@@ -537,7 +544,15 @@ export async function runShellBrowserProof({ part }) {
       checks.push({ stage: 'phone_scrolled_room_list_selection_starts_at_inspector_top', room_scroll_before: roomScrollBefore,
         selected_fixture_id: lastRoomFixture.fixture_id, ...selectedPhoneBounds });
       await keyboardTabs(true);
-      await tab('Chat'); await identityCheck('phone_chat_draft'); await phoneComposerBounds(); await capture('unified-chat-390x844');
+      await tab('Chat'); await identityCheck('phone_chat_draft'); await phoneComposerBounds();
+      // The legacy microphone layout/focus proof is a separately opted-in
+      // capability. Default typed chat above and after it keeps voice disabled.
+      await page.evaluate(() => { window.HG_VOICE_ENABLED = true; });
+      await tab('Controls'); await tab('Chat'); await identityCheck('phone_voice_opt_in_draft');
+      await phoneComposerBounds({ voiceEnabled: true });
+      await page.evaluate(() => { delete window.HG_VOICE_ENABLED; });
+      await tab('Controls'); await tab('Chat'); await identityCheck('phone_voice_off_draft'); await phoneComposerBounds();
+      await capture('unified-chat-390x844');
       await page.setViewportSize({ width: 1366, height: 768 }); await tab('Controls');
       await page.evaluate(() => window.__APT_ENGINE.rig.snapHome(0));
 

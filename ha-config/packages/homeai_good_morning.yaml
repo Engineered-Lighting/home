@@ -23,6 +23,14 @@
 #
 # Rollback: delete this file + reload automations.
 
+# Explicit rollback opt-in. Missing/unavailable/off also suppresses speech.
+# This helper does not gate morning energize or other lighting actions.
+input_boolean:
+  homeai_voice_enabled:
+    name: HomeAI voice enabled
+    icon: mdi:microphone
+    initial: false
+
 automation:
   - alias: "HomeAI — good morning (greeting + energize)"
     id: homeai_good_morning
@@ -81,6 +89,9 @@ automation:
       # 2) Speak the greeting on the Voice PE puck (best-effort).
       - if:
           - condition: state
+            entity_id: input_boolean.homeai_voice_enabled
+            state: "on"
+          - condition: state
             entity_id: input_boolean.living_lights_morning_greeting_enabled
             state: "on"
         then:
@@ -95,9 +106,11 @@ automation:
         event_data:
           ts: "{{ now().isoformat() }}"
           energized: "{{ is_state('input_boolean.living_lights_morning_energize_enabled', 'on') }}"
-          greeted: "{{ is_state('input_boolean.living_lights_morning_greeting_enabled', 'on') }}"
+          greeted: "{{ is_state('input_boolean.homeai_voice_enabled', 'on') and is_state('input_boolean.living_lights_morning_greeting_enabled', 'on') }}"
       - action: logbook.log
         data:
           name: "HomeAI"
-          message: "Good morning — greeted Marcelo and energized the main living areas."
+          message: >-
+            Good morning — voice {{ 'enabled' if is_state('input_boolean.homeai_voice_enabled', 'on') else 'disabled' }};
+            morning energize {{ 'enabled' if is_state('input_boolean.living_lights_morning_energize_enabled', 'on') else 'disabled' }}.
           entity_id: input_boolean.living_lights_woke_up_today

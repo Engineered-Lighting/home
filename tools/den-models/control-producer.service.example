@@ -1,0 +1,25 @@
+# User-service example only. Resolve paths/user/permissions in the reviewed
+# installer; this file is not installed or enabled by the model worker.
+[Unit]
+Description=Trusted Den optional-model control observations
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I -B /opt/home-den-models/current/den_models/control_producer.py --config /etc/home-den-models/control-producer.json
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+CPUQuota=25%
+MemoryMax=100663296
+MemorySwapMax=0
+TasksMax=16
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/home-den-models
+UMask=0077
+
+[Install]
+WantedBy=default.target

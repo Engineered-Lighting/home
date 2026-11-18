@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { reportTrace, matchCues, main } from './den-latency-report.mjs';
-import { createDenLatencyTrace } from '../app/src/home-den-latency.mjs';
+import { createDenLatencyTrace, producerCaptureAgeTiming } from '../app/src/home-den-latency.mjs';
 
 const entry = (phase, at_ms, fields = {}) => ({ kind: 'body', run_id: 'run-1', seq: 1, phase, at_ms, ...fields });
 const trace = entries => ({ schema: 'home-den-latency-1', entries, dropped_entries: 0, pending: 0 });
@@ -101,7 +101,38 @@ test('capture estimates require the exact completed body and retain their unqual
     assert.equal(estimate.qualified, false);
     assert.equal(estimate.estimated_age_at_receive_ms.n, 1);
     assert.equal(estimate.estimated_age_at_gpu_complete_ms.p95, 820);
+    assert.equal(estimate.clock_mapping.samples, 0);
+    assert.equal(estimate.clock_mapping.missing_samples, 1, 'older exports retain their age results without invented clock intervals');
     assert.equal(report.capture_to_paint, null);
+});
+
+test('clock mapping reports setup uncertainty, raw and causal intervals independently of capture qualification', () => {
+    const timing = producerCaptureAgeTiming({ started: 100, clockReceivedAt: 500, serverTs: 10 }, 10.7, 1000);
+    const received = entry('received', 1000, { capture_timing: 'producer_capture_estimate',
+        producer_clock_mapping: 'request_receive_interval', ...timing });
+    const invalid = [
+        { producer_age_at_receive_interval_ms: [3, 2] },
+        { producer_age_at_receive_interval_ms: [-10, -2] },
+        { producer_age_at_receive_interval_ms: [0, Infinity] },
+        { producer_clock_uncertainty_ms: 1 },
+    ];
+    const rows = [received, entry('submitted', 1005, { frame_id: 7 }), entry('gpu_completed', 1020, { frame_id: 7 })];
+    for (const [index, fields] of invalid.entries()) {
+        const seq = index + 2;
+        rows.push({ ...received, ...fields, seq }, entry('submitted', 1005, { seq, frame_id: 7 }), entry('gpu_completed', 1020, { seq, frame_id: 7 }));
+    }
+    const estimate = reportTrace(trace(rows)).kinds.body.capture_estimate, mapping = estimate.clock_mapping;
+    assert.equal(estimate.qualified, false); assert.equal(mapping.samples, 1); assert.equal(mapping.invalid_samples, 4);
+    assert.equal(mapping.causality_bounded_samples, 1);
+    assert.equal(mapping.setup_round_trip_bound_ms.p95, 400);
+    assert.equal(mapping.midpoint_age_at_receive_ms.p95, 0);
+    assert.equal(mapping.midpoint_age_at_gpu_complete_ms.p95, 20);
+    assert.equal(mapping.raw_age_at_receive_ms.lower.p95, -205.09);
+    assert.equal(mapping.causal_age_at_receive_ms.lower.p95, 0);
+    assert.equal(mapping.raw_age_at_gpu_complete_ms.lower.p95, -185.092);
+    assert.equal(mapping.raw_age_at_gpu_complete_ms.upper.p95, 225.092);
+    assert.equal(mapping.uncertainty_at_gpu_complete_ms.p95, 205.092);
+    assert.equal(estimate.estimated_age_at_receive_ms.p95, 205.09, 'the legacy upper-bound estimate remains available');
 });
 
 test('legacy cue matching requires epoch and sequence even when lit state matches', () => {

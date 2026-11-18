@@ -70,6 +70,7 @@ function quietNight() {
 
 function baseCtx(overrides) {
   return Object.assign({
+    voiceEnabled: true,
     modes: {},
     media: {},
     ledger: {
@@ -96,6 +97,7 @@ function makeHarness(api, opts) {
     },
   };
   const env = {
+    voiceEnabled: () => opts.voiceEnabled !== false,
     haClientRef,
     addEvent(evt) { events.push(evt); },
     setProactiveState(state) { states.push(state); },
@@ -122,6 +124,46 @@ async function main() {
   try {
     process.stdout.write("\nproactive_exports_test\n");
     const api = loadModule();
+    assert("voice disabled fails closed even for test events",
+      api.evaluateProactive({ type: "room_entered", room: "office", test: true }, baseCtx({ voiceEnabled: false }), midday()).reason === "voice-disabled");
+    const silent = makeHarness(api, { voiceEnabled: false });
+    for (const event of [
+      { type: "person_arrived_home", person: "person.marcelo", display_name: "Marcelo", confidence: 1, test: true },
+      { type: "identity_confirmed", display_name: "Marcelo", confidence: 0.97, test: true },
+    ]) silent.coord.ingestEvent(api.normalizeProactiveEvent(event, "ha_ws"));
+    await Promise.resolve();
+    assert("voice retirement keeps arrival lighting action", silent.calls.some(c => c.domain === "script" && c.target?.entity_id === "script.homeai_return_home"), silent.calls);
+    assert("voice retirement sends no satellite service call", silent.calls.every(c => c.domain !== "assist_satellite"), silent.calls);
+    assert("voice retirement does not claim a spoken welcome", !silent.events.some(e => /— spoken/.test(e.text || "")), silent.events);
+    silent.coord.clearAllTimers();
+    const previousWelcome = String((clock.now - 1000) / 1000);
+    api.localStorage.setItem("hg-welcomedAt", previousWelcome);
+    const silentGps = makeHarness(api, { voiceEnabled: false, frigateOnline: false });
+    silentGps.coord.ingestEvent(api.normalizeProactiveEvent({
+      type: "person_arrived_home", person: "person.marcelo", display_name: "Marcelo", test: true,
+    }, "ha_ws"));
+    clock.tick(api.PROACTIVE_CONSTANTS.arrivalConfirmWindowMs);
+    await Promise.resolve();
+    assert("disabled GPS fallback never calls speech", silentGps.calls.every(c => c.domain !== "assist_satellite"), silentGps.calls);
+    assert("disabled GPS fallback never claims spoken", !silentGps.events.some(e => /— spoken/.test(e.text || "")), silentGps.events);
+    assert("disabled GPS fallback preserves existing welcome cooldown", api.localStorage.getItem("hg-welcomedAt") === previousWelcome);
+    silentGps.coord.clearAllTimers();
+    api.localStorage.removeItem("hg-welcomedAt");
+    const enabledGps = makeHarness(api, { voiceEnabled: true, frigateOnline: false });
+    enabledGps.coord.ingestEvent(api.normalizeProactiveEvent({
+      type: "person_arrived_home", person: "person.marcelo", display_name: "Marcelo", confidence: 1,
+    }, "ha_ws"));
+    clock.tick(api.PROACTIVE_CONSTANTS.arrivalConfirmWindowMs - 1);
+    assert("enabled GPS fallback waits for confirmation expiry", enabledGps.calls.length === 0, enabledGps.calls);
+    clock.tick(1);
+    await Promise.resolve();
+    const gpsSpeech = enabledGps.calls.filter(c => c.domain === "assist_satellite");
+    assert("enabled GPS fallback speaks once after expiry", gpsSpeech.length === 1, enabledGps.calls);
+    assert("enabled GPS fallback keeps arriving display name", gpsSpeech[0]?.service_data?.start_message === "Welcome home, Marcelo.", gpsSpeech);
+    assert("enabled GPS fallback reports its spoken welcome", enabledGps.events.some(e => /Welcome home, Marcelo — spoken \(GPS only, Frigate offline\)/.test(e.text || "")), enabledGps.events);
+    assert("enabled GPS fallback records successful welcome cooldown", Number(api.localStorage.getItem("hg-welcomedAt")) === clock.now / 1000);
+    enabledGps.coord.clearAllTimers();
+    api.localStorage.removeItem("hg-welcomedAt");
     assert("normalizeProactiveEvent exported", typeof api.normalizeProactiveEvent === "function");
     assert("evaluateProactive exported", typeof api.evaluateProactive === "function");
     assert("createCoordinator exported", typeof api.createCoordinator === "function");

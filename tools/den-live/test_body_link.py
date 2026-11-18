@@ -337,6 +337,8 @@ class PipelineTests(unittest.TestCase):
         perceiver.seated = Published()
         perceiver.facing = Facing(lambda _: None, 30.0)   # no facing sample from these fakes
         perceiver.speed = Speed()   # posture's floor speed
+        from motion import Receipts
+        perceiver.motion = Receipts()
         perceiver.labels, perceiver.now = None, lambda: 1000
         perceiver.snapshot = TrackingSnapshot(perceiver.run_id, 3, 1, None, "starting", None, "unknown", ())
         perceiver.settings, perceiver.track_method = None, SimpleNamespace(tracker={})
@@ -451,6 +453,8 @@ class StreamTests(unittest.TestCase):
             self.assertGreater(cleared["seq"], first["seq"])
             self.assertNotIn("points", cleared)
         with urllib.request.urlopen(self.base + "stream", timeout=3) as response:
+            self.assertEqual(read_event(response), ("source_clock", {"schema": "den-source-clock-1",
+                "clock_domain": "producer_monotonic", "server_mono": 10.0}))
             self.assertEqual(read_event(response), ("spot_clock", {"epoch": spot["epoch"], "server_mono": 10.0}))
             self.assertEqual(read_event(response), ("spot_snapshot", spot))
             self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])
@@ -487,6 +491,8 @@ class StreamTests(unittest.TestCase):
             self.assertEqual(json.load(error)["error"], "body_unavailable")
             self.assertIsNone(error.headers.get("X-Home-Den-Body-Schema"))
         with urllib.request.urlopen(self.base + "stream", timeout=3) as response:
+            self.assertEqual(read_event(response), ("source_clock", {"schema": "den-source-clock-1",
+                "clock_domain": "producer_monotonic", "server_mono": 10.0}))
             self.assertEqual(read_event(response), ("spot_clock", {"epoch": spot["epoch"], "server_mono": 10.0}))
             self.assertEqual(read_event(response), ("spot_snapshot", spot))
             self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])

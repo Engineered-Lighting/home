@@ -47,7 +47,7 @@ import re
 import signal
 import stat as stat_bits
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
@@ -57,6 +57,7 @@ import ask  # noqa: E402  the Qwen ask (inference plan, step 2)
 import coordinator_live  # noqa: E402  the den lighting coordinator (coordinator plan, step 3)
 import desk  # noqa: E402  the desk switch: one fixture's commands to its board (plan 05, step 05-4)
 import hue_overlay  # noqa: E402  the bulbs, through den_lighting, behind the Bulbs switch (plan 04)
+import enrichment_link  # noqa: E402  optional exact-frame loopback movement adviser
 import ha_link  # noqa: E402  its Home Assistant link
 import occupancy  # noqa: E402  Frigate's occupancy, the ask's first gate
 import perceive  # noqa: E402
@@ -77,6 +78,43 @@ LOG_MAX_BYTES = 10 * 1024 * 1024   # the detector's log is rolled to .1 at a sta
 GATEWAY = "home-web-gateway"       # tools/install-home-web-gateway-linux.sh's service, as deploy-home-web.sh names it
 SITE = re.compile(r"^[a-z0-9-]{1,64}$")
 EXIT_REFUSED = 3
+MODEL_TOKEN = "model-worker-token.txt"
+
+
+def enrichment_settings(config, folder):
+    """Invalid optional settings disable only this lane; private credentials stay in systemd."""
+    block = config.get("enrichment")
+    if block is None or (isinstance(block, dict) and block.get("enabled") is False):
+        return None, "disabled"
+    keys = {"enabled", "port", "profile_file", "frame_root", "duration_s", "frame_access", "frame_group", "dependencies_file"}
+    if not isinstance(block, dict) or set(block) - keys or block.get("enabled") is not True:
+        return None, "invalid_optional_model_settings"
+    if type(block.get("port")) is not int or not 1024 <= block["port"] <= 65535:
+        return None, "invalid_optional_model_port"
+    if block.get("duration_s", 4) not in (4, 8):
+        return None, "invalid_optional_model_duration"
+    for key in ("profile_file", "frame_root", "dependencies_file"):
+        if not isinstance(block.get(key), str) or not Path(block[key]).is_absolute() or Path(block[key]).is_symlink():
+            return None, "invalid_optional_model_path"
+    if block.get("frame_access", "owner") not in ("owner", "private_group"):
+        return None, "invalid_optional_model_access"
+    if block.get("frame_access") == "private_group" and (type(block.get("frame_group")) is not int or block["frame_group"] <= 0):
+        return None, "invalid_optional_model_group"
+    if folder is None or not (Path(folder) / MODEL_TOKEN).is_file():
+        return None, "optional_model_credential_unavailable"
+    return dict(block, token_file=str(Path(folder) / MODEL_TOKEN)), None
+
+
+def walking_settings(block):
+    value = block.get("walking")
+    if value is not None:
+        try:
+            import walking
+            walking._config(value)
+        except (ImportError, ValueError, TypeError, KeyError):
+            say("Walking preview is off: its optional configuration is invalid. Reading goes on.")
+            return None
+    return value
 
 
 # ---- the settings file -------------------------------------------------------------------------------------------
@@ -263,7 +301,7 @@ def coordinator_settings(config, fixed, *, credentials=None):
         if not isinstance(fixtures, dict) or not fixtures or not isinstance(binding, dict):
             return None, "preview needs the registered fixture geometry and binding"
         return {"preview": True, "fixtures": fixtures, "binding": binding, "seat_mark": seat,
-                "bulbs": block.get("bulbs") is True}, None
+                "bulbs": block.get("bulbs") is True, "walking": walking_settings(block)}, None
     virtual = block.get("mode") == "virtual"
     if fixed is None and not virtual:
         return None, "it needs the asks block's Home Assistant link (ha_url, and the ha-token.txt credential)"
@@ -339,7 +377,8 @@ def coordinator_starter(settings, fixed, *, state, tree, credentials=None):
         try:
             core, learn = coordinator_live.load_core(tree)
             service = preview.Preview(core, state=state, fixtures=fixtures,
-                                      binding=settings["binding"], seat_mark=settings["seat_mark"])
+                                      binding=settings["binding"], seat_mark=settings["seat_mark"],
+                                      walking=settings.get("walking"))
             if mapping is not None:
                 attached = desk.attach(service, mapping, fixed)
             if bulbs:
@@ -469,6 +508,14 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
         config["coordinator"] = settings["coordinator"]
     elif isinstance(current, dict) and "coordinator" in current:
         config["coordinator"] = current["coordinator"]
+    # Enrichment requires this install's explicit settings. An omitted block
+    # disables it; a reinstall must not silently retain a GPU experiment.
+    if "enrichment" in settings:
+        config["enrichment"] = settings["enrichment"]
+    enrichment = config.get("enrichment")
+    if isinstance(enrichment, dict) and enrichment.get("enabled") is True:
+        # Validate the systemd-facing paths before writing either config file.
+        enrichment_dropin(enrichment)
     seed = settings.get("labels_seed") is True
     coordinator = config.get("coordinator") or {}
     preview_geometry = isinstance(coordinator, dict) and coordinator.get("preview") is True
@@ -478,6 +525,7 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
         own = settings.get("coordinator")
         bulbs = isinstance(own, dict) and own.get("preview") is True and own.get("bulbs") is True and ha is not None
         config["coordinator"] = {"preview": True, "transform_id": coordinator.get("transform_id"), "hue_overlay": False,
+                                 **({"walking": own["walking"]} if isinstance(own, dict) and "walking" in own else {}),
                                  **({"bulbs": True} if bulbs else {})}
     # The desk (desk.py): only from this install's own settings, never kept from the last one, and only with this
     # install's preview and Home Assistant link, which its commands go through.
@@ -487,7 +535,7 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
         raise Refusal("settings.json maps the desk, but the desk needs this install's preview and the Qwen ask's Home "
                       "Assistant link")
     for path, text in ((Path(out), json.dumps(config, indent=1) + "\n"),
-                       (Path(dropin), dropin_text(address, packs, ha, seed, preview_geometry, desk_on))):
+                       (Path(dropin), dropin_text(address, packs, ha, seed, preview_geometry, desk_on, enrichment))):
         path.parent.mkdir(parents=True, exist_ok=True)
         part = path.with_name(path.name + ".part")
         part.write_text(text, encoding="utf-8", newline="\n")
@@ -496,7 +544,32 @@ def write_config(*, settings_path, gateway_pid, venv_python, models, out, dropin
     return config
 
 
-def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=False, desk=False):
+def enrichment_dropin(block):
+    if not isinstance(block, dict) or block.get("enabled") is not True:
+        return []
+    paths = []
+    for key in ("frame_root", "dependencies_file", "profile_file"):
+        value = block.get(key)
+        # No unit specifiers, quoting, control characters or writable broad
+        # roots. This is a separately provisioned input-only namespace.
+        if (not isinstance(value, str) or not re.fullmatch(r"/(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+", value)
+                or ".." in value.split("/") or len(value.split("/")) < 4):
+            raise Refusal("optional model paths must name dedicated local input/profile paths")
+        paths.append(value)
+    frames, source_file, profile_file = paths
+    if (PurePosixPath(source_file).parent == PurePosixPath(frames) or PurePosixPath(frames) in PurePosixPath(profile_file).parents
+            or PurePosixPath(source_file).parent in PurePosixPath(profile_file).parents
+            or frames.startswith("/etc/") or source_file.startswith("/etc/")):
+        raise Refusal("optional model inputs need separate scoped directories")
+    if block.get("frame_access") != "private_group" or type(block.get("frame_group")) is not int or block["frame_group"] <= 0:
+        raise Refusal("separate model service inputs require an explicitly provisioned private group")
+    return ["LoadCredential=%s:/etc/den-live/private/%s" % (MODEL_TOKEN, MODEL_TOKEN),
+            "SupplementaryGroups=%d" % block["frame_group"],
+            "ReadWritePaths=%s %s" % (frames, str(PurePosixPath(source_file).parent)),
+            "BindReadOnlyPaths=%s" % profile_file]
+
+
+def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=False, desk=False, enrichment=None):
     """The unit's local settings: the one camera address it may reach, and the content packs, read only. With the packs
     under /home or /root, ProtectHome=tmpfs hides the homes as ProtectHome=yes does, but lets that one bind through.
     With the Qwen ask set up (ha: Home Assistant's address), that address too, and the Home Assistant token credential,
@@ -512,6 +585,7 @@ def dropin_text(address, packs, ha=None, labels_seed=False, preview_geometry=Fal
         lines.append("LoadCredential=virtual-fixtures.json:/etc/den-live/private/virtual-fixtures.json")
     if desk:
         lines.append("LoadCredential=%s:/etc/den-live/private/%s" % (DESK_FILE, DESK_FILE))
+    lines.extend(enrichment_dropin(enrichment))
     if packs.parts[1:2] in (("home",), ("root",)):
         lines.append("ProtectHome=tmpfs")
     return "\n".join(lines) + "\n"
@@ -630,6 +704,9 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
         say("The lighting coordinator is off: %s." % why)
     coordinator = (coordinator_starter(lighting, fixed, state=state, tree=trees["coordinator"], credentials=held)
                    if lighting and lighting.get("preview") else None)
+    enrichment, why = enrichment_settings(config, held)
+    if enrichment is None and why != "disabled":
+        say("Movement intent is off: %s. The markers go on." % why)
     return rl.serve(trees=trees, take=take, camera=camera, room_model=paths["room_model"], camera_id=camera_id,
                     require_correction=require_correction,
                     floor=None, packs=config["content_packs"], site=config["site"], registration=registration, state=live,
@@ -638,6 +715,9 @@ def run(*, config_path, env=None, until=None, status_every_s=STATUS_EVERY_S, tre
                     stream_port=config["stream_port"], busy="is another den-live still running?", until=until,
                     status_every_s=status_every_s, labels=rl.room_labels.Store(state / "labels", say=say),
                     asks=starter, coordinator=coordinator, body_input=body_input, body_profile=body_profile,
+                    enrichment=enrichment,
+                    native_motion_clock=bool(lighting and isinstance(lighting.get("walking"), dict)
+                                             and lighting["walking"].get("mode") in ("shadow", "virtual")),
                     person_log=state,   # den-person-state-1, in state/days/<UTC date>/ beside the ask's asks.jsonl
                     reinstall=True)   # another correction: register_now.py without --again, then install_la.py
 

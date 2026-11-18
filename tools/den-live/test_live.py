@@ -232,7 +232,8 @@ class PersonStateLog(unittest.TestCase):
                                     'anchor': {'mono': 500.0, 'ts': 1_800_000_000.0}})
         self.assertEqual(lines[3]['anchor']['mono'], 501.0)
         line = lines[1]
-        self.assertEqual(set(line), self.SNAPSHOT_KEYS)
+        self.assertEqual(set(line), self.SNAPSHOT_KEYS | {"available_mono"})
+        self.assertEqual(line["available_mono"], 500.0)
         self.assertEqual(set(line['frame']), self.FRAME_KEYS)
         track, = line['tracks']
         self.assertEqual(set(track), self.TRACK_KEYS)

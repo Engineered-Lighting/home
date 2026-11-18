@@ -1,6 +1,6 @@
 """Pinned optional YOLO26s-seg masks in RGB pixels for this exact detector frame.
 
-The separate CPU worker owns model loading and inference. This adapter keeps person
+The separate optional worker owns model loading and inference. This adapter keeps person
 masks and holdable instances near a supported wrist, with bounded finite polygons.
 Weights are local-only, pinned to the candidate reviewed at 3591ba7c. Loading never
 downloads or changes den-detect's tracking detector or pose model.
@@ -41,13 +41,14 @@ def weights_reason(models, pinned=HELD_SHA256):
     return None
 
 
-def load(models, device="cpu", *, pinned=HELD_SHA256, yolo=None, state=None):
+def load(models, device="cpu", *, pinned=HELD_SHA256, yolo=None, state=None, predictor_factory=None):
     why = weights_reason(models, pinned)
     if why:
         return None, why
     if yolo is None:
         from ultralytics import YOLO as yolo
-    segmenter = Segmenter(yolo(str(Path(models) / HELD_WEIGHTS), task="segment"), device, state=state)
+    segmenter = Segmenter(yolo(str(Path(models) / HELD_WEIGHTS), task="segment"), device, state=state,
+                          predictor_factory=predictor_factory)
     try:
         import numpy as np
         segmenter.predict(np.zeros((HEIGHT, WIDTH, 3), np.uint8))
@@ -56,12 +57,33 @@ def load(models, device="cpu", *, pinned=HELD_SHA256, yolo=None, state=None):
     return segmenter, None
 
 
+def cpu_mask_predictor(base=None):
+    """Keep the pinned CPU crop, upsample and scaling semantics after CUDA network inference."""
+    if base is None:
+        from ultralytics.models.yolo.segment.predict import SegmentationPredictor
+        base = SegmentationPredictor
+
+    class CPUReconstructionPredictor(base):
+        def construct_result(self, pred, img, orig_img, img_path, proto):
+            return super().construct_result(pred.cpu(), img, orig_img, img_path,
+                                            proto.cpu() if proto is not None else None)
+
+    return CPUReconstructionPredictor
+
+
 class Segmenter:
-    def __init__(self, model, device, *, state=None):
+    def __init__(self, model, device, *, state=None, predictor_factory=None):
         self.model, self.device = model, device
+        self.predictor_factory = predictor_factory or cpu_mask_predictor
+        self.predictor = None
 
     def predict(self, image):
-        return self.model.predict(image, verbose=False, device=self.device, conf=SCORE_MIN)[0]
+        options = {"verbose": False, "device": self.device, "conf": SCORE_MIN}
+        if str(self.device).startswith("cuda"):
+            if self.predictor is None:
+                self.predictor = self.predictor_factory()
+            options.update(predictor=self.predictor, half=False)
+        return self.model.predict(image, **options)[0]
 
     def __call__(self, image, row, cv2):
         return instances(self.predict(image), row, cv2)

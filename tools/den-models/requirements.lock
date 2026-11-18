@@ -1,0 +1,14 @@
+# Publisher's tested direct dependency versions, isolated from Den and Qwen.
+# Python 3.12; CUDA 13.0 Torch build must be verified by the admission trial.
+# This is NOT a complete wheel/hash closure: no wheels have been downloaded.
+# Provisioning must resolve/pin transitive CUDA/runtime wheels and their SHA256s
+# in a reviewed offline environment receipt before host admission. Do not use
+# this file to install into an existing Den/Qwen environment.
+torch==2.13.0
+transformers==5.10.4
+safetensors==0.8.0
+tokenizers==0.22.2
+huggingface-hub==1.33.0
+numpy==2.5.2
+jinja2==3.1.6
+eva-decord==0.6.1

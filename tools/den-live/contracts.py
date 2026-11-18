@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Mapping
 
+from motion import MotionState
+
 # Contract 1, the room model: step 2's receipt, which register_now.py writes and every den-live start requires.
 REGISTER_SCHEMA = "den-live-register-now-2"
 DEPTH_SCALE_RANGE = (0.90, 1.10)   # den-live's own depth scale; 1.0 is none
@@ -120,6 +122,7 @@ class TrackEvidence:
     posture: str | None = None   # person_fields.POSTURES: sitting, standing, walking or unclear
     head_orientation: Orientation3D | None = None
     torso_orientation: Orientation3D | None = None
+    motion: MotionState | None = None   # existing den-track state/P, with current person/frame and timing receipts
 
 
 @dataclass(frozen=True)

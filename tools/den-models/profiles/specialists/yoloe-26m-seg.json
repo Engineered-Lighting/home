@@ -1,0 +1,47 @@
+{
+  "schema": "den.specialist-profile/v1",
+  "admission_status": "not_admitted",
+  "admission_scope": "none",
+  "production_admitted": false,
+  "execution": {
+    "cpu_threads": 2,
+    "memory_max_bytes": 2147483648,
+    "memory_swap_max_bytes": 0,
+    "tasks_max": 64,
+    "io_read_bytes_per_second": 104857600,
+    "maximum_seconds": 60
+  },
+  "observed_peak_host_bytes": null,
+  "observed_peak_gpu_bytes": null,
+  "id": "yoloe-26m-seg",
+  "role": "household_object_masks_candidate",
+  "backend": "profile_only",
+  "files": {
+    "yoloe-26m-seg.pt": "585f5ec9028fd358035da8d860c27c56be285a795cba2076fba536a4391c2c83"
+  },
+  "repository": "ultralytics/assets",
+  "revision": "v8.4.0",
+  "artifact_url": "https://github.com/ultralytics/assets/releases/download/v8.4.0/yoloe-26m-seg.pt",
+  "runtime": {
+    "python": "3.12",
+    "ultralytics": "8.4.0"
+  },
+  "io": {
+    "pluggable_backend": "ultralytics_native_or_fixed_class_export",
+    "fixed_class_digest": null,
+    "prompt_encoder_file": "mobileclip2_b.ts",
+    "prompt_encoder_sha256": null,
+    "output": "instance_masks_in_source_image",
+    "metric_geometry": false
+  },
+  "admission_gaps": [
+    "Catalog only: no YOLOE inference/export backend is admitted or invoked.",
+    "Native Ultralytics8.4.0 support and runtime closure require local validation.",
+    "Text encoder closure and fixed household class/export digest are unresolved; dynamic prompts/downloads disabled.",
+    "Resource peaks, latency and reference output agreement unmeasured."
+  ],
+  "sources": [
+    "https://docs.ultralytics.com/models/yoloe/",
+    "https://github.com/ultralytics/assets/releases/tag/v8.4.0"
+  ]
+}

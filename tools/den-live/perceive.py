@@ -4,6 +4,7 @@ Standard library only, in the loop's own process. The detector runs in its own p
 no network (detect_worker.py). den-observe (rung 2) and den-track (rung 3) run unedited at the den simulation's pins:
 - observe.observe() on each frame, with Camera built once from step 2's room model;
 - TrackerCore.step() once per frame, on a method copy whose floor_m is your scan's floor, padded (see FLOOR_PAD_M).
+  The experimental native_motion_clock opt-in uses RGB host elapsed time; the default keeps the public clock below.
 
 Numbers this phase sets, with where they come from:
 - FRESH_S 1.5: the detector-freshness exception, plan pick 10. den-observe proposes 1.0; a frame crosses between
@@ -18,10 +19,12 @@ Numbers this phase sets, with where they come from:
 - The registration gate is step 2's method file's gate_m (0.15 m), with its sofa checks held to sofa_check_max_m
   (0.10 m) by register_now.py. den-observe's own max_error_bound_m is the ladder's 0.05, which a scan-picked
   registration isn't held to (plan pick 3).
-- The clock: capture time on this PC's monotonic clock = t_host + offset, the offset anchored to this PC's arrival
+- The public frame clock: capture time on this PC's monotonic clock = t_host + offset, anchored to this PC's arrival
   times (the 5th percentile over the last 50 frames: the least delayed). The den Jetson's wall clock read 1970 on
   2026-11-11, so the tracker never uses captured_unix_ns (plan L1); and a monotonic clock here means a wall-clock step
-  on this PC can't stall or reverse the tracker. The bias is the transit, about 0.1-0.3 s, which "behind" leaves out.
+  on this PC can't step this mapping. Only the native_motion_clock opt-in separates this changing offset from the
+  Kalman core's elapsed axis, assuming an unverified nominal 1:1 rate. The public mapping's bias is the transit, about
+  0.1-0.3 s, which "behind" leaves out. Motion's independent absolute age bound retains that uncertainty.
 - The transit, on the health line only (plan L1, step 4): the Jetson's clock is right again since 2026-11-11, so each
   bundle's arrival time here less its captured_unix_ns is the camera-to-here transit. transit_s_median is its median
   over the health window, from frames where it lies between 0 and 5 s only; a clock that's wrong again gives null, and
@@ -83,6 +86,7 @@ from collections import deque
 from pathlib import Path
 
 import person_fields
+import motion
 import head_binding
 import room_labels
 import seated as seated_rule
@@ -239,6 +243,28 @@ class ClockOffset:
 
     def reset(self):
         self.samples.clear()
+
+
+def claim_time(cache, raw_id, source_since, source_now, capture_mono):
+    """Latch an association transition's public receipt once, never rebase it.
+
+    The Kalman core's since_ts is on native source seconds. Ask/read windows
+    remain on the existing FrameRef clock; remapping on every rolling offset
+    update would churn the association revision and its two-frame grace.
+    """
+    previous = cache.get(raw_id)
+    if previous is not None and previous[0] == source_since:
+        # LRU: an active reader must survive a stream of unrelated births.
+        cache.pop(raw_id)
+        cache[raw_id] = previous
+        return previous[1]
+    if (type(source_since) not in (int, float) or not math.isfinite(source_since)
+            or source_since != source_now):
+        return None  # no receipt for an unobserved old transition
+    cache[raw_id] = (source_since, capture_mono)
+    while len(cache) > 128:
+        cache.pop(next(iter(cache)))
+    return capture_mono
 
 
 # ---- the detector process ------------------------------------------------------------------------------------------
@@ -465,20 +491,27 @@ class Prepared:
 
 
 class Perceiver:
-    """Times: the tracker runs on this PC's monotonic clock (capture_mono = t_host + the arrival-anchored offset), so a
-    step in the wall clock (time sync) can't send it backwards or stall it. Events carry wall-clock times: emitted_ts is
-    now, capture_ts is now less how long ago the frame was captured."""
+    """Experimental native_motion_clock filters assume an unverified nominal 1:1 source rate.
+
+    FrameRef, body/head/reading deadlines and events keep their existing receiver
+    mapping (bounded above by actual arrival in this opt-in). A source-clock
+    contradiction replaces its epoch, never rebasing x/P or qualifying timing.
+    The default retains the deployed filter clock and eligibility behavior.
+    """
 
     depth_scale, depth_table = 1.0, None   # step 2's depth scale and its table; __init__ sets them from the registration
     correction_changed = CORRECTION_CHANGED   # why a frame on another correction is refused; on LA, plus REINSTALL
 
     def __init__(self, tools, *, room_model_path, camera_id, max_error_bound_m, track_method_path, home, detector=None,
                  require_source_correction=True, content_revision=None, now=time.time, depth_scale=1.0,
-                 source_correction=None, reinstall=False):
+                 source_correction=None, reinstall=False, native_motion_clock=False):
         """source_correction: (factor, calibration_sha256) from step 2's receipt, the camera's correction its take was
         made on; every frame must say applied with exactly these. None holds frames to no receipt (a direct caller).
         reinstall: the LA service's, whose why on such a frame also says to paste install_la.py again."""
         self.t, self.detector, self.home, self.now = tools, detector, home, now
+        if type(native_motion_clock) is not bool:
+            raise ValueError("native_motion_clock must be boolean")
+        self.native_motion_clock = native_motion_clock
         self.body_provider = None
         self.body = None   # a body_link.BodyLink, when the live body runs: asked for each fresh frame, never waited for
         self.labels = None   # a room_labels.Store: each track's near phrase, from the confirmed labels on this scan
@@ -551,6 +584,12 @@ class Perceiver:
         self.facing = person_fields.Facing(self.t.records.body_heading,   # contract 2's body_facing, the same way
                                            self.track_method.tracker["heading_max_sd_deg"])
         self.speed = person_fields.Speed()   # each track's floor speed, for posture's walking
+        self.motion = motion.Receipts()   # observation qualification only; velocity and P remain den-track's
+        if not hasattr(self, "native_clock_counts"):
+            self.native_clock_counts = {}
+        self.native_clock = (motion.NativeClock(self.native_clock_counts)
+                             if getattr(self, "native_motion_clock", False) else None)
+        self.claim_times = {}
 
     def _epoch(self, *, clock_reset=False):
         self._clear_body("scope_changed")
@@ -604,6 +643,7 @@ class Perceiver:
                 **minute_figures("camera_age_s", self.camera_ages),
                 **minute_figures("capture_to_stream_s", self.capture_to_stream),
                 "head_direction": {**self.head_direction, "reasons": dict(self.head_direction["reasons"])},
+                "motion": {**self.motion.counts, **getattr(self, "native_clock_counts", {})},
                 **({"segmentation": dict(segmentation)} if segmentation else {})}
 
     def _transit(self, meta, bundle):
@@ -756,6 +796,7 @@ class Perceiver:
 
     def prepare(self, bundle, now_mono):
         """Read a candidate before submission and fix its identity and estimated capture time."""
+        native_clock = getattr(self, "native_clock", None)
         if bundle.session in self.retired:
             return self._drop("out_of_order", now_mono, "retired camera session")
         if bundle.session != self.session:
@@ -764,6 +805,15 @@ class Perceiver:
             self.session = bundle.session
             self._epoch(clock_reset=True)
         elif self.last_t_host is not None and (bundle.t_host <= self.last_t_host or bundle.rgb_seq <= self.last_seq):
+            if native_clock is not None:
+                # A contradicted source axis cannot retain its filter or the
+                # old public offset. Refuse this frame; reanchor the next one.
+                self.native_clock_counts["native_clock_incidents"] += 1
+                self.native_clock_counts["native_clock_refusals"] += 1
+                self._epoch(clock_reset=True)
+                self._drop("out_of_order", now_mono, "source elapsed clock changed")
+                self._snapshot(self.event(None, [], {"why": self.problem}, now_mono), status="degraded")
+                return None
             previous = self.clock_reset_candidate
             if bundle.t_host < self.last_t_host - EPOCH_BACK_S and bundle.rgb_seq < self.last_seq:
                 if previous is not None and bundle.t_host > previous[0] and bundle.rgb_seq > previous[1]:
@@ -784,9 +834,14 @@ class Perceiver:
         self.arrivals.append(bundle.arrival_mono)
         self.clock.add(bundle.t_host, bundle.arrival_mono)
         capture_mono = bundle.t_host + self.clock.offset()
+        if native_clock is not None:
+            # A rolling quantile can temporarily ignore the newest minimum.
+            # The public estimate cannot be later than its own arrival; this
+            # does not reduce the independent absolute timing-error bound.
+            capture_mono = min(capture_mono, bundle.arrival_mono)
         if now_mono >= capture_mono + FRESH_S:
             return self._drop("expired", now_mono, "camera frame expired")
-        if self.last_capture is not None and capture_mono <= self.last_capture:
+        if native_clock is None and self.last_capture is not None and capture_mono <= self.last_capture:
             return self._drop("out_of_order", now_mono, "frames out of order")
         try:
             meta, depth = self.t.takes.read_frame(bundle.data)
@@ -816,7 +871,7 @@ class Perceiver:
             if configure is not None:
                 configure(self.head_calibration)
             self._head_detector = self.detector
-        if self.last_capture is not None and capture_mono - self.last_capture >= EPOCH_GAP_S:
+        if native_clock is None and self.last_capture is not None and capture_mono - self.last_capture >= EPOCH_GAP_S:
             dark_since, light_since = self.dark_since, self.light_since   # the mode's own timers go on
             self._epoch()
             self.dark_since, self.light_since = dark_since, light_since
@@ -845,6 +900,8 @@ class Perceiver:
         """Synchronous replay entry; live uses prepare and finish around worker polling."""
         prepared = self.prepare(bundle, now_mono)
         if prepared is None:
+            if self.problem == "source elapsed clock changed":
+                return self._snapshot(self.event(None, [], camera_state, now_mono), status="degraded")
             if self.problem in (NOT_CORRECTED, self.correction_changed):
                 return self.idle(camera_state, now_mono)
             return None
@@ -924,8 +981,44 @@ class Perceiver:
                   and (o.get("kind") == "keypoints" or (o.get("kind") == "person_box" and (o.get("score") or 0) >= PERSON_MIN))}
         frames, _counts = self.t.records.frames_from_observations(observations, self.track_method.tracker)
         detections = frames[0]["detections"] if frames else []
-        tracks, supported, association = [], [], {}
-        for track, state in self.core.step(capture_mono, detections):
+        tracks, supported, association, raw_tracks = [], [], {}, {}
+        motion_timing = motion.timing_bound(ref, prepared.bundle, meta)
+        native_step = None
+        native_clock = getattr(self, "native_clock", None)
+        if native_clock is not None:
+            previous_step = native_clock.previous
+            try:
+                native_step = native_clock.step(ref, prepared.bundle, meta)
+            except ValueError:
+                # This P was accumulated on a contradicted source timeline.
+                # A new epoch replaces it; a later clean frame cannot rebase it.
+                self._epoch(clock_reset=True)
+                reason = "source elapsed clock changed"
+                self._drop("out_of_order", now_mono, reason)
+                return self._snapshot(self.event(None, [], dict(camera_state, why=reason), now_mono),
+                                      status="degraded", presence="unknown")
+            if previous_step is not None and native_step.source_s - previous_step[0].source_s >= EPOCH_GAP_S:
+                # Check continuity before a gap replaces its evidence cohort;
+                # otherwise a forward source-clock jump could hide as a gap.
+                self._epoch()
+                return self._snapshot(self.event(None, [], dict(camera_state, why="camera gap"), now_mono),
+                                      status="starting")
+        # Only _new_core may select the native clock. A legacy embedded core
+        # with existing history keeps its original clock until its next epoch.
+        source_now = native_step.source_s if native_step is not None else capture_mono
+        cohort = self.core.step(source_now, detections)
+        if native_step is not None:
+            active_ids = {track.id for track, _state in cohort}
+            self.claim_times = {key: value for key, value in self.claim_times.items() if key in active_ids}
+        for track, state in cohort:
+            # Audit the filter's entire time support, not just the later safe
+            # projection: tentative/coasting updates have already changed x/P.
+            if native_step is not None:
+                self.motion.audit_native(track, frame=ref, native_step=native_step,
+                                         filter_time=getattr(self.core, "t", None))
+                claim_time(self.claim_times, track.id, getattr(track, "since_ts", None), source_now, capture_mono)
+            else:
+                self.motion.audit(track, frame=ref, timing_error_s=motion_timing)
             if strong.intersection(track.obs_ids):
                 self.strong.add(track.id)
             if state not in OUT_STATES:
@@ -939,10 +1032,16 @@ class Perceiver:
                            "xy_m": [record["position"]["x"], record["position"]["y"]],
                            "sigma_m": round(math.sqrt(max(cov[0][0], cov[1][1], 0.0)), 3),
                            "heading_deg": None,   # body_facing's, set with the evidence below
-                           "age_s": round(max(0.0, capture_mono - track.last_seen), 3)})
+                           "age_s": round(max(0.0, source_now - track.last_seen), 3)})
             supported.append(set(track.obs_ids))
             # den-track's association (confident or ambiguous, since when on this clock), for the ask's evidence
-            association[tracks[-1]["track_id"]] = (record["association"]["status"], record["association"]["since_ts"])
+            since = (claim_time(self.claim_times, track.id, record["association"]["since_ts"], source_now, capture_mono)
+                     if native_step is not None else record["association"]["since_ts"])
+            association[tracks[-1]["track_id"]] = record["association"]["status"], since
+            # Copy the private filter through motion.Receipts below. track_record
+            # intentionally exposes no velocity covariance, so never reconstruct P
+            # from its rounded position covariance or the marker's scalar sigma.
+            raw_tracks[tracks[-1]["track_id"]] = track
         now_mono += time.monotonic() - start_lift
         if now_mono >= capture_mono + FRESH_S:
             return self._drop("expired", now_mono, "tracking result expired")
@@ -954,6 +1053,7 @@ class Perceiver:
         event = with_camera_age(self.event(now_mono - capture_mono, tracks, camera_state, now_mono), age)
         candidates = [o for o in observations if o["kind"] in ("person_box", "keypoints")
                       and (o.get("score") or 0) >= PERSON_MIN]
+        person_fields_started = time.monotonic()
         evidence = []
         for marker, obs_ids in zip(event["tracks"], supported):
             track_id = marker["track_id"]
@@ -999,12 +1099,22 @@ class Perceiver:
             else:
                 stereo_torso = {"left_hip", "right_hip", "left_shoulder", "right_shoulder"}.intersection(stereo)
                 basis = "stereo" if stereo_torso or any(o["kind"] == "person_box" for o in position_observations) else "plane"
+            motion_state = self.motion.update(
+                raw_tracks[track_id], frame=ref, track_id=track_id, association_revision=revision,
+                association_status="confident" if safe and basis == "stereo" else "ambiguous", state=marker["state"],
+                current_obs_ids=tuple(sorted(obs_ids)), available_mono=now_mono + time.monotonic() - person_fields_started,
+                white_accel_sigma_mps32=self.track_method.tracker.get("accel_sigma"),
+                registration_error_m=self.camera.error_bound_m, timing_error_s=motion_timing,
+                timing_evidence_id=(prepared.bundle.capture_age_receipt["evidence_id"]
+                                    if motion_timing is not None else None),
+                native_step=native_step, filter_time=getattr(self.core, "t", None))
             evidence.append(TrackEvidence(track_id, marker["state"], tuple(marker["xy_m"]), marker["sigma_m"],
                                           basis, tuple(sorted(obs_ids)), "confident" if safe else "ambiguous",
                                           revision, since, MappingProxyType(stereo), marker.get("near"),
                                           seated=seated, body_facing=facing, head_point_m=person_fields.head_point(stereo),
                                           wrists_m=person_fields.wrists(stereo), posture=posture,
-                                          head_orientation=head_orientation, torso_orientation=torso_orientation))
+                                          head_orientation=head_orientation, torso_orientation=torso_orientation,
+                                          motion=motion_state))
             # The people projection carries the person binding (contract 2): run, epoch, track id, revision; and its
             # arrow is body_facing's, gone when that expires.
             # For Home's caption: seated and posture, as perception has them, and a who slot that nothing fills
@@ -1135,12 +1245,14 @@ class Loop(threading.Thread):
     """The newest bundle from the mailbox, perceived, published. When no event has gone out for idle_s (no frame, or
     every frame dropped), an idle event says why, so the page never reads a running loop as stopped."""
 
-    def __init__(self, source, mailbox, perceiver, publish, *, idle_s=1.0, clock=time.monotonic, observe=None, body_sink=None):
+    def __init__(self, source, mailbox, perceiver, publish, *, idle_s=1.0, clock=time.monotonic, observe=None, body_sink=None,
+                 frame_sink=None):
         """Observers receive the public event and its in-process snapshot before publication."""
         super().__init__(daemon=True, name="den-live-loop")
         self.source, self.mailbox, self.perceiver, self.publish = source, mailbox, perceiver, publish
         self.idle_s, self.clock = idle_s, clock
         self.body_sink = body_sink
+        self.frame_sink = frame_sink
         self.observers = list(observe) if isinstance(observe, (list, tuple)) else ([observe] if observe else [])
         self.halt = threading.Event()
         self.stop_reason = self.stop_error = None
@@ -1187,6 +1299,13 @@ class Loop(threading.Thread):
                             event = p.idle(current, result_at)
                         else:
                             event = p.finish(pending, reply, current, result_at)
+                            if event is not None and self.frame_sink is not None:
+                                try:
+                                    # This sink may only replace a bounded
+                                    # mailbox reference; no decoding or I/O.
+                                    self.frame_sink(p.snapshot, pending, reply)
+                                except Exception:
+                                    pass  # optional enrichment never stops Den
                         pending = None
                         if event is not None:
                             self._publish(event)
@@ -1202,6 +1321,9 @@ class Loop(threading.Thread):
                                 last = now
                         else:
                             prepared = p.prepare(bundle, now)
+                            if prepared is None and p.problem == "source elapsed clock changed":
+                                self._publish(p._snapshot(p.event(None, [], camera, now), status="degraded"))
+                                last = now
                             if p.snapshot.camera_epoch != p.sessions:
                                 self._publish(p._snapshot(p.event(None, [], camera, now), status="starting"))
                                 last = now

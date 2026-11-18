@@ -531,7 +531,7 @@ class Bridge:
                  "reason": self.reason, "queued": int(bool(value.get("pending"))) if fresh else None,
                  "running": int(bool(value.get("running"))) if fresh else None,
                  "observed_mono": observed if self.enabled else now_mono,
-                 "valid_until_mono": observed + 3 if observed is not None else now_mono + 3}]
+                 "valid_until_mono": (observed + 3 if observed is not None else None) if self.enabled else now_mono + 3}]
 
     def decorate(self, event, snapshot):
         self.offer_snapshot(snapshot)

@@ -19,8 +19,13 @@ import uuid
 
 import activity_pose
 from activity_reading import reader_key
+from managed_pair import WORKER_STOP_REASONS
 
 TERMINAL = ('stopped', 'failed', 'interrupted', 'blocked', 'indeterminate')
+# A stopped recording with one of these reasons ended on a worker, runtime or
+# recording outcome (including a reconciled worker cleanup), not an operator's
+# Stop: the stack retries it with backoff instead of ending the loop.
+RETRY_REASONS = frozenset({'worker_failed', 'runtime_failed', 'recording_failed'}) | WORKER_STOP_REASONS
 OPEN = ('requested', 'starting', 'recording', 'stopping')
 REQUEST_PREFIX = 'activity-loop-'
 RELEASE_REASON = 'activity_loop_auto_release_indeterminate'
@@ -339,8 +344,7 @@ class ManagedDeepStack:
                     self.rolls += 1
                     self.sid = None  # our roll, or the budget expired first: reopen
                     self._open()
-                elif session['state'] != 'stopped' or session.get('reason') in (
-                        'worker_preparation_failed', 'worker_failed', 'runtime_failed', 'recording_failed'):
+                elif session['state'] != 'stopped' or session.get('reason') in RETRY_REASONS:
                     self._retry(session.get('reason') or session['state'])
                 else:
                     # A stopped recording with an unknown reason may be an

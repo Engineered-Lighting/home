@@ -253,7 +253,15 @@ class JetsonLifecycleClient:
             raise
 
     def status(self, request_id):
-        return self._gate(self.lifecycle.status(request_id))
+        from lifecycle import LifecycleError
+        from worker_lifecycle_client import RequestNotFound
+        try:
+            return self._gate(self.lifecycle.status(request_id))
+        except LifecycleError as error:
+            # Same signal as the remote supervisor's 404: no lease was reserved.
+            if error.reason == 'request_not_found':
+                raise RequestNotFound(error.reason) from None
+            raise
 
     def probe(self):
         """Readiness reasons from the launch-free host read; [] when every gate passes."""

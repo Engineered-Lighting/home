@@ -12,6 +12,11 @@ class StartRejected(Exception):
     """Trusted supervisor refused this new reservation before launching it."""
 
 
+class RequestNotFound(Exception):
+    """Trusted supervisor holds no lease for this request id: no start for it
+    reached the supervisor (or none has yet, while one may be in flight)."""
+
+
 # Never used for a start: an unknown-request status read has no lease to act on.
 PROBE_REQUEST = '00000000-0000-4000-8000-000000000000'
 
@@ -81,6 +86,13 @@ class LifecycleClient:
                 error = json.loads(raw)
                 if error == {'reason': 'worker_busy'} or error == {'reason': 'ledger_capacity'}:
                     raise StartRejected(error['reason'])
+            if method == 'GET' and response.status == 404 and len(raw) <= 1024:
+                try:
+                    error = json.loads(raw)
+                except ValueError:
+                    error = None
+                if error == {'reason': 'request_not_found'}:
+                    raise RequestNotFound(error['reason'])
             if response.status not in {200, 202} or len(raw) > 65536:
                 raise ValueError('Lifecycle response unavailable')
             value = json.loads(raw)
@@ -101,16 +113,26 @@ class LifecycleClient:
         finally:
             connection.close()
 
-    def start(self, request_id, session_id, variant='detector'):
+    def _bind(self, request_id, session_id, variant):
         if variant not in {'detector','pose'}:raise ValueError('Unknown worker variant')
-        if not re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}', request_id):
+        if not isinstance(request_id, str) or not re.fullmatch(r'[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}', request_id):
             raise ValueError('Canonical request UUID required')
-        if not re.fullmatch(r'[0-9a-f]{32}', session_id):
+        if not isinstance(session_id, str) or not re.fullmatch(r'[0-9a-f]{32}', session_id):
             raise ValueError('Session identity required')
         if request_id in self.sessions and (self.sessions[request_id] != session_id or self.variants[request_id]!=variant):
             raise ValueError('Lifecycle request cannot change session')
         self.sessions[request_id] = session_id
         self.variants[request_id] = variant
+
+    def adopt(self, request_id, session_id, variant='detector'):
+        """Bind a request that a previous Lab process recorded durably before it
+        sent the start, so its receipt can be read and released after a
+        restart. Sends nothing; every receipt must still match this session,
+        site and variant."""
+        self._bind(request_id, session_id, variant)
+
+    def start(self, request_id, session_id, variant='detector'):
+        self._bind(request_id, session_id, variant)
         return self._call('POST', '/v1/lifecycle/start',
                           {'version': 1, 'request_id': request_id, 'session_id': session_id,**({'variant':variant} if variant!='detector' else {})}, request_id)
 

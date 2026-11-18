@@ -58,6 +58,22 @@ fixture results. Active work with an uncertain execution/stop receipt becomes
 must reconcile it before retry or media deletion. Restart does not prove a
 remote process stopped.
 
+The managed pair (`managed_pair.py`) does this reconciling itself, from
+receipts.
+
+- A cleanup that could not prove both workers released is retried with
+  backoff, starting at 15 s and capped at 5 min. One slow arm therefore
+  delays the stop but does not strand the row.
+- At the first reap after startup, and every minute after that, it settles
+  each `indeterminate` row that no live worker item owns. The row moves to
+  `stopped` (reason `worker_cleanup_reconciled`) only when each request named
+  in its `workers.preparing` event has a terminal receipt from its own
+  supervisor, bound to the same session. A request that receipt shows still
+  running is stopped first.
+- A supervisor `request_not_found` counts as released only 120 s after the
+  request was recorded. The evidence is kept as a `workers.reconciled` event,
+  and no record is deleted.
+
 ## Provisioning
 
 `RemoteHTTP(receiver, grants)` is an optional ASGI ingress for exactly two POST

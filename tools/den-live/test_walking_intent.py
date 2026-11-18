@@ -124,6 +124,29 @@ class WalkingIntentTest(unittest.TestCase):
             value = dataclasses.replace(hint(), evidence=raw["evidence"])
             self.assertEqual(walking_intent.project(value, 100.3, snapshot())["reason"], "malformed_intent_hint", key)
 
+    def test_registered_transform_hint_is_bound_by_exact_equality(self):
+        value = intent.from_wire(test_intent.registered(test_intent.wire()), now_mono=100.3)
+        current = snapshot()
+        current["frame"]["transform_id"] = test_intent.REGISTERED
+        result = walking_intent.project(value, 100.3, current)
+        self.assertEqual((result["disposition"], result["reason"]), ("ignored", "awaiting_held_out_admission"))
+        self.assertEqual(result["dependencies"]["transform_id"], test_intent.REGISTERED)
+        for other in ("den-oak@2026-11-13.2", "den-oak", "transform"):
+            changed = copy.deepcopy(current)
+            changed["frame"]["transform_id"] = other
+            self.assertEqual(walking_intent.project(value, 100.3, changed)["reason"], "current_binding_changed", other)
+        raw = test_intent.registered(test_intent.wire())
+        raw["evidence"]["frames"][0]["source_frame"]["transform_id"] = "den-oak@2026-11-13.2"
+        self.assertEqual(walking_intent.project(dataclasses.replace(value, evidence=raw["evidence"]), 100.3,
+                                                current)["reason"], "malformed_intent_hint")
+        for key, changed in (("transform_id", "den-oak/2026-11-13.1"), ("transform_id", "den-oak@2026-11-13.1 "),
+                             ("transform_id", "den-oak@" + "1" * 121), ("transform_id", ""),
+                             ("scan_revision", "scan@1"), ("track_id", "person@1"), ("camera_id", "camera@1"),
+                             ("service_run_id", "run@1"), ("calibration_revision", "a" * 63 + "@")):
+            bad = dataclasses.replace(value, dependencies={**value.dependencies, key: changed})
+            self.assertEqual(walking_intent.project(bad, 100.3, current)["reason"], "malformed_intent_hint",
+                             (key, changed))
+
     def test_newer_current_measured_stop_and_turn_supersede_the_hint(self):
         value = snapshot()
         stop = measured(velocity_mps=(0.05, 0.05))

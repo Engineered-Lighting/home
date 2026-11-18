@@ -28,9 +28,9 @@ def _finite(value):
 
 def _metadata(hint):
     """Copy only named scalar metadata. Raw evidence and model text stay private."""
+    # Bindings use the intake's grammar, so the registered "<camera>@<version>" transform passes.
     if (not isinstance(hint.dependencies, Mapping) or set(hint.dependencies) != intent.DEPENDENCIES
-            or any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value)
-                   for value in hint.dependencies.values())):
+            or not intent.binding_values_valid(hint.dependencies)):
         raise ValueError("malformed_intent_hint")
     if hint.raw_option_scores is not None and (
             not isinstance(hint.raw_option_scores, Mapping) or set(hint.raw_option_scores) != set(intent.CHOICES)
@@ -48,8 +48,7 @@ def _metadata(hint):
         raise ValueError("malformed_intent_hint")
     dependencies = public.get("dependencies")
     if (not isinstance(dependencies, dict) or set(dependencies) != intent.DEPENDENCIES
-            or any(not isinstance(value, str) or not IDENTIFIER.fullmatch(value)
-                   for value in dependencies.values())):
+            or not intent.binding_values_valid(dependencies)):
         raise ValueError("malformed_intent_hint")
     if (public.get("schema") != intent.SCHEMA or public.get("intent") not in intent.CHOICES
             or public.get("authority") != "semantic_prior_only"

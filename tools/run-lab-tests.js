@@ -54,14 +54,16 @@ function approxEq(a, b, tol) {
   return Math.abs(a - b) <= tol;
 }
 
-function defaultComposeServices() {
+function composeServices(activeProfiles = []) {
   const services = [];
   let inServices = false;
   let current = null;
   let block = [];
   function flush() {
     if (!current) return;
-    if (!block.some((line) => /^\s{4}profiles:\s*\[/.test(line))) services.push(current);
+    const profileLine = block.find(line => /^\s{4}profiles:\s*\[/.test(line));
+    const profiles = profileLine ? [...profileLine.matchAll(/["']([^"']+)["']/g)].map(match => match[1]) : [];
+    if (!profileLine || profiles.some(profile => activeProfiles.includes(profile))) services.push(current);
   }
   for (const line of COMPOSE_SRC.split(/\r?\n/)) {
     if (!inServices) {
@@ -81,6 +83,8 @@ function defaultComposeServices() {
   flush();
   return services;
 }
+
+const defaultComposeServices = () => composeServices();
 
 function displayNameForComposeService(name) {
   return name === "kokoro-tts" ? "kokoro" : name;
@@ -1502,9 +1506,9 @@ process.stdout.write("\n[1mAddendum 26 — pipeline schema drift[0m\n");
   const stackServiceOrder = extractArrayStrings("STACK_SERVICE_ORDER") || [];
   const stackInfraNames = extractArrayObjectNames("STACK_INFRA_ROWS") || [];
   const flowLegendServices = extractArrayStrings("FLOW_LEGEND_SERVICES") || [];
-  const expectedStackServiceOrder = defaultComposeServices().map(displayNameForComposeService);
+  const expectedStackServiceOrder = composeServices(["voice"]).map(displayNameForComposeService);
 
-  assert("STACK_SERVICE_ORDER matches default compose services",
+  assert("STACK_SERVICE_ORDER retains default services and the explicitly enabled voice profile",
     sameOrderedItems(stackServiceOrder, expectedStackServiceOrder),
     { stackServiceOrder, expectedStackServiceOrder });
 
@@ -2404,19 +2408,19 @@ process.stdout.write("\n\x1b[1mstack recovery tiering\x1b[0m\n");
  *
  * The supervisor exposes one status/action row for every default compose
  * service. The Lab diagnostics pane must not hard-filter that list down to an
- * older four-service subset, or recovery affordances disappear for services
- * like Chatterbox and Intelligence.
+ * older hardcoded subset. Explicitly enabled voice services must retain the
+ * same recovery affordances as the default typed-chat and lighting stack.
  * ------------------------------------------------------------------------ */
 process.stdout.write("\n\x1b[1mlab diagnostics service operations\x1b[0m\n");
 
 (function () {
   const defaults = defaultComposeServices();
   assert("compose parser sees current default stack services",
-    defaults.includes("chatterbox-tts")
-      && defaults.includes("metrics-sidecar")
-      && defaults.includes("intelligence")
-      && defaults.length === 8,
+    sameOrderedItems(defaults, ["vllm", "vision-sidecar", "metrics-sidecar", "intelligence"]),
     defaults);
+  const voiceOnly = composeServices(["voice"]).filter(name => !defaults.includes(name));
+  assert("voice services remain available only through their explicit compose profile",
+    sameOrderedItems(voiceOnly, ["wyoming-parakeet", "kokoro-tts", "chatterbox-tts", "wyoming-kokoro"]), voiceOnly);
   assert("Lab diagnostics pane receives unfiltered supervisor service list",
     /<LabDiagPane[\s\S]*services=\{services\}/.test(LAB_SRC),
     "LabDiagPane should receive services={services}");

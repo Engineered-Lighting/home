@@ -9,6 +9,8 @@ const vm = require("vm");
 const REPO = path.resolve(__dirname, "..");
 const SRC = path.join(REPO, "app", "src", "home-s2s.jsx");
 const source = fs.readFileSync(SRC, "utf8");
+const CAPABILITIES_SRC = path.join(REPO, "app", "src", "home-capabilities.js");
+const capabilitiesSource = fs.readFileSync(CAPABILITIES_SRC, "utf8");
 
 let passes = 0;
 let fails = 0;
@@ -152,6 +154,7 @@ function makeModule(opts) {
     location: opts.location || { protocol: "http:", host: "localhost:5181" },
     setTimeout: (fn) => { fn(); return 1; },
   };
+  if (Object.prototype.hasOwnProperty.call(opts, "voiceEnabled")) window.HG_VOICE_ENABLED = opts.voiceEnabled;
   const sandbox = {
     window,
     navigator,
@@ -170,6 +173,7 @@ function makeModule(opts) {
     },
     setTimeout: window.setTimeout,
   };
+  vm.runInNewContext(capabilitiesSource, sandbox, { filename: CAPABILITIES_SRC });
   vm.runInNewContext(source, sandbox, { filename: SRC });
   return { window, navigator, wsLog, audioLog, warnings, errors, logs, tracks };
 }
@@ -195,8 +199,23 @@ async function main() {
   assert("invalid base returns null", base.window.bridgeWsUrl("not a url", "") === null);
   assert("empty base returns null", base.window.bridgeWsUrl("", "") === null);
 
+  process.stdout.write("\ns2s_default_voice_off_test\n");
+  for (const options of [{}, { voiceEnabled: false }, { voiceEnabled: "true" }]) {
+    const disabled = makeModule(options), disabledErrors = [], disabledStates = [];
+    const inert = await disabled.window.startS2SRun({ s2sBase: "https://box.local:8092",
+      onError: error => disabledErrors.push(error), onState: state => disabledStates.push(state) });
+    const label = Object.prototype.hasOwnProperty.call(options, "voiceEnabled") ? JSON.stringify(options.voiceEnabled) : "missing";
+    assert("voice " + label + " is not an explicit opt-in", disabled.window.homeVoiceEnabled() === false);
+    assert("voice " + label + " returns an inert complete handle", inert && ["stop", "setVoice", "setVoiceMode"].every(key => typeof inert[key] === "function"));
+    inert.stop(); inert.setVoice("am_eric"); inert.setVoiceMode(true);
+    assert("voice " + label + " does not touch mic, audio or sockets", disabled.audioLog.length === 0 && disabled.wsLog.instances.length === 0,
+      { audio: disabled.audioLog, sockets: disabled.wsLog.instances });
+    assert("voice " + label + " keeps typed-chat guidance", disabledErrors.length === 1 && disabledErrors[0] === "Voice is disabled. Typed chat is available.", disabledErrors);
+    assert("voice " + label + " starts no session state", disabledStates.length === 0, disabledStates);
+  }
+
   process.stdout.write("\ns2s_no_live_call_guard_test\n");
-  const sim = makeModule({ sim: true });
+  const sim = makeModule({ sim: true, voiceEnabled: true });
   const simErrors = [];
   const simHandle = await sim.window.startS2SRun({
     s2sBase: "http://box.local:8092",
@@ -207,14 +226,14 @@ async function main() {
   assert("Simulation Mode does not request mic", !sim.audioLog.some((e) => e.type === "getUserMedia"), sim.audioLog);
   assert("Simulation Mode reports mock-only error", simErrors[0] && /Simulation Mode/.test(simErrors[0].message || String(simErrors[0])), simErrors);
 
-  const invalid = makeModule();
+  const invalid = makeModule({ voiceEnabled: true });
   const invalidErrors = [];
   const invalidHandle = await invalid.window.startS2SRun({ s2sBase: "bad", onError: (err) => invalidErrors.push(err) });
   assert("invalid URL returns inert handle", invalidHandle && typeof invalidHandle.stop === "function");
   assert("invalid URL skips mic request", invalid.audioLog.length === 0, invalid.audioLog);
   assert("invalid URL reports error", invalidErrors[0] === "invalid s2s base url", invalidErrors);
 
-  const micFail = makeModule({ micReject: "denied" });
+  const micFail = makeModule({ micReject: "denied", voiceEnabled: true });
   const micErrors = [];
   const micHandle = await micFail.window.startS2SRun({ s2sBase: "http://box.local:8092", onError: (err) => micErrors.push(err) });
   assert("mic failure returns inert handle", micHandle && typeof micHandle.stop === "function");
@@ -222,7 +241,7 @@ async function main() {
   assert("mic failure reports user-facing error", /mic unavailable/.test(micErrors[0] || ""), micErrors);
 
   process.stdout.write("\ns2s_session_protocol_test\n");
-  const mod = makeModule();
+  const mod = makeModule({ voiceEnabled: true });
   const states = [];
   const transcripts = [];
   const identities = [];

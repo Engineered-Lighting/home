@@ -154,6 +154,22 @@ test('connected Apartment: actual viewer joins authored body, camera playback, s
       const s=window.__APT_ENGINE.litState();
       return s.active&&s.frame?.active&&s.frame.format==='RGBA16F'&&s.frame.frames>0&&s.receivers?.blends>0;
     });
+    // Lighting-on can leave the first HDR shaders and receiver work queued on
+    // software GL. Finish that authored fixture preparation before issuing
+    // the decision whose ordinary GPU-completion receipt is under test. This
+    // barrier is not a decision receipt and never replaces the proof below.
+    const warmup = await page.evaluate(()=>{
+      const engine=window.__APT_ENGINE,gl=engine.renderer.getContext(),started=performance.now();
+      const lostBefore=gl.isContextLost(),frameBefore=engine.litState().frame.frames;
+      if(!lostBefore)gl.finish();
+      return {purpose:'authored_fixture_preparation',method:'webgl_finish',elapsed_ms:performance.now()-started,
+        frame_before:frameBefore,frame_after:engine.litState().frame.frames,
+        context_lost_before:lostBefore,context_lost_after:gl.isContextLost()};
+    });
+    assert.equal(warmup.context_lost_before,false);
+    assert.equal(warmup.context_lost_after,false);
+    assert.ok(warmup.frame_before>0&&warmup.frame_after>=warmup.frame_before);
+    receipt.connected.fixture_gpu_warmup=warmup;
     const lighting=await page.evaluate(()=>window.__APT_ENGINE.litState());
     state.brain = 1;
     await page.waitForFunction(id=>window.__APT_ENGINE.overlay.virtualFixtureInteractionDescriptor(id)?.state.spotlight.brightness===.6,ids[0]);

@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { qualifiedRunnerTemp, createEnvironmentDirectory, cleanupEnvironmentDirectory } from './test-den-model-topology.mjs';
+import { qualifiedRunnerTemp, createEnvironmentDirectory, cleanupEnvironmentDirectory, hostedPython312, verifyPython312 } from './test-den-model-topology.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const runner = path.join(root, 'tools', 'run-touched-harnesses.mjs');
@@ -158,6 +158,52 @@ test('CI-only fixture preparation qualifies a real temporary scope and cleans on
     assert.equal(fs.existsSync(unrelated), true);
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('hosted fixtures select completed CPython 3.12 instead of the runner default', () => {
+  const temporaryRoot = fs.realpathSync(os.tmpdir());
+  const directory = fs.mkdtempSync(path.join(temporaryRoot, 'den-python312-'));
+  const checkout = path.join(directory, 'checkout'), runnerTemp = path.join(directory, 'runner-temp');
+  const cache = path.join(directory, 'toolcache');
+  for (const folder of [checkout, runnerTemp, cache]) fs.mkdirSync(folder);
+  const env = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Linux', RUNNER_ENVIRONMENT: 'github-hosted',
+    GITHUB_WORKSPACE: checkout, RUNNER_TEMP: runnerTemp, RUNNER_TOOL_CACHE: cache };
+  const options = { platform: 'linux', arch: 'x64', repo: checkout };
+  const install = (version, complete = true) => {
+    const home = path.join(cache, 'Python', version, 'x64');
+    fs.mkdirSync(path.join(home, 'bin'), { recursive: true });
+    const executable = path.join(home, 'bin', 'python');
+    fs.writeFileSync(executable, 'synthetic executable marker', { mode: 0o755 });
+    if (complete) fs.writeFileSync(home + '.complete', '');
+    return executable;
+  };
+  try {
+    install('3.14.4');
+    assert.throws(() => hostedPython312(env, options), /Preinstalled CPython 3.12/);
+    install('3.12.1');
+    const expected = install('3.12.16');
+    install('3.12.99', false);
+    assert.equal(hostedPython312(env, options), expected, 'newest completed supported patch, ignoring 3.14 and incomplete installs');
+    assert.throws(() => hostedPython312({ ...env, RUNNER_ENVIRONMENT: 'self-hosted' }, options), /qualified Linux x64/);
+    assert.throws(() => hostedPython312(env, { ...options, arch: 'arm64' }), /qualified Linux x64/);
+    assert.throws(() => hostedPython312({ ...env, RUNNER_TOOL_CACHE: checkout }, options), /toolcache scope/);
+    const identity = { implementation: 'cpython', version: [3, 12], platform: 'linux', machine: 'x86_64' };
+    verifyPython312(identity, true);
+    assert.throws(() => verifyPython312({ ...identity, version: [3, 14] }, true), /CPython 3.12/);
+    assert.throws(() => verifyPython312({ ...identity, machine: 'aarch64' }, true), /Linux x86_64/);
+    if (process.platform !== 'win32') {
+      const escaped = install('3.12.17');
+      fs.unlinkSync(escaped);
+      const outside = path.join(directory, 'outside-python');
+      fs.writeFileSync(outside, 'escaped executable', { mode: 0o755 });
+      fs.symlinkSync(outside, escaped);
+      assert.throws(() => hostedPython312(env, options), /escaped its toolcache home/);
+    }
+  } finally {
+    assert.equal(path.dirname(directory), temporaryRoot);
+    assert.ok(path.basename(directory).startsWith('den-python312-'));
+    fs.rmSync(directory, { recursive: true, force: true });
   }
 });
 

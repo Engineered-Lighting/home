@@ -35,6 +35,39 @@ export function qualifiedRunnerTemp(env = process.env, { platform = process.plat
   } catch { return null; }
 }
 
+export function hostedPython312(env = process.env, { platform = process.platform, arch = process.arch, repo = ROOT } = {}) {
+  assert.ok(qualifiedRunnerTemp(env, { platform, repo }) && arch === 'x64',
+    'Python fixture preparation requires the qualified Linux x64 hosted runner');
+  const cache = env.RUNNER_TOOL_CACHE;
+  const checkout = fs.realpathSync(repo);
+  assert.ok(typeof cache === 'string' && path.isAbsolute(cache) && path.resolve(cache) === cache
+    && cache !== path.parse(cache).root && fs.realpathSync(cache) === cache
+    && cache !== checkout && !cache.startsWith(checkout + path.sep), 'Invalid hosted Python toolcache scope');
+  const versions = fs.readdirSync(path.join(cache, 'Python')).filter(name => /^3\.12\.\d{1,3}$/.test(name));
+  assert.ok(versions.length <= 32, 'Unexpected Python 3.12 toolcache size');
+  for (const version of versions.sort((a, b) => Number(b.split('.')[2]) - Number(a.split('.')[2]))) {
+    const home = path.join(cache, 'Python', version, 'x64');
+    const complete = home + '.complete';
+    const executable = path.join(home, 'bin', 'python');
+    if (!fs.existsSync(complete) || !fs.existsSync(executable)) continue;
+    assert.ok(fs.lstatSync(complete).isFile() && !fs.lstatSync(complete).isSymbolicLink(), 'Incomplete Python toolcache marker');
+    assert.equal(fs.realpathSync(home), home, 'Python toolcache home escaped its declared scope');
+    const resolved = fs.realpathSync(executable);
+    assert.ok(resolved.startsWith(home + path.sep) && fs.statSync(resolved).isFile(), 'Python executable escaped its toolcache home');
+    fs.accessSync(resolved, fs.constants.X_OK);
+    return resolved;
+  }
+  throw new Error('Preinstalled CPython 3.12 x64 is required in RUNNER_TOOL_CACHE; refusing another version or a download');
+}
+
+export function verifyPython312(details, hosted) {
+  assert.ok(details && details.implementation === 'cpython' && Array.isArray(details.version)
+    && details.version[0] === 3 && details.version[1] === 12,
+  'The hash-pinned fixture environment requires CPython 3.12');
+  if (hosted) assert.ok(details.platform === 'linux' && details.machine === 'x86_64',
+    'The hash-pinned hosted fixture environment requires Linux x86_64');
+}
+
 export function createEnvironmentDirectory(verifiedTemp) {
   const base = fs.realpathSync(verifiedTemp);
   if (base !== verifiedTemp || !fs.statSync(base).isDirectory()) throw new Error('CI temporary root changed');
@@ -98,7 +131,6 @@ function assertSuite(result, label) {
 
 export async function runTopology({ env = process.env, diagnostic = () => {} } = {}) {
   const deadline = Date.now() + 150000;
-  const basePython = env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3');
   const temporary = qualifiedRunnerTemp(env);
   if (env.GITHUB_ACTIONS === 'true' && temporary === null) {
     throw new Error('GitHub runner temporary scope did not qualify; refusing test-package installation');
@@ -107,8 +139,15 @@ export async function runTopology({ env = process.env, diagnostic = () => {} } =
     HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', CUDA_VISIBLE_DEVICES: '' };
   delete childEnv.PYTHONPATH;
   delete childEnv.PYTHONHOME;
+  const basePython = temporary === null ? (env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')) : hostedPython312(env);
   let directory = null, workerPython = basePython;
   try {
+    const identified = await command(basePython, ['-I', '-S', '-B', '-c',
+      'import json,platform,sys; print(json.dumps(dict(implementation=sys.implementation.name,version=list(sys.version_info[:2]),platform=sys.platform,machine=platform.machine())))'],
+    { cwd: ROOT, env: childEnv, deadline, label: 'Pinned Python interpreter identity' });
+    assert.equal(identified.status, 0, identified.output);
+    verifyPython312(JSON.parse(identified.output.trim()), temporary !== null);
+    diagnostic('Verified CPython 3.12 before preparing the hash-pinned fixture environment.');
     if (temporary !== null) {
       directory = createEnvironmentDirectory(temporary);
       const prepared = await command(basePython, ['-B', '-m', 'venv', directory],

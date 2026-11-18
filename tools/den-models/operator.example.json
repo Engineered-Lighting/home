@@ -1,5 +1,9 @@
 {
-  "schema": "den.model-operator/v1",
+  "schema": "den.model-operator/v2",
+  "queue_receipt_file": null,
+  "queue_receipt_gid": null,
+  "qwen_observer_config_sha256": null,
+  "qwen_binding_policy_sha256": null,
   "profile_id": "vjepa-lm-qwen3-8b",
   "snapshot_root": "/srv/home-den-models/snapshots",
   "receipt_root": "/srv/home-den-models/receipts",

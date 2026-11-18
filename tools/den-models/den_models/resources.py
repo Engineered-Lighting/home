@@ -179,12 +179,18 @@ class FileExecutionLease:
 
 class ControlState:
     """Attested live producer receipt; manual healthy JSON cannot admit work."""
-    def __init__(self, path, max_age=2.0, *, expected_lease_file=None, shared_gid=None, identity=None, boot=None, wall=None):
+    def __init__(self, path, max_age=2.0, *, expected_lease_file=None, shared_gid=None, identity=None, boot=None, wall=None,
+                 queue_receipt_file=None, queue_receipt_gid=None, expected_qwen_config_sha256=None, expected_qwen_policy_sha256=None):
         self.path, self.max_age = Path(path), max_age
         self.shared_gid, self.identity = shared_gid, identity or process_start_identity
         self.boot, self.wall = boot or current_boot_id, wall or time.time
         self.producer_digest = hashlib.sha256(Path(__file__).with_name("control_producer.py").read_bytes()).hexdigest()
         self.expected_lease_digest = lease_path_digest(expected_lease_file) if expected_lease_file is not None else None
+        from .qwen_queue import QueueReader
+        self.queue_reader = QueueReader(queue_receipt_file, shared_gid=queue_receipt_gid,
+                                        expected_config_sha256=expected_qwen_config_sha256,
+                                        expected_policy_sha256=expected_qwen_policy_sha256)
+        self.expected_queue_path = lease_path_digest(queue_receipt_file) if queue_receipt_file is not None else None
 
     def read(self, now):
         try:
@@ -192,7 +198,7 @@ class ControlState:
             expected = {"schema", "qwen_busy", "observed_at", "unallocated_reserve_bytes", "dependencies",
                         "admission_blocked", "blocked_reasons", "producer", "sources"}
             if (not isinstance(state, dict) or set(state) != expected
-                    or state.get("schema") != "den.model-control/v1" or type(state.get("qwen_busy")) is not bool
+                    or state.get("schema") != "den.model-control/v2" or type(state.get("qwen_busy")) is not bool
                     or type(state.get("observed_at")) not in (int, float)
                     or not 0 <= now - state["observed_at"] <= self.max_age
                     or type(state.get("unallocated_reserve_bytes")) is not int
@@ -201,12 +207,16 @@ class ControlState:
                 raise ContractError("control_state_stale_or_invalid")
             producer = state["producer"]
             if (not isinstance(producer, dict) or set(producer) != {"schema", "pid", "process_start_identity",
-                    "boot_id", "clock_domain", "code_sha256", "broker_scope", "execution_lease_sha256"}
-                    or producer["schema"] != "den.model-control-producer/v1"
+                    "boot_id", "clock_domain", "code_sha256", "broker_scope", "execution_lease_sha256",
+                    "queue_receipt_path_sha256", "qwen_observer_config_sha256", "qwen_binding_policy_sha256"}
+                    or producer["schema"] != "den.model-control-producer/v2"
                     or producer["clock_domain"] != "la_host_monotonic/v1"
                     or producer["broker_scope"] != "single_optional_execution"
                     or self.expected_lease_digest is None
                     or producer["execution_lease_sha256"] != self.expected_lease_digest
+                    or self.expected_queue_path is None or producer["queue_receipt_path_sha256"] != self.expected_queue_path
+                    or producer["qwen_observer_config_sha256"] != self.queue_reader.expected_config_sha256
+                    or producer["qwen_binding_policy_sha256"] != self.queue_reader.expected_policy_sha256
                     or producer["code_sha256"] != self.producer_digest
                     or producer["boot_id"] != self.boot() or type(producer["pid"]) is not int or producer["pid"] <= 0
                     or self.identity(producer["pid"]) != producer["process_start_identity"]):
@@ -250,6 +260,22 @@ class ControlState:
             if any(type(sources[name].get(field)) is not int or sources[name][field] < 0
                    for name, field in (("gpu", "free_bytes"), ("host", "available_bytes"))):
                 raise ContractError("control_resource_observation_invalid")
-            return state
+            # The actual ROOT authority file is read independently. Copying a
+            # root-looking JSON object into a model-UID control file is not proof
+            # of root ownership. A newer same-binding sample may safely add busy
+            # without treating normal publisher polling races as job loss.
+            from .qwen_queue import SEMANTICS, digest, source_from_receipt
+            current = self.queue_reader.read(now)
+            copied = qwen.get("root_receipt")
+            self.queue_reader.validate(copied, now)
+            if (qwen.get("semantics") != SEMANTICS or qwen.get("root_receipt_sha256") != digest(copied)
+                    or any(qwen.get(key) != value for key, value in source_from_receipt(copied).items())
+                    or copied["binding_sha256"] != current["binding_sha256"]
+                    or copied["observer"] != current["observer"] or copied["sequence"] > current["sequence"]):
+                raise ContractError("control_root_queue_binding_changed_or_unproven")
+            result = strict_json(canonical(state))
+            result["qwen_busy"] = state["qwen_busy"] or bool(current["gauges"]["running"] or current["gauges"]["waiting"])
+            result["sources"]["qwen"]["current_verified_observation"] = source_from_receipt(current)
+            return result
         except (OSError, ValueError):
             raise ContractError("control_state_unavailable") from None

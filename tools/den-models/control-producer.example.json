@@ -1,6 +1,10 @@
 {
-  "schema": "den.model-control-config/v1",
-  "vllm_port": 8000,
+  "schema": "den.model-control-config/v2",
+  "vllm_port": null,
+  "queue_receipt_file": null,
+  "queue_receipt_gid": null,
+  "qwen_observer_config_sha256": null,
+  "qwen_binding_policy_sha256": null,
   "ops_status_file": "/var/lib/den-ops-monitor/status.json",
   "ops_host": "la-host",
   "dependencies_file": "/run/home-den-model-input/source/source.json",
@@ -11,6 +15,5 @@
   "trusted_source_uids": null,
   "ops_owner_uid": null,
   "poll_seconds": 0.25,
-  "http_timeout_seconds": 0.25,
   "ops_max_age_seconds": 90
 }

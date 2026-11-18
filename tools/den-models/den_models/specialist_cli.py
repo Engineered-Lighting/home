@@ -120,6 +120,10 @@ def main(argv=None):
     parser.add_argument("--manifest")
     parser.add_argument("--lease-file")
     parser.add_argument("--control-file")
+    parser.add_argument("--queue-receipt-file")
+    parser.add_argument("--queue-receipt-gid", type=int)
+    parser.add_argument("--qwen-observer-config-sha256")
+    parser.add_argument("--qwen-binding-policy-sha256")
     parser.add_argument("--io-device")
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
@@ -131,12 +135,16 @@ def main(argv=None):
             result = {"schema": "den.specialist-check/v1", "profile_id": profile["id"],
                       "offline_receipt_ready": True, "production_admitted": False, "native_work_started": False}
         else:
-            if not all((args.manifest, args.lease_file, args.control_file, args.io_device)):
+            if not all((args.manifest, args.lease_file, args.control_file, args.io_device, args.queue_receipt_file,
+                        args.qwen_observer_config_sha256, args.qwen_binding_policy_sha256)):
                 raise ContractError("specialist_bounded_operator_arguments_required")
             manifest = load_manifest(args.manifest)
             result = run_bounded(profile, args.snapshot_root, receipt, manifest,
                                  lease=FileExecutionLease(args.lease_file), io_device=args.io_device,
-                                 control=ControlState(args.control_file, expected_lease_file=args.lease_file))
+                                 control=ControlState(args.control_file, expected_lease_file=args.lease_file,
+                                                      queue_receipt_file=args.queue_receipt_file, queue_receipt_gid=args.queue_receipt_gid,
+                                                      expected_qwen_config_sha256=args.qwen_observer_config_sha256,
+                                                      expected_qwen_policy_sha256=args.qwen_binding_policy_sha256))
         print(canonical(result))
         return 0
     except (ContractError, OSError, ValueError) as error:

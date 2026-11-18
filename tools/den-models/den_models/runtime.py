@@ -20,7 +20,9 @@ class SpawnWorker:
         context = multiprocessing.get_context("spawn")
         self.parent, self.child = context.Pipe()
         child_config = {key: config[key] for key in ("snapshot_root", "receipt_root", "frame_root",
-                                                     "cache_root", "gpu_selector", "io_device", "control_state_file", "execution_lease_file")}
+                                                     "cache_root", "gpu_selector", "io_device", "control_state_file", "execution_lease_file",
+                                                     "queue_receipt_file", "queue_receipt_gid", "qwen_observer_config_sha256",
+                                                     "qwen_binding_policy_sha256")}
         self.process = context.Process(target=worker_main, args=(self.child, child_config, profile),
                                        name="den-vjepa-lm", daemon=False)
         self.started = False
@@ -90,7 +92,10 @@ class Runtime:
     def __init__(self, config, profile, *, clock=time.monotonic, control=None, probe=None,
                  lease=None, worker_factory=SpawnWorker, admission=None, residency_changed=None, host_probe=None):
         self.config, self.profile, self.clock = dict(config), json.loads(canonical(profile)), clock
-        self.control = control or ControlState(config["control_state_file"], expected_lease_file=config["execution_lease_file"])
+        self.control = control or ControlState(config["control_state_file"], expected_lease_file=config["execution_lease_file"],
+                                               queue_receipt_file=config["queue_receipt_file"], queue_receipt_gid=config["queue_receipt_gid"],
+                                               expected_qwen_config_sha256=config["qwen_observer_config_sha256"],
+                                               expected_qwen_policy_sha256=config["qwen_binding_policy_sha256"])
         self.probe = probe or NvidiaProbe(config["gpu_selector"])
         self.host_probe = host_probe or HostProbe()
         self.lease = lease or FileExecutionLease(config["execution_lease_file"])

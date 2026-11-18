@@ -21,7 +21,10 @@ class VjepaBackend:
         from .resources import ControlState, HostProbe, NvidiaProbe
         caps = self.profile["execution"]
         state = ControlState(self.config["control_state_file"],
-                             expected_lease_file=self.config["execution_lease_file"]).read(time.monotonic())
+                             expected_lease_file=self.config["execution_lease_file"],
+                             queue_receipt_file=self.config["queue_receipt_file"], queue_receipt_gid=self.config["queue_receipt_gid"],
+                             expected_qwen_config_sha256=self.config["qwen_observer_config_sha256"],
+                             expected_qwen_policy_sha256=self.config["qwen_binding_policy_sha256"]).read(time.monotonic())
         if state["qwen_busy"]:
             raise ContractError("qwen_busy_before_native_work")
         incremental = caps["gpu_reservation_bytes"] if cold else 0

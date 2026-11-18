@@ -545,6 +545,26 @@ class BridgeTests(LiveBridge, unittest.TestCase):
         self.assertIn("1 frame failures", words)
         self.assertIn("last failure ValueError@_frame:", words)
 
+    def test_decode_rgb_needs_no_opencv_and_matches_it(self):
+        import io as _io, zipfile as _zip
+        import numpy as np
+        rng = np.random.default_rng(3)
+        plane = rng.integers(0, 256, size=(540, 640), dtype=np.uint8)
+        buf = _io.BytesIO()
+        np.save(buf, plane, allow_pickle=False)
+        archive = _io.BytesIO()
+        with _zip.ZipFile(archive, "w") as z:
+            z.writestr("rgb_nv12.npy", buf.getvalue())
+        prepared = NS(ref=NS(rgb=NS(width=640, height=360)), bundle=NS(data=archive.getvalue()))
+        with patch.dict(sys.modules, {"cv2": None}):  # Den's system Python has no OpenCV.
+            rgb = link.decode_rgb(prepared)
+        self.assertEqual(len(rgb), 640 * 360 * 3)
+        try:
+            import cv2
+        except ImportError:
+            return
+        self.assertEqual(rgb, cv2.cvtColor(plane, cv2.COLOR_YUV2RGB_NV12).tobytes())
+
     def test_failure_site_names_type_function_and_line_only(self):
         def inner():
             json.loads("{not json")

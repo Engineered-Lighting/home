@@ -199,11 +199,30 @@ def decode_rgb(prepared):
             raise ValueError("rgb_plane_over_bound")
         raw = archive.read(info)
     import numpy as np
-    import cv2
     plane = np.load(io.BytesIO(raw), allow_pickle=False)
     if plane.dtype != np.uint8 or plane.shape != (height * 3 // 2, width):
         raise ValueError("invalid_nv12_plane")
-    return cv2.cvtColor(plane, cv2.COLOR_YUV2RGB_NV12).tobytes()
+    return nv12_to_rgb(plane, width, height)
+
+
+# OpenCV's fixed-point ITU-R BT.601 (limited range) YUV420sp -> RGB coefficients, scaled by 2**20. Den's main
+# process runs the system Python, which has numpy but not OpenCV, so the conversion is done here and matches
+# cv2.cvtColor(plane, cv2.COLOR_YUV2RGB_NV12).
+_CY, _CVR, _CVG, _CUG, _CUB = 1220542, 1673527, -852492, -409993, 2116026
+
+
+def nv12_to_rgb(plane, width, height):
+    import numpy as np
+    y = plane[:height].astype(np.int32)
+    uv = plane[height:].reshape(height // 2, width // 2, 2).astype(np.int32) - 128
+    u = uv[..., 0].repeat(2, axis=0).repeat(2, axis=1)
+    v = uv[..., 1].repeat(2, axis=0).repeat(2, axis=1)
+    yy = np.maximum(y - 16, 0) * _CY + (1 << 19)
+    rgb = np.empty((height, width, 3), np.int32)
+    rgb[..., 0] = (yy + _CVR * v) >> 20
+    rgb[..., 1] = (yy + _CVG * v + _CUG * u) >> 20
+    rgb[..., 2] = (yy + _CUB * u) >> 20
+    return np.clip(rgb, 0, 255).astype(np.uint8).tobytes()
 
 
 def binding(snapshot, camera_id):

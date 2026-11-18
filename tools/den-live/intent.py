@@ -16,8 +16,18 @@ CHOICES = ("continue", "stop", "turn_left", "turn_right", "unclear")
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 REVISION = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?\Z")
 IDENT = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
+# A registered transform is "<camera>@<version>", e.g. "den-oak@2026-11-13.1".
+# Only LINEAGE_FIELDS take this grammar, the same as den-models contracts.py;
+# every other binding and the request, clip and session identities stay IDENT.
+LINEAGE = re.compile(r"[A-Za-z0-9_.:@-]{1,128}\Z")
+LINEAGE_FIELDS = frozenset(("transform_id",))
 DEPENDENCIES = frozenset(("camera_id", "service_run_id", "camera_epoch", "source_generation", "track_id",
                           "association_revision", "transform_id", "scan_revision", "calibration_revision"))
+
+
+def binding_values_valid(dependencies):
+    return all(isinstance(value, str) and (LINEAGE if name in LINEAGE_FIELDS else IDENT).fullmatch(value)
+               for name, value in dependencies.items())
 
 
 def field(value, key, default=None):
@@ -136,7 +146,7 @@ def from_wire(value, *, now_mono, request=None):
             raise ValueError("invalid_hint_identity")
     deps, evidence = value["dependencies"], value["evidence"]
     if (not isinstance(deps, dict) or set(deps) != DEPENDENCIES
-            or not all(isinstance(v, str) and IDENT.fullmatch(v) for v in deps.values())):
+            or not binding_values_valid(deps)):
         raise ValueError("invalid_hint_dependencies")
     for key in ("camera_epoch", "association_revision"):
         if not deps[key].isascii() or not deps[key].isdigit() or str(int(deps[key])) != deps[key]:

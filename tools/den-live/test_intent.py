@@ -29,6 +29,24 @@ def wire():
                 text="private raw text", uncertainty="uncalibrated_semantic_hint", authority="semantic_prior_only")
 
 
+REGISTERED = "den-oak@2026-11-13.1"   # the live registration's transform_id shape: <camera>@<version>
+
+
+def registered(raw, transform_id=REGISTERED):
+    raw["dependencies"]["transform_id"] = transform_id
+    for entry in raw["evidence"]["frames"]:
+        entry["source_frame"]["transform_id"] = transform_id
+    return raw
+
+
+def trusted(raw):
+    request = {key: copy.deepcopy(raw[key]) for key in ("request_id", "clip_id", "profile_digest",
+                                                        "dependencies", "expires_at")}
+    request.update({key: copy.deepcopy(raw["evidence"][key]) for key in
+                    ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds")})
+    return request
+
+
 def current():
     track = dict(track_id="person", association_revision=2, state="confirmed", association_status="confident",
                  current_obs_ids=["observation"])
@@ -95,6 +113,53 @@ class IntentTest(unittest.TestCase):
         request["roi_xyxy"] = [1, 0, 361, 360]
         with self.assertRaisesRegex(ValueError, "hint_request_mismatch"):
             intent.from_wire(raw, now_mono=100.2, request=request)
+
+    def test_registered_transform_lineage_binds_by_exact_equality(self):
+        raw = registered(wire())
+        hint = intent.from_wire(raw, now_mono=100.2, request=trusted(raw))
+        snapshot, track = current()
+        snapshot["frame"]["transform_id"] = REGISTERED
+        self.assertTrue(hint.matches(snapshot, track))
+        self.assertEqual(hint.disposition(100.2, snapshot, track), ("advisory_only", "awaiting_held_out_admission"))
+        for other in ("den-oak@2026-11-13.2", "DEN-OAK@2026-11-13.1", "den-oak", "transform"):
+            changed = copy.deepcopy(snapshot); changed["frame"]["transform_id"] = other
+            self.assertEqual(hint.disposition(100.2, changed, track), ("ignored", "current_binding_changed"))
+
+    def test_mismatched_registered_transform_refuses(self):
+        bad = registered(wire()); bad["evidence"]["frames"][5]["source_frame"]["transform_id"] = "den-oak@2026-11-13.2"
+        with self.assertRaisesRegex(ValueError, "hint_source_mismatch"):
+            intent.from_wire(bad, now_mono=100.2)
+        raw = registered(wire())
+        request = trusted(raw)
+        request["dependencies"]["transform_id"] = "den-oak@2026-11-13.2"
+        with self.assertRaisesRegex(ValueError, "hint_request_mismatch"):
+            intent.from_wire(raw, now_mono=100.2, request=request)
+
+    def test_lineage_grammar_admits_the_at_sign_only_in_the_transform(self):
+        for value in (REGISTERED, "den-oak@" + "1" * 120, "registered-room@2"):
+            self.assertEqual(intent.from_wire(registered(wire(), value), now_mono=100.2).dependencies["transform_id"], value)
+        for value in ("den-oak@2026/11/13", "den-oak/../x", "den-oak@2026-11-13.1 ", "den oak@1", "den-oak@1\n",
+                      "den-oak\t@1", "", "den-oak@" + "1" * 121, "den-oak＠1", "den-oak@1;x", None, 1):
+            with self.assertRaisesRegex(ValueError, "invalid_hint_dependencies", msg=repr(value)):
+                intent.from_wire(registered(wire(), value), now_mono=100.2)
+        bad = registered(wire()); bad["dependencies"]["scan_revision"] = "scan/1"
+        with self.assertRaisesRegex(ValueError, "invalid_hint_dependencies"):
+            intent.from_wire(bad, now_mono=100.2)
+        # Same field scope as the den-models worker: every other binding keeps the narrower grammar.
+        for key in ("camera_id", "service_run_id", "camera_epoch", "source_generation", "track_id",
+                    "association_revision", "scan_revision", "calibration_revision"):
+            bad = registered(wire()); bad["dependencies"][key] = "den-oak@1"
+            with self.assertRaisesRegex(ValueError, "invalid_hint_dependencies", msg=key):
+                intent.from_wire(bad, now_mono=100.2)
+        # Request/clip/session identities are not lineage and keep the narrower grammar.
+        bad = registered(wire()); bad["request_id"] = "request@1"
+        with self.assertRaisesRegex(ValueError, "invalid_hint_identity"):
+            intent.from_wire(bad, now_mono=100.2)
+        bad = registered(wire())
+        for entry in bad["evidence"]["frames"]:
+            entry["source_frame"]["camera_session"] = "camera@session"
+        with self.assertRaisesRegex(ValueError, "invalid_source_frame"):
+            intent.from_wire(bad, now_mono=100.2)
 
     def test_string_integer_bindings_are_canonical(self):
         for value in ("02", "-1", "2.0", "２"):

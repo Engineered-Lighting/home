@@ -78,11 +78,14 @@ the former 0.4 s rule, a missing key or any other value is refused as
 a profile whose `inputs.sampling` names anything else. The profile names the
 rule, so the admission receipt that pins the profile digest names it too, and
 every hint echoes it in `evidence.sampling`. The 0.5 s hold is an owner-approved
-research-trial setting: the Den camera delivers about 2.5 frames/s while
-someone is in view (5 frames/s was never reached in 12 h), so a 0.4 s hold
-left a median of zero feasible clips per occupied minute; 0.5 s gives a median
-of two. Fewer distinct frames per clip (about 12 instead of 17) is a fidelity
-cost that held-out evaluation must still judge.
+research-trial setting: the Den camera delivers a median of about 2.5
+frames/s while someone is in view (journal minute lines; 5 frames/s was never
+reached in 12 h), so a 0.4 s hold left a median of zero feasible clips per
+occupied minute; 0.5 s gives a median of two. In the same replay the 4 s clips
+Den would send hold a median of 13 distinct frames (p10 10, p90 17) in their
+32 slots. That replay re-implements Den's clip rule over the logged frame
+times and checks each clip with this `validate_request`. Fewer distinct frames
+per clip is a fidelity cost that held-out evaluation must still judge.
 Source arrival must also be at or before the clip cutoff. The full track
 bounding box must remain inside the one fixed ROI for every frame. Do not
 recenter each frame: it changes apparent motion. Crops cannot restore detail

@@ -526,7 +526,7 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
             time.sleep(0.2)
         return {"counts": dict(perceiver.counts), "sessions": perceiver.sessions, "latest": out.latest, "drops": mailbox.dropped,
                 "received": mailbox.received, "status": status_line(perceiver, out.latest, logs),
-                "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped},
+                "body": None if link is None else link.diagnostics(),
                 "asks": None if asker is None else dict(asker[0].counts),
                 "enrichment": None if bridge is None else dict(bridge.counts),
                 "coordinator": None if lighting is None else dict(lighting[0].counts)}
@@ -594,6 +594,7 @@ def evidence_observer(asker, lighting, person_log=None, *, body=None, enrichment
                 person_log.write(current)
         if body is not None:
             event.setdefault("health", {})["body_timings"] = body.timing_summary()
+            event["health"]["body"] = body.diagnostics()
         if enrichment is not None:
             event = enrichment.decorate(event, current)
         return event

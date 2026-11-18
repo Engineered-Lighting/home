@@ -498,6 +498,181 @@ class StreamTests(unittest.TestCase):
             self.assertEqual(read_event(response)[1]["tracks"], [{"track_id": "anonymous"}])
 
 
+class Scripted(Detector):
+    """send_alone as perceive.DetectorWorker answers the body: admitted, or refused while a refused Qwen stills request
+    holds the slot (stills_waiting set) or while the slot is taken."""
+
+    def __init__(self):
+        super().__init__()
+        self.refuse, self.stills_waiting = deque(), None
+
+    def send_alone(self, header):
+        refusal = self.refuse.popleft() if self.refuse else None
+        self.stills_waiting = ("ask", 0.0) if refusal == "stills" else None
+        if refusal is not None:
+            return False
+        self.headers.append(header)
+        return True
+
+
+class DiagnosticsTests(unittest.TestCase):
+    """health.body is diagnostics only. One fixed sequence through BodyLink and the real body stream sends the same
+    events and worker jobs whether or not health.body is read after every step, and its counts reconcile with them."""
+
+    # What the body stream sends for the sequence below, as the code before health.body sent it: (status, reason,
+    # whether the frame carries the held-object pass's field).
+    SENT = [("clear", "scope_changed", False), ("ready", None, True), ("ready", None, False), ("clear", "stale", False),
+            ("clear", "insufficient_depth", False), ("clear", "ambiguous", False), ("clear", "scope_changed", False),
+            ("ready", None, False), ("clear", "scope_changed", False), ("clear", "empty", False),
+            ("clear", "warming_background", False), ("clear", "unavailable", False), ("clear", "unavailable", False),
+            ("clear", "unavailable", False)]
+    KEYS = {"run_id", "track_epoch", "sent", "skipped_busy", "skipped_rate", "frames", "empty", "errors", "busy", "held",
+            "mask", "why", "stopped", "seq", "ready_capture_ts", "ready", "clears", "lease_expired"}
+
+    def scenario(self, read_health):
+        import run_local
+        now = [100.0]
+        stream = PeopleStream(port=0, clock=lambda: 10.0, body_clock=lambda: now[0], wall_clock=lambda: 1000.0).start()
+        self.addCleanup(stream.close)
+        detector = Scripted()
+        link = BodyLink(detector, stream=stream, clock=lambda: now[0], monotonic=lambda: now[0])
+        observe = run_local.evidence_observer(None, None, body=link)
+        sent, health, set_body = [], [], stream._set_body
+
+        def record(*args, **kwargs):   # every body event the stream sends, its own lease expiry included
+            set_body(*args, **kwargs)
+            sent.append(stream.body_latest[0])
+        stream._set_body = record
+
+        def step(seconds=0.25):
+            now[0] += seconds
+
+        def submit(frame_id, observation="person", person=PERSON):
+            link.submit(frame_id, frame_key=["camera", frame_id], scope=SCOPE, setup=SETUP, capture_mono=now[0] - 0.1,
+                        observation=observation, person=person)
+
+        def after():
+            stream.body_wait()   # what each connected body client's handler does between writes
+            if read_health:
+                health.append((len(sent), observe({"health": {}}, SimpleNamespace())["health"]["body"]))
+
+        def frame(frame_id, seconds=0.25, *, refuse=None, **reply):
+            step(seconds)
+            if refuse is not None:
+                detector.refuse.append(refuse)
+            submit(frame_id, **{key: reply.pop(key) for key in ("observation", "person") if key in reply})
+            if reply:
+                detector.reply(**reply)
+            after()
+
+        submit(1)
+        detector.setup()
+        after()
+        frame(2, frame={**FRAME, "object": None}, timings_ms={"mask_wait": 40})
+        frame(3, frame=None, why="pose_unavailable")   # held: the shown frame's lease runs
+        frame(4, refuse="stills")
+        frame(5, refuse="slot")
+        step()
+        submit(6)
+        frame(7, 0.05, header=None)   # 7 waits on 6's reply, which follows
+        frame(8, 0.1)   # under MIN_INTERVAL_S after 6
+        step(BODY_LEASE_S)
+        after()   # no frame: the stream's own lease expiry
+        frame(9, frame=None, why="insufficient_depth")
+        step()
+        submit(10)
+        link.clear("ambiguous", scope=SCOPE)
+        detector.reply(timings_ms={"mask_wait": 750})   # fenced
+        after()
+        frame(11, person={**PERSON, "association_revision": 1}, header=None)
+        frame(12, observation="empty", person=None, frame=None, why="warming_background")
+        step()
+        submit(13, observation="empty", person=None)
+        detector.reply(header={**detector.headers[-1], "frame_key": "wrong"})
+        after()
+        step()
+        link.clear("unknown_words")   # sent as unavailable
+        after()
+        detector.on_body(None)   # the detector stopped
+        after()
+        link.clear("unavailable")   # a repeat is not sent
+        after()
+        return sent, detector.headers, health, link
+
+    def test_the_fixed_sequence_sends_the_events_it_always_did(self):
+        sent, _, _, _ = self.scenario(read_health=False)
+        self.assertEqual([(e["status"], e.get("reason"), "object" in e) for e in sent], self.SENT)
+        self.assertEqual([e["seq"] for e in sent], list(range(1, len(self.SENT) + 1)))
+
+    def test_reading_health_body_changes_nothing_and_its_counts_reconcile_with_the_events(self):
+        import collections
+        quiet_sent, quiet_jobs, _, quiet = self.scenario(read_health=False)
+        sent, jobs, health, link = self.scenario(read_health=True)
+        final = link.diagnostics()
+        self.assertEqual(sent, quiet_sent, "the same body events, field for field")
+        self.assertEqual(jobs, quiet_jobs, "the same worker jobs, learning resets and remaining leases included")
+        self.assertEqual(final, quiet.diagnostics())
+        self.assertEqual([(e["status"], e.get("reason"), "object" in e) for e in sent], self.SENT)
+        self.assertEqual(len(health), 16)
+        for count, body in health:   # each read is stamped with, and counts, what was sent before it
+            so_far = sent[:count]
+            self.assertEqual(set(body), self.KEYS)
+            self.assertEqual(body["seq"], so_far[-1]["seq"])
+            self.assertEqual(body["ready"], sum(e["status"] == "ready" for e in so_far))
+            self.assertEqual(body["ready"], body["frames"])
+            self.assertEqual(body["clears"], dict(collections.Counter(e["reason"] for e in so_far if e["status"] == "clear")))
+            self.assertEqual(body["skipped_busy"], sum(body["busy"].values()))
+            self.assertEqual((body["run_id"], body["track_epoch"]), (SCOPE["run_id"], SCOPE["track_epoch"]))
+            json.dumps(body, allow_nan=False)
+        ready = [e for e in sent if e["status"] == "ready"]
+        self.assertEqual(final["ready_capture_ts"], ready[-1]["capture_ts"])
+        self.assertEqual((final["lease_expired"], final["clears"]["stale"]), (1, 1))
+        self.assertEqual(final["busy"], {"own_job": 1, "stills_first": 1, "slot": 1})
+        self.assertEqual(final["held"], {"insufficient_depth": 0, "pose_unavailable": 1, "stale": 0})
+        self.assertEqual(final["mask"], {"waited": 2, "applied": sum("object" in e for e in ready)})
+        self.assertEqual({key: final[key] for key in ("sent", "skipped_rate", "empty", "errors")},
+                         {"sent": 8, "skipped_rate": 1, "empty": 3, "errors": 1})
+        self.assertEqual((final["why"], final["stopped"]), ("unavailable", "detector stopped"))
+        for value in (final["busy"], final["held"], final["mask"], final["clears"]):   # counts only: no frame content
+            self.assertTrue(all(type(count) is int for count in value.values()))
+
+    def test_the_real_slot_says_which_refusals_were_for_qwen_stills(self):
+        """perceive.DetectorWorker.send_alone itself (test_ask.slot_worker) decides; BodyLink only names its cause."""
+        import test_ask
+        clock = test_ask.Clock()
+        worker = test_ask.slot_worker(clock)
+        link = BodyLink(worker, stream=SimpleNamespace(publish_body=lambda scope, **event: True), clock=clock)
+
+        def submit(frame_id):
+            return link.submit(frame_id, frame_key=["camera", frame_id], scope=SCOPE, setup=SETUP,
+                               capture_mono=clock() - 0.1, observation="person", person=PERSON)
+
+        def answer():   # the reader frees the slot, then hands the reply on
+            header = worker.writes.get_nowait()[0]
+            worker.optional = None
+            if header["kind"] == "setup_body":
+                worker.on_body({"body_ready": True, "binding": header["setup"]["binding"]})
+            else:
+                worker.on_body(dict(body_id=header["id"], request_id=header["request_id"], why=None,
+                                    frame_key=header["frame_key"], binding=header["binding"], frame=FRAME))
+        submit(1); answer()
+        clock.t += 0.25
+        self.assertTrue(worker.send_alone({"kind": "stills", "id": 7, "frames": []}))
+        worker.writes.get_nowait()
+        self.assertFalse(submit(2), "the stills job has the slot")
+        worker.optional = None
+        clock.t += 0.25
+        self.assertTrue(submit(3))
+        self.assertFalse(worker.send_alone({"kind": "stills", "id": 8, "frames": []}))
+        answer()
+        clock.t += 0.25
+        self.assertFalse(submit(4), "refused stills 8 comes first")
+        clock.t += 1.0
+        self.assertTrue(submit(5), "past STILLS_PRECEDENCE_S")
+        self.assertEqual(link.busy, {"own_job": 0, "stills_first": 1, "slot": 1})
+        self.assertEqual(link.counts["skipped_busy"], 2)
+
+
 class SharedSlotTest(unittest.TestCase):
     """The body and the Qwen ask on the detector process's one optional slot, with den-live's real pieces: BodyLink at
     its own MIN_INTERVAL_S, ask.Asker, and perceive.DetectorWorker.send_alone (test_ask.SharedSlot). Frames come at LA's

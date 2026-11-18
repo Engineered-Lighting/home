@@ -42,6 +42,12 @@ class BodyLink:
         self.closed = False
         self._timings = deque(maxlen=TIMING_SAMPLES)
         self.counts = dict(sent=0, skipped_busy=0, skipped_rate=0, frames=0, empty=0, errors=0)
+        # Diagnostics only (health.body): nothing below reads them. busy splits skipped_busy by cause; held counts the
+        # hold reasons absorbed while the shown frame's lease ran; mask counts replies whose worker waited for an
+        # exact-frame mask, and published frames drawn with one.
+        self.busy = dict(own_job=0, stills_first=0, slot=0)
+        self.held = dict.fromkeys(sorted(HOLD_REASONS), 0)
+        self.mask = dict(waited=0, applied=0)
         detector.on_body = self._reply
 
     def _clear(self, reason, *, reset=True):
@@ -51,6 +57,7 @@ class BodyLink:
             self.reset_learning = True
         self.why = reason
         if reason in HOLD_REASONS and self.shown_until is not None and self.clock() < self.shown_until:
+            self.held[reason] += 1
             return   # the figure stays until its own lease ends (Home clears it then) or the next frame replaces it
         self.shown_until = None
         if self.scope is not None and reason != self.last_clear:
@@ -124,6 +131,8 @@ class BodyLink:
             if pending is None or pending["request_id"] != reply.get("request_id"):
                 return
             self.pending = None
+            if isinstance(reply.get("timings_ms"), dict) and "mask_wait" in reply["timings_ms"]:
+                self.mask["waited"] += 1
             if pending["generation"] != self.generation:
                 return
             if (reply.get("body_id") != pending["id"] or reply.get("frame_key") != pending["frame_key"]
@@ -147,6 +156,7 @@ class BodyLink:
             frame = {**frame, "facing_deg": self._facing(frame.get("facing_deg"))}
             if self.stream.publish_body(self.scope, frame=frame, capture_mono=capture_mono):
                 self.counts["frames"] += 1
+                self.mask["applied"] += "object" in frame   # body.py sets object only with this frame's mask
                 self.why = self.last_clear = None
                 self.shown_until = capture_mono + BODY_LEASE_S
                 self._record_timing(reply, pending)
@@ -185,6 +195,20 @@ class BodyLink:
                     "last_age_ms": round(age, 3) if age is not None and math.isfinite(age) and age >= 0 else None,
                     "timings_ms": stages}
 
+    def diagnostics(self):
+        """health.body: this run's cumulative body counts and the last clear's why, stamped with the body's run and
+        track epoch, and (from the stream) the newest body event's seq, the newest ready's capture_ts and the events
+        sent by status and reason. Counts, words and stamps only: never a point, a position or a track."""
+        with self.lock:
+            scope = self.scope or {}
+            record = {"run_id": scope.get("run_id"), "track_epoch": scope.get("track_epoch"), **self.counts,
+                      "busy": dict(self.busy), "held": dict(self.held), "mask": dict(self.mask),
+                      "why": self.why, "stopped": self.stopped}
+            sent = getattr(self.stream, "body_diagnostics", None)
+            if sent is not None:
+                record.update(sent())
+        return record
+
     def submit(self, frame_id, *, frame_key, scope, setup, capture_mono, observation, person=None):
         """Queue setup or one exact-frame job, without waiting for a reply."""
         with self.lock:
@@ -205,6 +229,7 @@ class BodyLink:
                 self._clear("empty", reset=False)
             if self.pending is not None or self.setting_up is not None:
                 self.counts["skipped_busy"] += 1
+                self.busy["own_job"] += 1
                 return False
             if self.bound != binding:
                 self.setting_up = binding
@@ -230,8 +255,12 @@ class BodyLink:
                 self._off()
             return False
         if admitted is False:
+            # The refusal's cause, read on the same thread right after it: send_alone refuses the body while a refused
+            # stills request is still waiting, and clears one past STILLS_PRECEDENCE_S before refusing for a busy slot.
+            stills_first = getattr(self.detector, "stills_waiting", None) is not None
             with self.lock:
                 self.counts["skipped_busy"] += 1
+                self.busy["stills_first" if stills_first else "slot"] += 1
                 if header["kind"] == "setup_body":
                     self.setting_up = None
                 elif self.pending is not None and self.pending["request_id"] == header["request_id"]:

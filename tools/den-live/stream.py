@@ -59,6 +59,7 @@ class PeopleStream:
         self.body_latest, self.body_clients = None, set()
         self.body_available, self.spot_latest = body_available, None
         self.body_run, self.body_seq = None, 0
+        self.body_sent, self.body_ready_ts = dict(ready=0, clears={}, lease_expired=0), None   # body_diagnostics
         self.clock, self.body_clock = clock, body_clock
         self.body_time_offset = wall_clock() - body_clock()
         self.served = self.refused = 0
@@ -296,10 +297,13 @@ class PeopleStream:
         deadline = None
         if frame is None:
             event["reason"] = reason
+            self.body_sent["clears"][reason] = self.body_sent["clears"].get(reason, 0) + 1
         else:
             deadline = capture_mono + BODY_LEASE_S
             capture_ts = self.body_time(capture_mono)
             event.update({**frame, "capture_ts": capture_ts, "expires_ts": capture_ts + BODY_LEASE_S})
+            self.body_sent["ready"] += 1
+            self.body_ready_ts = capture_ts
         packet = (event, deadline, _sse("body", event, self.body_seq))
         self.body_latest = packet
         for client in self.body_clients:
@@ -316,6 +320,14 @@ class PeopleStream:
             event, deadline, _ = self.body_latest
             if deadline is not None and self.body_clock() >= deadline:
                 self._set_body({key: event[key] for key in BODY_SCOPE}, reason="stale")
+                self.body_sent["lease_expired"] += 1   # of clears' stale: the shown frame's own lease ran out here
+
+    def body_diagnostics(self):
+        """The body events sent since start, ready and clear by reason, with the newest event's seq and the newest
+        ready's capture_ts (as the body stream sent them). Counts and stamps only: health.body (BodyLink.diagnostics)."""
+        with self.lock:
+            return {"seq": self.body_seq, "ready_capture_ts": self.body_ready_ts, "ready": self.body_sent["ready"],
+                    "clears": dict(self.body_sent["clears"]), "lease_expired": self.body_sent["lease_expired"]}
 
     def body_wait(self):
         with self.lock:

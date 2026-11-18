@@ -285,14 +285,15 @@ class BridgeTests(LiveBridge, unittest.TestCase):
     def test_result_expiring_during_poll_cannot_be_published(self):
         request = self.request()
         self.register(request)
-        self.clock.value = 101.9
+        expiry = request["expires_at"]  # cutoff + link.HINT_LEASE_SECONDS
+        self.clock.value = expiry - .1
         hint = make_hint(request, PROFILE, "d" * 64,
-                         {"intent": "continue", "raw_option_scores": None, "text": None}, 101.8).as_dict()
+                         {"intent": "continue", "raw_option_scores": None, "text": None}, expiry - .2).as_dict()
         def poll(req):
-            self.clock.value = 102.1
+            self.clock.value = expiry + .1
             return packet(req, "succeeded", hint)
         self.client.poll_hook = poll
-        self.bridge._results(snapshot(101.9), 101.9)
+        self.bridge._results(snapshot(expiry - .1), expiry - .1)
         self.assertEqual(self.hints, [])
 
     def test_stalled_source_history_ages_out_without_new_frames(self):
@@ -516,6 +517,17 @@ class BridgeTests(LiveBridge, unittest.TestCase):
                     self.assertIn(item["captured_at"], stamps)
                     self.assertEqual(item["captured_at"], item["source_frame"]["capture_mono"])
                 self.assertEqual(request["dependencies"]["transform_id"], REGISTERED)
+                # Hint lease: long enough for an 8B answer, inside both contracts' cutoff + 10 s cap.
+                self.assertEqual(request["expires_at"] - request["cutoff_at"], link.HINT_LEASE_SECONDS)
+                self.assertLessEqual(link.HINT_LEASE_SECONDS, 10)
+
+    def test_clip_is_still_built_when_older_than_two_seconds_within_the_lease(self):
+        self.history()
+        end = self.bridge.samples[-1]["captured_at"]
+        clip = self.bridge._clip(end + 3)  # The former 2 s lease refused a clip this old.
+        self.assertIsNotNone(clip)
+        self.assertEqual(clip["expires_at"], end + link.HINT_LEASE_SECONDS)
+        self.assertIsNone(self.bridge._clip(end + link.HINT_LEASE_SECONDS))
 
     def test_holds_over_half_a_second_or_another_rule_send_nothing(self):
         self.live()

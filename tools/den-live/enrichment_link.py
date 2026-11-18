@@ -26,6 +26,12 @@ import model_projection
 TERMINAL = frozenset(("succeeded", "failed", "cancelled", "expired", "superseded", "invalidated", "unsupported"))
 MAX_BYTES = 128 * 1024 * 1024
 MAX_FRAMES = 96
+# How long after a clip's last capture its hint stays valid. Both contracts allow up to cutoff + 10 s
+# (intent.from_wire and the worker's validate_request). Two seconds left an 8B worker well under 1.5 s
+# for decode, encoder and language model once capture-to-arrival lag and the bridge cadence were spent,
+# so every completed inference expired unseen; 8 s keeps a margin under the 10 s cap and the worker's
+# 20 s live-job ceiling. The hint is advisory and its age stays visible in Home.
+HINT_LEASE_SECONDS = 8.0
 # HTTP answers that settle one request for good. A submit refused as invalid
 # (400/422) created no job; a poll or cancel answered 404 job_not_found names a
 # request the worker does not hold. Neither job can read its inputs or yield a
@@ -541,7 +547,7 @@ class Bridge:
             self.reason = "sampling_unsupported"
             return None
         end = self.samples[-1]["captured_at"]
-        if end + 2 <= now or end <= self.last_cutoff:
+        if end + HINT_LEASE_SECONDS <= now or end <= self.last_cutoff:
             return None
         # intent.SAMPLING: 32 uniform causal slot centres, each holding the newest frame captured at or before
         # it for at most MAX_HOLD_SECONDS; repeats are marked and keep their true capture times.
@@ -573,7 +579,7 @@ class Bridge:
         return dict(schema="den.intent-request/v1", request_id=request_id, clip_id=request_id,
                     profile_digest=hashlib.sha256(canonical(self.profile).encode()).hexdigest(),
                     dependencies=dict(self.dependencies), frames=selected, roi_xyxy=[x, y, x + size, y + size],
-                    source_size=[width, height], cutoff_at=end, expires_at=end + 2,
+                    source_size=[width, height], cutoff_at=end, expires_at=end + HINT_LEASE_SECONDS,
                     duration_seconds=self.duration, mode="choose", sampling=intent.SAMPLING)
 
     def _results(self, snapshot, now):

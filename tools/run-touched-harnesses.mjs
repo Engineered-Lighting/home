@@ -41,6 +41,8 @@ const REPO = path.resolve(TOOLS, "..");
 const MAP = [
   [/^(?:app\/src\/(?:home-den-(?:latency|live-view|spot-playback)\.mjs|home-3d\/lighting-render-evidence\.mjs)|tools\/test-den-latency\.mjs)$/, ["test-den-latency.mjs"]],
   [/^(?:app\/src\/home-den-latency\.mjs|tools\/(?:den-latency-report|test-den-latency-report)\.mjs)$/, ["test-den-latency-report.mjs"]],
+  // The live body's client continuity: backlog escape, warm clock re-anchor, lease bound and counters.
+  [/^(?:app\/src\/(?:home-den-live-view|home-3d\/apartment-body-frame)\.mjs|tools\/(?:test-den-body-continuity|fixtures\/den-measured-body)\.mjs)$/, ["test-den-body-continuity.mjs"]],
   [/^(?:app\/src\/(?:home-app|home-lights)\.jsx|tools\/test-home-full-ui-lights-browser\.mjs)$/, ["test-home-full-ui-lights-browser.mjs"]],
   [/^(?:tools\/fixtures\/home-full-ui-harness\.mjs|app\/src\/home-overlay\.js)$/, ["test-home-full-ui-lights-browser.mjs", "test-home-full-ui-people-browser.mjs", "test-home-full-ui-intelligence-browser.mjs", "test-home-full-ui-metrics-browser.mjs", "test-home-full-ui-lab-browser.mjs", "test-apartment-connected-view-browser.mjs", "test-home-full-ui-connection-browser.mjs", "test-home-full-ui-simulation-browser.mjs", "test-home-full-ui-labeler-browser.mjs", "test-home-full-ui-labeler-editor-browser.mjs"]],
   [/^(?:app\/src\/home-app\.jsx|tools\/test-home-full-ui-connection-browser\.mjs)$/, ["test-home-full-ui-connection-browser.mjs"]],

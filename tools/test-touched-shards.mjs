@@ -68,6 +68,9 @@ test('Den latency collection and reporting select their regression harnesses', (
   for (const file of ['tools/den-latency-report.mjs', 'tools/test-den-latency-report.mjs']) {
     assert.ok(planOf(['--files', file]).includes('test-den-latency-report.mjs'), file);
   }
+  for (const file of ['app/src/home-den-live-view.mjs', 'app/src/home-3d/apartment-body-frame.mjs', 'tools/test-den-body-continuity.mjs']) {
+    assert.ok(planOf(['--files', file]).includes('test-den-body-continuity.mjs'), file);
+  }
 });
 function assertExactCover(argv, counts) {
   const full = planOf(argv);

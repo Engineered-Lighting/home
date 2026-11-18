@@ -135,6 +135,26 @@ test('the measured WebGL figure uses only the newest samples and clears in the s
     assert.equal(f.layer.snapshot().torso, null);
 });
 
+test('the measured figure reports how soon after updateMeasured it was drawn, and frames replaced before a draw', () => {
+    const f = fixture({ measuredOnly: true, reducedMotion: true });
+    const recording = f.group().getObjectByName('body-recording');
+    const frame = seq => decodeLiveBodyEvent(measuredBodyEvent({ seq })).decoded;
+    assert.equal(f.layer.status().draw_after_apply_s, null, 'nothing drawn yet');
+    f.layer.updateMeasured(frame(1));
+    f.clock.t += 0.004;
+    recording.onAfterRender();
+    assert.ok(Math.abs(f.layer.status().draw_after_apply_s - 0.004) < 1e-9);
+    f.clock.t += 0.1;
+    recording.onAfterRender();
+    assert.ok(Math.abs(f.layer.status().draw_after_apply_s - 0.004) < 1e-9, 'a redraw of the same frame changes nothing');
+    f.layer.updateMeasured(frame(2)); f.layer.updateMeasured(frame(3));
+    f.layer.clear();
+    assert.equal(f.layer.status().undrawn, 2, 'one replaced and one cleared before any draw');
+    const recorded = fixture();
+    assert.equal(recorded.layer.status().draw_after_apply_s, null, 'only the measured figure has the witness');
+    assert.equal(recorded.layer.status().undrawn, null);
+});
+
 test('the measured figure shows what the person holds in the accent blue, with its label for the tag', () => {
     const f = fixture({ measuredOnly: true, reducedMotion: true });
     const frame = decodeLiveBodyEvent(measuredBodyEvent({ held: true })).decoded;

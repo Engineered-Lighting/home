@@ -92,5 +92,7 @@ test('measured WebGPU instance count clears immediately even if the twin loads l
     layer.clear();
     assert.equal(recording.count, 0);
     assert.equal(layer.status().points, 0);
+    assert.equal(layer.status().draw_after_apply_s, null, 'the twin has no draw witness');
+    assert.equal(layer.status().undrawn, null);
     layer.dispose();
 });

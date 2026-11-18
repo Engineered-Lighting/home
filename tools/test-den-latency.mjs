@@ -38,8 +38,10 @@ test('the actual authority clock and all expiry checks retain their conservative
         assert.ok(capture + timing.producer_age_at_receive_midpoint_ms / 1000 < expiry, 'using the midpoint for authority would extend this lease');
     }
     assert.match(source, /const producerTime = producerNow\(connection, now\);\s*if \(producerTime < event.capture_ts \|\| producerTime >= event.expires_ts\)/);
-    assert.match(source, /const now = producerNow\(owned.connection, performance.now\(\)\);\s*if \(now >= owned.ready.event.expires_ts\)/);
-    assert.match(source, /producerNow\(owned.connection, performance.now\(\)\) < ready.event.expires_ts/);
+    // Each frame's expiry uses the anchor of the connection that delivered it.
+    assert.match(source, /const now = producerNow\(owned.ready.connection, performance.now\(\)\);\s*if \(now >= owned.ready.event.expires_ts\)/);
+    assert.match(source, /producerNow\(ready.connection, performance.now\(\)\) < ready.event.expires_ts/);
+    assert.match(source, /owned.ready = \{ event, decoded, trace, connection \};/);
     const clockCallback = source.slice(source.indexOf("source.addEventListener('body_clock'"), source.indexOf("source.addEventListener('body',"));
     assert.ok(clockCallback.indexOf('const receivedAt = performance.now();') < clockCallback.indexOf('if (!current()'));
 });

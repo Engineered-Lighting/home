@@ -134,7 +134,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
     const objectMat = material(OBJECT, { uTint: { value: new THREE.Vector3(...look.object) }, uGain: { value: 1 } }, { blending: THREE.NormalBlending, depthWrite: true });
     const ghosts = ghostGeo.map(() => material(HOLO));
     points(now0, halo, 'body-halo', 18); points(now0, glow, 'body-glow', 19).visible = look.glowGain > 0;
-    points(now0, holo, 'body-recording', 20); points(now0, objectMat, 'body-held-object', 21);
+    const recording = points(now0, holo, 'body-recording', 20); points(now0, objectMat, 'body-held-object', 21);
     ghostGeo.forEach((geo, i) => points(geo, ghosts[i], `body-trail-${i + 1}`, 17));
 
     // Motes: dust in the warm light around the person, drifting up.
@@ -171,6 +171,11 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
     let disposed = false, rafId = null, last = null, frames = [], period = 0.15, presence = 0, centroid = null, joints = {}, trackId = null, seen = null, poolOn = true;
     let speed = 0, prevCentroid = null, object = null, torso = null;
     const scratch = new THREE.Vector3(), camWorld = new THREE.Vector3();
+    // The measured WebGL figure's draw witness: how long after updateMeasured it was next drawn, and how many applied
+    // frames were replaced or cleared before any draw. (WebGPU draws the twin, so it reports neither.)
+    const witness = measuredOnly && engine.renderer?.isWebGPURenderer !== true;
+    let appliedAt = null, drawAfterApply = null, undrawn = 0;
+    if (witness) recording.onAfterRender = () => { if (appliedAt !== null) { drawAfterApply = now() - appliedAt; appliedAt = null; } };
 
     function write(F, geo, fade = 1) {
         const B = geo.B;
@@ -208,11 +213,14 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
         torso = frame.torso;
         object = frame.object ?? null;
         presence = 1;
+        if (witness) { if (appliedAt !== null) undrawn += 1; appliedAt = seen; }
         return true;
     }
 
     function clear() {
         if (disposed) return;
+        if (appliedAt !== null) undrawn += 1;
+        appliedAt = null;
         frames = []; trackId = null; seen = null; centroid = null; prevCentroid = null; joints = {};
         torso = null; object = null; speed = 0; presence = 0; period = 0.15;
         write(null, now0);
@@ -331,7 +339,7 @@ export function attachApartmentBodyLayer(engine, { now = () => performance.now()
             return { trackId, presence, centroid: centroid && centroid.slice(), joints: { ...joints }, speed, objectPoints, object: held };
         },
         status: () => ({ trackId, frames: measuredOnly ? Number(seen != null) : frames.length, points: now0.B.n, presence, period_s: period, since_s: seen == null ? null : now() - seen,
-            webgpu: !!twin }),
+            webgpu: !!twin, draw_after_apply_s: witness ? drawAfterApply : null, undrawn: witness ? undrawn : null }),
         dispose() {
             if (disposed) return;
             disposed = true;

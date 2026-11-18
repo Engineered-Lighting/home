@@ -16,7 +16,11 @@
  * (HOME_WEB_DEN_PIPELINE), the pipeline is drawn through the room (home-den-pipeline-layer.mjs). */
 const config = window.HomeDenLive;
 const STOPPED_MS = 3000, REOPEN_MS = 5000, TICK_MS = 500, BODY_RETRY_MS = 2000;
-const BODY_CLOCK_REFRESH_MS = 60 * 60 * 1000;
+// The body's clock is re-anchored on a warm second connection every 5 min: the bound's 100 ppm rate charge then stays
+// under 0.03 s of the 2 s lease, for one short extra request (and one repeated frame) per 5 min. A slower anchor waits 1 min.
+const BODY_REANCHOR_MS = 5 * 60 * 1000, BODY_REANCHOR_RETRY_MS = 60 * 1000, BODY_REANCHOR_TIMEOUT_MS = 10 * 1000;
+// A backlogged body connection: 3 readies in a row past their lease, or 2 with none accepted for longer than the lease.
+const BODY_LEASE_MS = 2000, BODY_LATE_PACKETS = 3, BODY_ESCAPE_MAX_MS = 60 * 1000, BODY_ESCAPE_RESET_MS = 5 * 60 * 1000;
 const SOURCE_CLOCK_REFRESH_MS = 60 * 1000;
 let qwenLine = () => '';   // home-den-live-qwen.mjs: what den-live's Qwen ask last said, a line in the chip
 
@@ -65,7 +69,13 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     const lookOnly = window.HomeLookOnly?.active === true;
     let engine = null, scope = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
     let panel = null, caption = null, pipeline = null, forecast = null, sourceClock = null;
-    let bodyKit = null, body = null, bodyRetryAt = 0, bodyFrames = 0, bodyAt = 0, watermark = null, pageActive = true;
+    let bodyKit = null, body = null, bodyRetryAt = 0, bodyReopen = null, bodyAt = 0, watermark = null, pageActive = true;
+    let bodyReanchorAt = 0, bodyEscapes = 0, bodyEscapeAt = -Infinity;
+    // What the body stream did, for status(): each event on the current connection is accepted, rejected or a producer
+    // clear, and each accepted frame is applied to the layer, dropped unapplied, or still pending.
+    const bodyCounts = { received: 0, accepted: 0, applied: 0, unapplied: 0, expired: 0, track_changes: 0, reanchored: 0,
+        rejected: { decode: 0, home: 0, pre_clock: 0, run_mismatch: 0, watermark: 0, scope: 0, before_capture: 0, past_lease: 0 },
+        clears: {}, reopens: { error: 0, backlog: 0, reanchor: 0 } };
     let spotTrace = null, spotReceipts = new WeakMap(), forecastFrame = null, forecastScopeKey = null;
     // A person's settled changes go to the coordinator to learn from (den-manual-1), as its other writes do; look-only
     // sends none.
@@ -206,6 +216,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     }
     function clearBody(owned, reason) {
         latency?.invalidate('body', reason === 'stale' || reason === 'scope_changed' ? reason : 'unavailable');
+        if (owned.ready?.decoded) bodyCounts.unapplied += 1;
         owned.ready = null;
         owned.reason = reason;
         owned.lastPaintAge = null;
@@ -213,34 +224,74 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         owned.labels?.clear();
     }
     function closeBodySource(owned) {
-        const connection = owned.connection;
-        owned.connection = null;
+        const connection = owned.connection, pending = owned.pending;
+        owned.connection = null; owned.pending = null;
         connection?.source.close();
+        pending?.source.close();
     }
     function retryBody(owned, reason) {
         closeBodySource(owned);
         clearBody(owned, reason);
         bodyRetryAt = performance.now() + BODY_RETRY_MS;
+        bodyReopen = 'error';
     }
     function disposeBody(owned = body) {
         if (!owned || body !== owned) return;
-        body = null;
+        body = null; bodyReopen = null;
         clearBody(owned, 'unavailable');
         closeBodySource(owned);
         owned.controller.abort();
         owned.labels?.dispose();
         owned.layer?.dispose();
     }
+    /* A run of readies past their lease bound means this connection is backlogged (or its anchor no longer holds).
+     * The figure is already hidden: drop the connection for a fresh one, at once, then no sooner than 2 s, 4 s, ...
+     * up to 60 s after the previous escape, until 5 min pass without one. */
+    function escapeBody(owned, connection, now) {
+        if (connection.late < BODY_LATE_PACKETS && !(connection.late >= 2
+            && now - (connection.acceptedAt ?? connection.clockReceivedAt) > BODY_LEASE_MS)) return;
+        if (now - bodyEscapeAt >= BODY_ESCAPE_RESET_MS) bodyEscapes = 0;
+        if (bodyEscapes && now - bodyEscapeAt < Math.min(BODY_ESCAPE_MAX_MS, BODY_RETRY_MS * 2 ** (bodyEscapes - 1))) return;
+        bodyEscapes += 1; bodyEscapeAt = now;
+        closeBodySource(owned);
+        openBody(owned, 'backlog');
+    }
+    /* Make before break: a second connection opens beside the current one, and its body_clock swaps it in (anchorBody)
+     * with no clear. One that fails, stalls or anchors no tighter is dropped and tried again later. */
+    function reanchorBody(owned, now) {
+        const connection = owned.connection, pending = owned.pending;
+        if (pending) { if (now - pending.started >= BODY_REANCHOR_TIMEOUT_MS) dropPending(owned, now); return; }
+        if (connection?.serverTs != null && now - connection.started >= BODY_REANCHOR_MS && now >= bodyReanchorAt) openBody(owned, 'reanchor');
+    }
+    function dropPending(owned, now) {
+        owned.pending?.source.close();
+        owned.pending = null;
+        bodyReanchorAt = now + BODY_REANCHOR_RETRY_MS;
+    }
+    function anchorBody(owned, connection, at) {
+        const old = owned.connection;
+        // Both bounds hold; keep the tighter one (a slow setup can charge more than the old anchor's rate margin).
+        if (!old || producerNow(connection, at) > producerNow(old, at)) { dropPending(owned, at); return; }
+        owned.pending = null;
+        owned.connection = connection;
+        old.source.close();
+        bodyCounts.reanchored += 1;
+    }
     function producerNow(connection, nowMs) {
-        // The clock sample is taken after this request starts. Charging that elapsed time makes this an upper bound.
+        // An upper bound of producer time, never an estimate: the producer samples server_ts at some moment after this
+        // request starts, so charging all the time since the start, plus 5 ms and 100 ppm of rate, can only run ahead.
+        // Each frame keeps the connection that delivered it, so a later anchor never re-dates an earlier frame.
         const elapsed = (nowMs - connection.started) / 1000;
         return connection.serverTs + elapsed + 0.005 + elapsed * 0.0001;
     }
-    function openBody(owned) {
+    function openBody(owned, reason = null) {
         const started = performance.now(), source = new EventSource(config.body);
-        const connection = { source, started, serverTs: null, clockReceivedAt: null, runId: null };
-        owned.connection = connection;
-        const current = () => body === owned && owned.connection === connection && isCurrent() && engine === owned.engine;
+        const connection = { source, started, serverTs: null, clockReceivedAt: null, runId: null, late: 0, acceptedAt: null };
+        if (reason) bodyCounts.reopens[reason] += 1;
+        if (reason === 'reanchor') owned.pending = connection; else owned.connection = connection;
+        // A pending re-anchor counts only until its body_clock settles it, which is the first thing the producer sends.
+        const current = () => body === owned && (owned.connection === connection || owned.pending === connection)
+            && isCurrent() && engine === owned.engine;
         source.addEventListener('body_clock', message => {
             const receivedAt = performance.now();
             if (!current() || connection.serverTs !== null) return;
@@ -249,42 +300,57 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             if (sample && Object.keys(sample).length === 1 && Number.isFinite(sample.server_ts)) {
                 connection.serverTs = sample.server_ts;
                 connection.clockReceivedAt = receivedAt;
+                if (owned.pending === connection) anchorBody(owned, connection, receivedAt);
             }
         });
         source.addEventListener('body', message => {
-            if (!current() || connection.serverTs === null) return;
+            if (!current()) return;
+            bodyCounts.received += 1;
+            if (connection.serverTs === null) { bodyCounts.rejected.pre_clock += 1; return; }
             const receivedAt = performance.now();
-            let result;
-            try { result = bodyKit.decode(JSON.parse(message.data)); } catch (_) { return; }
-            if (!result || result.event.home !== config.home) return;
+            let result = null;
+            try { result = bodyKit.decode(JSON.parse(message.data)); } catch (_) { /* counted below */ }
+            if (!result) { bodyCounts.rejected.decode += 1; return; }
+            if (result.event.home !== config.home) { bodyCounts.rejected.home += 1; return; }
             const { event, decoded } = result;
-            if (connection.runId !== null && connection.runId !== event.run_id) return;
+            if (connection.runId !== null && connection.runId !== event.run_id) { bodyCounts.rejected.run_mismatch += 1; return; }
             connection.runId = event.run_id;
-            if (watermark?.runId === event.run_id && event.seq <= watermark.seq) return;
+            if (watermark?.runId === event.run_id && event.seq <= watermark.seq) { bodyCounts.rejected.watermark += 1; return; }
             watermark = { runId: event.run_id, seq: event.seq };
             const old = owned.ready;
-            if (old && ['run_id', 'track_epoch', 'content_revision', 'transform_id', 'mode', 'track_id'].some(key => event[key] !== old.event[key]))
+            if (old && ['run_id', 'track_epoch', 'content_revision', 'transform_id', 'mode', 'track_id'].some(key => event[key] !== old.event[key])) {
+                if (event.status === 'ready') bodyCounts.track_changes += 1;   // a clear names no track
                 clearBody(owned, 'scope_changed');
+            }
             const trace = latency?.receive('body', event, receivedAt,
                 latency.captureAgeTiming(connection, event.capture_ts, receivedAt));
             latency?.mark(trace, 'decoded');
-            if (event.content_revision !== owned.engine.contentRevision) { clearBody(owned, 'scope_changed'); return; }
-            if (event.status === 'clear') { clearBody(owned, event.reason); return; }
+            if (event.content_revision !== owned.engine.contentRevision) { bodyCounts.rejected.scope += 1; clearBody(owned, 'scope_changed'); return; }
+            if (event.status === 'clear') {
+                bodyCounts.clears[event.reason] = (bodyCounts.clears[event.reason] ?? 0) + 1;
+                clearBody(owned, event.reason);
+                return;
+            }
             const now = performance.now();
             const producerTime = producerNow(connection, now);
             if (producerTime < event.capture_ts || producerTime >= event.expires_ts) {
-                // Refresh an old, over-conservative anchor on demand, without renewing this frame's lease.
-                if (now - started >= BODY_CLOCK_REFRESH_MS) retryBody(owned, 'stale');
-                else clearBody(owned, 'stale');
+                bodyCounts.rejected[producerTime < event.capture_ts ? 'before_capture' : 'past_lease'] += 1;
+                clearBody(owned, 'stale');
+                connection.late += 1;
+                escapeBody(owned, connection, now);
                 return;
             }
-            owned.ready = { event, decoded, trace };
+            connection.late = 0; connection.acceptedAt = now;
+            if (owned.ready?.decoded) bodyCounts.unapplied += 1;
+            owned.ready = { event, decoded, trace, connection };
             latency?.mark(trace, 'scheduled');
             owned.reason = null;
-            bodyFrames += 1; bodyAt = now;
+            bodyCounts.accepted += 1; bodyAt = now;
         });
         source.addEventListener('error', () => {
-            if (body !== owned || owned.connection !== connection) return;
+            if (body !== owned) return;
+            if (owned.pending === connection) { dropPending(owned, performance.now()); return; }
+            if (owned.connection !== connection) return;
             retryBody(owned, 'unavailable');
         });
     }
@@ -298,19 +364,20 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             const presentation = await current.createUiOverlayLayer({ host, signal: controller.signal, isCurrent: admitted,
                 onPresentationFrame: ({ deltaSeconds }) => {
                     if (!owned.ready) return;
-                    const now = producerNow(owned.connection, performance.now());
-                    if (now >= owned.ready.event.expires_ts) { clearBody(owned, 'stale'); return; }
+                    const now = producerNow(owned.ready.connection, performance.now());
+                    if (now >= owned.ready.event.expires_ts) { bodyCounts.expired += 1; clearBody(owned, 'stale'); return; }
                     if (owned.ready.decoded && (current.rendererBackend === 'webgl' || owned.layer.status().webgpu)) {
                         const ready = owned.ready;
                         owned.layer.updateMeasured(owned.ready.decoded);
                         owned.ready.decoded = null;
+                        bodyCounts.applied += 1;
                         owned.lastPaintAge = now - owned.ready.event.capture_ts;
                         latency?.mark(ready.trace, 'applied');
                         latency?.draw(ready.trace, { root: owned.layer.root,
                             request: context => current.requestPresentationRenderEvidence?.(context),
                             isDrawing: () => current.isPresentationFrame?.() === true,
                             isCurrent: () => admitted() && owned.ready === ready && owned.connection !== null
-                                && producerNow(owned.connection, performance.now()) < ready.event.expires_ts });
+                                && producerNow(ready.connection, performance.now()) < ready.event.expires_ts });
                     }
                     owned.layer.tick(deltaSeconds);
                     owned.labels.tick(deltaSeconds);
@@ -423,7 +490,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         }
         if (!source && (!closedAt || now - closedAt > REOPEN_MS)) open();
         if (bodyKit && !body) void mountBody(current);
-        if (body?.labels && !body.connection && now >= bodyRetryAt) openBody(body);
+        if (body?.labels && !body.connection && now >= bodyRetryAt) { openBody(body, bodyReopen); bodyReopen = null; }
+        if (body?.connection) reanchorBody(body, now);
         spots?.check();
         place();
         render();
@@ -538,6 +606,16 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         setText(chip.querySelector('.home-den-live-chip-banner'), words);
     }
 
+    /* The body stream's counters, as copies: received = accepted + every rejected + every clear, and accepted =
+     * applied + unapplied + pending. The anchor's age is what its bound's rate margin grows with. */
+    function bodyStatus() {
+        const connection = body?.connection, drawn = body?.layer?.status?.().draw_after_apply_s;
+        return { ...bodyCounts, rejected: { ...bodyCounts.rejected }, clears: { ...bodyCounts.clears }, reopens: { ...bodyCounts.reopens },
+            pending: body?.ready?.decoded ? 1 : 0, last_accept_ms: bodyAt || null,
+            anchor_age_s: connection?.serverTs != null ? (performance.now() - connection.started) / 1000 : null,
+            draw_after_apply_ms: Number.isFinite(drawn) ? drawn * 1000 : null };
+    }
+
     setInterval(sync, TICK_MS);
     document.addEventListener('visibilitychange', sync);
     window.addEventListener('pagehide', () => { pageActive = false; close(); });
@@ -550,8 +628,9 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             siteId: engine?.siteId ?? null, events, banner: chip?.dataset.banner ?? null, chip: chip?.isConnected === true,
             layer: layer ? layer.status() : null,
             body: bodyKit ? { stream: body?.connection ? ['connecting', 'open', 'closed'][body.connection.source.readyState] : 'none',
-                mounted: !!body?.layer, frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null,
-                reason: body?.reason ?? null, last_paint_age_s: body?.lastPaintAge ?? null, layer: body?.layer?.status() ?? null } : null ,
+                mounted: !!body?.layer, frames: bodyCounts.accepted, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null,
+                reason: body?.reason ?? null, last_paint_age_s: body?.lastPaintAge ?? null, layer: body?.layer?.status() ?? null,
+                ...bodyStatus() } : null ,
             coordinator: panel ? panel.status() : null, spot: spots?.current() ?? null, caption: caption ? caption.status() : null,
             pipeline: pipeline ? pipeline.status() : null,
             forecast: forecast ? forecast.snapshot() : null }),

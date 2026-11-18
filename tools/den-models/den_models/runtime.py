@@ -7,12 +7,17 @@ import threading
 import time
 
 from .artifacts import read_receipt, snapshot_path
-from .backend import worker_main
+from .backend import NONFATAL_FAILURES, worker_main
 from .contracts import ContractError, canonical, make_hint, profile_digest, validate_request
-from .resources import ControlState, FileExecutionLease, HostProbe, NvidiaProbe, process_start_identity
+from .resources import ControlState, DependencyFlap, FileExecutionLease, HostProbe, NvidiaProbe, process_start_identity
 
 TERMINAL = {"succeeded", "failed", "cancelled", "expired", "invalidated", "superseded", "unsupported"}
 PROOFS = {"cuda_synchronized", "no_native_context"}
+# A live clip expires at most 10 s after submission (expires_at <= cutoff+10,
+# cutoff <= now). A child still busy 20 s after dispatch is hung, not slow:
+# retire it rather than hold the single optional execution indefinitely.
+CLIP_WINDOW_SECONDS = 10
+LIVE_JOB_CEILING_SECONDS = 2 * CLIP_WINDOW_SECONDS
 
 
 class SpawnWorker:
@@ -165,6 +170,12 @@ class Runtime:
             except (ContractError, OSError, ValueError):
                 self._finish(job, "unsupported", "profile_not_admitted")
                 return self._public(job)
+            if not self.resident:
+                # Live clips never start or load the child; a cold load cannot
+                # fit their deadline. Only the operator warmup makes it resident.
+                self._finish(job, "unsupported", "not_resident")
+                self.last_defer_reason = "not_resident"
+                return self._public(job)
             if self.pending is not None:
                 self._finish(self.pending, "superseded", "newer_pending_clip")
             self.pending = job
@@ -198,7 +209,8 @@ class Runtime:
                 return None
             if job["status"] not in TERMINAL:
                 if job is self.active:
-                    self._stop_active("cancelled", "caller_cancelled")
+                    if job["status"] != "stopping":
+                        self._discard_active("cancelled", "caller_cancelled")
                 else:
                     self._finish(job, "cancelled", "caller_cancelled")
                     if self.pending is job:
@@ -206,9 +218,12 @@ class Runtime:
             return self._public(job)
 
     def _public(self, job):
+        hint = job["hint"]
+        if hint is not None and not self.clock() < hint["expires_at"]:
+            hint = None  # Never serve a hint after its own expiry.
         value = {"schema": "den.intent-job/v1", "request_id": job["request"]["request_id"],
                 "clip_id": job["request"]["clip_id"], "profile_digest": job["request"]["profile_digest"],
-                "status": job["status"], "reason": job["reason"], "hint": job["hint"],
+                "status": job["status"], "reason": job["reason"], "hint": hint,
                 "submitted_at": job["submitted_at"], "finished_at": job["finished_at"]}
         return json.loads(canonical(value))
 
@@ -247,9 +262,20 @@ class Runtime:
             self.worker.terminate()
 
     def _stop_active(self, status, reason):
-        if self.active is not None and self.active["status"] != "stopping":
-            self.active.update(status="stopping", reason=reason, stopping_status=status)
+        """Stop by retiring the child; an escalated discard takes this reason."""
+        job = self.active
+        if job is not None and (job["status"] != "stopping" or job.pop("discard", False)):
+            job.update(status="stopping", reason=reason, stopping_status=status)
         self._retire()
+
+    def _discard_active(self, status, reason):
+        """An unwanted live result (expired, cancelled, invalidated).
+
+        The resident child is kept and no hint is emitted. The execution
+        lease stays held until this request's own synchronized completion
+        proof or the child's reap; LIVE_JOB_CEILING_SECONDS bounds the wait.
+        """
+        self.active.update(status="stopping", reason=reason, stopping_status=status, discard=True)
 
     def _compatible(self, job, state):
         return (job["request"].get("_operator_warmup") is True
@@ -278,13 +304,13 @@ class Runtime:
             except (ContractError, OSError, ValueError):
                 observation_error = True
         with self.lock:
-            now = self.clock()
+            now, lapsed = self.clock(), False
             try:
                 state = self.control.read(now)
                 self.source_validated_at = now
                 self.control_valid = True
-            except (ContractError, OSError, ValueError):
-                state = None
+            except (ContractError, OSError, ValueError) as exc:
+                state, lapsed = None, isinstance(exc, DependencyFlap)
                 self.control_valid = False
             if self.admission_valid_until_utc is not None and time.time() >= self.admission_valid_until_utc:
                 self.admitted = False
@@ -299,46 +325,68 @@ class Runtime:
                     self._finish(self.pending, "invalidated", "dependencies_changed")
                     self.pending = None
             if self.active is not None and self.active["status"] != "stopping":
+                # A live clip that expires or whose Den binding changes or
+                # lapses is discarded, never its resident child. Warmup has no
+                # result to discard, and any other control failure (Ops
+                # backoff, Qwen evidence, attestation) still retires as before.
+                stop = self._stop_active if self.active["request"].get("_operator_warmup") else self._discard_active
                 if now >= self.active["request"]["expires_at"]:
-                    self._stop_active("expired", "clip_expired")
-                elif state is None or not self._compatible(self.active, state):
+                    stop("expired", "clip_expired")
+                elif state is None and not lapsed:
                     self._stop_active("invalidated", "dependencies_unavailable_or_changed")
+                elif state is None or not self._compatible(self.active, state):
+                    stop("invalidated", "dependencies_unavailable_or_changed")
+            if (self.active is not None and not self.active["request"].get("_operator_warmup")
+                    and self.retiring_at is None and now - self.active["dispatched_at"] >= LIVE_JOB_CEILING_SECONDS):
+                self._stop_active("failed", "live_job_ceiling_exceeded")
             if self.worker is not None:
                 if now - self.worker_started_at >= self.profile["execution"]["lifetime_seconds"]:
                     if self.active is not None:
                         self._stop_active("expired", "worker_lifetime_exceeded")
                     self._retire()
                 for message in self.worker.poll():
-                    if (self.active is None or self.active["status"] == "stopping"
+                    job = self.active
+                    discarding = job is not None and job.get("discard") is True and self.retiring_at is None
+                    if (job is None or (job["status"] == "stopping" and not discarding)
                             or not isinstance(message, dict)
-                            or message.get("request_id") != self.active["request"]["request_id"]
+                            or message.get("request_id") != job["request"]["request_id"]
                             or message.get("proof") not in PROOFS):
                         # An unexpected protocol message cannot prove that
                         # this job's kernels stopped. Retire and reap.
-                        if self.active is not None and self.active["status"] != "stopping":
+                        if job is not None and (job["status"] != "stopping" or discarding):
                             self._stop_active("failed", "worker_protocol_invalid")
                         continue
-                    job = self.active
+                    warmup = job["request"].get("_operator_warmup") is True
                     outcome, reason, candidate_hint = "failed", "backend_failed", None
-                    if message.get("kind") == "ready" and job["request"].get("_operator_warmup"):
+                    if message.get("kind") == "ready" and warmup:
                         if message.get("snapshot_manifest_digest") == job["admission_digest"]:
                             self.resident = True
                             outcome, reason = "succeeded", None
                         else:
                             reason = "snapshot_manifest_mismatch"
                             self._retire()
-                    elif message.get("kind") == "complete" and not job["request"].get("_operator_warmup"):
+                    elif message.get("kind") == "complete" and not warmup:
                         try:
                             if message.get("snapshot_manifest_digest") != job["admission_digest"]:
                                 raise ContractError("snapshot_manifest_mismatch")
-                            hint = make_hint(job["request"], self.profile,
-                                             message["snapshot_manifest_digest"], message["output"], now)
-                            candidate_hint = hint.as_dict()
-                            outcome, reason = "succeeded", None
-                            self.resident = True
+                            if discarding:
+                                # Synchronized completion proves the child idle
+                                # again; the unwanted result is dropped here.
+                                outcome, reason = job["stopping_status"], job["reason"]
+                            else:
+                                hint = make_hint(job["request"], self.profile,
+                                                 message["snapshot_manifest_digest"], message["output"], now)
+                                candidate_hint = hint.as_dict()
+                                outcome, reason = "succeeded", None
+                                self.resident = True
                         except (ContractError, KeyError, TypeError, ValueError):
                             reason = "backend_output_invalid"
                             self._retire()
+                    elif (message.get("kind") == "failed" and not warmup
+                          and message.get("reason") in NONFATAL_FAILURES):
+                        # Refused before native work; the child keeps serving.
+                        outcome, reason = ((job["stopping_status"], job["reason"]) if discarding else
+                                           (NONFATAL_FAILURES[message["reason"]], message["reason"]))
                     else:
                         self._retire()
                     if not self._release_execution(message["proof"]):
@@ -366,9 +414,17 @@ class Runtime:
                     self.residency_changed(None)
                 elif self.retiring_at is not None and now - self.retiring_at >= 2:
                     self.worker.kill()
-                elif self.active is None and now - self.last_activity >= self.profile["execution"]["idle_seconds"]:
+                elif self.active is None and self._idle_expired(now):
+                    # Explicit end of residency: live clips are then refused
+                    # not_resident until a fresh operator warmup (health
+                    # warmup_required); nothing reloads implicitly.
                     self._retire()
             if self.pending is None or self.active is not None or self.retiring_at is not None or self.closed:
+                return
+            if not self.pending["request"].get("_operator_warmup") and (not self.resident or self.worker is None):
+                self._finish(self.pending, "unsupported", "not_resident")
+                self.pending = None
+                self.last_defer_reason = "not_resident"
                 return
             if self.resource_fault:
                 return self._defer("resource_lease_fault")
@@ -401,6 +457,7 @@ class Runtime:
             self.active, self.pending = self.pending, None
             self.active.update(status="running", reason=None)
             self.active["admission_digest"] = admission_digest
+            self.active["dispatched_at"] = now
             self.last_defer_reason = None
             self.last_activity = now
             try:
@@ -423,6 +480,17 @@ class Runtime:
                     self.active = None
                     self._release_execution("no_native_context")
 
+    def _idle_expired(self, now):
+        """Idle residency ends idle_seconds after the last dispatch or completion.
+
+        Only a clip no tick has evaluated yet holds it, and for at most one
+        clip window. A deferred clip (Qwen busy, control unavailable, headroom)
+        never extends residency, so a stream of them cannot pin the model.
+        """
+        fresh = self.pending is not None and self.pending["status"] == "queued"
+        return (now - self.last_activity - self.profile["execution"]["idle_seconds"]
+                >= (CLIP_WINDOW_SECONDS if fresh else 0))
+
     def _defer(self, reason):
         self.last_defer_reason = reason
         if self.pending is not None:
@@ -433,6 +501,7 @@ class Runtime:
             now = self.clock()
             admitted = self.admitted and (self.admission_valid_until_utc is None
                                          or time.time() < self.admission_valid_until_utc)
+            warming = any(job is not None and job["request"].get("_operator_warmup") for job in (self.active, self.pending))
             return {"schema": "den.model-health/v1", "profile_id": self.profile["id"],
                     "model_repository": self.profile["repository"], "model_revision": self.profile["revision"],
                     "observed_at": now, "offline": True,
@@ -445,7 +514,8 @@ class Runtime:
                     "driver_free_bytes": self.driver_free_bytes, "host_available_bytes": self.host_available_bytes,
                     "resources_observed_at": self.resources_observed_at,
                     "loaded": self.resident, "worker_present": self.worker is not None,
-                    "resident": self.resident, "residency_reservation_bytes":
+                    "resident": self.resident, "warmup_required": not self.resident and not warming,
+                    "residency_reservation_bytes":
                     self.profile["execution"]["gpu_reservation_bytes"] if self.worker else 0,
                     "execution_lease_held": self.execution_token is not None,
                     "startup_in_progress": self.active is not None and self.active["request"].get("_operator_warmup") is True,

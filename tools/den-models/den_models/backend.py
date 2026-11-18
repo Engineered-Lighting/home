@@ -8,6 +8,13 @@ import time
 from .artifacts import check_runtime, cgroup_limits, read_receipt, read_runtime_manifest, verify_snapshot
 from .contracts import CHOICES, QUESTION, ContractError, finite, load_rgb_frames
 
+# Refusals raised before any native model call for the request. The child
+# synchronizes, reports them and keeps serving: they are not worker faults.
+# Headroom refusals stay fatal because residency itself is the pressure.
+# Value: the job's terminal status in the host runtime.
+NONFATAL_FAILURES = {"clip_expired_before_native_work": "expired", "qwen_busy_before_native_work": "failed",
+                     "control_state_unavailable_before_native_work": "invalidated"}
+
 
 class VjepaBackend:
     def __init__(self, config, profile, *, clock=time.monotonic):
@@ -20,11 +27,14 @@ class VjepaBackend:
     def native_gate(self, *, cold):
         from .resources import ControlState, HostProbe, NvidiaProbe
         caps = self.profile["execution"]
-        state = ControlState(self.config["control_state_file"],
-                             expected_lease_file=self.config["execution_lease_file"],
-                             queue_receipt_file=self.config["queue_receipt_file"], queue_receipt_gid=self.config["queue_receipt_gid"],
-                             expected_qwen_config_sha256=self.config["qwen_observer_config_sha256"],
-                             expected_qwen_policy_sha256=self.config["qwen_binding_policy_sha256"]).read(time.monotonic())
+        try:
+            state = ControlState(self.config["control_state_file"],
+                                 expected_lease_file=self.config["execution_lease_file"],
+                                 queue_receipt_file=self.config["queue_receipt_file"], queue_receipt_gid=self.config["queue_receipt_gid"],
+                                 expected_qwen_config_sha256=self.config["qwen_observer_config_sha256"],
+                                 expected_qwen_policy_sha256=self.config["qwen_binding_policy_sha256"]).read(time.monotonic())
+        except ContractError:
+            raise ContractError("control_state_unavailable_before_native_work") from None
         if state["qwen_busy"]:
             raise ContractError("qwen_busy_before_native_work")
         incremental = caps["gpu_reservation_bytes"] if cold else 0
@@ -193,9 +203,11 @@ def worker_main(connection, config, profile):
                     backend.synchronize()
                 except Exception:
                     raise RuntimeError("native_completion_unproven") from None
-                connection.send({"kind": "failed", "request_id": request["request_id"],
-                                 "reason": str(exc) if isinstance(exc, ContractError) else "backend_failed",
+                reason = str(exc) if isinstance(exc, ContractError) else "backend_failed"
+                connection.send({"kind": "failed", "request_id": request["request_id"], "reason": reason,
                                  "proof": "cuda_synchronized" if backend.torch is not None else "no_native_context"})
+                if message["command"] == "infer" and reason in NONFATAL_FAILURES:
+                    continue
                 break
     except (EOFError, BrokenPipeError, OSError):
         pass

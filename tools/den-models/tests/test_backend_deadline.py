@@ -3,10 +3,10 @@ from contextlib import nullcontext
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from den_models.backend import VjepaBackend
+from den_models.backend import NONFATAL_FAILURES, VjepaBackend
 from den_models.contracts import ContractError
 
 
@@ -72,6 +72,17 @@ class BackendDeadlineTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             self.backend.infer(self.request)
         self.assert_no_model_call()
+
+    def test_control_flap_at_native_gate_is_one_fixed_nonfatal_refusal(self):
+        backend = VjepaBackend({key: None for key in ("control_state_file", "execution_lease_file", "queue_receipt_file",
+                                                     "queue_receipt_gid", "qwen_observer_config_sha256",
+                                                     "qwen_binding_policy_sha256")}, {"execution": {}})
+        reader = Mock()
+        reader.return_value.read.side_effect = ContractError("control_admission_blocked")
+        with patch("den_models.resources.ControlState", reader), \
+                self.assertRaisesRegex(ContractError, r"\Acontrol_state_unavailable_before_native_work\Z"):
+            backend.native_gate(cold=False)
+        self.assertEqual(NONFATAL_FAILURES["control_state_unavailable_before_native_work"], "invalidated")
 
     def test_fresh_choose_and_chat_keep_existing_bounded_contract(self):
         self.assertEqual(self.backend.infer(self.request)["intent"], "continue")

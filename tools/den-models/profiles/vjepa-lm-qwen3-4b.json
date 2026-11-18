@@ -1,6 +1,6 @@
 {
   "schema": "den.model-profile/v1",
-  "adapter_bundle_sha256": "d2ddd7eb802b77e5931a3898ed62de72b5096f42d2dec47338ca10f0a5d45585",
+  "adapter_bundle_sha256": "7089d829f7bb94c1f46fa7585a6f39daf0ce1e31ca6074fc4111a908eaa54426",
   "id": "vjepa-lm-qwen3-4b",
   "role": "benchmark_control",
   "backend": "vjepa_lm",

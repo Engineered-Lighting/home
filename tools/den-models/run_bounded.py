@@ -34,8 +34,11 @@ def command(config_path, python_path, block_device, *, warmup=False):
                        str(Path(config["residency_file"]).parent)})
     properties = ["CPUQuota=400%", "MemoryMax=25769803776", "MemorySwapMax=0", "TasksMax=128",
                   "IOReadBandwidthMax=" + str(block_device) + " 104857600", "RuntimeMaxSec=1800",
+                  # OOMPolicy=kill sets memory.oom.group itself. There is no
+                  # MemoryOOMGroup= key: systemd 255 ignores it in unit files
+                  # and systemd-run would refuse it as a transient property.
                   "KillMode=control-group", "TimeoutStopSec=5", "SendSIGKILL=yes", "OOMPolicy=kill",
-                  "MemoryOOMGroup=yes", "NoNewPrivileges=yes", "PrivateTmp=yes", "UMask=0077",
+                  "NoNewPrivileges=yes", "PrivateTmp=yes", "UMask=0077",
                   "ProtectSystem=strict", "ReadWritePaths=" + " ".join(writable),
                   "ReadOnlyPaths=" + " ".join([config["snapshot_root"], config["receipt_root"], config["frame_root"]])]
     result = ["systemd-run", "--user", "--collect", "--unit=den-models-" + profile["id"]]

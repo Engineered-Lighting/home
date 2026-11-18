@@ -15,6 +15,11 @@ import re
 
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 IDENT = re.compile(r"[A-Za-z0-9_.:-]{1,128}\Z")
+# Den lineage values such as the transform "den-oak@2026-11-13.1" carry "@".
+# They are only compared for equality and echoed; never a path, URL or unit
+# name. The Den side (den-live intent.py) uses this identical grammar.
+LINEAGE = re.compile(r"[A-Za-z0-9_.:@-]{1,128}\Z")
+LINEAGE_FIELDS = frozenset(("transform_id",))
 CHOICES = ("continue", "stop", "turn_left", "turn_right", "unclear")
 QUESTION = ("Based only on this person's observed motion, which near-term movement "
             "intent is best supported? Choose unclear when the evidence is insufficient. "
@@ -56,6 +61,12 @@ def finite(value):
 
 def ident(value):
     return isinstance(value, str) and bool(IDENT.fullmatch(value))
+
+
+def binding_values_valid(dependencies):
+    """Lineage grammar for LINEAGE_FIELDS only; every other binding stays IDENT."""
+    return all(isinstance(value, str) and bool((LINEAGE if name in LINEAGE_FIELDS else IDENT).fullmatch(value))
+               for name, value in dependencies.items())
 
 
 def keys(value, expected, reason):
@@ -163,7 +174,7 @@ def validate_request(value, *, profile, now):
     if not ident(value["request_id"]) or not ident(value["clip_id"]):
         raise ContractError("invalid_request_identity")
     keys(value["dependencies"], DEPENDENCIES, "invalid_dependencies")
-    if not all(ident(v) for v in value["dependencies"].values()):
+    if not binding_values_valid(value["dependencies"]):
         raise ContractError("invalid_dependencies")
     dep = value["dependencies"]
     if (not re.fullmatch(r"0|[1-9][0-9]*", dep["camera_epoch"])

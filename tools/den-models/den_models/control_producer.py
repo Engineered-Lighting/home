@@ -18,7 +18,8 @@ import time
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from den_models.contracts import (ContractError, DEPENDENCIES, HEX64, canonical, finite, ident, strict_json)
+from den_models.contracts import (ContractError, DEPENDENCIES, HEX64, binding_values_valid, canonical, finite, ident,
+                                  strict_json)
 from den_models.resources import (HostProbe, NvidiaProbe, current_boot_id, private_json,
                                   process_start_identity, lease_path_digest)
 from den_models.qwen_queue import QueueReader, source_from_receipt
@@ -28,6 +29,7 @@ CLOCK_DOMAIN = "la_host_monotonic/v1"
 PRODUCER_SCHEMA = "den.model-control-producer/v2"
 BROKER_SCOPE = "single_optional_execution"
 STEPS = ("normal", "cadence_reduced", "deep_stack_paused", "loop_stopped")
+REASON_CODE = re.compile(r"[a-z_]{1,80}\Z")
 CONFIG_KEYS = {"schema", "vllm_port", "ops_status_file", "ops_host", "dependencies_file", "control_file",
                "execution_lease_file", "gpu_selector", "shared_gid", "poll_seconds",
                "ops_max_age_seconds", "trusted_source_uids", "ops_owner_uid", "queue_receipt_file",
@@ -48,7 +50,7 @@ def validate_dependencies(doc, now):
     seen = set()
     for deps in doc["dependencies"]:
         if (not isinstance(deps, dict) or set(deps) != set(DEPENDENCIES)
-                or not all(ident(value) for value in deps.values())
+                or not binding_values_valid(deps)
                 or not re.fullmatch(r"0|[1-9][0-9]*", deps["camera_epoch"])
                 or not re.fullmatch(r"0|[1-9][0-9]*", deps["association_revision"])
                 or not HEX64.fullmatch(deps["calibration_revision"])
@@ -169,10 +171,12 @@ class Producer:
         try:
             values = call()
             return {"ok": True, "started_at": started, "observed_at": self.clock(), **values}
-        except Exception:
-            # Fixed reason only: never copy arbitrary HTTP/file contents.
+        except Exception as exc:
+            # Fixed reason only: never copy arbitrary HTTP/file contents. A
+            # ContractError carries a fixed code (e.g. dependencies_lineage_invalid).
+            code = str(exc) if isinstance(exc, ContractError) else ""
             return {"ok": False, "started_at": started, "observed_at": self.clock(),
-                    "reason": name + "_unavailable"}
+                    "reason": code if REASON_CODE.fullmatch(code) else name + "_unavailable"}
 
     def sample(self):
         cfg = self.config

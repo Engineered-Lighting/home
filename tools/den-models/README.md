@@ -32,7 +32,9 @@ Optional operator `--warmup` performs one frameless synthetic tuple inference
 before live jobs, discards its output, and emits no hint. Cold full-file
 verification/loading has a separate startup deadline; live hints must expire
 within ten seconds of their source cutoff (the Den bridge uses two seconds).
-The first live clip can expire while loading if warmup was not completed.
+Warmup is the only path that starts or loads the child: a live clip submitted
+while the worker is not resident is refused at once as `unsupported` with
+reason `not_resident`, no hint, and `/healthz` reports `warmup_required`.
 
 Every endpoint requires `Authorization: Bearer <64 lowercase hex characters>`
 read from an operator-owned mode-0600 local file. The server binds only
@@ -59,6 +61,10 @@ transform, scan, and calibration revision is bound and echoed. Numeric frame
 and association counters are canonical decimal strings in the envelope.
 `source_generation` is SHA256 of compact JSON `[service_run_id,camera_epoch]`
 with an integer epoch. All times use the shared host monotonic clock.
+Binding values use `[A-Za-z0-9_.:-]{1,128}`, except `transform_id`, which uses
+the Den lineage grammar `[A-Za-z0-9_.:@-]{1,128}` for real transforms such as
+`den-oak@2026-11-13.1`. Lineage values are compared and echoed only; request
+and frame identities, which appear in URLs, never accept `@`.
 
 Four-second walking and eight-second reference windows use uniform slot
 centers. Each slot uses the newest source frame captured at or before that
@@ -123,7 +129,9 @@ evidence blocks; it does not fabricate a person or extend old authority.
 
 The producer writes atomic mode-0600 receipts at a bounded cadence, with
 separate source observation times, actual queue counts, actual Ops state,
-driver/RAM observations, and `admission_blocked` reasons. ControlState checks
+driver/RAM observations, and `admission_blocked` reasons. A failed source
+keeps its fixed failure code as its `reason` (for example
+`dependencies_lineage_invalid`); arbitrary error text is never copied. ControlState checks
 private path/owner/permissions, the producer's live PID and boot/start identity,
 reviewed producer source hash, LA monotonic clock domain, source freshness,
 and exact execution-lease path digest. A different broker path is rejected.
@@ -237,12 +245,31 @@ The observed 17.8 GiB publisher single-clip figure is not an NVML peak bound.
 Memory residency and GPU execution are separate. A successful native job
 calls `torch.cuda.synchronize` before its private-pipe completion proof and
 releases its execution lease, while model residency remains accounted. Idle
-residency expires after 120 seconds and child lifetime after 30 minutes.
-Cancellation, timeout, invalidation, malformed completion, or worker loss
-retains the execution lease until the child exits and is reaped. Merely
+residency expires 120 seconds after the last dispatch or completion, and child
+lifetime after 30 minutes. A deferred clip (Qwen busy, control state
+unavailable, headroom) never extends residency; only a just-submitted clip not
+yet evaluated holds it, for at most one 10-second clip window. After either
+limit, live clips get `not_resident` until an operator restarts the service
+with `--warmup`. Nothing reloads implicitly.
+
+A live clip that expires, is cancelled, or is invalidated because its Den
+binding changed or lapsed keeps the resident child: the job stays `stopping`
+and holds the execution lease until that request's own synchronized
+completion proof, then ends with no hint. Person-bound source documents live
+about one second, so ControlState reports a lapse separately, and only when
+every other check holds. Any other control failure while a clip runs (Ops
+backoff, Qwen evidence, producer attestation or freshness, resources) retires
+the child as before. The child likewise reports refusals before native work
+(expired clip, Qwen busy, unreadable control state) and keeps serving. A job
+still running 20 seconds after dispatch, twice the longest permitted clip
+window, retires the child. Malformed completion, a protocol violation, worker
+loss, admission expiry, lifetime, a lease-release fault or a headroom refusal
+also retires it, and the lease is then held until the child exits and is
+reaped. Merely
 cancelling a Python future or closing an HTTP connection is not completion.
-Memory reservation is removed only after reap. The idle model can coexist
-with another admitted participant's execution.
+A hint is never served after its own expiry. Memory reservation is removed
+only after reap. The idle model can coexist with another admitted
+participant's execution.
 
 The default `FileExecutionLease` uses a private O_EXCL file containing an
 opaque token, owner PID, boot/start identity, and request digest. It never
@@ -261,6 +288,19 @@ read I/O 100 MiB/s for that device, runtime 30 minutes, and control-group kill.
 The child verifies inherited cgroup-v2 CPU/RAM/swap/tasks/I/O caps before heavy
 imports. The PyTorch allocator fraction is an extra allocator guard, not a
 driver-level partition. These boundaries do not establish sustained admission.
+
+`ops/qualify_live_guards.py` qualifies the guard units before a trial. By
+default it prints its plan; `--execute` needs the Ops lease and preflight.
+PIDs, units, scope and host paths are arguments. It never runs
+`systemctl daemon-reload` and refuses when a target unit needs one, verifies
+existing staging directories instead of recreating them, records each
+sample's dependency count and reason codes, and succeeds only on the required
+number of consecutive fully OK control receipts. Only distinct, advancing,
+fresh receipts count (receipt at most 1.5 s old, every source at most 2 s);
+repeat reads of one receipt count once, and it samples faster than the
+producer's 0.2 s minimum poll so no receipt is skipped. The scope's `RuntimeMaxSec` is derived
+from the sampling window and every host-side timeout, and a failed or timed-out
+ssh still leaves a receipt with a fixed error code. It never starts the worker.
 
 ## Provisioning receipt
 

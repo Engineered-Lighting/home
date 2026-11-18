@@ -23,6 +23,7 @@ ROOT_FILES = frozenset(("README.md", "requirements.lock", "requirements-test.loc
 MODULES = frozenset(("__init__.py", "artifacts.py", "backend.py", "client.py", "contracts.py", "resources.py",
                      "runtime.py", "server.py", "specialists.py", "specialist_cli.py", "control_producer.py",
                      "qwen_queue.py", "qwen_observer.py"))
+OPS_FILES = frozenset(("qualify_live_guards.py",))
 REQUIRED = frozenset(("requirements.lock", "serve.py", "run_bounded.py", "den_models/__init__.py",
                       "den_models/artifacts.py", "den_models/backend.py", "den_models/client.py",
                       "den_models/contracts.py", "den_models/resources.py", "den_models/runtime.py",
@@ -65,6 +66,8 @@ def allowed(name):
         return True
     if len(path.parts) == 2 and path.parts[0] == "den_models":
         return path.name in MODULES
+    if len(path.parts) == 2 and path.parts[0] == "ops":
+        return path.name in OPS_FILES
     if len(path.parts) == 2 and path.parts[0] == "tests":
         return re.fullmatch(r"test_[a-z0-9_]+\.py", path.name) is not None
     return (len(path.parts) in (2, 3) and path.parts[0] == "profiles"

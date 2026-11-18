@@ -10,7 +10,8 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from den_models import control_producer as cp
 from den_models.contracts import ContractError, canonical
-from den_models.resources import ControlState, FileExecutionLease, file_permissions, parent_permissions, private_json
+from den_models.resources import (ControlState, DependencyFlap, FileExecutionLease, file_permissions, parent_permissions,
+                                  private_json)
 import test_runtime as fixtures
 import test_qwen_queue as queue_fixtures
 
@@ -168,25 +169,97 @@ class ProducerTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             self.f.reader().read(100)
 
-    def test_blocked_control_never_releases_active_native_lease_before_reap(self):
+    def running_job(self):
         runtime_fixture = fixtures.RuntimeTests()
         runtime_fixture.setUp()
         runtime = runtime_fixture.runtime
         runtime.control, runtime.clock = self.f.reader(), self.f.clock
         self.f.publish()
+        worker = runtime_fixture.warm()
         runtime.submit(fixtures.request())
         runtime.tick()
         self.assertEqual(runtime_fixture.lease.held, "job-1")
+        return runtime_fixture, runtime, worker
+
+    def test_blocked_control_never_releases_active_native_lease_before_reap(self):
+        runtime_fixture, runtime, worker = self.running_job()
         self.f.docs[self.f.config["ops_status_file"]].update(level=3, latched=True, step="loop_stopped")
         self.f.publish()
         runtime.tick()
         self.assertEqual(runtime.get("job-1")["status"], "stopping")
         self.assertEqual(runtime_fixture.lease.held, "job-1")
         self.assertIsNone(runtime.get("job-1")["hint"])
-        runtime_fixture.workers[0].alive = False
+        self.assertTrue(worker.terminate_requested)  # Ops backoff still retires the child.
+        worker.complete()
+        runtime.tick()
+        self.assertEqual(runtime_fixture.lease.held, "job-1")
+        worker.alive = False
         runtime.tick()
         self.assertEqual(runtime.get("job-1")["status"], "invalidated")
-        self.assertEqual(runtime_fixture.lease.releases, ["process_reaped"])
+        self.assertEqual(runtime_fixture.lease.releases, ["cuda_synchronized", "process_reaped"])
+
+    def test_dependency_lapse_discards_the_clip_and_keeps_the_resident_worker(self):
+        for republish in (False, True):
+            with self.subTest(republish=republish):
+                self.f = Fixture(self.temp.name)
+                self.f.docs[self.f.config["dependencies_file"]]["valid_until"] = 100.5
+                runtime_fixture, runtime, worker = self.running_job()
+                self.f.clock.now = 100.6  # The person-bound source aged out; Qwen evidence lasts to 101.
+                if republish:
+                    self.assertEqual(self.f.publish()["blocked_reasons"], ["dependencies_unavailable"])
+                runtime.tick()
+                self.assertEqual(runtime.get("job-1")["status"], "stopping")
+                self.assertFalse(worker.terminate_requested)
+                worker.complete()
+                runtime.tick()
+                job = runtime.get("job-1")
+                self.assertEqual((job["status"], job["hint"]), ("invalidated", None))
+                self.assertEqual(runtime_fixture.lease.releases, ["cuda_synchronized", "cuda_synchronized"])
+                self.assertFalse(worker.terminate_requested)
+                self.assertTrue(runtime.resident)
+
+    def test_dependency_lapse_is_classified_only_when_every_other_check_holds(self):
+        self.f.docs[self.f.config["dependencies_file"]]["valid_until"] = 100.5
+        self.f.publish()
+        with self.assertRaisesRegex(DependencyFlap, r"\Acontrol_state_unavailable\Z"):
+            self.f.reader().read(100.6)
+        for other in ("qwen_expired", "ops_backoff", "binding_mismatch"):
+            with self.subTest(other=other):
+                self.f.clock.now = 100
+                state = self.f.publish()
+                now = 100.6
+                if other == "qwen_expired":
+                    now = 101  # The Qwen receipt expired too.
+                elif other == "ops_backoff":
+                    self.f.docs[self.f.config["ops_status_file"]].update(level=1, step="cadence_reduced")
+                    self.f.clock.now = 100.6
+                    self.assertEqual(self.f.publish()["blocked_reasons"], ["den_ops_backoff", "dependencies_unavailable"])
+                    self.f.docs[self.f.config["ops_status_file"]].update(level=0, step="normal")
+                else:
+                    state["sources"]["dependencies"]["dependencies"] = []
+                    cp.write_atomic(self.f.config["control_file"], state)
+                with self.assertRaisesRegex(ContractError, r"\Acontrol_state_unavailable\Z") as caught:
+                    self.f.reader().read(now)
+                self.assertNotIsInstance(caught.exception, DependencyFlap)
+
+    def test_real_den_transform_passes_and_lineage_failure_names_its_code(self):
+        deps = self.f.docs[self.f.config["dependencies_file"]]["dependencies"]
+        deps[0] = fixtures.dependencies("den-oak@2026-11-13.1")
+        state = self.f.publish()
+        self.assertFalse(state["admission_blocked"])
+        self.assertEqual(self.f.reader().read(100)["dependencies"], deps)
+        for bad in ("den-oak@2026/../x", "den oak@1", "../den-oak"):
+            with self.subTest(bad=bad):
+                deps[0] = fixtures.dependencies(bad)
+                state = self.f.publish()
+                self.assertTrue(state["admission_blocked"])
+                self.assertEqual(state["dependencies"], [])
+                self.assertEqual(state["sources"]["dependencies"]["reason"], "dependencies_lineage_invalid")
+                self.assertIn("dependencies_unavailable", state["blocked_reasons"])
+                with self.assertRaises(ContractError):
+                    self.f.reader().read(100)
+        self.f.gpu.free_bytes.side_effect = OSError("driver text must not be copied")
+        self.assertEqual(self.f.publish()["sources"]["gpu"]["reason"], "gpu_unavailable")
 
     def test_unknown_sources_never_become_idle_or_normal(self):
         failures = (lambda: self.f.queue.receipt.update(status="unknown"),

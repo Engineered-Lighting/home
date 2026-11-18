@@ -135,6 +135,11 @@ class BundleTests(unittest.TestCase):
         self.assertFalse(bundle.allowed("control-producer.json"))
         self.assertFalse(bundle.allowed("den_models/credentials.py"))
 
+    def test_reviewed_ops_harness_is_allowed_but_other_ops_files_are_not(self):
+        self.assertTrue(bundle.allowed("ops/qualify_live_guards.py"))
+        self.assertFalse(bundle.allowed("ops/receipt.json"))
+        self.assertFalse(bundle.allowed("ops/nested/qualify_live_guards.py"))
+
 
 if __name__ == "__main__":
     unittest.main()

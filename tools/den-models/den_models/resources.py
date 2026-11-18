@@ -177,6 +177,21 @@ class FileExecutionLease:
         return True
 
 
+# Producer reasons meaning only that the person-bound Den binding lapsed:
+# its source documents live about 1 s, so this flaps while someone is present.
+DEPENDENCY_LAPSES = frozenset(("dependencies_unavailable", "dependencies_observation_stale",
+                               "dependencies_expired_during_observation"))
+
+
+class DependencyFlap(ContractError):
+    """Control state unavailable only because the Den binding lapsed.
+
+    Raised (still as control_state_unavailable) only when every other check
+    holds, so Ops backoff, Qwen evidence, attestation or resource failures
+    never take this class.
+    """
+
+
 class ControlState:
     """Attested live producer receipt; manual healthy JSON cannot admit work."""
     def __init__(self, path, max_age=2.0, *, expected_lease_file=None, shared_gid=None, identity=None, boot=None, wall=None,
@@ -228,12 +243,17 @@ class ControlState:
                     or not all(isinstance(reason, str) and re.fullmatch(r"[a-z_]{1,80}", reason)
                                for reason in state["blocked_reasons"])):
                 raise ContractError("control_admission_barrier_invalid")
-            if state["admission_blocked"] or state["blocked_reasons"]:
+            # A lapse is still refused, but only after every other check below.
+            lapse = (state["admission_blocked"] and bool(state["blocked_reasons"])
+                     and set(state["blocked_reasons"]) <= DEPENDENCY_LAPSES)
+            if (state["admission_blocked"] or state["blocked_reasons"]) and not lapse:
                 raise ContractError("control_admission_blocked")
             sources = state["sources"]
             if not isinstance(sources, dict) or set(sources) != {"qwen", "den_ops", "dependencies", "gpu", "host", "broker"}:
                 raise ContractError("control_source_evidence_missing")
-            for source in sources.values():
+            for name, source in sources.items():
+                if lapse and name == "dependencies":
+                    continue
                 if (not isinstance(source, dict) or source.get("ok") is not True
                         or type(source.get("observed_at")) not in (int, float)
                         or not 0 <= now - source["observed_at"] <= self.max_age):
@@ -244,11 +264,14 @@ class ControlState:
                     or type(ops.get("checked_at_utc")) not in (int, float)
                     or not 0 <= self.wall() - ops["checked_at_utc"] <= 90):
                 raise ContractError("control_ops_backoff_or_unknown")
-            if (type(deps.get("source_observed_at")) not in (int, float)
-                    or type(deps.get("valid_until")) not in (int, float)
-                    or not deps["source_observed_at"] <= now < deps["valid_until"] <= deps["source_observed_at"] + 2
-                    or deps.get("dependencies") != state["dependencies"]):
-                raise ContractError("control_dependencies_stale_or_changed")
+            if not lapse:
+                if (type(deps.get("source_observed_at")) not in (int, float)
+                        or type(deps.get("valid_until")) not in (int, float)
+                        or not deps["source_observed_at"] <= now
+                        or not deps["valid_until"] <= deps["source_observed_at"] + 2
+                        or deps.get("dependencies") != state["dependencies"]):
+                    raise ContractError("control_dependencies_stale_or_changed")
+                lapse = not now < deps["valid_until"]  # Aged out since the producer's write.
             if (any(type(qwen.get(name)) is not int or qwen[name] < 0 for name in ("running", "waiting"))
                     or type(qwen.get("busy")) is not bool
                     or qwen["busy"] != (qwen["running"] > 0 or qwen["waiting"] > 0)
@@ -273,9 +296,13 @@ class ControlState:
                     or copied["binding_sha256"] != current["binding_sha256"]
                     or copied["observer"] != current["observer"] or copied["sequence"] > current["sequence"]):
                 raise ContractError("control_root_queue_binding_changed_or_unproven")
+            if lapse:
+                raise DependencyFlap("control_dependencies_lapsed")
             result = strict_json(canonical(state))
             result["qwen_busy"] = state["qwen_busy"] or bool(current["gauges"]["running"] or current["gauges"]["waiting"])
             result["sources"]["qwen"]["current_verified_observation"] = source_from_receipt(current)
             return result
+        except DependencyFlap:
+            raise DependencyFlap("control_state_unavailable") from None
         except (OSError, ValueError):
             raise ContractError("control_state_unavailable") from None

@@ -35,6 +35,7 @@ class TransportTests(unittest.TestCase):
         fixture.setUp()
         self.fixture, self.runtime = fixture, fixture.runtime
         self.runtime.refresh_admission()
+        fixture.warm()
         self.token = "e" * 64
         self.handler = handler_for(self.runtime, self.token)
 
@@ -129,6 +130,33 @@ class NativeProtocolTests(unittest.TestCase):
         self.assertEqual([m["kind"] for m in connection.sent], ["ready", "complete"])
         self.assertTrue(all(m["proof"] == "cuda_synchronized" for m in connection.sent))
         self.assertTrue(connection.closed)
+
+    def test_refusal_before_native_work_keeps_child_serving_but_faults_exit(self):
+        for reason, survives in (("clip_expired_before_native_work", True), ("qwen_busy_before_native_work", True),
+                                 ("control_state_unavailable_before_native_work", True),
+                                 ("gpu_headroom_changed_before_native_work", False)):
+            events = []
+            class Backend:
+                torch = object()
+                receipt_digest = DIGEST
+                def __init__(self, config, profile):
+                    pass
+                def infer(self, request):
+                    events.append("infer")
+                    if request["request_id"] == "first":
+                        raise ContractError(reason)
+                    return {"intent": "unclear"}
+                def synchronize(self):
+                    events.append("synchronize")
+            connection = Connection([{"command": "infer", "request": {"request_id": "first"}},
+                                     {"command": "infer", "request": {"request_id": "second"}},
+                                     {"command": "stop"}], events)
+            with self.subTest(reason=reason), patch("den_models.backend.VjepaBackend", Backend):
+                worker_main(connection, {}, {})
+                self.assertEqual(connection.sent[0], {"kind": "failed", "request_id": "first", "reason": reason,
+                                                      "proof": "cuda_synchronized"})
+                self.assertEqual([m["kind"] for m in connection.sent], ["failed", "complete"] if survives else ["failed"])
+                self.assertTrue(connection.closed)
 
     def test_failed_native_synchronization_never_emits_false_terminal_proof(self):
         events = []

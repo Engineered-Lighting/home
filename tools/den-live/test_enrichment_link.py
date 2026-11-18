@@ -244,6 +244,37 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(value["state"], "preparing")
         self.assertFalse(value["loaded"])
 
+    def test_unobserved_enabled_stage_has_no_fabricated_lease(self):
+        for now in (self.clock(), self.clock() + 20):
+            raw = self.bridge.stages(now)[0]
+            value = model_projection.stage(raw, now)
+            self.assertTrue(value["configured"])
+            self.assertEqual(value["id"], "vjepa-lm-qwen3-8b")
+            self.assertEqual(value["state"], "unavailable")
+            for key in ("observed_mono", "valid_until_mono", "loaded", "provisioned"):
+                self.assertIsNone(raw[key])
+                self.assertIsNone(value[key])
+
+    def test_real_observation_lease_is_preserved_after_expiry(self):
+        self.bridge._poll_health(self.clock())
+        fresh = self.bridge.stages(self.clock())[0]
+        self.assertTrue(fresh["loaded"])
+        self.assertEqual(fresh["state"], "idle")
+        self.assertEqual((fresh["observed_mono"], fresh["valid_until_mono"]), (self.clock(), self.clock() + 3))
+        old = self.bridge.stages(self.clock() + 20)[0]
+        self.assertEqual(old["state"], "unavailable")
+        self.assertIsNone(old["loaded"])
+        self.assertEqual((old["observed_mono"], old["valid_until_mono"]),
+                         (fresh["observed_mono"], fresh["valid_until_mono"]))
+
+    def test_disabled_stage_keeps_its_current_local_observation_lease(self):
+        disabled = link.Bridge(camera_id="camera", threaded=False)
+        for now in (100, 120):
+            value = disabled.stages(now)[0]
+            self.assertEqual(value["state"], "disabled")
+            self.assertFalse(value["configured"])
+            self.assertEqual((value["observed_mono"], value["valid_until_mono"]), (now, now + 3))
+
     def test_publisher_repository_id_survives_but_urls_do_not(self):
         self.bridge._poll_health(self.clock())
         value = self.bridge.stages(self.clock())[0]

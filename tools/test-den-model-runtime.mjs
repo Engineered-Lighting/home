@@ -130,6 +130,28 @@ test('unknown clock never yields freshness, including inconsistent callback cont
     assert.equal(row({ observed_mono: null, valid_until_mono: null }).freshness, 'unknown');
 });
 
+test('configured unobserved 8B remains renderable while genuine lease times stay exact', () => {
+    const waiting = stage({ id: 'vjepa-lm-qwen3-8b', role: 'motion_intent', state: 'unavailable', configured: true,
+        model_id: 'kkt94/Llama-V-JEPA-LM-Qwen3-8B', observed_mono: null, valid_until_mono: null,
+        loaded: null, provisioned: null, queued: null, running: null, reason: 'stage_observation_stale' });
+    const expired = stage({ id: 'expired', state: 'unavailable', observed_mono: 6, valid_until_mono: 9, loaded: null });
+    const fresh = stage({ id: 'fresh', state: 'idle', observed_mono: 10, valid_until_mono: 13, loaded: true });
+    const output = normalizeDenModelStages(packet([waiting, expired, fresh]), options({ now: 3200 }));
+    assert.equal(output.rejected_stages, 0);
+    assert.equal(output.stages.length, 3);
+    const [unknown, old, current] = output.stages;
+    assert.equal(unknown.configured, true);
+    assert.equal(unknown.freshness, 'unknown');
+    assert.equal(denModelStageLabel(unknown), 'Unavailable');
+    assert.equal(unknown.loaded, null);
+    assert.deepEqual([unknown.observed_mono, unknown.valid_until_mono], [null, null]);
+    assert.equal(old.freshness, 'stale');
+    assert.deepEqual([old.observed_mono, old.valid_until_mono], [6, 9]);
+    assert.equal(current.freshness, 'fresh');
+    assert.equal(current.loaded, true);
+    assert.deepEqual([current.observed_mono, current.valid_until_mono], [10, 13]);
+});
+
 test('fresh, uncertain and expired windows use conservative producer clock bounds', () => {
     assert.equal(row({}).freshness, 'fresh');
     assert.equal(row({}, options({ now: 3100 })).freshness, 'unknown', 'uncertainty straddles expiry');

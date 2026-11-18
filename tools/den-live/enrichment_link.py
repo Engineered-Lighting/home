@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+import stat
 import threading
 import time
 import uuid
@@ -30,19 +31,80 @@ def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
+def _systemd_worker_credential(path, info, fd, env):
+    """Recognize only the protected, read-only systemd credential mount.
+
+    systemd may retain root ownership and grant the service access with a named
+    ACL, represented by mode 0440. An environment variable alone grants nothing.
+    """
+    folder = env.get("CREDENTIALS_DIRECTORY")
+    if not isinstance(folder, str):
+        return False
+    directory = Path(folder)
+    if (not path.is_absolute() or not directory.is_absolute() or folder != str(directory)
+            or ".." in path.parts or path.parent != directory
+            or path.name != "model-worker-token.txt"
+            or directory.parent != Path("/run/credentials")
+            or (info.st_uid, info.st_gid, stat.S_IMODE(info.st_mode)) != (0, 0, 0o440)
+            or not getattr(os, "O_NOFOLLOW", 0)):
+        return False
+    for parent in (directory, *directory.parents):
+        item = parent.lstat()
+        if (not stat.S_ISDIR(item.st_mode) or item.st_uid != 0 or item.st_gid != 0
+                or item.st_mode & 0o022):
+            return False
+        if parent == directory and stat.S_IMODE(item.st_mode) != 0o550:
+            return False
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_DIRECTORY | getattr(os, "O_CLOEXEC", 0)
+    directory_fd = os.open(directory, flags)
+    try:
+        parent = os.fstat(directory_fd)
+        named = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        return ((parent.st_uid, parent.st_gid, stat.S_IMODE(parent.st_mode)) == (0, 0, 0o550)
+                and stat.S_ISDIR(parent.st_mode) and stat.S_ISREG(named.st_mode)
+                and (named.st_dev, named.st_ino) == (info.st_dev, info.st_ino)
+                and parent.st_dev == info.st_dev
+                and bool(os.fstatvfs(fd).f_flag & os.ST_RDONLY)
+                and bool(os.fstatvfs(directory_fd).f_flag & os.ST_RDONLY))
+    finally:
+        os.close(directory_fd)
+
+
+def worker_token(token_file, *, env=None):
+    """Read a bounded token from one validated descriptor, without following links."""
+    path = Path(token_file)
+    fd = None
+    try:
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 256:
+            raise ValueError
+        flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+                 | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+        fd = os.open(path, flags)
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 256
+                or (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino)):
+            raise ValueError
+        if os.name == "posix":
+            private_owner = info.st_uid == os.getuid() and not info.st_mode & 0o077
+            if not private_owner and not _systemd_worker_credential(path, info, fd, os.environ if env is None else env):
+                raise ValueError
+        raw = os.read(fd, 257)
+        if len(raw) > 256 or not intent.HEX64.fullmatch(raw.decode("ascii").strip()):
+            raise ValueError
+        return raw.decode("ascii").strip()
+    except (OSError, ValueError, UnicodeError):
+        raise ValueError("private_worker_token_required") from None
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
 class Client:
     def __init__(self, port, token_file, *, connection_factory=None):
         if type(port) is not int or not 1024 <= port <= 65535:
             raise ValueError("invalid_worker_port")
-        path = Path(token_file)
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 256:
-            raise ValueError("private_worker_token_required")
-        if os.name == "posix" and (path.stat().st_mode & 0o077 or path.stat().st_uid != os.getuid()):
-            raise ValueError("private_worker_token_required")
-        token = path.read_text(encoding="ascii").strip()
-        if not intent.HEX64.fullmatch(token):
-            raise ValueError("private_worker_token_required")
-        self.port, self.token = port, token
+        self.port, self.token = port, worker_token(token_file)
         self.connection_factory = connection_factory or http.client.HTTPConnection
 
     def call(self, method, path, data=None):
@@ -469,7 +531,7 @@ class Bridge:
                  "reason": self.reason, "queued": int(bool(value.get("pending"))) if fresh else None,
                  "running": int(bool(value.get("running"))) if fresh else None,
                  "observed_mono": observed if self.enabled else now_mono,
-                 "valid_until_mono": observed + 3 if observed is not None else now_mono + 3}]
+                 "valid_until_mono": (observed + 3 if observed is not None else None) if self.enabled else now_mono + 3}]
 
     def decorate(self, event, snapshot):
         self.offer_snapshot(snapshot)

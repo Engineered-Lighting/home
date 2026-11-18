@@ -19,6 +19,22 @@ class StageTest(unittest.TestCase):
         self.assertIsNone(old["loaded"])
         self.assertIsNone(old["running"])
         self.assertEqual(old["observed_mono"], 100)
+        self.assertEqual(old["valid_until_mono"], 103)
+
+    def test_missing_or_nonfinite_observation_cannot_publish_an_expiry(self):
+        for observed in (None, float("nan"), "100"):
+            value = self.sample(); value["observed_mono"] = observed
+            out = projection.stage(value, 101)
+            self.assertIsNone(out["observed_mono"])
+            self.assertIsNone(out["valid_until_mono"])
+            self.assertTrue(out["configured"])
+            self.assertIsNone(out["loaded"])
+
+    def test_fresh_observed_lease_stays_exact(self):
+        out = projection.stage(self.sample(), 101)
+        self.assertEqual(out["state"], "idle")
+        self.assertTrue(out["loaded"])
+        self.assertEqual((out["observed_mono"], out["valid_until_mono"]), (100, 103))
 
     def test_configured_does_not_imply_loaded(self):
         value = self.sample(); value.update(state="not_admitted", provisioned=None, loaded=None)

@@ -39,7 +39,7 @@ def stage(value, now_mono):
               "admission_scope": value.get("admission_scope") if fresh and value.get("admission_scope") in
               ("not_admitted", "bounded_trial", "production") else None,
               "observed_mono": observed if _finite(observed) else None,
-              "valid_until_mono": until if _finite(until) else None,
+              "valid_until_mono": until if _finite(observed) and _finite(until) else None,
               "clock": "producer_monotonic"}
     for key in ("configured", "provisioned", "loaded"):
         v = value.get(key)

@@ -1,0 +1,33 @@
+# System-unit example only; never installed/enabled by the worker or --check.
+# Resolve immutable release/config paths and qualified numeric receipt GID.
+# /run/home-qwen-queue must be root-owned0750, group-read/search for the
+# model service group, with NO group/world write. Model UIDs get no Docker group.
+[Unit]
+Description=Bounded ROOT direct Qwen reported-queue observer
+After=docker.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/usr/bin/python3 -I -B /opt/home-den-models/current/den_models/qwen_observer.py --config /etc/home-den-models/qwen-observer.json --observe
+CPUQuota=25%
+MemoryMax=100663296
+MemorySwapMax=0
+TasksMax=16
+RuntimeMaxSec=1800
+KillMode=control-group
+TimeoutStopSec=3
+OOMPolicy=kill
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ReadWritePaths=/run/home-qwen-queue
+RestrictAddressFamilies=AF_UNIX AF_INET
+UMask=0077
+
+# Deliberately no [Install]/restart policy: owner-qualified bounded observation.

@@ -18,13 +18,17 @@ SUBTREE = "tools/den-models"
 MANIFEST = "SOURCE-MANIFEST.json"
 ROOT_FILES = frozenset(("README.md", "requirements.lock", "requirements-test.lock", "operator.example.json", "control.example.json",
                         "control-producer.example.json", "control-producer.service.example",
+                        "qwen-observer.example.json", "qwen-observer.service.example",
                         "serve.py", "run_bounded.py", "bundle.py"))
 MODULES = frozenset(("__init__.py", "artifacts.py", "backend.py", "client.py", "contracts.py", "resources.py",
-                     "runtime.py", "server.py", "specialists.py", "specialist_cli.py", "control_producer.py"))
+                     "runtime.py", "server.py", "specialists.py", "specialist_cli.py", "control_producer.py",
+                     "qwen_queue.py", "qwen_observer.py"))
 REQUIRED = frozenset(("requirements.lock", "serve.py", "run_bounded.py", "den_models/__init__.py",
                       "den_models/artifacts.py", "den_models/backend.py", "den_models/client.py",
                       "den_models/contracts.py", "den_models/resources.py", "den_models/runtime.py",
-                      "den_models/server.py", "profiles/vjepa-lm-qwen3-8b.json", "profiles/vjepa-lm-qwen3-4b.json"))
+                      "den_models/server.py", "den_models/qwen_queue.py", "den_models/qwen_observer.py",
+                      "qwen-observer.example.json", "qwen-observer.service.example",
+                      "profiles/vjepa-lm-qwen3-8b.json", "profiles/vjepa-lm-qwen3-4b.json"))
 MAX_FILE = 1024 * 1024
 MAX_TOTAL = 8 * 1024 * 1024
 MAX_FILES = 256

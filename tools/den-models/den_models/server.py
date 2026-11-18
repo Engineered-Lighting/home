@@ -13,13 +13,14 @@ import threading
 import time
 
 from .artifacts import load_profile
-from .contracts import ContractError, canonical, ident, strict_json
+from .contracts import ContractError, HEX64, canonical, ident, strict_json
 from .runtime import Runtime
 
 MAX_BODY = 64 * 1024
 CONFIG_KEYS = {"schema", "profile_id", "snapshot_root", "receipt_root", "frame_root", "cache_root",
                "control_state_file", "execution_lease_file", "residency_file", "token_file",
-               "gpu_selector", "io_device", "port"}
+               "gpu_selector", "io_device", "port", "queue_receipt_file", "queue_receipt_gid",
+               "qwen_observer_config_sha256", "qwen_binding_policy_sha256"}
 
 
 def operator_config(path):
@@ -27,14 +28,23 @@ def operator_config(path):
     if not path.is_file() or path.is_symlink() or path.stat().st_size > 16 * 1024:
         raise ContractError("invalid_operator_config")
     value = strict_json(path.read_text(encoding="utf-8"))
-    if not isinstance(value, dict) or set(value) != CONFIG_KEYS or value["schema"] != "den.model-operator/v1":
+    if not isinstance(value, dict) or set(value) != CONFIG_KEYS or value["schema"] != "den.model-operator/v2":
         raise ContractError("invalid_operator_config")
     if type(value["port"]) is not int or not 1024 <= value["port"] <= 65535:
         raise ContractError("invalid_port")
-    for key in CONFIG_KEYS - {"schema", "profile_id", "gpu_selector", "io_device", "port"}:
+    paths = {"snapshot_root", "receipt_root", "frame_root", "cache_root", "control_state_file",
+             "execution_lease_file", "residency_file", "token_file", "queue_receipt_file"}
+    for key in paths:
         item = value[key]
+        if key == "queue_receipt_file" and item is None:
+            continue
         if not isinstance(item, str) or not Path(item).is_absolute() or "://" in item:
             raise ContractError("operator_paths_must_be_local_absolute")
+    for key in ("qwen_observer_config_sha256", "qwen_binding_policy_sha256"):
+        if value[key] is not None and (not isinstance(value[key], str) or not HEX64.fullmatch(value[key])):
+            raise ContractError("qwen_root_approval_invalid")
+    if value["queue_receipt_gid"] is not None and (type(value["queue_receipt_gid"]) is not int or value["queue_receipt_gid"] < 0):
+        raise ContractError("qwen_root_receipt_gid_invalid")
     # All directories are prepared by the operator, never created from a
     # request. The model environment and materialized snapshots are separate.
     for key in ("snapshot_root", "receipt_root", "frame_root", "cache_root"):

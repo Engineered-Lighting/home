@@ -1,0 +1,25 @@
+{
+  "schema": "den.qwen-observer-config/v1",
+  "daemon_endpoint": "unix:///var/run/docker.sock",
+  "policy": {
+    "daemon_id": null,
+    "container_id": null,
+    "image_id": null,
+    "compose_project": null,
+    "compose_service": "vllm",
+    "started_at": null,
+    "restart_count": null,
+    "init_pid": null,
+    "init_process_start_identity": null,
+    "network_name": null,
+    "network_id": null,
+    "endpoint_id": null,
+    "expected_series": null
+  },
+  "receipt_file": "/run/home-qwen-queue/queue.json",
+  "receipt_gid": null,
+  "poll_seconds": 0.5,
+  "cycle_timeout_seconds": 1.0,
+  "receipt_ttl_seconds": 1.0,
+  "runtime_seconds": 1800
+}

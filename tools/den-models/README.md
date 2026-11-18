@@ -99,12 +99,13 @@ the attested live `control_producer.py` receipt is an admission source. Manual
 JSON that declares an idle queue or a healthy host is rejected. The worker
 does not change Qwen or the Ops monitor.
 
-The control producer continuously reads both real vLLM queue gauges from
-`http://127.0.0.1:<configured-port>/metrics` using a direct connection with no
-proxies or redirects, the real local `den-ops-status-1` status file, current
-bridge source evidence, driver free memory, `/proc/meminfo` MemAvailable, and
-the cooperative execution lease. It sums all distinct running/waiting series;
-missing/malformed/unknown gauges never establish an idle queue. Ops
+The control producer reads an approved ROOT queue-observation receipt, the
+real local `den-ops-status-1` status file, current bridge source evidence,
+driver free memory, `/proc/meminfo` MemAvailable, and the cooperative execution
+lease. It has no Docker access and makes no model HTTP requests. Host port
+8000 serves the existing metrics sidecar's JSON; it is not a direct vLLM
+Prometheus queue source. Cached TPS, model names, resource peaks or sidecar
+health are never queue-admission evidence. Ops
 `checked_at` and `report.evidence.ok` are required; a backoff level above zero,
 latched L3, stale/missing status, or unknown evidence blocks optional work.
 The actual level/latch remains in the receipt, including last known L3 on a
@@ -126,6 +127,15 @@ driver/RAM observations, and `admission_blocked` reasons. ControlState checks
 private path/owner/permissions, the producer's live PID and boot/start identity,
 reviewed producer source hash, LA monotonic clock domain, source freshness,
 and exact execution-lease path digest. A different broker path is rejected.
+`den.model-control-config/v2`, `den.model-control/v2` and
+`den.model-operator/v2` deliberately reject the former loopback configuration.
+`vllm_port` must be null. Both producer and worker require the same fixed
+`queue_receipt_file`, its qualified read-only GID, and approved
+`qwen_observer_config_sha256`/`qwen_binding_policy_sha256`. Defaults are null
+and cannot admit native work. The worker independently reads the actual root
+authority file, validates its bound metadata, and conservatively includes a
+newer busy sample; embedding root-looking JSON in a model-UID file is not root
+authority. Original GET times and expiry are retained, not refreshed by polling.
 An explicitly configured shared private GID permits mode-0640 dependency input
 files under the matching root-owned scoped 2770 setgid directory. A different
 Den service UID must be explicitly listed in `trusted_source_uids`; matching
@@ -148,8 +158,8 @@ Thus `unallocated_reserve_bytes=0` describes this exclusive cooperative scope,
 not all GPU applications. Existing allocated Qwen/Den memory is already in
 driver free memory. No global enforcement over other applications is claimed.
 
-Configure `control-producer.example.json` with the actual local paths, vLLM
-port, GPU and Ops host. Unknown/unconfigured sources fail closed. Run
+Configure `control-producer.example.json` with the actual local paths, approved
+root queue source, GPU and Ops host. Unknown/unconfigured sources fail closed. Run
 `python -I -B tools/den-models/den_models/control_producer.py --config
 /PRIVATE/control-producer.json`; a resource-bounded user-unit example is
 included. The singleton uses a kernel-released lock separate from the GPU
@@ -167,6 +177,52 @@ Control, execution lease, residency record and bearer stay under model-UID
 0700 `/run/home-den-models`. Do not place those authority files in the shared
 input directories. The standalone `store_rgb_blob` helper remains 0600;
 the Den bridge owns the explicitly configured group-sharing writer.
+
+## ROOT queue observer
+
+`qwen_observer.py` is a separate, uninstalled metadata actor. It leaves Qwen,
+container images, ports and the sidecar unchanged. Default/`--check` validates
+only local configuration and performs no host probes. The example's identity
+and GID fields are null, so it remains unconfigured. `--observe` requires Linux
+UID0 and the exact `den-qwen-queue-observer.service` cgroup: CPU25%, RAM96MiB,
+swap0, tasks16, runtime at most30min. Its system-unit example has no install or
+restart policy. Model service UIDs receive no Docker socket/group access.
+
+The ROOT actor uses only `/usr/bin/docker` against the fixed local
+`unix:///var/run/docker.sock`, with an empty private Docker configuration and a
+small explicit environment. Selected inspect projections exclude Env, command
+lines and credentials. Its qualified policy pins the daemon ID, full container
+and image IDs, Compose project/service, StartedAt/restart count, init PID and
+boot/start identity, and exact network/endpoint IDs. No bridge IP is configured.
+The actual private address/subnet are derived from that approved local bridge.
+
+Each bounded attempt is inspect A → direct private-address GET `/metrics` on
+internal8000 → inspect B. All identity and route fields must remain identical;
+restart, lost binding, endpoint/IP reuse, unhealthy state or any unknown source
+publishes UNKNOWN. There is no API POST, proxy, redirect, old-port fallback,
+static IP or cached healthy response. Both gauges must contain exactly the
+approved matching model/engine label sets, with finite exact integer counts.
+Explicit Prometheus sample timestamps, unexpected/partial/duplicate series,
+fractional underflow and sidecar JSON are rejected.
+
+The ROOT output is `den.qwen-queue-observation/v1`, at most16KiB. It carries
+selected binding metadata/digests, reported gauges, response size/hash, original
+GET start/receipt times, post-inspection time, expiry, and live root PID/start,
+boot, immutable loaded-code and config attestations. Raw Prometheus bodies are
+not saved. Freshness is bounded from GET start as well as receipt time. Failures
+replace the receipt with UNKNOWN rather than re-stamping previous counts.
+
+Prepare its output directory as root-owned0750 with read/search access only
+for the qualified model group; files are root-owned0640. Every ancestor must
+be root-owned without group/world write and no symlinks. This authority source
+must stay outside the Den-writable input directory. A container/start/endpoint
+change requires a newly qualified policy/config; source digests are pinned in
+both model-side configs. Source/version changes require restarting the root
+observer; it cannot attest new on-disk code while executing old loaded modules.
+
+Queue zero means the scheduler reported zero at that observation. It is not an
+atomic guarantee that Qwen cannot receive another request afterward and does
+not establish global GPU exclusion or physical actuation authority.
 
 Immediately before a cold load the driver must report 16 GiB free **plus** the
 incremental manifest reservation (22 GiB for 8B, 14 GiB for 4B). A resident

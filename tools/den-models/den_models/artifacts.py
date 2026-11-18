@@ -17,7 +17,7 @@ PROFILE_IDS = ("vjepa-lm-qwen3-8b", "vjepa-lm-qwen3-4b")
 def adapter_bundle_digest():
     root = Path(__file__).resolve().parents[1]
     names = ("__init__.py", "artifacts.py", "backend.py", "client.py", "contracts.py", "control_producer.py", "resources.py",
-             "runtime.py", "server.py")
+             "runtime.py", "server.py", "qwen_queue.py", "qwen_observer.py")
     files = [*(root / "den_models" / name for name in names), root / "serve.py", root / "run_bounded.py",
              root / "requirements.lock"]
     closure = {path.relative_to(root).as_posix(): digest_file(path) for path in files}

@@ -12,11 +12,9 @@ from den_models import control_producer as cp
 from den_models.contracts import ContractError, canonical
 from den_models.resources import ControlState, FileExecutionLease, file_permissions, parent_permissions, private_json
 import test_runtime as fixtures
+import test_qwen_queue as queue_fixtures
 
 BOOT = "12345678-1234-1234-1234-123456789abc"
-METRICS = ('# TYPE vllm:num_requests_running gauge\n'
-           'vllm:num_requests_running{engine="0",model_name="qwen"} 0.0\n'
-           'vllm:num_requests_waiting{engine="0",model_name="qwen"} 0.0\n')
 
 
 class Clock:
@@ -32,72 +30,68 @@ def identity(pid):
 class Fixture:
     def __init__(self, root):
         self.root, self.clock = Path(root), Clock()
-        self.config = {"schema": "den.model-control-config/v1", "vllm_port": 8000,
+        self.queue = queue_fixtures.QueueFixture(root)
+        self.config = {"schema": "den.model-control-config/v2", "vllm_port": None,
                        "ops_status_file": str(self.root / "ops.json"), "ops_host": "la-host",
                        "dependencies_file": str(self.root / "source.json"),
                        "control_file": str(self.root / "control.json"),
                        "execution_lease_file": str(self.root / "execution.lease"), "gpu_selector": "0",
                        "shared_gid": None, "trusted_source_uids": None, "ops_owner_uid": None,
-                       "poll_seconds": .25, "http_timeout_seconds": .25,
+                       "queue_receipt_file": self.queue.path, "queue_receipt_gid": 999,
+                       "qwen_observer_config_sha256": self.queue.config_sha,
+                       "qwen_binding_policy_sha256": self.queue.policy_sha,
+                       "poll_seconds": .25,
                        "ops_max_age_seconds": 90}
         self.docs = {self.config["ops_status_file"]: {"schema": "den-ops-status-1", "host": "la-host",
                      "level": 0, "step": "normal", "latched": False, "checked_at": 999,
                      "report": {"evidence": {"ok": True}}}, self.config["dependencies_file"]:
                      {"schema": "den.intent-source/v1", "observed_at": 99.9, "valid_until": 101.4,
                       "dependencies": [fixtures.dependencies()]}}
-        self.metrics = Mock(return_value=METRICS)
         self.gpu = Mock(free_bytes=Mock(return_value=50 * 1024**3))
         self.host = Mock(available_bytes=Mock(return_value=40 * 1024**3))
         self.broker = Mock(return_value={"scope": cp.BROKER_SCOPE, "state": "free", "global_enforcement": False,
                                          "unallocated_reserve_bytes": 0})
-        self.producer = cp.Producer(self.config, clock=self.clock, wall=lambda: 1000, metrics=self.metrics,
+        self.producer = cp.Producer(self.config, clock=self.clock, wall=lambda: 1000,
                                     read_json=lambda path, **kw: copy.deepcopy(self.docs[path]), gpu=self.gpu,
                                     host=self.host, identity=identity, boot=lambda: BOOT, broker=self.broker)
 
     def reader(self):
-        return ControlState(self.config["control_file"], expected_lease_file=self.config["execution_lease_file"],
-                            identity=identity, boot=lambda: BOOT, wall=lambda: 1000)
+        raw = ControlState(self.config["control_file"], expected_lease_file=self.config["execution_lease_file"],
+                           identity=identity, boot=lambda: BOOT, wall=lambda: 1000,
+                           queue_receipt_file=self.queue.path, queue_receipt_gid=999,
+                           expected_qwen_config_sha256=self.queue.config_sha, expected_qwen_policy_sha256=self.queue.policy_sha)
+        fixture = self
+        class Reader:
+            def read(self, now):
+                with fixture.queue.root_io():
+                    return raw.read(now)
+        return Reader()
 
     def publish(self):
-        state = self.producer.sample()
+        with self.queue.root_io():
+            state = self.producer.sample()
         cp.write_atomic(self.config["control_file"], state)
         return state
 
 
-class MetricsTests(unittest.TestCase):
-    def test_actual_both_queue_gauges_are_required_and_summed(self):
-        text = METRICS + ('vllm:num_requests_running{engine="1",model_name="qwen"} 2\n'
-                          'vllm:num_requests_waiting{engine="1",model_name="qwen"} 1\n'
-                          'vllm:num_requests_running_total 999\n')
-        self.assertEqual(cp.parse_vllm_metrics(text), {"running": 2, "waiting": 1, "busy": True})
-        for bad in ("", METRICS.splitlines()[1], METRICS.replace("0.0", "NaN", 1),
-                    METRICS.replace("0.0", "Inf", 1), METRICS.replace("0.0", "-1", 1),
-                    METRICS.replace("0.0", "1.2", 1), METRICS + METRICS,
-                    "vllm:num_requests_running_total 0\nvllm:num_requests_waiting_total 0\n"):
-            with self.subTest(text=bad):
+class QueueSourceTests(unittest.TestCase):
+    def test_v1_and_loopback_port_configs_cannot_be_admitted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            path = Path(directory) / "config.json"
+            for change in ({"schema": "den.model-control-config/v1"}, {"vllm_port": 8000}):
+                cfg = {**fixture.config, **change}
+                cp.write_atomic(path, cfg)
                 with self.assertRaises(ContractError):
-                    cp.parse_vllm_metrics(bad)
+                    cp.load_config(path)
+                with self.assertRaises(ContractError):
+                    cp.Producer(cfg)
 
-    def test_http_is_direct_loopback_and_never_follows_redirects(self):
-        connection, response = Mock(), Mock()
-        connection.getresponse.return_value = response
-        response.status = 200
-        response.getheader.return_value = str(len(METRICS.encode()))
-        response.read.return_value = METRICS.encode()
-        with patch.object(cp, "HTTPConnection", return_value=connection) as factory:
-            self.assertEqual(cp.metrics_http(8000, .25), METRICS)
-        factory.assert_called_once_with("127.0.0.1", 8000, timeout=.25)
-        self.assertEqual(connection.request.call_args.args, ("GET", "/metrics"))
-        connection.close.assert_called_once()
-        for status in (301, 302, 401, 500):
-            response.status = status
-            with patch.object(cp, "HTTPConnection", return_value=connection):
-                with self.assertRaises(ContractError):
-                    cp.metrics_http(8000, .25)
-        response.status, response.getheader.return_value = 200, "99999"
-        with patch.object(cp, "HTTPConnection", return_value=connection):
-            with self.assertRaises(ContractError):
-                cp.metrics_http(8000, .25)
+    def test_unapproved_root_config_digest_blocks_even_well_formed_zero_gauges(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(directory)
+            fixture.producer.queue_reader.expected_config_sha256 = "0" * 64
+            self.assertTrue(fixture.publish()["admission_blocked"])
 
 
 class ProducerTests(unittest.TestCase):
@@ -115,7 +109,10 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(state["sources"]["host"]["available_bytes"], 40 * 1024**3)
         self.assertEqual(state["sources"]["den_ops"]["checked_at_utc"], 999)
         self.assertEqual(state["producer"]["clock_domain"], cp.CLOCK_DOMAIN)
-        self.assertEqual(self.f.reader().read(100), state)
+        verified = self.f.reader().read(100)
+        self.assertIn("current_verified_observation", verified["sources"]["qwen"])
+        del verified["sources"]["qwen"]["current_verified_observation"]
+        self.assertEqual(verified, state)
         wrong = ControlState(self.f.config["control_file"], expected_lease_file=self.f.root / "other.lease",
                              identity=identity, boot=lambda: BOOT, wall=lambda: 1000)
         with self.assertRaises(ContractError):
@@ -138,11 +135,38 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(state["sources"]["den_ops"]["last_known"]["level"], 3)
 
     def test_queue_busy_is_an_actual_queue_observation(self):
-        self.f.metrics.return_value = METRICS.replace("0.0", "2.0", 1)
+        self.f.queue.fetch.side_effect = lambda b, d: (queue_fixtures.metrics(2), 100, 100)
+        self.f.queue.receipt = self.f.queue.observer.sample()
         state = self.f.publish()
         self.assertTrue(state["qwen_busy"])
         self.assertFalse(state["admission_blocked"])
         self.assertTrue(self.f.reader().read(100)["qwen_busy"])
+
+    def test_new_root_busy_sample_cannot_be_hidden_by_older_control_zero(self):
+        state = self.f.publish()
+        self.assertFalse(state["qwen_busy"])
+        self.f.queue.clock.now = 100.2
+        self.f.queue.fetch.side_effect = lambda b, d: (queue_fixtures.metrics(1), 100.2, 100.2)
+        self.f.queue.receipt = self.f.queue.observer.sample()
+        current = self.f.reader().read(100.3)
+        self.assertTrue(current["qwen_busy"])
+        self.assertEqual(current["sources"]["qwen"]["current_verified_observation"]["observed_at"], 100.2)
+
+    def test_background_control_publish_never_freshens_root_queue_timestamp(self):
+        self.f.publish()
+        self.f.clock.now = 100.5
+        state = self.f.publish()
+        self.assertEqual(state["observed_at"], 100.5)
+        self.assertEqual(state["sources"]["qwen"]["observed_at"], 100)
+        self.assertEqual(state["sources"]["qwen"]["valid_until"], 101)
+        self.f.clock.now = 101
+        self.assertTrue(self.f.publish()["admission_blocked"])
+
+    def test_copied_root_looking_json_does_not_replace_the_real_root_file(self):
+        self.f.publish()
+        self.f.queue.receipt = {"schema": "den.qwen-queue-observation/v1", "status": "unknown"}
+        with self.assertRaises(ContractError):
+            self.f.reader().read(100)
 
     def test_blocked_control_never_releases_active_native_lease_before_reap(self):
         runtime_fixture = fixtures.RuntimeTests()
@@ -165,7 +189,7 @@ class ProducerTests(unittest.TestCase):
         self.assertEqual(runtime_fixture.lease.releases, ["process_reaped"])
 
     def test_unknown_sources_never_become_idle_or_normal(self):
-        failures = (lambda: self.f.metrics.configure_mock(side_effect=OSError()),
+        failures = (lambda: self.f.queue.receipt.update(status="unknown"),
                     lambda: self.f.gpu.free_bytes.configure_mock(side_effect=OSError()),
                     lambda: self.f.host.available_bytes.configure_mock(side_effect=OSError()),
                     lambda: self.f.broker.configure_mock(side_effect=OSError()))
@@ -178,7 +202,8 @@ class ProducerTests(unittest.TestCase):
                 with self.assertRaises(ContractError):
                     self.f.reader().read(100)
         self.f = Fixture(self.temp.name)
-        for key in ("vllm_port", "gpu_selector", "ops_status_file", "dependencies_file", "execution_lease_file"):
+        self.f.producer.queue_reader.path = None
+        for key in ("gpu_selector", "ops_status_file", "dependencies_file", "execution_lease_file"):
             self.f.config[key] = None
         state = self.f.publish()
         self.assertTrue(state["admission_blocked"])
@@ -232,7 +257,7 @@ class ProducerTests(unittest.TestCase):
                      lambda s: s["sources"]["dependencies"].update(valid_until=99))
         for mutate in mutations:
             with self.subTest(mutate=mutate):
-                state = self.f.producer.sample()
+                state = self.f.publish()
                 mutate(state)
                 cp.write_atomic(self.f.config["control_file"], state)
                 with self.assertRaises(ContractError):

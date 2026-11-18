@@ -1,13 +1,11 @@
 """Trusted LA control observations; no synthetic idle/healthy fallback.
 
-Only configured local files and direct 127.0.0.1 vLLM metrics are read. No
-model libraries, media, environment secrets, proxy settings, or redirects are
-used. A missing source still produces a fresh *blocked* diagnostic receipt.
+Only configured local files and approved ROOT queue observations are read.
+No Docker access, endpoint HTTP, model libraries, media or environment secrets
+are used. A missing source produces a fresh *blocked* diagnostic receipt.
 """
 import argparse
 import hashlib
-from http.client import HTTPConnection
-import math
 import os
 from pathlib import Path
 import re
@@ -23,78 +21,21 @@ if __package__ in (None, ""):
 from den_models.contracts import (ContractError, DEPENDENCIES, HEX64, canonical, finite, ident, strict_json)
 from den_models.resources import (HostProbe, NvidiaProbe, current_boot_id, private_json,
                                   process_start_identity, lease_path_digest)
+from den_models.qwen_queue import QueueReader, source_from_receipt
 
-SCHEMA = "den.model-control/v1"
+SCHEMA = "den.model-control/v2"
 CLOCK_DOMAIN = "la_host_monotonic/v1"
-PRODUCER_SCHEMA = "den.model-control-producer/v1"
+PRODUCER_SCHEMA = "den.model-control-producer/v2"
 BROKER_SCOPE = "single_optional_execution"
 STEPS = ("normal", "cadence_reduced", "deep_stack_paused", "loop_stopped")
-MAX_METRICS = 1024 * 1024
 CONFIG_KEYS = {"schema", "vllm_port", "ops_status_file", "ops_host", "dependencies_file", "control_file",
-               "execution_lease_file", "gpu_selector", "shared_gid", "poll_seconds", "http_timeout_seconds",
-               "ops_max_age_seconds", "trusted_source_uids", "ops_owner_uid"}
+               "execution_lease_file", "gpu_selector", "shared_gid", "poll_seconds",
+               "ops_max_age_seconds", "trusted_source_uids", "ops_owner_uid", "queue_receipt_file",
+               "queue_receipt_gid", "qwen_observer_config_sha256", "qwen_binding_policy_sha256"}
 
 
 def code_digest():
     return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
-
-
-def parse_vllm_metrics(text):
-    """Both actual gauges are mandatory; sum distinct model/engine series.
-
-    Similar metric prefixes, NaN/Inf, duplicate label sets, and missing gauges
-    cannot establish an idle queue. No request history is used to infer zero.
-    """
-    names = ("vllm:num_requests_running", "vllm:num_requests_waiting")
-    values, labels = {name: [] for name in names}, {name: set() for name in names}
-    pattern = re.compile(r"^(vllm:num_requests_running|vllm:num_requests_waiting)(\{[^\n]*\})?\s+([^\s]+)(?:\s+[0-9]+)?\s*$")
-    for line in text.splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if not any(re.match(re.escape(name) + r"(?:\{|\s|$)", line) for name in names):
-            continue
-        match = pattern.fullmatch(line)
-        if match is None:
-            raise ContractError("qwen_metrics_malformed")
-        name, label, raw = match.groups()
-        label = label or ""
-        if label in labels[name]:
-            raise ContractError("qwen_metrics_duplicate_series")
-        try:
-            number = float(raw)
-        except ValueError:
-            raise ContractError("qwen_metrics_malformed") from None
-        if not math.isfinite(number) or number < 0 or not number.is_integer() or number > 1000000:
-            raise ContractError("qwen_metrics_invalid_count")
-        labels[name].add(label)
-        values[name].append(int(number))
-    if not all(values.values()):
-        raise ContractError("qwen_metrics_missing_queue_gauge")
-    running, waiting = (sum(values[name]) for name in names)
-    return {"running": running, "waiting": waiting, "busy": running > 0 or waiting > 0}
-
-
-def metrics_http(port, timeout):
-    if type(port) is not int or not 1024 <= port <= 65535:
-        raise ContractError("qwen_metrics_unconfigured")
-    connection = HTTPConnection("127.0.0.1", port, timeout=timeout)
-    try:
-        connection.request("GET", "/metrics", headers={"Accept": "text/plain", "Connection": "close"})
-        response = connection.getresponse()
-        if response.status != 200:  # Includes redirects: never follow them.
-            raise ContractError("qwen_metrics_http_unavailable")
-        declared = response.getheader("Content-Length")
-        if declared is not None and (not declared.isdigit() or int(declared) > MAX_METRICS):
-            raise ContractError("qwen_metrics_oversize_or_invalid_length")
-        raw = response.read(MAX_METRICS + 1)
-        if len(raw) > MAX_METRICS or (declared is not None and len(raw) != int(declared)):
-            raise ContractError("qwen_metrics_oversize")
-        return raw.decode("utf-8", errors="strict")
-    except (OSError, UnicodeError):
-        raise ContractError("qwen_metrics_unavailable") from None
-    finally:
-        connection.close()
 
 
 def validate_dependencies(doc, now):
@@ -170,21 +111,26 @@ def broker_observation(path, *, identity=process_start_identity, shared_gid=None
 
 def load_config(path):
     cfg = private_json(path, max_bytes=16 * 1024, protected_parent=True)
-    if not isinstance(cfg, dict) or set(cfg) != CONFIG_KEYS or cfg["schema"] != "den.model-control-config/v1":
+    if not isinstance(cfg, dict) or set(cfg) != CONFIG_KEYS or cfg["schema"] != "den.model-control-config/v2":
         raise ContractError("invalid_control_config")
-    for name in ("ops_status_file", "dependencies_file", "control_file", "execution_lease_file"):
+    for name in ("ops_status_file", "dependencies_file", "control_file", "execution_lease_file", "queue_receipt_file"):
         value = cfg[name]
         if value is None and name != "control_file":
             continue
         if not isinstance(value, str) or not Path(value).is_absolute() or "://" in value:
             raise ContractError("control_paths_must_be_local_absolute")
     paths = [Path(value).resolve() for name, value in cfg.items()
-             if name in ("ops_status_file", "dependencies_file", "control_file", "execution_lease_file") and value is not None]
+             if name in ("ops_status_file", "dependencies_file", "control_file", "execution_lease_file", "queue_receipt_file") and value is not None]
     paths.extend((Path(path).resolve(), Path(str(cfg["control_file"]) + ".producer.lock").resolve()))
     if len(paths) != len(set(paths)):
         raise ContractError("control_source_and_output_paths_must_be_distinct")
-    if cfg["vllm_port"] is not None and (type(cfg["vllm_port"]) is not int or not 1024 <= cfg["vllm_port"] <= 65535):
-        raise ContractError("invalid_vllm_port")
+    if cfg["vllm_port"] is not None:
+        raise ContractError("legacy_loopback_queue_source_forbidden")
+    for name in ("qwen_observer_config_sha256", "qwen_binding_policy_sha256"):
+        if cfg[name] is not None and (not isinstance(cfg[name], str) or not HEX64.fullmatch(cfg[name])):
+            raise ContractError("qwen_observer_approval_invalid")
+    if cfg["queue_receipt_gid"] is not None and (type(cfg["queue_receipt_gid"]) is not int or cfg["queue_receipt_gid"] < 0):
+        raise ContractError("queue_receipt_gid_invalid")
     if cfg["shared_gid"] is not None and (type(cfg["shared_gid"]) is not int or cfg["shared_gid"] < 0):
         raise ContractError("invalid_shared_gid")
     if (cfg["trusted_source_uids"] is not None and
@@ -195,7 +141,6 @@ def load_config(path):
     if cfg["ops_owner_uid"] is not None and (type(cfg["ops_owner_uid"]) is not int or cfg["ops_owner_uid"] < 0):
         raise ContractError("invalid_ops_owner_uid")
     if (not ident(cfg["ops_host"]) or not finite(cfg["poll_seconds"]) or not .2 <= cfg["poll_seconds"] <= 1
-            or not finite(cfg["http_timeout_seconds"]) or not .05 <= cfg["http_timeout_seconds"] <= .5
             or not finite(cfg["ops_max_age_seconds"]) or not 1 <= cfg["ops_max_age_seconds"] <= 90):
         raise ContractError("invalid_control_poll_limits")
     if cfg["gpu_selector"] is not None:
@@ -204,11 +149,16 @@ def load_config(path):
 
 
 class Producer:
-    def __init__(self, config, *, clock=time.monotonic, wall=time.time, metrics=metrics_http,
+    def __init__(self, config, *, clock=time.monotonic, wall=time.time,
                  read_json=private_json, gpu=None, host=None, identity=process_start_identity,
                  boot=current_boot_id, broker=broker_observation):
+        if config.get("schema") != "den.model-control-config/v2" or config.get("vllm_port") is not None:
+            raise ContractError("legacy_queue_config_not_admitted")
         self.config, self.clock, self.wall = config, clock, wall
-        self.metrics, self.read_json, self.identity, self.broker = metrics, read_json, identity, broker
+        self.read_json, self.identity, self.broker = read_json, identity, broker
+        self.queue_reader = QueueReader(config["queue_receipt_file"], shared_gid=config["queue_receipt_gid"],
+                                        expected_config_sha256=config["qwen_observer_config_sha256"],
+                                        expected_policy_sha256=config["qwen_binding_policy_sha256"])
         self.gpu = gpu or (NvidiaProbe(config["gpu_selector"]) if config["gpu_selector"] is not None else None)
         self.host = host or HostProbe()
         self.boot_id = boot()
@@ -227,9 +177,7 @@ class Producer:
     def sample(self):
         cfg = self.config
         def qwen_read():
-            if cfg["vllm_port"] is None:
-                raise ContractError("qwen_unconfigured")
-            return parse_vllm_metrics(self.metrics(cfg["vllm_port"], cfg["http_timeout_seconds"]))
+            return source_from_receipt(self.queue_reader.read(self.clock()))
         qwen = self._observe("qwen", qwen_read)
         def ops_read():
             if cfg["ops_status_file"] is None:
@@ -270,6 +218,9 @@ class Producer:
         if deps["ok"] and not now < deps["valid_until"]:
             deps["ok"] = False
             reasons.append("dependencies_expired_during_observation")
+        if qwen["ok"] and not now < qwen["valid_until"]:
+            qwen["ok"] = False
+            reasons.append("qwen_receipt_expired_during_observation")
         if ops.get("level", 0) > 0 or ops.get("latched") is True:
             reasons.append("den_ops_backoff")
         for name, field in (("gpu", "free_bytes"), ("host", "available_bytes")):
@@ -284,6 +235,10 @@ class Producer:
                              "boot_id": self.boot_id, "clock_domain": CLOCK_DOMAIN, "code_sha256": code_digest(),
                              "execution_lease_sha256": lease_path_digest(cfg["execution_lease_file"])
                              if cfg["execution_lease_file"] is not None else None,
+                             "queue_receipt_path_sha256": lease_path_digest(cfg["queue_receipt_file"])
+                             if cfg["queue_receipt_file"] is not None else None,
+                             "qwen_observer_config_sha256": cfg["qwen_observer_config_sha256"],
+                             "qwen_binding_policy_sha256": cfg["qwen_binding_policy_sha256"],
                              "broker_scope": BROKER_SCOPE}}
 
 

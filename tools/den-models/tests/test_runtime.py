@@ -17,7 +17,7 @@ from den_models.backend import VjepaBackend
 from den_models.contracts import (CHOICES, MAX_HOLD_SECONDS, SAMPLING, ContractError, canonical, load_rgb_frames,
                                  make_hint, profile_digest, store_rgb_blob, strict_json, validate_request)
 from den_models.resources import DependencyFlap, FileExecutionLease
-from den_models.runtime import CLIP_WINDOW_SECONDS, LIVE_JOB_CEILING_SECONDS, Runtime
+from den_models.runtime import CLIP_WINDOW_SECONDS, LIVE_JOB_CEILING_SECONDS, WARMUP_CONTROL_GRACE_SECONDS, Runtime
 
 GIB = 1024**3
 PROFILE = load_profile("vjepa-lm-qwen3-8b")
@@ -71,6 +71,13 @@ class Control:
         if self.state is None:
             raise ContractError("control_unavailable")
         return copy.deepcopy(self.state)
+
+
+def unavailable(detail):
+    """ControlState's one public refusal, carrying the specific failed check as its detail."""
+    error = ContractError("control_state_unavailable")
+    error.detail = detail
+    return error
 
 
 class Probe:
@@ -653,6 +660,9 @@ class RuntimeTests(unittest.TestCase):
                 self.assertFalse(worker.terminate_requested)
                 if cause == "control_unavailable":
                     self.control.lapsed, self.control.state = False, None
+                    self.runtime.tick()
+                    self.assertFalse(worker.terminate_requested)  # Inside the grace; see the grace tests below.
+                    self.clock.now += WARMUP_CONTROL_GRACE_SECONDS
                 elif cause == "admission_expired":
                     self.runtime.admission_valid_until_utc = 1
                 else:
@@ -673,6 +683,68 @@ class RuntimeTests(unittest.TestCase):
                 self.runtime.tick()
                 self.assertFalse(self.runtime.resident)
                 self.assertEqual(self.lease.releases, ["process_reaped"])
+
+    # Live attempt 2: one failed read under the child's hashing I/O stopped a cold warmup.
+    def test_warmup_rides_out_control_read_failures_shorter_than_the_grace(self):
+        self.runtime.warmup()
+        self.runtime.tick()
+        worker = self.workers[0]
+        verified = self.control.state
+        for good in ("state", "lapse"):  # A valid state or a pure lapse restarts the grace.
+            self.control.state = None  # A non-lapse failure (stale, Ops, attestation) at 20 Hz for 2.95 s.
+            start = self.clock.now
+            for step in range(1, round(WARMUP_CONTROL_GRACE_SECONDS / .05)):
+                self.clock.now = start + step * .05
+                self.runtime.tick()
+            self.assertFalse(worker.terminate_requested)
+            self.control.state, self.control.lapsed = verified, good == "lapse"
+            self.runtime.tick()
+            self.control.lapsed = False
+        self.assertFalse(worker.terminate_requested)
+        self.assertTrue(self.runtime.health()["startup_in_progress"])
+        worker.complete("operator-warmup", kind="ready")
+        self.runtime.tick()
+        self.assertTrue(self.runtime.resident)
+        self.assertEqual(self.runtime.counters["warmups_completed"], 1)
+        self.assertEqual(self.runtime.counters["invalidated"], 0)
+        self.assertIsNone(self.runtime.health()["warmup_reason"])
+
+    def test_warmup_stops_after_the_grace_naming_the_failed_reads_code(self):
+        for failure, code in ((unavailable("control_state_stale_or_invalid"), "control_state_stale_or_invalid"),
+                              (ContractError("control_unavailable"), "control_unavailable"),
+                              (OSError("[Errno 5] Input/output error: '/run/x'"), "oserror")):
+            with self.subTest(code=code):
+                self.setUp()
+                self.runtime.warmup()
+                self.runtime.tick()  # Dispatched on a good read at 100.
+                worker = self.workers[0]
+                self.control.read = Mock(side_effect=failure)
+                self.clock.now = 100 + WARMUP_CONTROL_GRACE_SECONDS - .05
+                self.runtime.tick()
+                self.assertFalse(worker.terminate_requested)
+                self.clock.now = 100 + WARMUP_CONTROL_GRACE_SECONDS
+                self.runtime.tick()
+                self.assertTrue(worker.terminate_requested)
+                self.assertEqual(self.runtime.active["reason"], "control_unavailable:" + code)
+                worker.alive = False
+                self.runtime.tick()
+                self.assertFalse(self.runtime.resident)
+                self.assertEqual(self.lease.releases, ["process_reaped"])
+                self.assertEqual(self.runtime.counters["invalidated"], 1)
+                self.assertEqual(self.runtime.health()["warmup_reason"], "control_unavailable:" + code)
+                self.assertTrue(self.runtime.health()["warmup_required"])
+
+    def test_live_clip_still_stops_on_its_first_non_lapse_control_failure(self):
+        worker = self.warm()
+        self.submit(request())
+        self.control.read = Mock(side_effect=unavailable("control_ops_backoff_or_unknown"))
+        self.runtime.tick()  # No grace and no clock advance for a live clip.
+        job = self.runtime.get("job-1")
+        self.assertEqual((job["status"], job["reason"]), ("stopping", "dependencies_unavailable_or_changed"))
+        self.assertTrue(worker.terminate_requested)
+        worker.alive = False
+        self.runtime.tick()
+        self.assertEqual(self.runtime.get("job-1")["status"], "invalidated")
 
     def test_trial_window_keeps_a_quiet_resident_worker_inside_the_hard_cap(self):
         execution = PROFILE["execution"]

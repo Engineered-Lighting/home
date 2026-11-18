@@ -14,34 +14,49 @@ from .contracts import CHOICES, QUESTION, ContractError, finite, load_rgb_frames
 # Value: the job's terminal status in the host runtime.
 NONFATAL_FAILURES = {"clip_expired_before_native_work": "expired", "qwen_busy_before_native_work": "failed",
                      "control_state_unavailable_before_native_work": "invalidated"}
+# Den's own Qwen asks keep Qwen busy about a fifth of the time. A busy instant
+# would retire a warmup that just hashed the snapshot, so warmup waits (bounded)
+# for an idle one; a live clip is still refused at once.
+WARMUP_QWEN_IDLE_WAIT_SECONDS = 30.0
+WARMUP_QWEN_POLL_SECONDS = 0.25
 
 
 class VjepaBackend:
-    def __init__(self, config, profile, *, clock=time.monotonic):
+    def __init__(self, config, profile, *, clock=time.monotonic, sleep=time.sleep):
         self.config, self.profile = config, profile
-        self.clock = clock
+        self.clock, self.sleep = clock, sleep
         self.model = self.torch = self.numpy = None
         self.receipt_digest = None
         self.module_cache = None
 
-    def native_gate(self, *, cold, warmup=False):
-        from .resources import ControlState, DependencyFlap, HostProbe, NvidiaProbe
-        caps = self.profile["execution"]
+    def control_state(self, *, warmup):
+        from .resources import ControlState, DependencyFlap
         try:
-            state = ControlState(self.config["control_state_file"],
-                                 expected_lease_file=self.config["execution_lease_file"],
-                                 queue_receipt_file=self.config["queue_receipt_file"], queue_receipt_gid=self.config["queue_receipt_gid"],
-                                 expected_qwen_config_sha256=self.config["qwen_observer_config_sha256"],
-                                 expected_qwen_policy_sha256=self.config["qwen_binding_policy_sha256"]).read(time.monotonic())
+            return ControlState(self.config["control_state_file"],
+                                expected_lease_file=self.config["execution_lease_file"],
+                                queue_receipt_file=self.config["queue_receipt_file"], queue_receipt_gid=self.config["queue_receipt_gid"],
+                                expected_qwen_config_sha256=self.config["qwen_observer_config_sha256"],
+                                expected_qwen_policy_sha256=self.config["qwen_binding_policy_sha256"]).read(time.monotonic())
         except DependencyFlap as flap:
             # Dependencies gate live clips only. Operator warmup needs no Den
             # binding, so a pure lapse (every other check held) gates it on
             # that verified state; a live clip is still refused.
             if not warmup or flap.state is None:
                 raise ContractError("control_state_unavailable_before_native_work") from None
-            state = flap.state
+            return flap.state
         except ContractError:
             raise ContractError("control_state_unavailable_before_native_work") from None
+
+    def native_gate(self, *, cold, warmup=False):
+        from .resources import HostProbe, NvidiaProbe
+        caps = self.profile["execution"]
+        state = self.control_state(warmup=warmup)
+        if warmup and state["qwen_busy"]:
+            deadline = self.clock() + WARMUP_QWEN_IDLE_WAIT_SECONDS
+            while state["qwen_busy"] and self.clock() < deadline:
+                self.sleep(WARMUP_QWEN_POLL_SECONDS)
+                state = self.control_state(warmup=True)
+        # Every check below uses the state finally read.
         if state["qwen_busy"]:
             raise ContractError("qwen_busy_before_native_work")
         incremental = caps["gpu_reservation_bytes"] if cold else 0

@@ -10,6 +10,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from den_models import control_producer as cp
 from den_models.contracts import ContractError, canonical
+from den_models.runtime import WARMUP_CONTROL_GRACE_SECONDS
 from den_models.resources import (ControlState, DependencyFlap, FileExecutionLease, file_permissions, parent_permissions,
                                   private_json)
 import test_runtime as fixtures
@@ -241,6 +242,10 @@ class ProducerTests(unittest.TestCase):
                 with self.assertRaisesRegex(ContractError, r"\Acontrol_state_unavailable\Z") as caught:
                     self.f.reader().read(now)
                 self.assertNotIsInstance(caught.exception, DependencyFlap)
+                # The specific failed check is kept for a warmup's stop reason only.
+                self.assertEqual(caught.exception.detail, {"qwen_expired": "qwen_root_receipt_unavailable_or_unqualified",
+                                                           "ops_backoff": "control_admission_blocked",
+                                                           "binding_mismatch": "control_dependencies_stale_or_changed"}[other])
 
     def test_dependency_lapse_carries_only_the_verified_binding_free_state(self):
         self.f.docs[self.f.config["dependencies_file"]]["valid_until"] = 100.5
@@ -284,7 +289,14 @@ class ProducerTests(unittest.TestCase):
                     self.f.docs[self.f.config["ops_status_file"]].update(level=1, step="cadence_reduced")
                     self.f.publish()
                     runtime.tick()
+                    self.assertFalse(worker.terminate_requested)  # One failed read is inside the grace.
+                    # Ops backoff persists with fresh Qwen evidence: no good read for the whole grace.
+                    self.f.clock.now = self.f.queue.clock.now = 100.6 + WARMUP_CONTROL_GRACE_SECONDS
+                    self.f.queue.receipt = self.f.queue.observer.sample()
+                    self.f.publish()
+                    runtime.tick()
                     self.assertTrue(worker.terminate_requested)
+                    self.assertEqual(runtime.active["reason"], "control_unavailable:control_admission_blocked")
                     self.assertEqual(runtime_fixture.lease.held, "operator-warmup")
 
     def test_real_den_transform_passes_and_lineage_failure_names_its_code(self):

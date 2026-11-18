@@ -312,5 +312,8 @@ class ControlState:
             return result
         except DependencyFlap as exc:
             raise DependencyFlap("control_state_unavailable", exc.state) from None
-        except (OSError, ValueError):
-            raise ContractError("control_state_unavailable") from None
+        except (OSError, ValueError) as exc:
+            error = ContractError("control_state_unavailable")
+            # Callers still see one code; the specific check is kept for diagnostics only.
+            error.detail = str(exc) if isinstance(exc, ContractError) else type(exc).__name__.lower()
+            raise error from None

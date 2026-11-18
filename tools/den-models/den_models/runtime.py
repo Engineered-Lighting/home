@@ -3,6 +3,7 @@ from collections import Counter, OrderedDict
 import multiprocessing
 import json
 from pathlib import Path
+import re
 import threading
 import time
 
@@ -18,6 +19,19 @@ PROOFS = {"cuda_synchronized", "no_native_context"}
 # retire it rather than hold the single optional execution indefinitely.
 CLIP_WINDOW_SECONDS = 10
 LIVE_JOB_CEILING_SECONDS = 2 * CLIP_WINDOW_SECONDS
+# Ticks read control state at about 20 Hz. One failed read (seen under the
+# child's own hashing I/O) must not end a multi-minute warmup; only this long
+# without a good read does.
+WARMUP_CONTROL_GRACE_SECONDS = 3.0
+CODE = re.compile(r"[a-z_]{1,80}")
+
+
+def control_code(exc):
+    """A failed control read's fixed code for a stop reason; never free text."""
+    for code in (getattr(exc, "detail", None), str(exc)):
+        if isinstance(code, str) and CODE.fullmatch(code):
+            return code
+    return re.sub(r"[^a-z_]", "", type(exc).__name__.lower())[:80] or "unknown"
 
 
 class SpawnWorker:
@@ -122,6 +136,8 @@ class Runtime:
         self.admitted = False
         self.source_validated_at = None
         self.control_valid = False
+        self.control_good_at = None  # Last valid state or pure lapse; bounds a running warmup.
+        self.warmup_reason = None
         self.driver_free_bytes = self.host_available_bytes = self.resources_observed_at = None
 
     def _admission(self):
@@ -232,6 +248,8 @@ class Runtime:
             return
         job.update(status=status, reason=reason, finished_at=self.clock())
         self.counters[status] += 1
+        if job["request"].get("_operator_warmup") is True:
+            self.warmup_reason = reason  # The warmup is not a stored job; health shows why it ended.
 
     def _prune(self):
         for key in list(self.jobs):
@@ -323,7 +341,7 @@ class Runtime:
             except (ContractError, OSError, ValueError):
                 observation_error = True
         with self.lock:
-            now, lapsed, flap = self.clock(), False, None
+            now, lapsed, flap, failure = self.clock(), False, None, None
             try:
                 state = self.control.read(now)
                 self.source_validated_at = now
@@ -331,7 +349,10 @@ class Runtime:
             except (ContractError, OSError, ValueError) as exc:
                 state, lapsed = None, isinstance(exc, DependencyFlap)
                 flap = exc if lapsed else None
+                failure = None if lapsed else exc
                 self.control_valid = False
+            if failure is None:
+                self.control_good_at = now
             if self.admission_valid_until_utc is not None and time.time() >= self.admission_valid_until_utc:
                 self.admitted = False
                 if self.active is not None:
@@ -349,11 +370,16 @@ class Runtime:
                 # lapses is discarded, never its resident child. Warmup has no
                 # result to discard and needs no binding, so a pure lapse
                 # leaves it running; any other control failure (Ops backoff,
-                # Qwen evidence, attestation) still retires as before.
+                # Qwen evidence, attestation) retires it once no good read
+                # has arrived for WARMUP_CONTROL_GRACE_SECONDS, and a live
+                # clip at once, as before.
                 warmup = self.active["request"].get("_operator_warmup") is True
                 stop = self._stop_active if warmup else self._discard_active
                 if now >= self.active["request"]["expires_at"]:
                     stop("expired", "clip_expired")
+                elif failure is not None and warmup:
+                    if self.control_good_at is None or now - self.control_good_at >= WARMUP_CONTROL_GRACE_SECONDS:
+                        self._stop_active("invalidated", "control_unavailable:" + control_code(failure))
                 elif state is None and not lapsed:
                     self._stop_active("invalidated", "dependencies_unavailable_or_changed")
                 elif state is None and warmup:
@@ -544,6 +570,7 @@ class Runtime:
                     self.profile["execution"]["gpu_reservation_bytes"] if self.worker else 0,
                     "execution_lease_held": self.execution_token is not None,
                     "startup_in_progress": self.active is not None and self.active["request"].get("_operator_warmup") is True,
+                    "warmup_reason": self.warmup_reason,
                     "running": self.active is not None, "pending": self.pending is not None,
                     "retiring": self.retiring_at is not None, "deferred_reason": self.last_defer_reason,
                     "resource_fault": self.resource_fault, "closed": self.closed,

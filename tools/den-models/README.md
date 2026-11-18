@@ -303,10 +303,20 @@ hashes, loads and runs the synthetic inference, on the host or in the
 child's own gates. The lapse carries the otherwise fully verified control
 state, with an empty dependency list, and warmup is still gated on its Qwen
 busy flag, reservations and headroom. Ops backoff, Qwen evidence, attestation,
-freshness, resource or admission failures still defer or stop warmup exactly
-as before. Person-bound sources lapse a few times a minute while someone is
+freshness, resource or admission failures still defer warmup's dispatch as
+before. Person-bound sources lapse a few times a minute while someone is
 in view (the M3 replay measured about 3.5 times per bound minute), so a
-several-minute cold warmup would otherwise rarely survive one. A job
+several-minute cold warmup would otherwise rarely survive one.
+
+A running warmup also rides out brief control-read failures: one failed read
+under the child's own hashing I/O stopped live attempt 2 after 42 s. It stops
+only when no valid state or pure lapse has been read for
+`WARMUP_CONTROL_GRACE_SECONDS` (3 s), with reason `control_unavailable:<code>`
+naming the failed check; `/healthz` reports the last warmup's ending reason as
+`warmup_reason` (null after success). A running live clip still stops at the
+first such failure. In the child, a warmup gate that finds Qwen busy re-reads
+control state every 0.25 s for up to 30 s for an idle instant, then applies
+every other check to that state; live work is refused at once. A job
 still running 20 seconds after dispatch, twice the longest permitted clip
 window, retires the child. Malformed completion, a protocol violation, worker
 loss, admission expiry, lifetime, a lease-release fault or a headroom refusal

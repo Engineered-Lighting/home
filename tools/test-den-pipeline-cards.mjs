@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { pipelineCards, pipelinePerceptionRows, pipelineModelRows, pipelineIntentRows, attachDenPipeline } from '../app/src/home-den-pipeline-layer.mjs';
 import { createDenSourceClock } from '../app/src/home-den-model-runtime.mjs';
@@ -209,4 +210,122 @@ test('attached pipeline recomputes source freshness on its ordinary tick without
     pipeline?.dispose();
     for (const [key, value] of Object.entries(previous)) if (value === undefined) delete globalThis[key]; else globalThis[key] = value;
   }
+});
+
+// A people event shaped like den-live model_projection.project output (intent.IntentHint.public rows), real transform.
+const RUN = 'den-run-7f3a', EPOCH = 3, TRANSFORM = 'den-oak@2026-11-13.1', HINT_REVISION = 'd059602a9cdb2d198301f103aa0c7362ff943cb7';
+const generation = (run, epoch) => createHash('sha256').update(JSON.stringify([run, epoch])).digest('hex');
+const denTrack = (extra = {}) => ({ track_id: 'trk-1', state: 'confirmed', xy_m: [1.2, 2.3], sigma_m: .08, service_run_id: RUN,
+  camera_epoch: EPOCH, association_revision: 5, heading_deg: null, seated: false, posture: 'standing', who: null,
+  head_orientation: null, torso_orientation: null, motion: null, association_status: 'confident', current_obs_ids: ['obs-1'],
+  position_basis: 'stereo', motion_forecast: null, motion_forecast_reason: 'motion_unavailable', ...extra });
+const denFrame = (extra = {}) => ({ service_run_id: RUN, camera_epoch: EPOCH, frame_id: 4812, camera_session: 'oak-session-1',
+  mode: 'rgb', rgb: { seq: 4812, device_s: null, host_s: 9.96, width: 640, height: 360 }, right: null, depth: null,
+  depth_calibration_sha256: 'c'.repeat(64), transform_id: TRANSFORM, scan_revision: 'scan-r4', capture_mono: 9.9,
+  arrival_mono: 9.96, capture_ts: T0 + 19.9, ...extra });
+const vjepa = (extra = {}) => ({ id: 'vjepa-lm-qwen3-8b', role: 'motion_intent', state: 'unavailable',
+  model_id: 'kkt94/Llama-V-JEPA-LM-Qwen3-8B', model_revision: HINT_REVISION, profile_digest: 'e'.repeat(64), device: null,
+  reason: 'worker_unreachable', admission_scope: null, observed_mono: 9.5, valid_until_mono: 12.5, clock: 'producer_monotonic',
+  configured: true, provisioned: null, loaded: null, queued: null, running: null, request_id: null, ...extra });
+const resident = extra => vjepa({ state: 'idle', provisioned: true, loaded: true, device: 'cuda:0', reason: 'ready',
+  admission_scope: 'bounded_trial', queued: 0, running: 0, ...extra });
+const denHint = (extra = {}, dependencies = {}) => ({ schema: 'den.intent-hint/v1', request_id: 'req-1', clip_id: 'clip-1',
+  profile_digest: 'a'.repeat(64), snapshot_manifest_digest: 'b'.repeat(64), model_revision: HINT_REVISION,
+  dependencies: { camera_id: 'den-oak', service_run_id: RUN, camera_epoch: String(EPOCH), source_generation: generation(RUN, EPOCH),
+    track_id: 'trk-1', association_revision: '5', transform_id: TRANSFORM, scan_revision: 'scan-r4',
+    calibration_revision: 'c'.repeat(64), ...dependencies },
+  produced_at: 9.75, expires_at: 13.25, observed_at: 9.4, clock: 'producer_monotonic', intent: 'turn_left',
+  raw_option_scores: { continue: 0.0731, stop: 0.0402, turn_left: 0.6113, turn_right: 0.2101, unclear: 0.0653 },
+  uncertainty: 'uncalibrated_semantic_hint', authority: 'semantic_prior_only', disposition: 'advisory_only',
+  reason: 'awaiting_held_out_admission', consumed: false, ...extra });
+const denEvent = ({ stage = vjepa(), hints = [], tracks = [denTrack()], frame = denFrame(), epoch = EPOCH } = {}) => ({
+  schema: 'den-live-people-1', seq: 4812, emitted_ts: T0 + 20, mode: 'rgb', camera: { status: 'ok' }, perception_status: 'fresh',
+  transform_id: TRANSFORM, content_revision: 'scan-r4', tracks, service_run_id: RUN, camera_epoch: epoch, frame,
+  health: health({ model_stages: { schema: 'den-model-stages-1', sampled_mono: 10, clock: 'producer_monotonic', stages: [stage] } }),
+  intent_hints: hints });
+const perception = (e, extra) => Object.fromEntries(pipelinePerceptionRows(e, context(extra)));
+const hintView = rows => ['Intent hint', 'Hint type', 'Hint model', 'Hint binding', 'Hint age', 'Disposition'].map(key => rows[key] ?? '').join(' | ');
+
+test('den-live intent hints: waiting, resident, a bound hint, an expired one and a mismatched one all read differently', () => {
+  const waiting = perception(denEvent());
+  assert.equal(waiting['Intent hint'], 'Waiting · no worker report');
+  assert.equal(waiting['Observation reason'], 'Worker unreachable');
+  const unloaded = perception(denEvent({ stage: vjepa({ state: 'provisioned', provisioned: true, loaded: false, reason: 'not_resident',
+    queued: 0, running: 0 }) }));
+  assert.equal(unloaded['Intent hint'], 'Waiting · model not loaded');
+  assert.equal(unloaded['Observation reason'], 'Model not resident');
+  const idle = perception(denEvent({ stage: resident() }));
+  assert.equal(idle['Intent hint'], 'None yet · model resident');
+  assert.equal(idle.Loaded, 'Yes');
+  assert.equal(perception(denEvent({ stage: resident({ state: 'running', running: 1 }) }))['Intent hint'], 'None yet · model running');
+  assert.equal(perception(denEvent({ stage: resident() }), { now: 4400 })['Intent hint'], 'Waiting · model report stale');
+  const hint = perception(denEvent({ stage: resident(), hints: [denHint()] }));
+  assert.equal(hint['Intent hint'], 'Turn left');
+  assert.equal(hint['Hint type'], 'Advisory · uncalibrated');
+  assert.equal(hint['Hint model'], 'd059602a');
+  assert.equal(hint['Hint binding'], 'Bound · current frame and track');
+  assert.equal(hint['Hint age'], '0.3 s old · expires in 3.1 s', 'producer clock: 10.05 - 9.75 old, 13.25 - 10.105 left');
+  assert.equal(hint.Disposition, 'Advisory only · Awaiting held-out admission');
+  const expired = perception(denEvent({ stage: resident(), hints: [denHint()] }), { now: 4400 });
+  assert.equal(expired['Intent hint'], 'Turn left · Expired', 'past expires_at on the source clock, though Den said advisory at publish');
+  assert.match(expired['Hint age'], /^Expired · 3\.\d s old$/);
+  const otherTrack = perception(denEvent({ stage: resident(), hints: [denHint({}, { track_id: 'trk-9' })] }));
+  assert.equal(otherTrack['Intent hint'], 'Turn left · Not bound');
+  assert.equal(otherTrack['Hint binding'], 'Not bound · track not current');
+  const views = [waiting, unloaded, idle, hint, expired, otherTrack].map(hintView);
+  assert.equal(new Set(views).size, views.length, views.join('\n'));
+});
+
+test('den-live hint binding follows the carrying event: generation, association, frame and the Den decline', () => {
+  const binding = e => perception(e)['Hint binding'];
+  const next = { tracks: [denTrack({ camera_epoch: EPOCH + 1 })], frame: denFrame({ camera_epoch: EPOCH + 1 }), epoch: EPOCH + 1 };
+  assert.equal(binding(denEvent({ ...next, stage: resident(), hints: [denHint()] })), 'Not bound · source generation changed');
+  assert.equal(binding(denEvent({ stage: resident(), hints: [denHint({}, { source_generation: 'f'.repeat(64) })] })),
+    'Not bound · source generation changed', 'a generation that does not recompute from the run and epoch never binds');
+  assert.equal(binding(denEvent({ stage: resident(), hints: [denHint()], tracks: [denTrack({ association_revision: 6 })] })),
+    'Not bound · association changed');
+  assert.equal(binding(denEvent({ stage: resident(), hints: [denHint()], tracks: [denTrack({ association_status: 'ambiguous' })] })),
+    'Not bound · track not current');
+  assert.equal(binding(denEvent({ stage: resident(), hints: [denHint()], frame: denFrame({ transform_id: 'den-oak@2026-11-14.1' }) })),
+    'Not bound · camera frame changed');
+  assert.equal(binding(denEvent({ stage: resident(), hints: [denHint()], frame: null })), 'Not bound · no current frame');
+  const declined = perception(denEvent({ stage: resident(), hints: [denHint({ disposition: 'ignored', reason: 'current_binding_changed' })] }));
+  assert.deepEqual([declined['Intent hint'], declined['Hint binding'], declined.Disposition],
+    ['Turn left · Not bound', 'Not bound · Den declined this binding', 'Ignored · Person or source binding changed']);
+  const lapsed = perception(denEvent({ stage: resident(), hints: [denHint({ disposition: 'expired', reason: 'capture_lease_expired' })] }));
+  assert.deepEqual([lapsed['Intent hint'], lapsed.Disposition], ['Turn left · Expired', 'Expired · Capture lease expired']);
+  const newest = perception(denEvent({ stage: resident(), hints: [denHint({ intent: 'stop', produced_at: 9.6 }), denHint({ intent: 'continue' })] }));
+  assert.equal(newest['Intent hint'], 'Continue');
+});
+
+test('den-live hint age needs this connection source clock and never matures a future hint', () => {
+  const e = denEvent({ stage: resident(), hints: [denHint()] });
+  const unanchored = Object.fromEntries(pipelinePerceptionRows(e, { receivedAt: 1100, now: 1100 }));
+  assert.deepEqual([unanchored['Intent hint'], unanchored['Hint age']], ['Turn left · Age unknown', 'Unknown']);
+  const future = denEvent({ stage: resident(), hints: [denHint({ produced_at: 10.5 })] });
+  assert.equal(perception(future)['Hint age'], 'Unknown');
+  assert.equal(perception(future, { now: 1700 })['Hint age'], 'Unknown', 'display ticks cannot make a future hint current');
+});
+
+test('den-live hints never show raw scores as probabilities, never claim use, and malformed rows fail closed', () => {
+  const rows = pipelinePerceptionRows(denEvent({ stage: resident(), hints: [denHint()] }), context());
+  assert.doesNotMatch(JSON.stringify(rows), /0\.61|61%|probab|consum|clip-1|req-1/i);
+  for (const bad of [{ consumed: true }, { disposition: 'consumed' }, { uncertainty: 'calibrated' }, { intent: 'walk_to_door' },
+    { clock: 'browser' }, { expires_at: 30 }, { model_revision: 'main' }]) {
+    const shown = perception(denEvent({ stage: resident(), hints: [denHint(bad)] }));
+    assert.equal(shown['Intent hint'], 'Unavailable', JSON.stringify(bad));
+    assert.equal(Object.hasOwn(shown, 'Hint binding'), false);
+  }
+  assert.equal(perception(denEvent({ stage: resident(), hints: [denHint(), denHint(), denHint()] }))['Intent hint'], 'Unavailable');
+  assert.equal(Object.hasOwn(Object.fromEntries(pipelinePerceptionRows(event(), context())), 'Intent hint'), false,
+    'a people event with no hint projection or intent stage keeps its calm rows');
+});
+
+test('Den model-stage reasons read as plain words instead of Unknown', () => {
+  const label = reason => Object.fromEntries(pipelineModelRows(denEvent({ stage: vjepa({ reason }) }), 'perception', context()))['Observation reason'];
+  for (const [reason, words] of Object.entries({ worker_unreachable: 'Worker unreachable', optional_worker_failure: 'Optional worker failed',
+    submission_unproven: 'Job submission unconfirmed', qwen_busy: 'Deferred: Qwen busy', stage_observation_stale: 'Stage report stale',
+    not_resident: 'Model not resident', gpu_execution_busy: 'Deferred: GPU busy', ready: 'Ready' })) assert.equal(label(reason), words);
+  assert.equal(label('/home/PRIVATE_REASON'), 'Unknown');
+  assert.equal(label('constructor'), 'Unknown');
 });

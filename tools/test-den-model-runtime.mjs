@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { createDenSourceClock, denSourceClockInterval, normalizeDenModelStages, denModelStageLabel, denModelAdmissionLabel,
     DEN_MODEL_RUNTIME_LIMITS as LIMITS } from '../app/src/home-den-model-runtime.mjs';
+import * as runtime from '../app/src/home-den-model-runtime.mjs';
 
 const stage = changes => ({ id: 'vjepa', role: 'forecast', state: 'running', configured: true,
     provisioned: null, loaded: null, device: null, model_id: 'facebook/vjepa2-vitg-fpc64-256',
@@ -193,4 +195,15 @@ test('normalization copies no prototypes, references or inherited facts', () => 
     assert.equal(input.stages[0].state, 'running');
     assert.equal(normalizeDenModelStages(Object.assign(Object.create({ schema: 'den-model-stages-1' }),
         { sampled_mono: 10, stages: [] })), null);
+});
+
+test('source generation recomputes Den intent.generation byte for byte and has none for other input', () => {
+    const want = (run, epoch) => createHash('sha256').update(JSON.stringify([run, epoch])).digest('hex');
+    // 55 bytes fit one SHA-256 block, 56 need two; JSON quoting matches Python json.dumps for printable ASCII.
+    for (const [run, epoch] of [['den-run-7f3a', 3], ['r'.repeat(49), 0], ['r'.repeat(50), 0], ['r'.repeat(128), Number.MAX_SAFE_INTEGER],
+        ['a"b\\c', 7]]) assert.equal(runtime.denSourceGeneration?.(run, epoch), want(run, epoch), run);
+    assert.equal(runtime.denSourceGeneration?.('den-run-7f3a', 3), '2502cfbf759aa4e54109f85dc9fe0a4f0dd53ca94f10154ae54e6a4f15f7c7bf',
+        'the value den-live intent.generation produced for the same run and epoch');
+    for (const [run, epoch] of [['café', 1], ['', 1], ['r'.repeat(129), 1], ['run', -1], ['run', 1.5], ['run', '1'], [null, 1]])
+        assert.equal(runtime.denSourceGeneration?.(run, epoch), null, String(run));
 });

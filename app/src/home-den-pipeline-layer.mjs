@@ -27,7 +27,8 @@
  * - Text goes in with textContent. Role names, not host names: the page shows what each system does. */
 import * as THREE from 'three';
 import { FADE, answerOf, identityOf } from './home-den-inference-model.mjs';
-import { normalizeDenModelStages, denModelStageLabel, denModelAdmissionLabel, denSourceClockInterval } from './home-den-model-runtime.mjs';
+import { normalizeDenModelStages, denModelStageLabel, denModelAdmissionLabel, denModelReasonLabel, denSourceClockInterval,
+    denIntentHintView } from './home-den-model-runtime.mjs';
 
 const SVG = 'http://www.w3.org/2000/svg';
 const WIRE_HOT_MS = 1100, STALE_S = 3, MEASURE_MS = 250, COMPACT_PX = 640, FIT_MS = 450, DOT_R = 4.5, COMET_PX = 26;
@@ -100,7 +101,7 @@ export function pipelineModelRows(event, node = 'perception', context = {}) {
             ['Device', stage.device ?? 'Unknown'], ['Profile digest', stage.profile_digest ?? 'Unknown'], ['Configured', reported(stage.configured)],
             ['Provisioned', reported(stage.provisioned)], ['Loaded', reported(stage.loaded)],
             ['Lifecycle', denModelStageLabel(stage)], ['Freshness', freshnessWord(stage.freshness)],
-            ['Observation reason', stage.reason?.replace(/_/g, ' ') ?? 'Unknown'],
+            ['Observation reason', denModelReasonLabel(stage)],
             ['Admission', stage.reason === 'planned' ? `Planned · ${denModelAdmissionLabel(stage)}` : denModelAdmissionLabel(stage)],
             ['Work', `Queued ${stage.queued ?? 'unknown'} · running ${stage.running ?? 'unknown'}`],
             ['Result use', 'Not reported by model stage']);
@@ -109,8 +110,41 @@ export function pipelineModelRows(event, node = 'perception', context = {}) {
     return rows;
 }
 
+const INTENT_WORDS = Object.freeze({ continue: 'Continue', stop: 'Stop', turn_left: 'Turn left', turn_right: 'Turn right', unclear: 'Unclear' });
+const HINT_DISPOSITIONS = Object.freeze({ advisory_only: 'Advisory only', ignored: 'Ignored', expired: 'Expired' });
+const HINT_BINDING = Object.freeze({ bound: 'Bound · current frame and track', declined: 'Not bound · Den declined this binding',
+    source: 'Not bound · source generation changed', frame: 'Not bound · camera frame changed',
+    track: 'Not bound · track not current', association: 'Not bound · association changed', no_frame: 'Not bound · no current frame' });
+
+/* Den's advisory hint (event.intent_hints) beside its motion-intent stage. Raw option scores are never shown,
+ * and use stays the coordinator receipt's alone. Pure. */
+export function pipelineHintRows(event, context = {}) {
+    let view;
+    try {
+        view = denIntentHintView(event, { clock: context.sourceClock ?? null, receivedAt: context.receivedAt, now: context.now ?? context.receivedAt });
+    } catch (_) { return [['Intent hint', 'Unavailable']]; }
+    const stage = runtimeOf(event, context)?.stages.find(row => row.role === 'motion_intent') ?? null;
+    if (!view && !stage) return [];
+    const hint = view?.hint;
+    if (!hint) {
+        if (view?.rejected) return [['Intent hint', 'Unavailable']];
+        // Den reports residency only from a current worker report, so null means no worker has answered.
+        return [['Intent hint', !stage ? 'Waiting · model not reported' : stage.state === 'disabled' ? 'Off · model disabled'
+            : stage.freshness === 'stale' ? 'Waiting · model report stale'
+                : stage.loaded === true ? (stage.state === 'running' || stage.running > 0 ? 'None yet · model running' : 'None yet · model resident')
+                    : stage.loaded === false ? 'Waiting · model not loaded' : 'Waiting · no worker report']];
+    }
+    const flag = hint.freshness === 'expired' ? 'Expired' : hint.binding !== 'bound' ? 'Not bound' : hint.freshness === 'unknown' ? 'Age unknown' : '';
+    const age = hint.freshness === 'fresh' ? `${secs(hint.age_s)} old · expires in ${secs(hint.expires_in_s)}`
+        : hint.freshness === 'expired' ? (finite(hint.age_s) ? `Expired · ${secs(hint.age_s)} old` : 'Expired') : 'Unknown';
+    const reason = hint.reason && Object.hasOwn(INTENT_REASONS, hint.reason) ? INTENT_REASONS[hint.reason] : 'Not reported';
+    return [['Intent hint', `${INTENT_WORDS[hint.intent]}${flag ? ` · ${flag}` : ''}`], ['Hint type', 'Advisory · uncalibrated'],
+        ['Hint model', hint.model_revision.slice(0, 8)], ['Hint binding', HINT_BINDING[hint.binding]], ['Hint age', age],
+        ['Disposition', `${HINT_DISPOSITIONS[hint.disposition]} · ${reason}`]];
+}
+
 /* Only the coordinator's contracted intent receipt supplies disposition/use.
- * Worker event.intent_hints and motion consumption cannot promote semantic hints. */
+ * Den's advisory event.intent_hints (pipelineHintRows) and motion consumption cannot promote semantic hints. */
 export function pipelineIntentRows(spot, context = {}) {
     const path = own(spot, 'path_lighting');
     if (own(path, 'schema') !== 'den-path-lighting-1') return [['Intent receipt', 'Not reported'], ['Intent consumed', 'Unknown']];
@@ -161,7 +195,7 @@ export function pipelinePerceptionRows(event, context = {}) {
     return [['People', String((event?.tracks || []).length)], ['Detector model', timing('detector_model')],
         ['Detector round trip', timing('detector_turnaround')], ['Lift', timing('lift')], ['Track', timing('track')],
         ['Behind', finite(h.lag_s_median) ? secs(h.lag_s_median + (h.transit_s_median || 0)) : '—'],
-        ['Status', event?.perception_status ?? '—'], ...pipelineModelRows(event, 'perception', context)];
+        ['Status', event?.perception_status ?? '—'], ...pipelineHintRows(event, context), ...pipelineModelRows(event, 'perception', context)];
 }
 
 /* What each card says, from one people event (sinceS seconds old) and the applied spot snapshot. Pure. */

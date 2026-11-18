@@ -241,19 +241,150 @@ class LinkTests(unittest.TestCase):
         self.submit(observation="empty", person=None)
         self.assertTrue(self.detector.headers[-1]["reset_learning"])
 
-    def test_same_track_revision_change_rejects_old_body_reply(self):
-        self.setup_worker()
-        self.submit(person={**PERSON, "association_revision": 1})
-        old = self.detector.headers[-1]
-        self.link.prepare(SCOPE, BINDING, PERSON["track_id"], 2)
-        self.detector.reply(header=old)
-        self.assertEqual(self.events[-1][1], dict(reason="scope_changed"))
-        self.assertFalse(any("frame" in event for _, event in self.events))
-        self.now += 0.5
-        self.assertTrue(self.submit(person={**PERSON, "association_revision": 2}))
-        self.assertTrue(self.detector.headers[-1]["reset_learning"])
+    def show(self, revision=1):
+        """Set the worker up and publish one figure of PERSON at this association revision."""
+        person = {**PERSON, "association_revision": revision}
+        self.assertFalse(self.submit(person=person))
+        self.detector.setup()
+        self.assertTrue(self.submit(person=person))
         self.detector.reply()
         self.assertEqual(self.events[-1][1]["frame"], FRAME)
+        return len(self.events)
+
+    def test_same_track_revision_change_rejects_old_body_reply(self):
+        shown = self.show(1)
+        self.now += 0.3
+        self.submit(frame_id=9, person={**PERSON, "association_revision": 1})
+        old = self.detector.headers[-1]
+        self.link.prepare(SCOPE, BINDING, PERSON["track_id"], 2)
+        self.detector.reply(header=old, frame={**FRAME, "pelvis_z_m": 0.7})
+        self.assertEqual(len(self.events), shown, "the old revision's reply is fenced, and nothing clears yet")
+        self.now += 0.3
+        capture = self.now - 0.1
+        self.assertTrue(self.submit(frame_id=10, person={**PERSON, "association_revision": 2}))
+        self.assertTrue(self.detector.headers[-1]["reset_learning"])
+        self.now += 0.25
+        self.assertFalse(self.submit(frame_id=11, person={**PERSON, "association_revision": 2}))
+        self.assertEqual(len(self.events), shown, "no clear before the new revision's reply")
+        self.detector.reply()
+        self.assertEqual(self.events[shown:], [(SCOPE, dict(frame=FRAME, capture_mono=capture))])
+
+    def test_new_revision_ready_replaces_the_figure_as_the_next_seq(self):
+        stream = PeopleStream(port=0, clock=lambda: 10.0, body_clock=lambda: self.now, wall_clock=lambda: 1000.0).start()
+        self.addCleanup(stream.close)
+        self.link.close()
+        self.link = BodyLink(self.detector, stream=stream, clock=lambda: self.now, monotonic=lambda: self.monotonic)
+        self.assertFalse(self.submit(person={**PERSON, "association_revision": 1}))
+        self.detector.setup()
+        self.submit(person={**PERSON, "association_revision": 1})
+        self.detector.reply()
+        old = stream.body_latest[0]
+        self.assertEqual(old["status"], "ready")
+        self.now += 0.3
+        self.link.prepare(SCOPE, BINDING, PERSON["track_id"], 2)
+        self.assertTrue(self.submit(frame_id=9, person={**PERSON, "association_revision": 2}))
+        self.assertIs(stream.body_latest[0], old)
+        self.detector.reply()
+        new = stream.body_latest[0]
+        self.assertEqual((new["status"], new["seq"]), ("ready", old["seq"] + 1))
+        self.assertGreater(new["capture_ts"], old["capture_ts"])
+
+    def test_a_new_revision_outcome_other_than_a_ready_clears_at_once(self):
+        two = {**PERSON, "association_revision": 2}
+
+        def rebind():
+            self.link.prepare(SCOPE, BINDING, PERSON["track_id"], 2)
+            self.assertEqual(len(self.events), shown)
+
+        def reply(why):
+            rebind()
+            self.assertTrue(self.submit(frame_id=10, person=two))
+            self.detector.reply(frame=None, why=why)
+
+        def busy():   # the old revision's job is still out, so the new revision gets none
+            self.submit(frame_id=9, person={**PERSON, "association_revision": 1})
+            rebind()
+            self.assertFalse(self.submit(frame_id=10, person=two))
+
+        def held_for_stills():
+            rebind()
+            with patch.object(self.detector, "send_alone", return_value=False):
+                self.assertFalse(self.submit(frame_id=10, person=two))
+
+        def cleared(reason):
+            rebind()
+            self.link.clear(reason, scope=SCOPE)
+
+        outcomes = dict(pose_unavailable=lambda: reply("pose_unavailable"),
+                        insufficient_depth=lambda: reply("insufficient_depth"),
+                        empty=lambda: reply("empty"), busy=busy, held_for_stills=held_for_stills,
+                        ambiguous=lambda: cleared("ambiguous"),
+                        head_mask_unavailable=lambda: cleared("head_mask_unavailable"))
+        for name, outcome in outcomes.items():
+            with self.subTest(name):
+                self.setUp()
+                shown = self.show(1)
+                lease_end = self.link.shown_until
+                self.now += 0.3
+                outcome()
+                self.assertLess(self.now, lease_end, "the old figure's lease is still running")
+                self.assertEqual(self.events[shown][1], dict(reason="scope_changed"), "not held to its lease")
+                self.assertFalse(any("frame" in event for _, event in self.events[shown:]))
+                self.assertIsNone(self.link.shown_until)
+
+    def test_timing_ring_survives_a_same_track_revision_change(self):
+        self.show(1)
+        self.link.prepare(SCOPE, BINDING, PERSON["track_id"], 2)
+        self.assertEqual(self.link.timing_summary()["samples"], 1)
+        self.now += 0.3
+        self.submit(frame_id=9, person={**PERSON, "association_revision": 2})
+        self.detector.reply(frame=None, why="pose_unavailable")
+        self.assertEqual(self.events[-2][1], dict(reason="scope_changed"))
+        self.assertEqual(self.link.timing_summary()["samples"], 1, "a deferred clear keeps the ring too")
+        self.now += 0.3
+        self.submit(frame_id=10, person={**PERSON, "association_revision": 2})
+        self.detector.reply()
+        self.assertEqual(self.link.timing_summary()["samples"], 2)
+        self.link.prepare(SCOPE, BINDING, "another-track", 2)
+        self.assertEqual(self.link.timing_summary()["samples"], 0)
+
+    def test_a_track_epoch_run_or_binding_change_still_clears_at_once(self):
+        epoch = {**SCOPE, "track_epoch": 4}
+        run = {**SCOPE, "run_id": "another-run"}
+        changes = dict(track=(SCOPE, BINDING, "e3-two"),
+                       epoch=(epoch, {**BINDING, "track_epoch": 4}, PERSON["track_id"]),
+                       run=(run, {**BINDING, "run_id": "another-run"}, PERSON["track_id"]),
+                       binding=(SCOPE, {**BINDING, "depth_profile": "another-depth"}, PERSON["track_id"]))
+        for name, (scope, binding, track) in changes.items():
+            with self.subTest(name):
+                self.setUp()
+                shown = self.show(1)
+                self.now += 0.3
+                self.submit(frame_id=9, person={**PERSON, "association_revision": 1})
+                old = self.detector.headers[-1]
+                self.link.prepare(scope, binding, track, 1)
+                self.assertEqual(self.events[shown:], [(scope, dict(reason="scope_changed"))])
+                self.assertEqual(self.link.timing_summary()["samples"], 0)
+                self.detector.reply(header=old)
+                self.assertEqual(len(self.events), shown + 1, "the fence still drops the old reply")
+
+    def test_two_tracked_people_clear_at_once_with_or_without_a_rebind(self):
+        perceiver = Perceiver.__new__(Perceiver)
+        perceiver.home, perceiver.body = "den", self.link
+        # What body_rgb answers for two tracks (test_body_rgb): the figure goes at once, never held.
+        ambiguous = BodyInput(["camera", 9], SCOPE["run_id"], SCOPE["track_epoch"], SCOPE["content_revision"],
+                              SCOPE["transform_id"], BINDING["depth_profile"], self.now, "rgb", "ambiguous")
+        shown = self.show(1)
+        self.assertIsNone(perceiver._body_request(ambiguous))
+        self.assertEqual(self.events[shown:], [(SCOPE, dict(reason="ambiguous"))])
+        self.now += 0.3
+        self.submit(frame_id=10, person={**PERSON, "association_revision": 1})
+        self.detector.reply()
+        shown = len(self.events)
+        self.link.prepare(SCOPE, BINDING, PERSON["track_id"], 2)
+        self.assertIsNone(perceiver._body_request(ambiguous))
+        self.assertEqual([event for _, event in self.events[shown:]],
+                         [dict(reason="scope_changed"), dict(reason="ambiguous")])
 
 
 class PipelineTests(unittest.TestCase):

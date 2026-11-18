@@ -15,7 +15,8 @@ from stream import BODY_LEASE_S
 MIN_INTERVAL_S = 0.2
 # A frame's misses for the same person: the last published frame keeps its own lease through them, so one frame
 # without a pose or enough depth doesn't blank the figure. Anything that changes the scene (empty, ambiguous, a new
-# scope or track, the detector stopping) clears at once.
+# scope or track, the detector stopping) clears at once. A same-track association revision is a deferred rebind
+# (_scope): the figure on show waits for the new revision's first outcome, and anything but a ready clears it at once.
 HOLD_REASONS = frozenset(("pose_unavailable", "insufficient_depth", "stale"))
 TIMING_STAGES = ("body_queue", "mask_wait", "body_compute", "segment_queue", "segment_inference", "body_roundtrip")
 TIMING_SAMPLES = 100
@@ -33,6 +34,7 @@ class BodyLink:
         self.lock = threading.Lock()
         self.scope = self.track = self.binding = self.pending = None
         self.association_revision = None
+        self.rebinding = False   # a same-track revision change whose scope_changed waits for its first outcome
         self.setting_up = self.bound = None
         self.reset_learning = True
         self.request_id, self.generation = 0, 0
@@ -44,7 +46,15 @@ class BodyLink:
         self.counts = dict(sent=0, skipped_busy=0, skipped_rate=0, frames=0, empty=0, errors=0)
         detector.on_body = self._reply
 
+    def _rebound(self):
+        """The new revision's first outcome is no figure: the deferred scope_changed goes out now, never held."""
+        if self.rebinding:
+            self.rebinding = False
+            self.shown_until = self.last_clear = None
+            self._clear("scope_changed")
+
     def _clear(self, reason, *, reset=True):
+        self._rebound()
         self.generation += 1
         self.facing = self.facing_candidate = None
         if reset:
@@ -58,12 +68,23 @@ class BodyLink:
             self.last_clear = reason
 
     def _scope(self, scope, binding, track, association_revision=None):
-        if (scope, binding, track, association_revision) != (self.scope, self.binding, self.track, self.association_revision):
+        if (scope, binding, track) != (self.scope, self.binding, self.track):
             self.scope, self.binding, self.track = scope, binding, track
             self.association_revision = association_revision
             self._timings.clear()
+            self.rebinding = False
             self.last_sent = self.last_clear = self.shown_until = None
             self._clear("scope_changed")
+        elif association_revision != self.association_revision:
+            # The same person's association revision moved (contract 2): the fence drops every reply made under the
+            # old revision and learning starts again, but nothing is published yet. The new revision's first ready
+            # replaces the figure; any other outcome publishes scope_changed at once (_rebound). Either way the old
+            # figure never outlives its own lease (stream.py expires it, and so does Home).
+            self.association_revision = association_revision
+            self.generation += 1
+            self.facing = self.facing_candidate = None
+            self.reset_learning = self.rebinding = True
+            self.last_sent = None
 
     def clear(self, reason, *, scope=None):
         with self.lock:
@@ -148,6 +169,7 @@ class BodyLink:
             if self.stream.publish_body(self.scope, frame=frame, capture_mono=capture_mono):
                 self.counts["frames"] += 1
                 self.why = self.last_clear = None
+                self.rebinding = False
                 self.shown_until = capture_mono + BODY_LEASE_S
                 self._record_timing(reply, pending)
             else:
@@ -205,13 +227,17 @@ class BodyLink:
                 self._clear("empty", reset=False)
             if self.pending is not None or self.setting_up is not None:
                 self.counts["skipped_busy"] += 1
+                if self.pending is None or self.pending["generation"] != self.generation:
+                    self._rebound()   # no job of the new revision is out to answer for it
                 return False
             if self.bound != binding:
+                self._rebound()
                 self.setting_up = binding
                 header = {"kind": "setup_body", "setup": setup}
             else:
                 if observation == "person" and self.last_sent is not None and now - self.last_sent < self.min_interval_s:
                     self.counts["skipped_rate"] += 1
+                    self._rebound()
                     return False
                 self.request_id += 1
                 header = {"kind": "body", "id": frame_id, "request_id": self.request_id, "now": capture_mono,
@@ -240,6 +266,7 @@ class BodyLink:
                     self.reset_learning |= header["reset_learning"]
                     self.pending = None
                     self.counts["sent"] -= 1
+                self._rebound()
             return False
         return header["kind"] == "body"
 

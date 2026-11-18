@@ -259,7 +259,7 @@ It says which one is missing if it can't start.
 - `stream.py` serves the people stream on 127.0.0.1:8111, and the body frames on their own path, `/body`.
 - `live_page.mjs` serves Home on 127.0.0.1:18190: this checkout when it holds the body layer (`claude/den-live-body`), else the `claude/den-live-home` worktree. It passes the streams through on the same paths step 4's gateway route will use.
 
-**The live body.** A tailnet Home view can show current measured gold particles and a torso-facing cue. The head and upper neck are removed before encoding. Missing surfaces are left empty. The figure clears when the track, privacy evidence, or measured depth is insufficient, or when its one-second capture deadline passes. Background learning uses eight seconds of confidently empty input followed by 12 qualified frames, in memory.
+**The live body.** A tailnet Home view can show current measured gold particles and a torso-facing cue. The head and upper neck are removed before encoding. Missing surfaces are left empty. The figure clears when the track, privacy evidence, or measured depth is insufficient, or when its one-second capture deadline passes. When only the same track's association revision moves, the figure on show stays, never past its own lease, until the new revision's first outcome: a ready replaces it, and anything else clears it at once with `scope_changed`. Replies made under the old revision are dropped either way. Background learning uses eight seconds of confidently empty input followed by 12 qualified frames, in memory.
 
 **RGB provider.** The standard service starts the provider when `body_rgb` matches the current registration receipt. The installer reads the optional `den-live-body-rgb.json` beside the camera token and carries its validated settings into the service configuration. Keep that file private. Its fields are:
 
@@ -534,7 +534,7 @@ Each RGB candidate is bound to the exact service/epoch/frame, detection index an
 
 ### Body stage timing and optional CUDA masks
 
-`health.body_timings` summarizes the latest 100 accepted body requests using host-monotonic durations. Its `timings_ms` stages are `body_queue`, `mask_wait`, `body_compute`, `segment_queue`, `segment_inference` and `body_roundtrip`, each with its own sample count, median, p95 and maximum. Missing or invalid stages are omitted. Samples enter the ring after exact request, frame, binding, generation and lease checks and successful body publication. A new body owner clears the ring. `last_age_ms` dates the newest admitted sample.
+`health.body_timings` summarizes the latest 100 accepted body requests using host-monotonic durations. Its `timings_ms` stages are `body_queue`, `mask_wait`, `body_compute`, `segment_queue`, `segment_inference` and `body_roundtrip`, each with its own sample count, median, p95 and maximum. Missing or invalid stages are omitted. Samples enter the ring after exact request, frame, binding, generation and lease checks and successful body publication. A new body owner (scope, binding or track) clears the ring; a same-track association revision change keeps it. `last_age_ms` dates the newest admitted sample.
 
 `mask_wait` includes time awaiting an exact mask result. `segment_queue` and `segment_inference` describe portions that can overlap that wait. Use `body_roundtrip` for the request total. These diagnostics travel on the internal worker reply and the people event's health metadata. The measured body frame keeps its existing schema and capture expiry.
 

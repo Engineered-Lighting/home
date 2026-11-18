@@ -70,7 +70,7 @@ class MetricAdmissionTests(unittest.TestCase):
         return {'npz': raw.getvalue(), 'calibration': self.f.originals['calibration'],
                 'proof': proof}
 
-    def build(self):
+    def build(self, execution_arms=('a', 'b')):
         f = self.f
         alignment, _, originals, config = f.approximate_configuration()
         candidate = encode(preview_fixtures.configured_candidate(alignment.pack))
@@ -99,7 +99,7 @@ class MetricAdmissionTests(unittest.TestCase):
             configured = bootstrap.load_factory(config, client=Client())
         configured.clock = Clock()
         configured.desk_preview = configured_preview
-        runtime = f.build(metric_factory=configured)
+        runtime = f.build(metric_factory=configured, execution_arms=execution_arms)
         runner = runtime.runners[f.session['id']]
         runner.sampling_hz = {'a': 1, 'b': 1}  # Actual trial's authored config.
         model_result = preview_fixtures.add_shoulders(f.event)['payload']['result']
@@ -129,11 +129,11 @@ class MetricAdmissionTests(unittest.TestCase):
             time.sleep(.005)
         self.fail('actual paired authored model output did not settle')
 
-    def dropped_lease(self):
-        self.build()
+    def dropped_lease(self, execution_arms=('a', 'b')):
+        self.build(execution_arms)
         self.consume(0, .59)
         self.consume(.5, .59)
-        self.outputs(2)
+        self.outputs(len(execution_arms))
         self.capture_index = 1
         # Hold only the new post-offer hook so its exact production terminal
         # rows can exercise refusal cases. No runner/admission result is faked.
@@ -148,6 +148,55 @@ class MetricAdmissionTests(unittest.TestCase):
                 "json_extract(payload,'$.frame.media_ids[0]')=? ORDER BY arm",
                 (self.f.session['id'], dropped['media_ids'][0])).fetchall()
         return frame, rows
+
+    def test_la_only_cadence_drop_releases_exact_unexecuted_lease(self):
+        frame, rows = self.dropped_lease(('b',))
+        self.assertEqual(len(rows), 1)
+        metric = self.source.metric
+        capture_at, identity = metric.last_capture_at, metric.last_npz_identity
+        runner = self.runtime.runners[self.f.session['id']]
+        for scope in ((), ('a',), ('b', 'b'), ('foreign',)):
+            runner.execution_arms = scope
+            self.assertFalse(metric.after_offer(frame))
+        runner.execution_arms = ('b',)
+        runner.active['b'] = rows[0]['id']
+        self.assertFalse(metric.after_offer(frame))
+        runner.active['b'] = None
+        runner.pending['b'] = json.loads(rows[0]['payload'])
+        self.assertFalse(metric.after_offer(frame))
+        runner.pending['b'] = None
+        self.assertTrue(metric.after_offer(frame),
+                        'LA-only cadence drop must not wait for a nonexistent A request')
+        self.assertIsNone(metric.lease)
+        self.assertIsNone(metric.image_record)
+        self.assertEqual(metric.last_capture_at, capture_at)
+        self.assertEqual(metric.last_npz_identity, identity)
+
+    def test_actual_la_only_pump_advances_after_sampling_drop(self):
+        self.build(('b',))
+        self.consume(0, .59)
+        self.consume(.5, .59)
+        self.outputs(1)
+        self.capture_index = 1
+        self.consume(1.5, 1.59)
+        self.assertIsNone(self.source.metric.lease,
+                          'actual LA-only pump must retire a sampling-dropped lease immediately')
+        self.capture_index = 2
+        admitted = self.consume(2.5, 2.59)
+        outputs = self.outputs(2)
+        matching = [e for e in outputs if e['payload']['media_ids']==admitted['media_ids']]
+        self.assertEqual(len(matching), 1)
+        self.assertEqual(matching[0]['payload']['arm'], 'b')
+        timing = self.source.metric.status()['capture_timing']
+        self.assertEqual(timing['frame_id'], matching[0]['payload']['frame_id'])
+        self.assertEqual(timing['schema'], 'den-metric-capture-timing-1')
+        self.assertEqual(set(timing['stages_ms']), {'capture_lock', 'receiver_clock', 'npz_read',
+                         'calibration_read', 'upper_anchor', 'clock_finish', 'verify_originals',
+                         'prepare', 'register'})
+        self.assertTrue(all(v>=0 for v in timing['stages_ms'].values()))
+        self.assertAlmostEqual(sum(timing['stages_ms'].values()), timing['total_ms'], places=5)
+        self.consume(2.6, 2.7)
+        self.assertEqual(self.source.metric.projected, 1)
 
     def test_only_both_exact_cadence_drops_without_possible_execution_release(self):
         frame, rows = self.dropped_lease()

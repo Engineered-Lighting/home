@@ -142,7 +142,7 @@ class MetricInputSession:
             'lab_profile':deepcopy(runner.profiles['b']),
             'sampling_hz':runner.sampling_hz['b'] if runner.sampling_hz is not None else None}
     def after_offer(self,frame):
-        """Retire only an exact lease BOTH arms provably declined to execute.
+        """Retire an exact lease every configured arm declined to execute.
 
         The existing runner's source cadence stays authoritative. Keep its
         next slot free of unrelated JPEGs while the same pump waits for a new
@@ -159,17 +159,19 @@ class MetricInputSession:
         if (expected!={**{key:lease.image_metadata[key] for key in required
                 if key not in ('session_id','media_ids')},'session_id':session['id'],'media_ids':[record['id']]}
                 or runner.generation!=lease.binding['model_generation']):return False
+        from runtime import original_frame,validate_execution_arms
+        try:arms=validate_execution_arms(runner.execution_arms)
+        except ValueError:return False
         ids={arm:sha(encoded([session['id'],runner.generation,arm,
-            frame['capture_epoch'],frame['frame_id']])) for arm in ('a','b')}
+            frame['capture_epoch'],frame['frame_id']])) for arm in arms}
         # Runner -> Store -> owner is the incumbent reconciliation lock order.
         # No source lock spans the durable terminal-disposition lookup.
         with runner.lock:
             with self.owner.store.lock:
                 rows=self.owner.store.db.execute(
-                    'SELECT id,payload,state,result FROM paired_requests WHERE id IN (?,?)',
-                    (ids['a'],ids['b'])).fetchall()
-            if len(rows)!=2:return False
-            from runtime import original_frame
+                    'SELECT id,payload,state,result FROM paired_requests WHERE id IN ('+
+                    ','.join('?' for _ in ids)+')',tuple(ids.values())).fetchall()
+            if len(rows)!=len(ids):return False
             for row in rows:
                 request=json.loads(row['payload']);arm=request.get('arm')
                 if (arm not in ids or row['id']!=ids[arm] or request.get('request_id')!=ids[arm]
@@ -309,11 +311,17 @@ class MetricInputSession:
                 self.reason='metric_capture_budget_unavailable';return None
             self.reserved_bytes=MAX_CAPTURE_BYTES;self.in_flight=True;self.last_capture_at=now
         locked=False;phase='capture_lock'
+        capture_started=stage_started=time.monotonic();stage_timings={};attempt_frame_id=None
+        def stage(name):
+            nonlocal phase,stage_started
+            now=time.monotonic()
+            stage_timings[phase]=stage_timings.get(phase,0.)+(now-stage_started)*1000
+            phase=name;stage_started=now
         try:
             locked=self.factory.capture_lock.acquire(timeout=1)
             if not locked:raise ValueError('commissioned camera capture busy')
-            self._current();phase='receiver_clock';started=self.factory.clock.begin(receipt)
-            phase='npz_read'
+            self._current();stage('receiver_clock');started=self.factory.clock.begin(receipt)
+            stage('npz_read')
             raw,_=self.factory.client._read('/frame.npz');self._current()
             newer=after_anchor(raw,receipt)
             if not newer:
@@ -325,18 +333,19 @@ class MetricInputSession:
                 raw,_=self.factory.client._read('/frame.npz');self._current()
                 newer=after_anchor(raw,receipt)
             if newer:prior=(jpeg,header.encode())
-            phase='calibration_read'
+            stage('calibration_read')
             calibration,_=self.factory.client._read('/calibration');self._current()
             # Read the upper JPEG after NPZ under the SAME commissioned clock
             # turn. The next pump turn publishes another host-clock receipt;
             # a pending proof must never span that replacement. This is one
             # bounded read through the existing client, not another pump.
-            phase='upper_anchor';jpeg,header=self.factory.client._read('/frame.jpg')
+            stage('upper_anchor');jpeg,header=self.factory.client._read('/frame.jpg')
             upper=_receipt(jpeg,header)
             if upper['session']!=receipt['session'] or upper['timing_generation']!=receipt['timing_generation']:
                 raise ValueError('metric_camera_epoch_changed')
-            proof=self.factory.clock.finish(started);available=self.owner.store.clock();self._current()
+            stage('clock_finish');proof=self.factory.clock.finish(started);available=self.owner.store.clock();self._current()
             self.factory.capture_lock.release();locked=False
+            stage('verify_originals')
             originals={'npz':raw,'calibration':calibration,'anchor_a':prior[0],'anchor_b':jpeg}
             headers={'a':prior[1].decode(),'b':header}
             from apartment_viewing_metric import prepare_metric_frame
@@ -348,11 +357,12 @@ class MetricInputSession:
             captured=None
             if self.development:
                 with self.owner.lock:captured,self.pending_warnings=self.pending_warnings,[]
-            phase='prepare';lease=prepare_metric_frame(originals=originals,anchor_headers=headers,receiver_proof=proof,
+            stage('prepare');lease=prepare_metric_frame(originals=originals,anchor_headers=headers,receiver_proof=proof,
                 binding=self._binding(session,runner),pins=pins,available_at=available,started_at=session['started_at'],now_s=self.owner.store.clock(),
                 **({'warnings':captured} if captured is not None else {}))
             if lease.retained_bytes>MAX_CAPTURE_BYTES:raise ValueError('metric capture reservation exceeded')
-            meta=lease.image_metadata;identity=(meta['capture_epoch'],meta['timing_generation'],meta['sequence'])
+            meta=lease.image_metadata;attempt_frame_id=meta['frame_id']
+            identity=(meta['capture_epoch'],meta['timing_generation'],meta['sequence'])
             if self.last_npz_identity is not None and (identity[:2]!=self.last_npz_identity[:2] or identity[2]<=self.last_npz_identity[2]):
                 raise ValueError('metric NPZ identity did not advance')
             self._current()
@@ -365,7 +375,7 @@ class MetricInputSession:
             # current()/registration consult the Store and scope. Never hold
             # owner.lock across them: live/Stop and worker reconciliation can
             # already own outer lifecycle/Store locks before asking this owner.
-            phase='register';record=self.owner.register_metric_frame(lease)
+            stage('register');record=self.owner.register_metric_frame(lease)
             self._current();self.owner.prune()
             with self.owner.lock:
                 registered=self.owner.store.clock();late=registered>=lease.descriptor['retirement_deadline']
@@ -388,7 +398,14 @@ class MetricInputSession:
             return None
         finally:
             if locked:self.factory.capture_lock.release()
-            with self.owner.lock:self.reserved_bytes=0;self.in_flight=False
+            finished=time.monotonic()
+            stage_timings[phase]=stage_timings.get(phase,0.)+(finished-stage_started)*1000
+            with self.owner.lock:
+                self.reserved_bytes=0;self.in_flight=False
+                self.last_capture_timing={'schema':'den-metric-capture-timing-1',
+                    'completed_at':self.owner.store.clock(),'total_ms':(finished-capture_started)*1000,
+                    'stages_ms':stage_timings,'outcome':self.reason,
+                    'frame_id':attempt_frame_id}
     def snapshot(self):
         try:self._current()
         except Exception:return None
@@ -519,5 +536,6 @@ class MetricInputSession:
         return {'enabled':True,'arm':'b','state':state,'prepared_frames':self.prepared,'projected_frames':self.projected,
             'registered_frame':registered,**({'timing_policy':'development'} if self.development else {}),
             'reason':self.reason,'in_flight':self.in_flight,'reserved_bytes':self.reserved_bytes,
+            'capture_timing':deepcopy(getattr(self,'last_capture_timing',None)),
             'metric_depth':'diagnostic_nominal_eeprom','room_alignment':'approximate_viewing_only' if self.projection is not None else 'unavailable',
             'operational_geometry':False,'physical_permission':False}

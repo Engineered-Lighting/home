@@ -247,19 +247,19 @@ test('a moving row reaches the overlay with its glide on Home\'s clock, and the 
 });
 
 // A person's settled change, as the overlay reports it (equipment-virtual-fixtures.mjs onHandChange).
-function handSetup({ answer = (path, body) => ({ status: 200, answer: { ok: true, event_id: body.event_id, recorded: true, learned: false,
-    why_not: null, hand: { event_id: body.event_id, parts: ['spot'] }, from_seq: 5 } }), withPost = true } = {}) {
+function handSetup({ answer = handAnswer, withPost = true, protocol = 2 } = {}) {
     let at = 1000, listener = null, ids = 0;
-    const posts = [], released = [], queued = [], holds = new Map();
+    const posts = [], released = [], queued = [], holds = new Map(), restored = [];
     const scope = { generation: 1, binding: { content_revision: binding.scan_revision },
         equipment_revision: binding.equipment_revision, equipment_digest: binding.equipment_digest, fixture_ids: [fixture] };
     const overlay = { coordinatorSpotScope: () => scope, applyCoordinatorSpots: () => true,
         onVirtualFixtureHand(fn) { listener = fn; return () => { listener = null; }; },
         virtualFixtureHandHolds: () => [...holds.values()],
+        restoreVirtualFixtureHand(id, hand) { restored.push({ id, hand }); holds.set(id, { fixture_id: id, reason: 'restored' }); return true; },
         releaseVirtualFixtureHand(id) { released.push(id); holds.delete(id); return [id]; },
         releaseVirtualFixtureHands() { const all = [...holds.keys()]; holds.clear(); return all; } };
     const post = withPost ? async (path, body) => { posts.push({ path, body: structuredClone(body) }); return answer(path, body, posts.length); } : null;
-    const player = createSpotPlayback({ home: 'den', site: 'victoria', clock: () => at, post, makeEventId: () => `home-${++ids}`,
+    const player = createSpotPlayback({ home: 'den', site: 'victoria', clock: () => at, post, clientId: 'page-a', makeEventId: () => `home-${++ids}`,
         later(callback) { queued.push(callback); return queued.length; }, cancel() {} });
     player.attach(overlay);
     player.connect(at);
@@ -269,10 +269,209 @@ function handSetup({ answer = (path, body) => ({ status: 200, answer: { ok: true
     const settle = (patch = {}) => listener?.({ phase: 'settled', fixture_id: fixture, label: 'Desk spot', reason: 'aim', before: { tilt_deg: 30 },
         after: { tilt_deg: 41 }, at_ms: 1700000000000, ...patch });
     const change = patch => { start(); settle(patch); };
-    const snap = (seq, hand) => player.receive({ ...lit, seq, fixtures: { [fixture]: { ...lit.fixtures[fixture], hand } } });
+    const snap = (seq, hand, extra = {}) => {
+        const latest = posts.filter(row => row.path === 'manual').at(-1)?.body;
+        const record = hand && { hold_id: latest?.hold_id || 'saved-hold', event_id: latest?.event_id || 'saved-event',
+            revision: latest?.client_seq || 1, state: { tilt_deg: 41 }, ...hand };
+        player.receive({ ...lit, seq, ...(protocol === 2 ? { manual_protocol: 2 } : {}), ...extra,
+            fixtures: { [fixture]: { ...lit.fixtures[fixture],
+                manual_revision: record?.revision ?? (latest ? latest.client_seq + 1 : 0), hand: record,
+                ...(extra.fixtures?.[fixture] || {}) } } });
+    };
     const flush = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)); };
-    return { player, overlay, posts, released, queued, holds, start, settle, change, snap, flush, listener: () => listener };
+    return { player, overlay, posts, released, queued, holds, restored, start, settle, change, snap, flush, listener: () => listener };
 }
+
+const handAnswer = (path, body) => path === 'manual/resume' ? { status: 200, answer: { ok: true,
+    request_id: body.request_id, hold_id: body.hold_id, manual_revision: body.expected_revision + 1 } } : ({ status: 200, answer: { ok: true, event_id: body.event_id,
+    recorded: true, learned: false, epoch: lit.epoch, from_seq: 5, manual_revision: body.client_seq,
+    hand: { hold_id: body.hold_id, event_id: body.event_id, revision: body.client_seq,
+        client_id: body.client_id, client_seq: body.client_seq, parts: ['spot'], state: { tilt_deg: 41 } } } });
+
+test('a newer gesture fences old hand release before its settled report', async () => {
+    const f = handSetup({ protocol: 2, answer: handAnswer });
+    f.snap(1, null); f.change(); await f.flush();
+    f.snap(5, handAnswer('manual', f.posts[0].body).answer.hand);
+    f.start();
+    f.snap(6, null, { fixtures: { [fixture]: { manual_revision: 2 } } });
+    assert.deepEqual(f.released, [], 'the pending gesture already owns the fixture');
+});
+
+test('a superseded queued manual retry never reaches the server', async () => {
+    const f = handSetup({ protocol: 2, answer: () => ({ status: 503, answer: null }) });
+    f.snap(1, null); f.change(); await f.flush();
+    const retry = f.queued.at(-1);
+    f.change(); await f.flush();
+    retry(); await f.flush();
+    assert.equal(f.posts.length, 2, 'only the two distinct edits are posted');
+});
+
+test('fenced edits allocate their ordering at gesture start and keep a stable hold identity', async () => {
+    const f = handSetup({ protocol: 2, answer: handAnswer });
+    f.snap(1, null); f.start(); f.snap(2, null); f.settle(); await f.flush();
+    f.change(); await f.flush();
+    const [first, second] = f.posts.map(row => row.body);
+    assert.equal(first.client_id, 'page-a');
+    assert.equal(first.client_seq, 1); assert.equal(second.client_seq, 2);
+    assert.ok(first.hold_id); assert.equal(second.hold_id, first.hold_id);
+    assert.equal(first.expected_revision, 0);
+    assert.deepEqual(first.snapshot, { epoch: lit.epoch, seq: 1 });
+});
+
+test('an unrelated hand cannot acknowledge and then release the latest edit', async () => {
+    const f = handSetup({ protocol: 2, answer: handAnswer });
+    f.snap(1, null); f.change(); await f.flush();
+    f.snap(5, { hold_id: 'other-hold', event_id: 'other-event', revision: 1, state: { tilt_deg: 22 } });
+    f.snap(6, null, { fixtures: { [fixture]: { manual_revision: 2 } } });
+    assert.deepEqual(f.released, []);
+});
+
+test('a matching durable hand rekeys a local hold across producer restart and later releases it', async () => {
+    const f = handSetup({ protocol: 2, answer: handAnswer });
+    f.snap(1, null); f.change(); await f.flush();
+    const hand = handAnswer('manual', f.posts[0].body).answer.hand;
+    f.player.anchor({ epoch: 'preview-restarted', server_mono: 10 });
+    f.snap(1, hand, { epoch: 'preview-restarted' });
+    f.snap(2, null, { epoch: 'preview-restarted', fixtures: { [fixture]: { manual_revision: 2 } } });
+    assert.deepEqual(f.released, [fixture]);
+});
+
+test('a fresh viewer restores durable held values silently before rendering coordinator rows', () => {
+    const f = handSetup({ protocol: 2 });
+    const hand = { hold_id: 'saved-hold', event_id: 'saved-event', revision: 7, client_id: 'prior-page', client_seq: 3,
+        parts: ['spot'], recovering: true, state: { pan_deg: 8, tilt_deg: 41, spotlight: { on: true, brightness: .8, color_temp_kelvin: 2700 } } };
+    f.snap(1, hand);
+    assert.equal(f.restored.length, 1);
+    assert.deepEqual(f.restored[0], { id: fixture, hand });
+    assert.equal(f.posts.length, 0);
+    f.snap(2, hand);
+    assert.equal(f.restored.length, 1, 'the same revision is restored once');
+});
+
+test('a newer gesture cancels Resume before its delayed send reaches the server', async () => {
+    const f = handSetup({ protocol: 2, answer: handAnswer });
+    f.snap(1, null); f.change(); await f.flush();
+    const hand = handAnswer('manual', f.posts[0].body).answer.hand;
+    f.snap(5, hand);
+    f.player.handBack();
+    f.change(); await f.flush();
+    assert.equal(f.posts.some(row => row.path === 'manual/resume'), false);
+    assert.notEqual(f.posts.at(-1).body.hold_id, hand.hold_id);
+    assert.equal(f.holds.has(fixture), true, 'the new gesture remains locally held');
+});
+
+test('an older producer preserves local control without unfenced writes', async () => {
+    const f = handSetup({ protocol: 1 });
+    f.snap(1, null); f.change(); await f.flush();
+    assert.equal(f.posts.length, 0);
+    assert.equal(f.player.handHolds()[0].learning, 'unsupported');
+    assert.equal(f.player.handBack(), 1);
+    await f.flush();
+    assert.equal(f.posts.length, 0);
+});
+
+test('Resume waits for its matching acknowledgment and a delayed acknowledgment cannot end a newer burst', async () => {
+    let complete;
+    const f = handSetup({ answer: (path, body) => path === 'manual/resume'
+        ? new Promise(resolve => { complete = () => resolve(handAnswer(path, body)); }) : handAnswer(path, body) });
+    f.snap(1, null); f.change(); await f.flush();
+    f.snap(5, handAnswer('manual', f.posts[0].body).answer.hand);
+    f.player.handBack(); await f.flush();
+    assert.equal(f.holds.has(fixture), true, 'the server has not acknowledged Resume');
+    f.start();
+    complete(); await f.flush();
+    assert.equal(f.holds.has(fixture), true);
+    assert.deepEqual(f.released, []);
+    f.settle(); await f.flush();
+    assert.notEqual(f.posts.at(-1).body.hold_id, f.posts[0].body.hold_id, 'the gesture after Resume starts a new hold');
+});
+
+test('conflicting edits and Resume keep the local hand and do not retry stale authority', async () => {
+    const f = handSetup({ answer: () => ({ status: 409, answer: { ok: false, error: 'manual_conflict' } }) });
+    f.snap(1, null); f.change(); await f.flush();
+    assert.equal(f.player.handHolds()[0].learning, 'not_recorded');
+    f.snap(2, { hold_id: 'newer-remote', event_id: 'newer-event', revision: 9, state: { tilt_deg: 20 } });
+    assert.equal(f.restored.length, 0, 'a conflicting local edit stays locally held');
+    f.player.handBack(); await f.flush();
+    assert.equal(f.holds.has(fixture), true);
+    assert.deepEqual(f.released, []);
+    assert.equal(f.posts.length, 2, 'a 409 edit and Resume are never retried');
+});
+
+test('Resume during a newer unsettled gesture cancels that draft and releases its prior acknowledged hand', async () => {
+    const f = handSetup();
+    f.snap(1, null); f.change(); await f.flush();
+    const hand = handAnswer('manual', f.posts[0].body).answer.hand;
+    f.snap(5, hand); f.start();
+    f.player.handBack(); await f.flush();
+    const resume = f.posts.find(row => row.path === 'manual/resume');
+    assert.ok(resume, 'the acknowledged backend hold is also released');
+    assert.equal(resume.body.hold_id, hand.hold_id);
+    assert.equal(resume.body.expected_revision, hand.revision);
+    assert.equal(f.holds.has(fixture), false);
+    f.settle(); await f.flush();
+    assert.equal(f.posts.length, 2, 'the cancelled draft never reports afterward');
+});
+
+test('Resume waits for the captured in-flight edit acknowledgment before choosing its revision', async () => {
+    let finish;
+    const f = handSetup({ answer: (path, body) => path === 'manual'
+        ? new Promise(resolve => { finish = () => resolve(handAnswer(path, body)); }) : handAnswer(path, body) });
+    f.snap(1, null); f.change();
+    f.player.handBack(); await f.flush();
+    assert.equal(f.posts.length, 1, 'the edit is still in flight');
+    finish(); await f.flush();
+    assert.equal(f.posts[1].body.expected_revision, 1);
+    assert.equal(f.holds.has(fixture), false);
+});
+
+test('cancelling a newer draft can use the prior edit receipt that arrived while that draft was active', async () => {
+    let finish;
+    const f = handSetup({ answer: (path, body) => path === 'manual'
+        ? new Promise(resolve => { finish = () => resolve(handAnswer(path, body)); }) : handAnswer(path, body) });
+    f.snap(1, null); f.change(); f.start();
+    finish(); await f.flush();
+    f.player.handBack(); await f.flush();
+    assert.equal(f.posts[1].body.expected_revision, 1);
+    assert.equal(f.holds.has(fixture), false);
+});
+
+test('an explicit Resume after an edit conflict uses the returned winning hold fence', async () => {
+    const winner = { hold_id: 'winner', event_id: 'winner-event', revision: 9, state: { tilt_deg: 20 } };
+    const f = handSetup({ answer: (path, body) => path === 'manual'
+        ? { status: 409, answer: { ok: false, error: 'manual_conflict', manual_revision: 9, hand: winner } }
+        : handAnswer(path, body) });
+    f.snap(1, null); f.change(); await f.flush();
+    f.player.handBack(); await f.flush();
+    assert.equal(f.posts[1].body.hold_id, 'winner');
+    assert.equal(f.posts[1].body.expected_revision, 9);
+    assert.equal(f.holds.has(fixture), false);
+});
+
+test('a delayed successful Resume cannot clear a newer authoritative hand already drawn', async () => {
+    let complete;
+    const f = handSetup({ answer: (path, body) => path === 'manual/resume'
+        ? new Promise(resolve => { complete = () => resolve(handAnswer(path, body)); }) : handAnswer(path, body) });
+    f.snap(1, null); f.change(); await f.flush();
+    f.snap(5, handAnswer('manual', f.posts[0].body).answer.hand);
+    f.player.handBack(); await f.flush();
+    const newer = { hold_id: 'another-page', event_id: 'new-edit', revision: 3, state: { tilt_deg: 25 } };
+    f.snap(6, newer);
+    complete(); await f.flush();
+    assert.deepEqual(f.released, []);
+    assert.equal(f.restored.at(-1).hand.hold_id, newer.hold_id);
+    assert.equal(f.holds.has(fixture), true);
+});
+
+test('a confirmed older local hand yields to a newer authoritative edit without an intervening blank', async () => {
+    const f = handSetup();
+    f.snap(1, null); f.change(); await f.flush();
+    f.snap(5, handAnswer('manual', f.posts[0].body).answer.hand);
+    f.snap(6, { hold_id: 'another-page', event_id: 'new-edit', revision: 2, state: { tilt_deg: 25 } });
+    assert.equal(f.restored.length, 1);
+    assert.equal(f.restored[0].hand.hold_id, 'another-page');
+    assert.deepEqual(f.released, []);
+});
 
 test('a settled hand change goes to den-live once, with the snapshot Home was drawing, and its hold ends only when den-live releases it', async () => {
     const { player, posts, released, change, snap, flush, holds } = handSetup();
@@ -285,7 +484,8 @@ test('a settled hand change goes to den-live once, with the snapshot Home was dr
     assert.equal(posts.length, 1);
     assert.equal(posts[0].path, 'manual');
     assert.deepEqual(posts[0].body, { schema: 'den-manual-1', event_id: 'home-1', fixture_id: fixture, before: { tilt_deg: 30 },
-        after: { tilt_deg: 41 }, at_ms: 1700000000000, snapshot: { epoch: lit.epoch, seq: 1 } });
+        after: { tilt_deg: 41 }, at_ms: 1700000000000, snapshot: { epoch: lit.epoch, seq: 1 },
+        client_id: 'page-a', client_seq: 2, hold_id: posts[0].body.hold_id, expected_revision: 0 });
     assert.equal(player.handHolds()[0].learning, 'recorded');
     // Before from_seq, and before den-live has shown the hand, a snapshot without it ends nothing.
     snap(3, null); snap(4, null);
@@ -332,12 +532,13 @@ test('a declined change, an older den-live and another run never hand the fixtur
     // Resume hands it back and posts manual/resume; so does the coordinator going from off to on.
     assert.equal(restarted.player.handBack(), 1);
     await restarted.flush();
-    assert.deepEqual(restarted.posts.at(-1), { path: 'manual/resume', body: { fixture_id: fixture } });
+    assert.equal(restarted.posts.at(-1).path, 'manual/resume');
+    assert.equal(restarted.posts.at(-1).body.fixture_id, fixture);
     restarted.change();
     restarted.player.observeControl({ on: false, stopped: false, stop_counter: 0 });
     restarted.player.observeControl({ on: true, stopped: false, stop_counter: 0 });
     await restarted.flush();
-    assert.deepEqual(restarted.posts.at(-1), { path: 'manual/resume', body: { fixture_id: fixture } });
+    assert.equal(restarted.posts.at(-1).path, 'manual/resume');
     assert.equal(restarted.holds.size, 0);
 });
 

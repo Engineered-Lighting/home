@@ -1033,6 +1033,34 @@ test('manual always wins: with the coordinator on, a drag aim, the pan slider, a
   preview.dispose();
 });
 
+test('durable manual state restores silently, survives coordinator output and rejects invalid state atomically', () => {
+  const registration = registrationFor();
+  const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding });
+  preview.setDocument(registration, { coordinator: true });
+  const scope = preview.coordinatorSpotScope();
+  const id = preview.readback().fixtures.find(row => !row.spot_only).fixture_id;
+  const events = [];
+  preview.onHandChange(event => events.push(event));
+  const state = { pan_deg: 8, tilt_deg: 41,
+    spotlight: { on: true, brightness: .8, color_temp_kelvin: 2700 },
+    downward: { on: true, brightness: .7, color_temp_kelvin: 3000 },
+    radials: [{ number: 1, on: true, brightness: .9, color_temp_kelvin: 3000 }] };
+  assert.equal(preview.restoreHand(id, { hold_id: 'persisted', event_id: 'edit-1', revision: 1, state }), true);
+  const held = copy(preview.readback().fixtures.find(row => row.fixture_id === id).state);
+  assert.equal(events.length, 0, 'recovery is never a new correction');
+  assert.equal(preview.restoreHand(id, { state: { ...state, spotlight: { brightness: 2 } } }), false);
+  assert.deepEqual(preview.readback().fixtures.find(row => row.fixture_id === id).state, held);
+  preview.applyCoordinatorSpots(scope.fixture_ids.map(fixture_id => ({ fixture_id,
+    on: false, level: 0, cct_k: 2700, pan_deg: 0, tilt_deg: 20, reason: 'task', motion_phase: 'settled' })),
+  scope.generation, { ambient: { level: .2, cct_k: 2200 } });
+  assert.deepEqual(preview.readback().fixtures.find(row => row.fixture_id === id).state, held);
+  assert.equal(preview.handHolds()[0].fixture_id, id);
+  const pointOnly = { point: [1, 2, .8] };
+  assert.equal(preview.restoreHand(id, { state: { ...state, target: pointOnly } }), true);
+  assert.deepEqual(preview.interactionDescriptor(id).target, pointOnly, 'an existing point-only target is preserved');
+  preview.dispose();
+});
+
 test('the fixture marks a spot aimed and waiting dark with a dashed warm collar, and a held fixture with a solid ice collar', () => {
   const registration = registrationFor();
   const preview = createEquipmentVirtualFixtures(new THREE.Group(), { binding: registration.binding, later: () => 0, cancel: () => {} });

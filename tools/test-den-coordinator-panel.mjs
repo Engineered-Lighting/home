@@ -96,6 +96,8 @@ test('the summary line', () => {
     assert.equal(manualWords(holds), "You're in control of Desk spot and F1 · the coordinator will learn from this");
     assert.equal(manualWords([holds[1]]), "You're in control of F1", 'no promise to learn when den-live takes no change');
     assert.equal(manualWords([{ ...holds[0], learning: 'not_recorded' }]), "You're in control of Desk spot");
+    assert.equal(manualWords([{ ...holds[0], resuming: true }]), "You're in control of Desk spot · waiting for Resume");
+    assert.equal(manualWords([{ ...holds[0], resume_error: 'manual_conflict' }]), "You're in control of Desk spot · Resume failed. Try Resume again");
     assert.equal(manualWords([]), '');
     assert.equal(summaryWords({ on: true, stopped: false, situation: DECISION.situation }), 'Lighting coordinator · On · A close-up task, evening');
 });

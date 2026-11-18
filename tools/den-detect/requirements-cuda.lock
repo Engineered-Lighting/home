@@ -1,0 +1,84 @@
+# den-detect's venv on the LA host, with CUDA: requirements.lock's distributions at the same versions, except
+# CUDA 12.8 torch and torchvision (PyTorch's cu128 index), onnxruntime-gpu in place of onnxruntime, and what CUDA torch
+# needs on Linux: the NVIDIA runtime wheels, cuda-bindings and triton. Those extra lines are the ones
+# tools/la-detector-trial/requirements.lock resolved for torch 2.10.0+cu128 on LA (Linux x86_64, Python 3.12,
+# glibc 2.39, NVIDIA driver 595.84, RTX PRO 6000 Blackwell), where that runtime was installed and run on 2026-09-26.
+# detect.py holds a venv with CUDA torch (+cu128) to this file, and any other to requirements.lock.
+#
+# install.sh builds it on LA, wheels only, each with --no-deps: torch and torchvision from the two url lines below,
+# PyTorch's own cu128 wheels, each held by pip to its sha256 (the ones the LA trial installed); rtmlib from its wheel in
+# the release; the rest from PyPI. About 4.6 GB to
+# download, measured from the wheels' sizes on 2026-11-14 (torch 917 MB, cuDNN 707 MB, cuBLAS 594 MB, onnxruntime-gpu
+# 301 MB, ...): about 4.2 GB more than the CPU venv's 400 MB, and 7 to 9 GB on disk. The weights are the same files.
+# If CUDA or the GPU isn't usable, the detector runs on the CPU in this same venv (detect.gpu_usable).
+#
+# url torch https://download-r2.pytorch.org/whl/cu128/torch-2.10.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=628e89bd5110ced7debee2a57c69959725b7fbc64eab81a39dd70e46c7e28ba5
+# url torchvision https://download-r2.pytorch.org/whl/cu128/torchvision-0.25.0%2Bcu128-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=1255a0ca2bf987acf9f103b96c5c4cfe3415fc4a1eef17fa08af527a04a4f573
+certifi==2026.10.23
+charset-normalizer==3.5.2
+colorama==0.4.6
+coloredlogs==15.0.1
+contourpy==1.3.3
+cuda-bindings==12.9.4
+cuda-pathfinder==1.8.2
+cycler==0.12.1
+filelock==4.2.9
+flatbuffers==25.12.19
+fonttools==4.68.0
+fsspec==2026.9.0
+humanfriendly==10.0
+idna==3.20
+Jinja2==3.1.6
+kiwisolver==1.5.1
+MarkupSafe==3.0.4
+matplotlib==3.11.2
+mpmath==1.3.0
+networkx==3.7
+numpy==1.26.4
+nvidia-cublas-cu12==12.8.4.1
+nvidia-cuda-cupti-cu12==12.8.90
+nvidia-cuda-nvrtc-cu12==12.8.93
+nvidia-cuda-runtime-cu12==12.8.90
+nvidia-cudnn-cu12==9.10.2.21
+nvidia-cufft-cu12==11.3.3.83
+nvidia-cufile-cu12==1.13.1.3
+nvidia-curand-cu12==10.3.9.90
+nvidia-cusolver-cu12==11.7.3.90
+nvidia-cusparse-cu12==12.5.8.93
+nvidia-cusparselt-cu12==0.7.1
+nvidia-nccl-cu12==2.27.5
+nvidia-nvjitlink-cu12==12.8.93
+nvidia-nvshmem-cu12==3.4.5
+nvidia-nvtx-cu12==12.8.90
+onnxruntime-gpu==1.23.2
+opencv-python==4.11.0.86
+packaging==26.3
+pillow==13.0.0
+pip==25.0.1
+polars==2.1.0
+polars-runtime-32==2.1.0
+protobuf==7.36.2
+psutil==7.2.2
+pyparsing==3.3.3
+pyreadline3==3.5.6
+python-dateutil==4.0.0
+PyYAML==6.0.3
+requests==2.34.2
+rtmlib==0.0.16
+scipy==1.17.1
+setuptools==84.2.1
+sympy==1.14.0
+torch==2.10.0+cu128
+torchvision==0.25.0+cu128
+tqdm==4.70.1
+triton==3.6.0
+typing_extensions==4.16.0
+tzdata==2026.6
+ultralytics==8.4.0
+ultralytics-thop==2.2.5
+urllib3==2.8.0
+#
+# The weights, in the venv's models folder (the same as requirements.lock's):
+# sha256 yolo26s.pt 646f8bc3fe0a656803d95c294f7852321748cb29d13466a1af8862e2db384a1b
+# sha256 rtmpose-m-body7.onnx 5c0a4bf67953e6d2ac43ce15e77dc9d5d354ae18430a47d2c5963a7bc5683e3c
+# sha256 artifact.json 1bd8ad0a3828efc9d5b86b603ceee0639d3e7d674db98dfc3d85baa291740585

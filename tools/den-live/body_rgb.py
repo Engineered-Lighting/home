@@ -1,0 +1,151 @@
+"""Bind current RGB observations to measured-body input for one registered camera."""
+import math
+from dataclasses import dataclass, replace
+from typing import Optional
+
+from body import FAR_MM, HEAD_SHOWN, MIN_TORSO_SEEDS, NEAR_MM
+from stream import BODY_LEASE_S
+from body_clock import capture_bounds, lease_clock, receipt_arrival
+from body_head import HeadProfile, head_evidence, torso_cut
+from body_input import BodyInput
+
+
+RGB_PAIR_S = 0.067
+TORSO = {5, 6, 11, 12}
+
+
+def _finite(value):
+    return type(value) in (int, float) and -1e300 <= value <= 1e300
+
+
+@dataclass(frozen=True)
+class RgbBodyProfile:
+    qualification_id: str
+    clock_evidence_id: str
+    calibration_sha256: str
+    correction_factor: float
+    transform_id: str
+    scan_revision: str
+    min_valid_depth_fraction: float
+    head: Optional[HeadProfile]   # None: the owner's profile shows the head ("head": "shown")
+
+    @classmethod
+    def from_config(cls, block, registration):
+        """Read the private, owner-qualified profile and bind it to step 2's receipt."""
+        correction = registration["source_correction"]
+        fit = registration["fit"]
+        digest, = correction["calibrations"]
+        factor, = correction["factors"]
+        profile = cls(block["qualification_id"], block["clock_evidence_id"], digest, factor, block["transform_id"], block["scan_revision"],
+                      block["min_valid_depth_fraction"],
+                      None if block["head"] == HEAD_SHOWN else HeadProfile(**block["head"]))
+        if (not all(isinstance(v, str) and 0 < len(v) <= 128
+                    for v in (profile.qualification_id, profile.clock_evidence_id, profile.transform_id, profile.scan_revision))
+                or not isinstance(digest, str) or len(digest) != 64
+                or any(c not in "0123456789abcdef" for c in digest)
+                or not _finite(factor) or not 0.5 <= factor <= 1.5
+                or not _finite(profile.min_valid_depth_fraction) or not 0 < profile.min_valid_depth_fraction <= 1
+                or type(correction["frames"]) is not int or correction["frames"] <= 0
+                or correction["applied"] != correction["frames"]
+                or fit["result"] != "registered" or fit["transform_id"] != profile.transform_id
+                or registration["scan_revision"] != profile.scan_revision):
+            raise ValueError("RGB body profile does not match the registered depth source")
+        return profile
+
+
+def arrival_capture(bundle, capture_mono):
+    """The frame's capture on the body lease's clock, from perception's estimate on the source's clock: the receipt
+    clock's arrival stamp less the frame's estimated age at arrival (never negative). None when either is missing."""
+    arrival, lease_arrival = getattr(bundle, "arrival_mono", None), receipt_arrival(bundle)
+    if not all(_finite(value) for value in (capture_mono, arrival, lease_arrival)):
+        return None
+    return lease_arrival - max(0.0, arrival - capture_mono)
+
+
+class RgbBodyInput:
+    def __init__(self, profile, camera, *, clock=lease_clock):
+        self.profile, self.camera, self.clock = profile, camera, clock
+
+    def __call__(self, bundle, meta, depth, *, frame_key, mode, observations, tracks, supported, association,
+                 capture_mono=None):
+        """capture_mono: perception's own estimate of the frame's capture, on the source's clock (the camera's stamp
+        plus the arrival-anchored offset the people stream uses)."""
+        profile = self.profile
+        if mode != "rgb" or self.camera.transform_id != profile.transform_id:
+            return None
+        if profile.head is None:
+            # The owner shows the head: no head cut, so no exposure separation to bound, and no camera receipt to
+            # require. The frame is dated as the people stream dates it, and gets the same lease.
+            earliest, separation = arrival_capture(bundle, capture_mono), None
+        else:
+            bounds = capture_bounds(bundle, meta)
+            if bounds is None or bounds.evidence_id != profile.clock_evidence_id:
+                return None
+            earliest, separation = bounds.earliest_mono, bounds.separation_s
+        now_mono = self.clock()
+        if earliest is None or not earliest <= now_mono < earliest + BODY_LEASE_S:
+            return None
+        if not self._depth_qualified(bundle, meta, depth):
+            return None
+
+        run_id, track_epoch, _ = frame_key
+        common = (frame_key, run_id, track_epoch, profile.scan_revision, profile.transform_id,
+                  profile.qualification_id, earliest, "rgb")
+        people = [o for o in observations if o["kind"] in ("keypoints", "person_box")]
+        if not people and not tracks:
+            return BodyInput(*common, "empty")
+        if len(tracks) > 1:   # two people tracked: whose depth is whose can't be told
+            return BodyInput(*common, "ambiguous")
+        if len(tracks) != 1 or len(supported) != 1:
+            return BodyInput(*common, "unknown")
+        # The one track's own observation this frame. Any other detection doesn't support it: a stray box, a reflection,
+        # a pose the tracker never followed. It isn't this person, and it doesn't blank their figure.
+        own = [o for o in people if o["obs_id"] in supported[0]]
+        if len(own) != 1:
+            return BodyInput(*common, "ambiguous" if len(own) > 1 else "unknown")
+
+        track, pose = tracks[0], own[0]
+        status, _ = association.get(track["track_id"], (None, None))
+        if status == "ambiguous":
+            return BodyInput(*common, "ambiguous")
+        if (track["state"] != "confirmed" or status != "confident" or pose["obs_id"] not in supported[0]
+                or pose["kind"] != "keypoints" or pose["validity"] != "valid"
+                or pose["transform_id"] != self.camera.transform_id
+                or pose["freshness"]["status"] != "fresh" or pose["freshness"]["depth"] != "used"):
+            return BodyInput(*common, "unknown")
+        joints = [joint for joint in pose["joints_room"] if joint["status"] == "supported" and joint["lift"] == "stereo"]
+        if len({j["j"] for j in joints} & TORSO) < MIN_TORSO_SEEDS:
+            return BodyInput(*common, "unknown")
+        value = BodyInput(*common, "person", {**track, "association": status}, {**pose, "joints_room": joints})
+        if profile.head is None:   # the owner shows the head: the whole measured person, nothing masked
+            return replace(value, head_evidence={"frame_key": frame_key, "binding": value.binding(), "head": HEAD_SHOWN})
+        evidence = dict(frame_key=frame_key, binding=value.binding(), profile=profile.head,
+                        separation_s=separation)
+        head = head_evidence(pose, self.camera, **evidence)
+        cut = torso_cut(pose, self.camera, **evidence)
+        if (head is None and cut is None) or (profile.head.torso_cut_m is not None and cut is None):
+            return BodyInput(*common, "unknown")   # a profile with the cut never publishes on the envelope alone
+        # The envelope and the cut, whichever this frame supports: the figure loses the union of both.
+        return replace(value, head_evidence={**(cut or {}), **(head or {})})
+
+    def _depth_qualified(self, bundle, meta, depth):
+        profile = self.profile
+        correction = meta["raw"].get("depth_correction")
+        if (meta.get("intrinsics") is None or not isinstance(correction, dict) or correction.get("applied") is not True
+                or correction.get("calibration_sha256") != profile.calibration_sha256
+                or correction.get("factor") != profile.correction_factor
+                or (depth.width, depth.height) != self.camera.rig.depth_size
+                or not _finite(meta.get("t_depth")) or depth.t_host != meta["t_depth"]
+                or depth.sequence != meta["depth_seq"]
+                or abs(bundle.t_host - depth.t_host) > RGB_PAIR_S + 1e-9):
+            return False
+        # Empty means an observed, usable view with corrected measured depth. A
+        # black frame, a stale result, and a failed detector never reach this path.
+        needed = math.ceil(profile.min_valid_depth_fraction * (depth.width * depth.height))
+        valid = 0
+        for distance in depth.mm:
+            if NEAR_MM <= distance <= FAR_MM:
+                valid += 1
+                if valid >= needed:
+                    return True
+        return False

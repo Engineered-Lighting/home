@@ -1,0 +1,461 @@
+"""Offline RGB provider integration using native generated bundles and the measured-body worker."""
+import json
+import sys
+import tempfile
+import unittest
+from dataclasses import asdict, replace
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from body import BodyChannel, head_exclusion, torso_cut
+from body_clock import AGE_HEADER, AGE_SCHEMA
+from body_head import HeadProfile
+from body_link import BodyLink
+from body_rgb import RgbBodyInput, RgbBodyProfile
+import install_la
+from perceive import Perceiver, Tools, track_method_copy
+import run_local
+import run_service
+from sofa_check import archive
+from source import SLIM_PATH, Bundle, camera_client
+
+CALIBRATION = "a" * 64
+TIMING_EVIDENCE = "fixture-capture-clock"
+CORRECTION = {"applied": True, "factor": 0.889, "calibration_sha256": CALIBRATION}
+REVISION = "synthetic-scan"
+
+
+class Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+
+class Fixture:
+    def __init__(self, scratch):
+        self.tools = Tools(archive(scratch, "observe"), archive(scratch, "track"))
+        import fake_detector
+        import synth
+
+        self.synth = synth
+        self.rows = fake_detector
+        self.scene = synth.Scene()
+        self.depth = self.scene.depth_mm()
+        self.empty_depth = (4200).to_bytes(2, "little") * (640 * 400)
+        # A distinct foreground silhouette and shoulder/hip seeds outside
+        # the conservative neck exclusion, using the pinned projection.
+        joints = {**synth.JOINTS, "left_hip": (0.16, 0.95), "right_hip": (-0.16, 0.95),
+                  "left_shoulder": (0.23, 1.41), "right_shoulder": (-0.23, 1.41)}
+        self.pixels = {}
+        for name, (x, z) in joints.items():
+            left = synth.g.apply(*self.scene.left_from_room, (x, synth.PANEL_Y, z))
+            self.pixels[name] = synth.g.project(
+                synth.g.apply(*synth.RGB_FROM_LEFT, left), self.scene.k_rgb, self.scene.d_rgb)
+        self.model = scratch / "room-model.jsonl"
+        self.model.write_text(json.dumps(synth.room_model()), encoding="utf-8")
+        self.method = track_method_copy(self.tools, [-2.0, -1.0, 5.0, 6.0], scratch)
+        self.clock = Clock()
+        self.perceiver = Perceiver(self.tools, room_model_path=self.model, camera_id="den-oak",
+                                   max_error_bound_m=0.10, track_method_path=self.method, home="den",
+                                   content_revision=REVISION, now=lambda: 1_800_000_000.0 + self.clock())
+        self.channel = BodyChannel()
+        self.detector = SimpleNamespace(next_id=0, on_body=None, send_alone=self.send)
+        self.perceiver.detector = self.detector
+        self.rendered = []
+        self.link = BodyLink(self.detector, stream=SimpleNamespace(publish_body=self.publish), clock=self.clock,
+                             min_interval_s=0)
+        self.perceiver.body = self.link
+        self.block = {"qualification_id": "fixture-profile", "clock_evidence_id": TIMING_EVIDENCE,
+                      "transform_id": self.perceiver.camera.transform_id,
+                      "scan_revision": REVISION, "min_valid_depth_fraction": 0.2,
+                      "head": asdict(HeadProfile(0.13, 0.055, 0.35, 1.0, 0.006, 0.5, 0.085))}
+        self.receipt = {"schema": "den-live-register-now-2", "qualified": True, "depth_scale": 1.0,
+                        "source_correction": {"calibrations": [CALIBRATION], "factors": [0.889],
+                                             "frames": 3, "applied": 3},
+                        "fit": {"result": "registered", "transform_id": self.block["transform_id"]},
+                        "scan_revision": REVISION}
+        profile = RgbBodyProfile.from_config(self.block, self.receipt)
+        self.provider = RgbBodyInput(profile, self.perceiver.camera, clock=self.clock)
+        self.perceiver.body_provider = self.observe
+        self.last = None
+        self.reply = None
+        self.luma = 110
+
+    def publish(self, scope, **fields):
+        self.rendered.append((scope, fields))
+        return True
+
+    def observe(self, *args, **kwargs):
+        self.seen = args[:3]   # this frame's bundle, metadata and depth, for a test to call the provider again
+        self.last = self.provider(*args, **kwargs)
+        return self.last
+
+    def send(self, header):
+        self.detector.on_body(self.channel.handle(header, self.kept))
+
+    def frame(self, seq, *, empty=False, rival=False, receipt=True, receipt_depth_seq=None, age=0.05,
+              correction=CORRECTION, depth=None, skew=0.015, session="fixture-camera", missing_ear=False,
+              timing_evidence=TIMING_EVIDENCE):
+        capture = 5100.0 + seq * 0.2
+        self.clock.now = 100.0 + seq * 0.2 + 0.07
+        meta = self.synth.metadata(session, seq, capture, capture - skew,
+                                   {"rgb": self.synth.RGB_K, "depth": self.synth.LEFT_K})
+        meta["depth_correction"] = correction
+        pixels = {name: uv for name, uv in self.pixels.items() if not missing_ear or name != "right_ear"}
+        row = self.rows.row(capture, rgb_seq=seq, pixels=pixels)
+        if empty:
+            row["detections"].clear()
+        if rival:
+            row["detections"].append({"id": "rival", "class": "person", "score": 0.55,
+                                      "box_xyxy": [8.0, 12.0, 90.0, 65.0], "keypoints": None})
+        self.reply = {"luma": self.luma, "row": row}
+        depth = (self.empty_depth if empty else self.depth) if depth is None else depth
+        proof = {"schema": AGE_SCHEMA, "frame_key": [session, seq, seq if receipt_depth_seq is None else receipt_depth_seq],
+                 "evidence_id": timing_evidence,
+                 "rgb_age_upper_s": age, "depth_age_upper_s": age + skew, "separation_upper_s": skew + 0.01}
+        item = Bundle(self.synth.bundle(meta, depth), session, seq, capture, 1_800_000_000 + self.clock(),
+                      self.clock() - 0.01, request_mono=self.clock() - 0.03, capture_age_receipt=proof if receipt else None,
+                      receipt_arrival_mono=self.clock() - 0.01)
+        self.last = None
+        prepared = self.perceiver.prepare(item, self.clock())
+        self.detector.next_id += 1
+        self.kept = (self.detector.next_id, item.data, list(prepared.ref.key))
+        with patch("perceive.time.monotonic", self.clock):
+            return self.perceiver.finish(prepared, self.reply, {"status": "ok"}, self.clock())
+
+
+class RgbBodyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        tmp = tempfile.TemporaryDirectory(prefix="den-rgb-body-")
+        cls.addClassCleanup(tmp.cleanup)
+        cls.scratch = Path(tmp.name)
+
+    def setUp(self):
+        self.f = Fixture(self.scratch)
+        self.addCleanup(self.f.link.close)
+
+    def test_generated_bundles_produce_a_current_measured_head_free_figure(self):
+        f = self.f
+        for n in range(55):
+            f.frame(n, empty=True)
+        self.assertIsNotNone(f.channel.maker.background)
+        for n in range(55, 70):
+            f.frame(n)
+        self.assertEqual(f.last.observation, "person")
+        self.assertEqual(f.last.frame_key, [f.perceiver.run_id, f.perceiver.sessions, 70])
+        self.assertEqual(f.last.frame_key, f.kept[2])
+        self.assertEqual(f.last.frame_key, list(f.perceiver.body_input["frame"].key))
+        self.assertEqual(f.last.track["association"], "confident")
+        self.assertLess(f.last.capture_earliest_mono, f.clock() - 0.08)
+        _, output = next(((scope, fields) for scope, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+        self.assertIsNotNone(output, f.link.why)
+        cloud = output["frame"]
+        self.assertGreater(cloud["points"]["count"], 0)
+        self.assertNotIn("head_evidence", cloud)
+        from test_body import decode
+        bounds = head_exclusion(f.last.head_evidence, frame_key=f.last.frame_key, binding=f.last.binding())
+        left, top, right, bottom = bounds
+        import numpy as np
+        keys = decode(cloud)["key"].reshape(-1)
+        ys, xs = np.divmod(keys, 640)
+        self.assertFalse(((left <= xs) & (xs < right) & (top <= ys) & (ys < bottom)).any())
+
+    def test_with_the_shoulder_line_cut_a_hidden_ear_still_gives_a_head_free_figure(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        for n in range(55, 70):
+            f.frame(n, missing_ear=True)
+        self.assertEqual(f.last.observation, "person")
+        self.assertIn("cut", f.last.head_evidence)
+        self.assertNotIn("bounds_px", f.last.head_evidence, "no face envelope without the ear")
+        _, output = next(((scope, fields) for scope, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+        self.assertIsNotNone(output, f.link.why)
+        import numpy as np
+        from body import cut_pixels, cut_side
+        from test_body import decode
+        cut = cut_pixels(torso_cut(f.last.head_evidence, frame_key=f.last.frame_key, binding=f.last.binding()),
+                         np.frombuffer(f.depth, "<u2").reshape(400, 640), f.perceiver.camera.rig.left_k[0])
+        rows, cols = np.divmod(decode(output["frame"])["key"].ravel(), 640)
+        self.assertGreater(len(rows), 0)
+        self.assertFalse(cut_side(cols, rows, cut).any())
+
+    def test_a_profile_that_shows_the_head_publishes_the_whole_measured_person(self):
+        import numpy as np
+        from test_body import decode
+
+        def figure(f):
+            for n in range(55):
+                f.frame(n, empty=True)
+            for n in range(55, 70):
+                f.frame(n)
+            _, output = next(((s, fields) for s, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+            self.assertIsNotNone(output, f.link.why)
+            ys, xs = np.divmod(decode(output["frame"])["key"].reshape(-1), 640)
+            return ys, xs
+
+        masked = self.f
+        ys, xs = figure(masked)
+        left, top, right, bottom = head_exclusion(masked.last.head_evidence, frame_key=masked.last.frame_key,
+                                                  binding=masked.last.binding())
+        f = Fixture(self.scratch)
+        self.addCleanup(f.link.close)
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        shown_ys, shown_xs = figure(f)
+        self.assertEqual(f.last.head_evidence, {"frame_key": f.last.frame_key, "binding": f.last.binding(), "head": "shown"})
+        inside = (left <= shown_xs) & (shown_xs < right) & (top <= shown_ys) & (shown_ys < bottom)
+        self.assertTrue(inside.any(), "the head the qualified profile cuts is in the figure")
+        self.assertGreater(len(shown_ys), len(ys))
+
+    def test_a_profile_that_shows_the_head_needs_no_camera_receipt(self):
+        from body_rgb import arrival_capture
+        from stream import BODY_LEASE_S
+        import numpy as np
+        from test_body import decode
+
+        f = self.f
+        f.block["head"] = "shown"
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True, receipt=False)
+        self.assertIsNotNone(f.channel.maker.background, "the room is learned without receipts")
+        for n in range(55, 70):
+            f.frame(n, receipt=False)
+        self.assertEqual(f.last.observation, "person")
+        _, output = next(((s, fields) for s, fields in reversed(f.rendered) if fields.get("frame")), (None, None))
+        self.assertIsNotNone(output, f.link.why)
+        self.assertGreater(len(decode(output["frame"])["key"]), 0)
+        # Dated as the people stream dates the frame: perception's capture estimate, on the lease's clock.
+        self.assertLessEqual(f.last.capture_earliest_mono, f.clock())
+        self.assertGreater(f.last.capture_earliest_mono, f.clock() - BODY_LEASE_S)
+        bundle = SimpleNamespace(arrival_mono=50.0, receipt_arrival_mono=200.0)
+        self.assertEqual(arrival_capture(bundle, 49.6), 199.6)
+        self.assertEqual(arrival_capture(bundle, 50.2), 200.0, "never later than the arrival")
+        for missing in (None, float("nan")):
+            self.assertIsNone(arrival_capture(bundle, missing))
+        self.assertIsNone(arrival_capture(SimpleNamespace(arrival_mono=50.0), 49.6))
+        # A frame older than the lease, by that estimate, still gives no body.
+        late = f.provider(SimpleNamespace(arrival_mono=50.0, receipt_arrival_mono=f.clock()), None, None,
+                          frame_key=f.last.frame_key, mode="rgb", observations=(), tracks=(), supported=(), association={},
+                          capture_mono=50.0 - BODY_LEASE_S - 0.1)
+        self.assertIsNone(late)
+
+    def test_a_profile_with_the_cut_still_needs_the_receipt(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        f.frame(0, empty=True, receipt=False)
+        self.assertIsNone(f.last)
+
+    def test_a_profile_with_the_cut_never_publishes_on_the_face_envelope_alone(self):
+        f = self.f
+        f.block["head"]["torso_cut_m"] = 0.08
+        f.provider = RgbBodyInput(RgbBodyProfile.from_config(f.block, f.receipt), f.perceiver.camera, clock=f.clock)
+        for n in range(55):
+            f.frame(n, empty=True)
+        with patch("body_rgb.torso_cut", return_value=None):
+            f.frame(55)
+        self.assertEqual(f.last.observation, "unknown")
+
+    def test_stale_unqualified_and_dark_empty_frames_do_not_feed_learning(self):
+        f = self.f
+        from stream import BODY_LEASE_S
+        for seq, changes in enumerate(({"receipt": False}, {"age": BODY_LEASE_S}, {"skew": 0.068},
+                                       {"correction": dict(CORRECTION, calibration_sha256="b" * 64)},
+                                       {"depth": bytes(640 * 400 * 2)}, {"timing_evidence": "other-profile"},
+                                       {"receipt_depth_seq": 0})):
+            f.frame(seq, empty=True, **changes)
+            self.assertIsNone(f.last)
+        f.luma = 3
+        f.frame(7, empty=True)
+        self.assertIsNone(f.last)
+        self.assertIsNone(f.channel.maker)
+
+    def test_ambiguous_or_unbound_pose_clears(self):
+        f = self.f
+        for n in range(16):
+            f.frame(n)
+        self.assertEqual(f.last.observation, "person")
+        f.frame(16, rival=True)
+        self.assertEqual(f.last.observation, "person", "a stray box that supports no track doesn't blank the figure")
+        f.frame(17, missing_ear=True)
+        self.assertEqual(f.last.observation, "unknown")
+        f.frame(18, session="fixture-camera-restarted")
+        self.assertNotEqual(f.last.observation, "person")
+
+    def test_only_two_tracks_or_two_detections_on_one_track_are_ambiguous(self):
+        f = self.f
+        for n in range(16):
+            f.frame(n)
+        value = f.last
+        bundle, meta, depth = f.seen
+        pose = dict(value.pose, obs_id="pose-a")
+        track = dict(value.track, track_id="t1", state="confirmed")
+        call = lambda **kw: f.provider(bundle, meta, depth, frame_key=value.frame_key, mode="rgb",
+                                       association={"t1": ("confident", 0.0), "t2": ("confident", 0.0)}, **kw)
+        stray = {"obs_id": "stray", "kind": "person_box"}
+        self.assertEqual(call(observations=[pose, stray], tracks=[track], supported=[{"pose-a"}]).observation, "person")
+        second = dict(track, track_id="t2")
+        self.assertEqual(call(observations=[pose, stray], tracks=[track, second],
+                              supported=[{"pose-a"}, {"stray"}]).observation, "ambiguous")
+        twin = dict(pose, obs_id="pose-b")
+        self.assertEqual(call(observations=[pose, twin], tracks=[track], supported=[{"pose-a", "pose-b"}]).observation,
+                         "ambiguous", "two detections on one track")
+        self.assertEqual(call(observations=[stray], tracks=[track], supported=[{"pose-a"}]).observation, "unknown")
+
+    def test_normal_service_passes_registration_bound_profile_without_an_injected_callback(self):
+        f = self.f
+        creds = self.scratch / "credentials"
+        creds.mkdir(exist_ok=True)
+        token, receipt = creds / "camera-token.txt", creds / "register-receipt.json"
+        token.write_text("fixture", encoding="ascii")
+        receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
+        for name in run_service.MODEL_FILES:
+            (self.scratch / name).touch()
+        config = {"camera_url": "http://127.0.0.1:8090", "venv_python": sys.executable, "models": str(self.scratch),
+                  "site": "fixture", "content_packs": str(self.scratch), "stream_port": 8091, "body_rgb": f.block}
+        take = SimpleNamespace(read_token=lambda _: "fixture", Camera=lambda *args: SimpleNamespace(host="127.0.0.1", port=8090),
+                               MAX_BODY=4194304)
+        with (patch.object(run_service, "credentials", return_value=({"token": token, "receipt": receipt,
+                                                                        "room_model": f.model}, self.scratch)),
+              patch.object(run_service, "read_config", return_value=config),
+              patch.object(run_service.rl, "den_take", return_value=take),
+              patch.object(run_service.rl, "serve") as serve):
+            run_service.run(config_path=Path("fixture-config.json"), env={}, trees={"observe": self.scratch})
+        arguments = serve.call_args.kwargs
+        self.assertIsNone(arguments["body_input"])
+        self.assertEqual(arguments["body_profile"], f.provider.profile)
+        registration = arguments["registration"](f.block["transform_id"])
+        self.assertEqual({key: registration[key] for key in ("scan_revision", "depth_scale")}, {"scan_revision": REVISION, "depth_scale": 1.0})
+        # The receipt's own depth correction comes along too, so the live loop can refuse frames under another one.
+        self.assertTrue({"correction_factor", "calibration_sha256"} <= set(registration), registration.keys())
+
+    def test_profile_refuses_a_different_registration(self):
+        f = self.f
+        with self.assertRaises(ValueError):
+            RgbBodyProfile.from_config(dict(f.block, scan_revision="other"), f.receipt)
+
+    def test_local_preview_passes_the_qualified_profile_and_same_pack_to_home(self):
+        f = self.f
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            room_model = root / "room-model.jsonl"
+            room_model.write_bytes(f.model.read_bytes())
+            receipt = root / "register-now-1.json"
+            receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
+            profile = root / "body.json"
+            profile.write_text(json.dumps(f.block), encoding="utf-8-sig")
+            record = root / run_local.body_profiles.QUALIFICATION_FILE
+            renderer = root / "app" / "src" / "home-3d" / "apartment-people-layer.mjs"
+            renderer.parent.mkdir(parents=True)
+            renderer.touch()
+            (renderer.parent.parent / "home-den-live-view.mjs").touch()
+            packs = root / "packs"
+            take = SimpleNamespace(inside_checkout=lambda _: False, in_onedrive=lambda _: False)
+            args = dict(root=root, camera_url="http://127.0.0.1:1", token_file=root / "token.txt",
+                        venv=sys.executable, app=root, packs=packs, room_model=room_model,
+                        body_profile_file=profile, open_page=lambda _: None)
+            with (patch.object(run_local.sc, "archive", return_value=root),
+                  patch.object(run_local.perceive, "Tools", return_value=f.tools),
+                  patch.object(run_local, "scan_floor", return_value=(None, "other-scan")) as scan,
+                  patch.object(run_local, "den_take", return_value=take),
+                  patch.object(run_local.sc, "open_camera") as camera,
+                  patch.object(run_local, "serve") as serve,
+                  patch.object(run_local, "page", return_value=(None, "http://127.0.0.1:1/")) as page):
+                with self.assertRaisesRegex(run_local.Stop, "passing head-cut score"):
+                    run_local.run(**args)   # the local preview holds the profile to the installer's gate
+                import hashlib
+                record.write_text(json.dumps({"candidate_sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+                                              "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
+                with self.assertRaisesRegex(run_local.Stop, "active scan"):
+                    run_local.run(**args)
+                camera.assert_not_called()
+                scan.return_value = (None, REVISION)
+                run_local.run(**args)
+                self.assertTrue(camera.call_args.kwargs["body_timing"])
+                self.assertEqual(serve.call_args.kwargs["body_profile"], f.provider.profile)
+                self.assertEqual(serve.call_args.kwargs["packs"], packs)
+                serve.call_args.kwargs["after_start"]()
+                self.assertEqual(page.call_args.args[2], ("--packs", str(packs)))
+
+    def test_installer_reads_only_a_registration_bound_profile(self):
+        f = self.f
+        profile = self.scratch / install_la.BODY_PROFILE_FILE
+        receipt = self.scratch / "fixture-registration.json"
+        receipt.write_text(json.dumps(f.receipt), encoding="utf-8")
+        self.assertIsNone(install_la.body_profile(profile, receipt))
+        profile.write_text(json.dumps(f.block), encoding="utf-8-sig")
+        record = self.scratch / install_la.BODY_QUALIFICATION_FILE
+        import hashlib
+        digest = hashlib.sha256(profile.read_bytes()).hexdigest()
+        with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+            install_la.body_profile(profile, receipt)   # no qualification record beside it
+        for mask, ok in (({"verdict": "pass", "basis": "zero_separation"}, True),
+                         ({"verdict": "pass", "basis": "measured_separation"}, True),
+                         ({"verdict": "pass", "basis": "candidate_separation"}, False),
+                         ({"verdict": "fail", "basis": "zero_separation"}, False)):
+            with self.subTest(mask=mask):
+                record.write_text(json.dumps({"candidate_sha256": digest, "mask": mask}), encoding="utf-8")
+                if ok:
+                    self.assertEqual(install_la.body_profile(profile, receipt), f.block)
+                else:
+                    with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+                        install_la.body_profile(profile, receipt)
+        record.write_text(json.dumps({"candidate_sha256": "0" * 64,
+                                      "mask": {"verdict": "pass", "basis": "zero_separation"}}), encoding="utf-8")
+        with self.assertRaisesRegex(install_la.Stop, "passing head-cut score"):
+            install_la.body_profile(profile, receipt)   # another candidate's pass
+        record.unlink()
+        profile.write_text(json.dumps(dict(f.block, head="shown")), encoding="utf-8")
+        self.assertEqual(install_la.body_profile(profile, receipt), dict(f.block, head="shown"),
+                         "the owner shows the head: no head-cut score to tie it to")
+        profile.write_text(json.dumps(dict(f.block, head="shown", transform_id="other")), encoding="utf-8")
+        with self.assertRaisesRegex(install_la.Stop, "does not match"):
+            install_la.body_profile(profile, receipt)   # it still binds to the registration
+        profile.write_text(json.dumps(dict(f.block, transform_id="other")), encoding="utf-8")
+        with self.assertRaisesRegex(install_la.Stop, "does not match"):
+            install_la.body_profile(profile, receipt)
+
+
+class TransportTests(unittest.TestCase):
+    def test_age_receipt_comes_from_the_same_get(self):
+        """A camera without the slim path (404) gets the full /frame.npz pull, and its receipt is that GET's own."""
+        take = SimpleNamespace(Camera=lambda *args: SimpleNamespace(host="fixture", port=1234), MAX_BODY=100)
+        camera = camera_client(take, "http://fixture:1234", "fixture-token", body_timing=True)
+        header = (AGE_HEADER, json.dumps({"schema": AGE_SCHEMA, "frame_key": ["fixture", 2, 3]}))
+        other = (AGE_HEADER, json.dumps({"schema": AGE_SCHEMA, "frame_key": ["fixture", 1, 1]}))
+        full_headers = [[header]]
+        with patch("source.http.client.HTTPConnection") as connect:
+            socket = connect.return_value
+
+            def answer():
+                response = MagicMock()
+                if socket.request.call_args.args[1] == SLIM_PATH:   # an earlier camera release: no slim path
+                    response.status, response.length, response.will_close = 404, 0, True
+                    response.read.return_value = b"Unavailable\n"
+                    response.getheaders.return_value = [other]
+                else:
+                    response.status, response.length = 200, 0
+                    response.read.return_value = b"bundle"
+                    response.getheaders.return_value = full_headers[0]
+                return response
+            socket.getresponse.side_effect = answer
+            self.assertEqual(camera.get_bundle(), (200, b"bundle", json.loads(header[1])))
+            auth = {"Authorization": "Bearer fixture-token"}
+            self.assertEqual([(c.args, c.kwargs) for c in socket.request.call_args_list],
+                             [(("GET", SLIM_PATH), {"headers": auth}), (("GET", "/frame.npz"), {"headers": auth})])
+            self.assertEqual(socket.close.call_count, 2, "the slim ask's connection and the full GET's, each closed")
+            full_headers[0] = [header, header]
+            self.assertEqual(camera.get_bundle(), (200, b"bundle", None))
+            self.assertEqual(socket.request.call_args_list[-1].args, ("GET", "/frame.npz"), "no slim ask within a minute")
+
+
+if __name__ == "__main__":
+    unittest.main()

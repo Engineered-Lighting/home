@@ -16,6 +16,7 @@ import re
 import stat
 import threading
 import time
+import traceback
 import uuid
 import zipfile
 from collections import deque
@@ -238,6 +239,21 @@ def _plane_timed(plane):
             and 1 <= plane.width <= 8192 and 1 <= plane.height <= 8192)
 
 
+def failure_site(exc):
+    """'Type@function:line' of the innermost frame that raised `exc`, preferring this module's own frames.
+    Only identifiers and a line number: never the exception text, a path, a credential or model output."""
+    def word(text):
+        return re.sub(r"[^A-Za-z0-9_]", "", str(text))[:60] or "unknown"
+    frames = traceback.extract_tb(exc.__traceback__)
+    own = [f for f in frames if Path(f.filename).name == Path(__file__).name]
+    site = (own or frames or [None])[-1]
+    where = "" if site is None else "@%s:%d" % (word(site.name), site.lineno or 0)
+    if frames and site is not frames[-1]:
+        # The library frame that actually raised, by module stem and function name only.
+        where += "<" + word(Path(frames[-1].filename).stem) + "." + word(frames[-1].name)
+    return word(type(exc).__name__) + where
+
+
 def frame_problem(frame):
     """Why the worker's source-lineage contract (den_models validate_lineage) would refuse a clip holding this
     frame, as the bridge count that records the skip, or None. Nothing is repaired or re-timed."""
@@ -273,7 +289,9 @@ class Bridge:
         self.counts = {key: 0 for key in ("offered", "superseded", "decoded", "submitted", "completed",
                                          "expired", "invalidated", "refused", "failures",
                                          "rejected", "unknown", "noncausal_skipped", "untimed_skipped",
-                                         "lineage_skipped", "binding_refused")}
+                                         "lineage_skipped", "binding_refused", "frame_failed")}
+        # Where the last failure was raised: exception type, function and line only (failure_site), never its text.
+        self.last_failure = None
         # The last request the worker definitively refused or did not know: a fixed word, never worker text.
         self.last_drop_reason = None
         self.refused_binding = None
@@ -348,10 +366,11 @@ class Bridge:
             self.wake.clear()
             try:
                 self.step()
-            except Exception:
-                # Failure text may contain a path, credential or model output.
+            except Exception as exc:
+                # Failure text may contain a path, credential or model output: keep only where it was raised.
                 self.reason = "optional_worker_failure"
                 self.counts["failures"] += 1
+                self.last_failure = failure_site(exc)
 
     def _poll_health(self, now):
         if now - self.last_poll < 1:
@@ -414,7 +433,13 @@ class Bridge:
             self._cleanup()
             return
         if pending is not None:
-            self._frame(*pending, deps=deps)
+            try:
+                self._frame(*pending, deps=deps)
+            except Exception as exc:
+                # One frame that cannot be decoded or stored is skipped and counted; it must not stop every
+                # later clip (the partial blob, if any, was already removed). Its text is never kept.
+                self.counts["frame_failed"] += 1
+                self.last_failure = failure_site(exc)
         if self.samples and len(self.requests) < 2 and now - self.last_submit >= 1:
             request = self._clip(now)
             if request is not None:
@@ -663,10 +688,12 @@ class Bridge:
         c = self.counts
         skipped = c["noncausal_skipped"] + c["untimed_skipped"] + c["lineage_skipped"]
         return ("intent %s: %d sent, %d hints, %d expired, %d rejected, %d unknown, %d frames skipped "
-                "(%d noncausal, %d untimed, %d lineage), %d bindings refused%s"
+                "(%d noncausal, %d untimed, %d lineage), %d bindings refused, %d decoded, %d frame failures%s%s"
                 % (self.reason, c["submitted"], c["completed"], c["expired"], c["rejected"], c["unknown"], skipped,
                    c["noncausal_skipped"], c["untimed_skipped"], c["lineage_skipped"], c["binding_refused"],
-                   "" if self.last_drop_reason is None else ", last drop " + self.last_drop_reason))
+                   c["decoded"], c["frame_failed"],
+                   "" if self.last_drop_reason is None else ", last drop " + self.last_drop_reason,
+                   "" if self.last_failure is None else ", last failure " + self.last_failure))
 
     def decorate(self, event, snapshot):
         self.offer_snapshot(snapshot)

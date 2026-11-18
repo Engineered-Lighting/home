@@ -1,6 +1,7 @@
 """Exact-frame bridge contracts: tiny private CPU fixtures, no model or socket I/O."""
 import copy
 import dataclasses
+import json
 import os
 from pathlib import Path
 import sys
@@ -521,6 +522,39 @@ class BridgeTests(LiveBridge, unittest.TestCase):
                 self.assertEqual(request["expires_at"] - request["cutoff_at"], link.HINT_LEASE_SECONDS)
                 self.assertLessEqual(link.HINT_LEASE_SECONDS, 10)
 
+    def test_one_frame_that_fails_to_decode_is_skipped_and_later_clips_still_go(self):
+        self.live()
+        good = self.bridge.decoder
+        calls = []
+        def flaky(prepared):
+            calls.append(prepared.ref.frame_id)
+            if len(calls) == 2:
+                raise ValueError("secret /etc/den-live/private/token text")
+            return good(prepared)
+        self.bridge.decoder = flaky
+        self.feed([300 + k / 2.3 for k in range(14)])
+        self.assertEqual(self.bridge.counts["frame_failed"], 1)
+        self.assertEqual(self.bridge.counts["failures"], 0)
+        self.assertNotEqual(self.bridge.reason, "optional_worker_failure")
+        # The bridge's own frame is named first, then the outside function that raised.
+        self.assertRegex(self.bridge.last_failure, r"^ValueError@_frame:\d+<test_enrichment_link\.flaky$")
+        self.assertNotIn("secret", self.bridge.last_failure)
+        self.assertNotIn("/", self.bridge.last_failure)
+        self.assertTrue(self.client.submitted)  # The later frames still made a clip.
+        words = self.bridge.status_words()
+        self.assertIn("1 frame failures", words)
+        self.assertIn("last failure ValueError@_frame:", words)
+
+    def test_failure_site_names_type_function_and_line_only(self):
+        def inner():
+            json.loads("{not json")
+        try:
+            inner()
+        except ValueError as exc:
+            site = link.failure_site(exc)
+        self.assertRegex(site, r"^JSONDecodeError@[A-Za-z0-9_]+:\d+(<[A-Za-z0-9_]+\.[A-Za-z0-9_]+)?$")
+        self.assertNotIn("not json", site)
+
     def test_clip_is_still_built_when_older_than_two_seconds_within_the_lease(self):
         self.history()
         end = self.bridge.samples[-1]["captured_at"]
@@ -618,7 +652,7 @@ class BridgeTests(LiveBridge, unittest.TestCase):
         words = self.bridge.status_words()
         self.assertEqual(words, "intent worker_rejected_request: 4 sent, 1 hints, 0 expired, 3 rejected, 1 unknown, "
                                 "5 frames skipped (3 noncausal, 2 untimed, 0 lineage), 1 bindings refused, "
-                                "last drop worker_rejected_request")
+                                "0 decoded, 0 frame failures, last drop worker_rejected_request")
         self.assertTrue(run_local.status_line(perceiver, event, (), self.bridge).endswith(" | " + words))
 
     def test_a_held_frame_arriving_after_the_cutoff_is_not_submitted(self):

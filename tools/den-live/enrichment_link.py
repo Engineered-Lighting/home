@@ -12,6 +12,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import threading
 import time
@@ -31,6 +32,7 @@ MAX_FRAMES = 96
 # hint, so the bridge drops it instead of polling it forever.
 REFUSALS = frozenset((400, 404, 422))
 REJECTED = frozenset((400, 422))
+DECIMAL = re.compile(r"0|[1-9][0-9]*\Z")
 
 
 def canonical(value):
@@ -215,6 +217,33 @@ def binding(snapshot, camera_id):
             "calibration_revision": frame.depth_calibration_sha256}, track
 
 
+def binding_acceptable(deps):
+    """The worker's dependency contract (den_models validate_request), checked before anything is advertised or
+    sent: IDENT values (the registered-transform grammar for transform_id), a decimal camera epoch and association
+    revision, and a full calibration hash. A frame without a scan revision, say, can never be admitted."""
+    return (intent.binding_values_valid(deps) and DECIMAL.fullmatch(deps["camera_epoch"]) is not None
+            and DECIMAL.fullmatch(deps["association_revision"]) is not None
+            and intent.HEX64.fullmatch(deps["calibration_revision"]) is not None)
+
+
+def _plane_timed(plane):
+    return (type(plane.seq) is int and plane.seq >= 0 and intent.finite(plane.host_s) and intent.finite(plane.device_s)
+            and type(plane.width) is int and type(plane.height) is int
+            and 1 <= plane.width <= 8192 and 1 <= plane.height <= 8192)
+
+
+def frame_problem(frame):
+    """Why the worker's source-lineage contract (den_models validate_lineage) would refuse a clip holding this
+    frame, as the bridge count that records the skip, or None. Nothing is repaired or re-timed."""
+    if frame.mode != "rgb" or not isinstance(frame.camera_session, str) or not intent.IDENT.fullmatch(frame.camera_session):
+        return "lineage_skipped"
+    if (not all(intent.finite(value) for value in (frame.capture_mono, frame.arrival_mono, frame.capture_ts))
+            or not all(_plane_timed(plane) for plane in (frame.rgb, frame.right, frame.depth) if plane is not None)):
+        # A camera plane without a finite device time, typically: the worker requires one on every plane present.
+        return "untimed_skipped"
+    return None
+
+
 class Bridge:
     def __init__(self, settings=None, *, camera_id, on_hint=None, clock=time.monotonic, decoder=decode_rgb,
                  client=None, profile=None, threaded=True, base_stages=None):
@@ -237,9 +266,11 @@ class Bridge:
         self.reason = "disabled" if not self.enabled else "worker_unavailable"
         self.counts = {key: 0 for key in ("offered", "superseded", "decoded", "submitted", "completed",
                                          "expired", "invalidated", "refused", "failures",
-                                         "rejected", "unknown", "noncausal_skipped")}
+                                         "rejected", "unknown", "noncausal_skipped", "untimed_skipped",
+                                         "lineage_skipped", "binding_refused")}
         # The last request the worker definitively refused or did not know: a fixed word, never worker text.
         self.last_drop_reason = None
+        self.refused_binding = None
         self.thread = None
         self.client = client
         self.profile = profile
@@ -353,6 +384,12 @@ class Bridge:
             snapshot, pending, observed = self.latest, self.pending, self.snapshot_observed
             self.pending = None
         deps, track = binding(snapshot, self.camera_id) if snapshot is not None else (None, None)
+        if deps is not None and not binding_acceptable(deps):
+            # The worker would refuse every clip bound to it, so it is neither advertised nor sampled: Den waits.
+            if deps != self.refused_binding:
+                self.refused_binding = deps
+                self.counts["binding_refused"] += 1
+            deps = track = None
         self._source_receipt(snapshot, deps, observed)
         if deps != self.dependencies:
             self.dependencies = deps
@@ -361,8 +398,8 @@ class Bridge:
             with self.lock:
                 self.hints.clear()
             for request_id in list(self.requests):
-                self._cancel(request_id)
-                self.counts["invalidated"] += 1
+                if not self._cancel(request_id):  # A request the worker did not hold counts once, as unknown.
+                    self.counts["invalidated"] += 1
         self._results(snapshot, now)
         now = self.clock()
         self._trim(now)
@@ -399,13 +436,16 @@ class Bridge:
         self.last_drop_reason = self.reason = reason
 
     def _cancel(self, request_id):
-        """Cancel keeps the pins until a terminal status, except for a request the worker does not hold."""
+        """Cancel keeps the pins until a terminal status, except for a request the worker does not hold, which is
+        dropped (True)."""
         try:
             self.client.cancel(request_id)
         except WorkerRefused as exc:
             if not exc.unknown_request:
                 raise
             self._drop(request_id, "worker_unknown_request", "unknown")
+            return True
+        return False
 
     def _source_receipt(self, snapshot, deps, observed):
         if self.source_path is None or snapshot is None or observed is None or observed == self.source_written:
@@ -456,6 +496,10 @@ class Bridge:
             # Its capture time maps after its own arrival, so no causal clip may hold it (the worker refuses
             # noncausal_source_arrival). Skip it; timestamps are never altered.
             self.counts["noncausal_skipped"] += 1
+            return
+        problem = frame_problem(frame)
+        if problem is not None:
+            self.counts[problem] += 1
             return
         data = self.decoder(prepared)
         if len(data) != frame.rgb.width * frame.rgb.height * 3:
@@ -604,6 +648,19 @@ class Bridge:
                  "running": int(bool(value.get("running"))) if fresh else None,
                  "observed_mono": observed if self.enabled else now_mono,
                  "valid_until_mono": (observed + 3 if observed is not None else None) if self.enabled else now_mono + 3}]
+
+    def status_words(self):
+        """The journal status line's movement-intent part: counts and fixed words only, never a position or
+        worker text. None while the bridge is disabled."""
+        if not self.enabled:
+            return None
+        c = self.counts
+        skipped = c["noncausal_skipped"] + c["untimed_skipped"] + c["lineage_skipped"]
+        return ("intent %s: %d sent, %d hints, %d expired, %d rejected, %d unknown, %d frames skipped "
+                "(%d noncausal, %d untimed, %d lineage), %d bindings refused%s"
+                % (self.reason, c["submitted"], c["completed"], c["expired"], c["rejected"], c["unknown"], skipped,
+                   c["noncausal_skipped"], c["untimed_skipped"], c["lineage_skipped"], c["binding_refused"],
+                   "" if self.last_drop_reason is None else ", last drop " + self.last_drop_reason))
 
     def decorate(self, event, snapshot):
         self.offer_snapshot(snapshot)

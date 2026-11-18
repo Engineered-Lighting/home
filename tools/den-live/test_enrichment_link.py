@@ -439,6 +439,7 @@ class BridgeTests(LiveBridge, unittest.TestCase):
         self.bridge.step()
         self.assertIn(request["request_id"], self.client.cancelled)
         self.assertEqual(self.bridge.counts["unknown"], 2)
+        self.assertEqual(self.bridge.counts["invalidated"], 0)  # Counted once, as unknown.
         self.assertFalse(self.bridge.requests)
         # Nothing was ever published for either dropped request, even if the worker later claims a result.
         self.client.jobs[request["request_id"]] = request
@@ -527,6 +528,86 @@ class BridgeTests(LiveBridge, unittest.TestCase):
         self.history()
         self.assertIsNone(self.bridge._clip(self.clock()))
         self.assertEqual(self.bridge.reason, "sampling_unsupported")
+
+    # Review: the worker requires a finite device time on every plane present, an rgb-mode frame and an IDENT
+    # session. Den's planes carry device_s=None when the camera gives no finite device timestamp.
+    def test_frames_the_worker_would_refuse_are_skipped_counted_and_never_sent(self):
+        self.live()
+        stamps = [400 + k / 2.3 for k in range(24)]
+        untimed = {3: "rgb", 5: "depth", 8: "rgb_nan"}
+        lineage = {11: dict(mode="ir"), 13: dict(camera_session="bad session")}
+        for k, stamp in enumerate(stamps):
+            index = 1 + k
+            source = live_frame(stamp, index)
+            if index in untimed:
+                plane = "depth" if untimed[index] == "depth" else "rgb"
+                device = float("nan") if untimed[index] == "rgb_nan" else None
+                source = dataclasses.replace(source, **{plane: dataclasses.replace(getattr(source, plane), device_s=device)})
+            if index in lineage:
+                source = dataclasses.replace(source, **lineage[index])
+            self.clock.value = source.arrival_mono + .01
+            self.bridge.offer_frame(live_snapshot(source), NS(ref=source), person_reply())
+            self.bridge.step()
+        self.assertEqual((self.bridge.counts["untimed_skipped"], self.bridge.counts["lineage_skipped"]), (3, 2))
+        self.assertFalse({int(sample["frame_id"]) for sample in self.bridge.samples} & (set(untimed) | set(lineage)))
+        self.assertTrue(self.client.jobs)
+        self.assertEqual(self.client.refused, [])
+        self.assertEqual((self.bridge.counts["rejected"], self.bridge.counts["failures"]), (0, 0))
+        for request in self.client.submitted:
+            self.assertFalse({int(f["frame_id"]) for f in request["frames"]} & (set(untimed) | set(lineage)))
+        # Nothing was re-timed: every sent frame keeps its own device and capture times.
+        for request in self.client.submitted:
+            for item in request["frames"]:
+                self.assertEqual(item["source_frame"]["rgb"]["device_s"], item["captured_at"] - 50)
+        # The same frames sent unskipped are refused by the worker contract, which is why they are skipped.
+        for bad in (dataclasses.replace(live_frame(500, 1), rgb=dataclasses.replace(live_frame(500, 1).rgb, device_s=None)),
+                    dataclasses.replace(live_frame(500, 1), mode="ir")):
+            self.assertIsNotNone(link.frame_problem(bad))
+            request = self.client.submitted[0]
+            spoiled = copy.deepcopy(request)
+            spoiled["frames"][-1]["source_frame"] = dataclasses.asdict(dataclasses.replace(
+                bad, frame_id=int(spoiled["frames"][-1]["frame_id"]), capture_mono=spoiled["frames"][-1]["captured_at"],
+                arrival_mono=spoiled["frames"][-1]["source_frame"]["arrival_mono"]))
+            with self.assertRaises(ContractError):
+                validate_request(spoiled, profile=PROFILE, now=request["cutoff_at"])
+
+    def test_bindings_the_worker_would_refuse_are_never_advertised_or_sampled(self):
+        self.live()
+        for change in (dict(scan_revision=None), dict(scan_revision="bad revision"),
+                       dict(depth_calibration_sha256="A" * 64), dict(transform_id="den oak")):
+            with self.subTest(change=change):
+                self.setUp()
+                self.live()
+                deps, _ = link.binding(live_snapshot(dataclasses.replace(live_frame(300, 1), **change)), "camera")
+                self.assertTrue(deps is None or not link.binding_acceptable(deps))
+                for k in range(12):
+                    source = dataclasses.replace(live_frame(300 + k / 2.3, 1 + k), **change)
+                    self.clock.value = source.arrival_mono + .01
+                    self.bridge.offer_frame(live_snapshot(source), NS(ref=source), person_reply())
+                    self.bridge.step()
+                    self.assertIsNone(self.bridge.dependencies)
+                self.assertEqual(self.bridge.counts["binding_refused"], 0 if deps is None else 1)
+                self.assertEqual((list(self.bridge.samples), self.client.submitted), ([], []))
+        # The registered binding the worker admits is unchanged.
+        deps, _ = link.binding(live_snapshot(live_frame(300, 1)), "camera")
+        self.assertTrue(link.binding_acceptable(deps))
+
+    def test_status_words_count_drops_and_skips_and_stay_off_when_disabled(self):
+        import run_local
+        disabled = link.Bridge(camera_id="camera")
+        self.assertIsNone(disabled.status_words())
+        perceiver = NS(counts={"frames": 3, "refused_depth": 0, "detector_errors": 0, "unreadable": 0,
+                               "out_of_order": 0, "expired": 0})
+        event = {"camera": {"status": "ok"}, "health": {}, "tracks": []}
+        self.assertEqual(run_local.status_line(perceiver, event, (), disabled), run_local.status_line(perceiver, event))
+        self.bridge.counts.update(submitted=4, completed=1, rejected=2, unknown=1, noncausal_skipped=3,
+                                  untimed_skipped=2, binding_refused=1)
+        self.bridge._drop("absent", "worker_rejected_request", "rejected")
+        words = self.bridge.status_words()
+        self.assertEqual(words, "intent worker_rejected_request: 4 sent, 1 hints, 0 expired, 3 rejected, 1 unknown, "
+                                "5 frames skipped (3 noncausal, 2 untimed, 0 lineage), 1 bindings refused, "
+                                "last drop worker_rejected_request")
+        self.assertTrue(run_local.status_line(perceiver, event, (), self.bridge).endswith(" | " + words))
 
     def test_a_held_frame_arriving_after_the_cutoff_is_not_submitted(self):
         self.history()

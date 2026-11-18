@@ -146,10 +146,11 @@ def stop_page(proc):
     proc.stdout.close()
 
 
-def status_line(perceiver, latest, logs=()):
+def status_line(perceiver, latest, logs=(), bridge=None):
     """One line of words and counts from the newest event and the loop's own counters: never a position. logs: the day
     files' writers (person_state.Log, ask.AskLog), each with its own cap; the lines one skipped at its cap today (UTC)
-    are counted at the end, naming its file."""
+    are counted at the end, naming its file. bridge: the movement-intent bridge, whose counts and last drop go last
+    while it is enabled."""
     event = latest or {}
     health, camera, c = event.get("health") or {}, event.get("camera") or {}, perceiver.counts
     lag = health.get("lag_s_median")
@@ -169,11 +170,12 @@ def status_line(perceiver, latest, logs=()):
     minute = "".join(" | %.2f s %s (p95 %.2f)" % (health[key + "_median"], words, health[key + "_p95"])
                      for key, words in (("camera_age_s", "camera wait"), ("capture_to_stream_s", "capture to stream"))
                      if health.get(key + "_median") is not None and health.get(key + "_p95") is not None)
-    return ("camera %s%s | %s frames a second | %d people | %s behind%s | %d dropped a minute | %d frames%s%s"
+    words = getattr(bridge, "status_words", lambda: None)()
+    return ("camera %s%s | %s frames a second | %d people | %s behind%s | %d dropped a minute | %d frames%s%s%s"
             % (camera.get("status", "starting"), (": " + camera["why"]) if camera.get("why") else "",
                "-" if health.get("fps_in") is None else "%.1f" % health["fps_in"], len(event.get("tracks") or []),
                "-" if lag is None else "%.2f s" % lag, minute, health.get("dropped_per_min") or 0, c["frames"],
-               (", " + problems) if problems else "", asks))
+               (", " + problems) if problems else "", asks, (" | " + words) if words else ""))
 
 
 def revision_of(receipt, transform_id):
@@ -521,14 +523,14 @@ def serve(*, trees, take, camera, room_model, camera_id, floor, packs, site, reg
             if not loop.is_alive():
                 raise Stop("the loop stopped")
             if time.monotonic() >= next_line:
-                say(status_line(perceiver, out.latest, logs))
+                say(status_line(perceiver, out.latest, logs, bridge))
                 next_line += status_every_s
             time.sleep(0.2)
         return {"counts": dict(perceiver.counts), "sessions": perceiver.sessions, "latest": out.latest, "drops": mailbox.dropped,
-                "received": mailbox.received, "status": status_line(perceiver, out.latest, logs),
+                "received": mailbox.received, "status": status_line(perceiver, out.latest, logs, bridge),
                 "body": None if link is None else {**link.counts, "why": link.why, "stopped": link.stopped},
                 "asks": None if asker is None else dict(asker[0].counts),
-                "enrichment": None if bridge is None else dict(bridge.counts),
+                "enrichment": None if bridge is None else {**bridge.counts, "last_drop_reason": bridge.last_drop_reason},
                 "coordinator": None if lighting is None else dict(lighting[0].counts)}
     finally:
         for thread in (loop, src):

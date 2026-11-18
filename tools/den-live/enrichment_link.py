@@ -25,10 +25,37 @@ import model_projection
 TERMINAL = frozenset(("succeeded", "failed", "cancelled", "expired", "superseded", "invalidated", "unsupported"))
 MAX_BYTES = 128 * 1024 * 1024
 MAX_FRAMES = 96
+# HTTP answers that settle one request for good. A submit refused as invalid
+# (400/422) created no job; a poll or cancel answered 404 job_not_found names a
+# request the worker does not hold. Neither job can read its inputs or yield a
+# hint, so the bridge drops it instead of polling it forever.
+REFUSALS = frozenset((400, 404, 422))
+REJECTED = frozenset((400, 422))
 
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+class WorkerRefused(ValueError):
+    """A definitive worker refusal: the HTTP status and the worker's fixed error word, never its body."""
+
+    def __init__(self, status, error=None):
+        super().__init__("worker_refused")
+        self.status, self.error = status, error
+
+    @property
+    def unknown_request(self):
+        return self.status == 404 and self.error == "job_not_found"
+
+
+def _error_word(raw):
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    error = value.get("error") if isinstance(value, dict) else None
+    return error if isinstance(error, str) and intent.IDENT.fullmatch(error) else None
 
 
 def _systemd_worker_credential(path, info, fd, env):
@@ -116,7 +143,11 @@ class Client:
                                headers={"Authorization": "Bearer " + self.token, "Content-Type": "application/json"})
             response = connection.getresponse()
             raw = response.read(128 * 1024 + 1)
-            if response.status not in (200, 202) or len(raw) > 128 * 1024:
+            if len(raw) > 128 * 1024:
+                raise ValueError("worker_response_over_bound")
+            if response.status in REFUSALS:
+                raise WorkerRefused(response.status, _error_word(raw))
+            if response.status not in (200, 202):
                 raise ValueError("worker_response_over_bound")
             def pairs(items):
                 value = {}
@@ -205,7 +236,10 @@ class Bridge:
         self.stage_observed = None
         self.reason = "disabled" if not self.enabled else "worker_unavailable"
         self.counts = {key: 0 for key in ("offered", "superseded", "decoded", "submitted", "completed",
-                                         "expired", "invalidated", "refused", "failures")}
+                                         "expired", "invalidated", "refused", "failures",
+                                         "rejected", "unknown", "noncausal_skipped")}
+        # The last request the worker definitively refused or did not know: a fixed word, never worker text.
+        self.last_drop_reason = None
         self.thread = None
         self.client = client
         self.profile = profile
@@ -327,7 +361,7 @@ class Bridge:
             with self.lock:
                 self.hints.clear()
             for request_id in list(self.requests):
-                self.client.cancel(request_id)
+                self._cancel(request_id)
                 self.counts["invalidated"] += 1
         self._results(snapshot, now)
         now = self.clock()
@@ -349,10 +383,29 @@ class Bridge:
                 try:
                     self.client.submit(request)
                     self.counts["submitted"] += 1
-                except Exception:
-                    self.reason = "submission_unproven"
-                    self.counts["failures"] += 1
+                except Exception as exc:
+                    if isinstance(exc, WorkerRefused) and exc.status in REJECTED:
+                        # Validated and refused: no job exists. The next eligible clip goes normally.
+                        self._drop(request["request_id"], "worker_rejected_request", "rejected")
+                    else:
+                        self.reason = "submission_unproven"
+                        self.counts["failures"] += 1
         self._cleanup()
+
+    def _drop(self, request_id, reason, count):
+        """Forget a request no worker job holds; its input pins go at the next cleanup and it can never yield a hint."""
+        self.requests.pop(request_id, None)
+        self.counts[count] += 1
+        self.last_drop_reason = self.reason = reason
+
+    def _cancel(self, request_id):
+        """Cancel keeps the pins until a terminal status, except for a request the worker does not hold."""
+        try:
+            self.client.cancel(request_id)
+        except WorkerRefused as exc:
+            if not exc.unknown_request:
+                raise
+            self._drop(request_id, "worker_unknown_request", "unknown")
 
     def _source_receipt(self, snapshot, deps, observed):
         if self.source_path is None or snapshot is None or observed is None or observed == self.source_written:
@@ -399,6 +452,11 @@ class Bridge:
             return
         if self.samples and frame.capture_mono <= self.samples[-1]["captured_at"]:
             return
+        if frame.capture_mono > frame.arrival_mono:
+            # Its capture time maps after its own arrival, so no causal clip may hold it (the worker refuses
+            # noncausal_source_arrival). Skip it; timestamps are never altered.
+            self.counts["noncausal_skipped"] += 1
+            return
         data = self.decoder(prepared)
         if len(data) != frame.rgb.width * frame.rgb.height * 3:
             raise ValueError("invalid_rgb_bytes")
@@ -434,18 +492,26 @@ class Bridge:
             self.samples.popleft()
 
     def _clip(self, now):
+        if (self.profile.get("inputs") or {}).get("sampling") != intent.SAMPLING:
+            # The worker's profile admits another sampling rule: it would refuse every clip built here.
+            self.reason = "sampling_unsupported"
+            return None
         end = self.samples[-1]["captured_at"]
         if end + 2 <= now or end <= self.last_cutoff:
             return None
+        # intent.SAMPLING: 32 uniform causal slot centres, each holding the newest frame captured at or before
+        # it for at most MAX_HOLD_SECONDS; repeats are marked and keep their true capture times.
         selected, seen = [], set()
         for i in range(32):
             slot = end - self.duration + (i + .5) * self.duration / 32
             candidates = [frame for frame in self.samples if frame["captured_at"] <= slot]
-            if not candidates or slot - candidates[-1]["captured_at"] > .4:
+            if not candidates or slot - candidates[-1]["captured_at"] > intent.MAX_HOLD_SECONDS:
                 return None
             frame = candidates[-1]
             selected.append(dict(frame, sample_at=slot, repeated=frame["frame_id"] in seen))
             seen.add(frame["frame_id"])
+        if any(frame["source_frame"]["arrival_mono"] > end for frame in selected):
+            return None  # A held frame arrived after the cutoff: not yet causal, so the worker would refuse it.
         boxes = [frame["track_bbox_xyxy"] for frame in selected]
         width, height = self.samples[-1]["source_frame"]["rgb"]["width"], self.samples[-1]["source_frame"]["rgb"]["height"]
         left, top = min(box[0] for box in boxes), min(box[1] for box in boxes)
@@ -464,18 +530,24 @@ class Bridge:
                     profile_digest=hashlib.sha256(canonical(self.profile).encode()).hexdigest(),
                     dependencies=dict(self.dependencies), frames=selected, roi_xyxy=[x, y, x + size, y + size],
                     source_size=[width, height], cutoff_at=end, expires_at=end + 2,
-                    duration_seconds=self.duration, mode="choose")
+                    duration_seconds=self.duration, mode="choose", sampling=intent.SAMPLING)
 
     def _results(self, snapshot, now):
         for request_id, request in list(self.requests.items()):
-            value = self.client.poll(request_id)
+            try:
+                value = self.client.poll(request_id)
+            except WorkerRefused as exc:
+                if not exc.unknown_request:
+                    raise  # Anything else keeps the pins and is retried at the next step, as before.
+                self._drop(request_id, "worker_unknown_request", "unknown")
+                continue
             now = self.clock()
             if (not isinstance(value, dict) or value.get("schema") != "den.intent-job/v1"
                     or any(value.get(k) != request[k] for k in ("request_id", "clip_id", "profile_digest"))):
                 raise ValueError("unproven_job_response")
             if value.get("status") not in TERMINAL:
                 if now >= request["expires_at"]:
-                    self.client.cancel(request_id)
+                    self._cancel(request_id)
                 continue
             del self.requests[request_id]
             if value["status"] == "succeeded" and value.get("hint") is not None:

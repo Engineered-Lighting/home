@@ -159,7 +159,7 @@ class ServiceWiringTests(unittest.TestCase):
         request = {key: copy.deepcopy(raw[key]) for key in
                    ("request_id", "clip_id", "profile_digest", "dependencies", "expires_at")}
         request.update({key: copy.deepcopy(raw["evidence"][key]) for key in
-                        ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds")})
+                        ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds", "sampling")})
         bridge = enrichment_link.Bridge(camera_id="synthetic-camera", clock=lambda: case.now,
                                          on_hint=case.preview.offer_intent)
         bridge.profile, bridge.latest = PROFILE, current

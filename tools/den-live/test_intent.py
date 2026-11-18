@@ -23,7 +23,7 @@ def wire():
                 snapshot_manifest_digest="d" * 64, model_revision="e" * 40, dependencies=deps,
                 evidence=dict(frames=frames, source_size=[640, 360], roi_xyxy=[0, 0, 360, 360],
                               source_to_model=[[384/360, 0, 0], [0, 384/360, 0], [0, 0, 1]], cutoff_at=100,
-                              duration_seconds=4, sampling="causal_slot_center_sample_hold/v1", additional_center_crop=False),
+                              duration_seconds=4, sampling=intent.SAMPLING, additional_center_crop=False),
                 produced_at=100.1, expires_at=102, intent="continue",
                 raw_option_scores={key: float(i) for i, key in enumerate(intent.CHOICES)},
                 text="private raw text", uncertainty="uncalibrated_semantic_hint", authority="semantic_prior_only")
@@ -43,7 +43,7 @@ def trusted(raw):
     request = {key: copy.deepcopy(raw[key]) for key in ("request_id", "clip_id", "profile_digest",
                                                         "dependencies", "expires_at")}
     request.update({key: copy.deepcopy(raw["evidence"][key]) for key in
-                    ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds")})
+                    ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds", "sampling")})
     return request
 
 
@@ -108,7 +108,7 @@ class IntentTest(unittest.TestCase):
         request = {key: copy.deepcopy(raw[key]) for key in ("request_id", "clip_id", "profile_digest",
                                                             "dependencies", "expires_at")}
         request.update({key: copy.deepcopy(raw["evidence"][key]) for key in
-                        ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds")})
+                        ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds", "sampling")})
         self.assertTrue(intent.from_wire(raw, now_mono=100.2, request=request))
         request["roi_xyxy"] = [1, 0, 361, 360]
         with self.assertRaisesRegex(ValueError, "hint_request_mismatch"):
@@ -160,6 +160,23 @@ class IntentTest(unittest.TestCase):
             entry["source_frame"]["camera_session"] = "camera@session"
         with self.assertRaisesRegex(ValueError, "invalid_source_frame"):
             intent.from_wire(bad, now_mono=100.2)
+
+    def test_hint_must_echo_the_one_sampling_rule_its_request_named(self):
+        self.assertEqual(intent.SAMPLING, "causal_slot_center_sample_hold/v2;max_hold_s=0.5")
+        self.assertEqual(intent.MAX_HOLD_SECONDS, .5)
+        raw = registered(wire())
+        self.assertEqual(intent.from_wire(raw, now_mono=100.2, request=trusted(raw)).evidence["sampling"], intent.SAMPLING)
+        for other in ("causal_slot_center_sample_hold/v1", "causal_slot_center_sample_hold/v2", None):
+            bad = registered(wire()); bad["evidence"]["sampling"] = other
+            with self.assertRaisesRegex(ValueError, "invalid_hint_sampling", msg=repr(other)):
+                intent.from_wire(bad, now_mono=100.2)
+        bad = registered(wire()); del bad["evidence"]["sampling"]
+        with self.assertRaisesRegex(ValueError, "invalid_hint_sampling"):
+            intent.from_wire(bad, now_mono=100.2)
+        request = trusted(raw)
+        request["sampling"] = "causal_slot_center_sample_hold/v1"
+        with self.assertRaisesRegex(ValueError, "hint_request_mismatch"):
+            intent.from_wire(raw, now_mono=100.2, request=request)
 
     def test_string_integer_bindings_are_canonical(self):
         for value in ("02", "-1", "2.0", "２"):

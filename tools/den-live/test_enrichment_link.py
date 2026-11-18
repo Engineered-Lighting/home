@@ -9,9 +9,12 @@ from types import SimpleNamespace as NS
 import unittest
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "den-models"))
+try:  # A worker tree supplied on PYTHONPATH is the contract under test; otherwise this checkout's own.
+    import den_models  # noqa: F401
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "den-models"))
 from den_models.artifacts import load_profile
-from den_models.contracts import (make_hint, profile_digest, store_rgb_blob, validate_request)
+from den_models.contracts import (ContractError, make_hint, profile_digest, store_rgb_blob, validate_request)
 from den_models.runtime import Runtime
 
 from contracts import FrameRef, PlaneRef
@@ -77,7 +80,92 @@ class FakeClient:
         return packet(self.jobs[request_id], "stopping")
 
 
-class BridgeTests(unittest.TestCase):
+class WorkerClient(FakeClient):
+    """The worker's HTTP answers: submit runs the real request contract (HTTP 400 and no job on refusal), and
+    poll or cancel of a request it does not hold answers 404 job_not_found."""
+
+    def __init__(self, clock):
+        super().__init__(clock)
+        self.refused, self.polled = [], []
+
+    def submit(self, request):
+        self.submitted.append(copy.deepcopy(request))
+        if self.submit_failure:
+            raise self.submit_failure
+        try:
+            accepted = validate_request(copy.deepcopy(request), profile=PROFILE, now=self.runtime.clock())
+        except ContractError as exc:
+            self.refused.append(str(exc))
+            raise link.WorkerRefused(400, "invalid_request") from None
+        self.jobs[request["request_id"]] = accepted
+        return packet(request, "queued")
+
+    def poll(self, request_id):
+        self.polled.append(request_id)
+        if request_id not in self.jobs:
+            raise link.WorkerRefused(404, "job_not_found")
+        return self.poll_hook(self.jobs[request_id]) if self.poll_hook else packet(self.jobs[request_id])
+
+    def cancel(self, request_id):
+        self.cancelled.append(request_id)
+        if request_id not in self.jobs:
+            raise link.WorkerRefused(404, "job_not_found")
+        return packet(self.jobs[request_id], "stopping")
+
+
+# Real-shaped live frames: Den's registered transform, 640x360 RGB with its own plane times, arrival after capture.
+REGISTERED = test_intent.REGISTERED
+WIDTH, HEIGHT = 640, 360
+
+
+def live_frame(stamp, index, *, lag=.15, transform=REGISTERED):
+    rgb = PlaneRef(index, stamp - 50, stamp, WIDTH, HEIGHT)
+    depth = PlaneRef(index, stamp - 50, stamp, 640, 400)
+    return FrameRef("run", 1, index, "session", "rgb", rgb, None, depth, "a" * 64, transform, "scan",
+                    stamp, stamp + lag, 1800000000 + stamp)
+
+
+def live_snapshot(source):
+    track = NS(track_id="person", state="confirmed", association_status="confident",
+               current_obs_ids=("observation",), association_revision=2, position_basis="stereo")
+    return NS(frame=source, service_run_id="run", camera_epoch=1, tracks=(track,), status="fresh", presence="present")
+
+
+def person_reply(box=(280, 40, 400, 330)):
+    return {"row": {"frame": {"width": WIDTH, "height": HEIGHT},
+                    "detections": [{"class": "person", "score": .9, "keypoints": [[0, 0, 1]] * 17,
+                                    "box_xyxy": list(box)}]}}
+
+
+def live_decoder(prepared):
+    return bytes([prepared.ref.frame_id % 251]) * (WIDTH * HEIGHT * 3)
+
+
+def holds(request):
+    return [frame["sample_at"] - frame["captured_at"] for frame in request["frames"]]
+
+
+class LiveBridge:
+    """A bridge fed as the camera thread feeds it: one offer, then one step, per arriving frame."""
+
+    def live(self, duration=4):
+        self.client = WorkerClient(self.clock)
+        self.bridge = link.Bridge(dict(self.settings, duration_s=duration), camera_id="camera", clock=self.clock,
+                                  client=self.client, profile=PROFILE, threaded=False, on_hint=self.hints.append,
+                                  decoder=live_decoder)
+        return self.bridge
+
+    def feed(self, stamps, *, start=1, lag=.15, noncausal=()):
+        for k, stamp in enumerate(stamps):
+            index = start + k
+            source = live_frame(stamp, index, lag=-.02 if index in noncausal else lag)
+            self.clock.value = max(source.capture_mono, source.arrival_mono) + .01
+            self.bridge.offer_frame(live_snapshot(source), NS(ref=source), person_reply())
+            self.bridge.step()
+        return source
+
+
+class BridgeTests(LiveBridge, unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -291,8 +379,201 @@ class BridgeTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         intent.from_wire(wire, now_mono=100.2)
 
+    # M3 (b): one definitive worker refusal never wedges the bridge.
+    def test_definitive_rejection_is_dropped_and_later_clips_go_normally(self):
+        for status in (400, 422):
+            with self.subTest(status=status):
+                self.setUp()
+                self.client = WorkerClient(self.clock)
+                self.bridge = self.new_bridge()
+                self.history()
+                self.bridge.worker_health = self.client.health()
+                self.bridge.last_poll = self.clock.value  # Health was just observed.
+                self.client.submit_failure = link.WorkerRefused(status, "invalid_request")
+                self.bridge.step()
+                rejected = self.client.submitted[0]
+                self.assertNotIn(rejected["request_id"], self.bridge.requests)
+                self.assertEqual((self.bridge.counts["rejected"], self.bridge.counts["failures"]), (1, 0))
+                self.assertEqual(self.bridge.last_drop_reason, "worker_rejected_request")
+                self.client.submit_failure = None
+                self.client.poll_hook = lambda req: packet(req, "expired")  # Each accepted job ends; the next may go.
+                for k in range(30):  # 15 s of 10 Hz frames, the scratch wedge check's schedule.
+                    self.clock.value += .5
+                    self.bridge.last_poll = self.clock.value
+                    for j in range(5):
+                        source = frame(round(self.clock.value - .45 + j / 10, 3), 2000 + 5 * k + j)
+                        self.bridge.samples.append(dict(self.bridge.samples[-1], frame_id=str(source.frame_id),
+                                                        captured_at=source.capture_mono,
+                                                        source_frame=dataclasses.asdict(source)))
+                    self.bridge.latest = snapshot(self.clock.value - .05)
+                    self.bridge.step()  # Never raises.
+                self.assertEqual(len(self.client.submitted) - 1, 15)  # One clip a second, every one accepted.
+                self.assertEqual(len(self.client.jobs), 15)
+                self.assertEqual(self.client.refused, [])
+                self.assertNotIn(rejected["request_id"], self.client.polled)
+                # Every accepted job but the newest has ended; the newest is still pinned awaiting its status.
+                self.assertEqual((self.bridge.counts["failures"], self.bridge.counts["expired"]), (0, 14))
+                self.assertEqual(list(self.bridge.requests), [self.client.submitted[-1]["request_id"]])
+                self.assertEqual(self.hints, [])
+
+    def test_unknown_request_on_poll_or_cancel_is_dropped_without_a_hint(self):
+        self.client = WorkerClient(self.clock)
+        self.bridge = self.new_bridge()
+        request = self.request()  # Pinned but not held by the worker (it restarted, or pruned it).
+        self.bridge.requests[request["request_id"]] = request
+        path = self.root / request["frames"][0]["blob_ref"]
+        self.bridge._results(snapshot(), self.clock())
+        self.assertNotIn(request["request_id"], self.bridge.requests)
+        self.assertEqual((self.bridge.counts["unknown"], self.bridge.last_drop_reason), (1, "worker_unknown_request"))
+        self.bridge.samples.clear()
+        self.bridge._cleanup()
+        self.assertFalse(path.exists())
+        # A binding change cancels; a request the worker does not hold is dropped there too.
+        request = self.request()
+        self.bridge.requests[request["request_id"]] = request
+        self.bridge.worker_health = self.client.health()
+        self.bridge.last_poll = self.clock.value
+        changed = snapshot()
+        changed.tracks[0].association_revision = 3
+        self.bridge.latest = changed
+        self.bridge.step()
+        self.assertIn(request["request_id"], self.client.cancelled)
+        self.assertEqual(self.bridge.counts["unknown"], 2)
+        self.assertFalse(self.bridge.requests)
+        # Nothing was ever published for either dropped request, even if the worker later claims a result.
+        self.client.jobs[request["request_id"]] = request
+        self.client.poll_hook = lambda req: packet(req, "succeeded", make_hint(
+            req, PROFILE, "d" * 64, {"intent": "continue", "raw_option_scores": None, "text": None}, 100.15).as_dict())
+        self.bridge._results(snapshot(), self.clock())
+        self.assertEqual(self.hints, [])
+
+    def test_transient_or_unrecognised_failures_keep_pins_and_their_retry(self):
+        request = self.request()
+        self.register(request)
+        path = self.root / request["frames"][0]["blob_ref"]
+        for failure in (TimeoutError(), ValueError("worker_response_over_bound"),
+                        link.WorkerRefused(404, "route_not_found"), link.WorkerRefused(404, None),
+                        link.WorkerRefused(400, "invalid_request")):
+            with self.subTest(failure=failure):
+                self.client.poll = lambda _id, failure=failure: (_ for _ in ()).throw(failure)
+                with self.assertRaises(type(failure)):
+                    self.bridge._results(snapshot(), self.clock())
+                self.assertIn(request["request_id"], self.bridge.requests)
+                self.bridge.samples.clear()
+                self.bridge._cleanup()
+                self.assertTrue(path.exists())
+        self.assertEqual(self.bridge.counts["unknown"], 0)
+        # A submit refused other than as invalid proves nothing: pinned and unproven, as before.
+        self.setUp()
+        self.history()
+        self.bridge.worker_health = self.client.health()
+        self.bridge.last_poll = self.clock.value
+        self.client.submit_failure = link.WorkerRefused(404, "route_not_found")
+        self.bridge.step()
+        self.assertIn(self.client.submitted[0]["request_id"], self.bridge.requests)
+        self.assertEqual((self.bridge.reason, self.bridge.counts["rejected"]), ("submission_unproven", 0))
+
+    # M3 (c): a frame whose capture maps after its own arrival is skipped, never re-timed.
+    def test_noncausal_frames_are_skipped_counted_and_never_retimed(self):
+        self.live()
+        stamps = [200 + k / 2.3 for k in range(16)]
+        bad = {2, 3}
+        self.feed(stamps, noncausal=bad)
+        self.assertEqual(self.bridge.counts["noncausal_skipped"], 2)
+        kept = [int(sample["frame_id"]) for sample in self.bridge.samples]
+        self.assertFalse(set(kept) & bad)
+        for sample in self.bridge.samples:
+            source = sample["source_frame"]
+            self.assertEqual(sample["captured_at"], stamps[source["frame_id"] - 1])
+            self.assertEqual(source["capture_mono"], sample["captured_at"])
+            self.assertLessEqual(source["capture_mono"], source["arrival_mono"])
+        self.assertTrue(self.client.jobs)
+        self.assertEqual(self.client.refused, [])  # No noncausal_source_arrival.
+        for request in self.client.submitted:
+            self.assertFalse({int(f["frame_id"]) for f in request["frames"]} & bad)
+
+    # M3 (d): a 0.5 s hold at the measured cadence, with exactly 32 uniform slots and true times.
+    def test_half_second_hold_clips_at_measured_cadence_name_the_v2_rule(self):
+        for duration in (4, 8):
+            with self.subTest(duration=duration):
+                self.setUp()
+                self.live(duration)
+                stamps = [300 + k / 2.3 for k in range(int((duration + 1) * 2.3) + 2)]
+                self.feed(stamps)
+                self.assertTrue(self.client.jobs)
+                self.assertEqual(self.client.refused, [])
+                request = self.client.submitted[0]
+                self.assertEqual(request["sampling"], intent.SAMPLING)
+                self.assertEqual(len(request["frames"]), 32)
+                self.assertGreater(max(holds(request)), .4)  # The former 0.4 s rule would not have sent it.
+                self.assertLessEqual(max(holds(request)), intent.MAX_HOLD_SECONDS)
+                end, seen = request["cutoff_at"], set()
+                for i, item in enumerate(request["frames"]):
+                    self.assertEqual(item["sample_at"], end - duration + (i + .5) * duration / 32)
+                    self.assertEqual(item["repeated"], item["frame_id"] in seen)
+                    seen.add(item["frame_id"])
+                    self.assertIn(item["captured_at"], stamps)
+                    self.assertEqual(item["captured_at"], item["source_frame"]["capture_mono"])
+                self.assertEqual(request["dependencies"]["transform_id"], REGISTERED)
+
+    def test_holds_over_half_a_second_or_another_rule_send_nothing(self):
+        self.live()
+        self.feed([300 + k / 1.5 for k in range(12)])  # 0.67 s apart: some slot would hold a frame over 0.5 s.
+        self.assertEqual(self.client.submitted, [])
+        self.setUp()
+        other = copy.deepcopy(PROFILE)
+        other["inputs"]["sampling"] = "causal_slot_center_sample_hold/v1"
+        self.bridge.profile = other
+        self.history()
+        self.assertIsNone(self.bridge._clip(self.clock()))
+        self.assertEqual(self.bridge.reason, "sampling_unsupported")
+
+    def test_a_held_frame_arriving_after_the_cutoff_is_not_submitted(self):
+        self.history()
+        held = self.bridge.samples[-2]  # Captured 99.9 s, held by the last slot of a clip cut at 100 s.
+        held["source_frame"] = dict(held["source_frame"], arrival_mono=100.05)
+        self.assertIsNone(self.bridge._clip(self.clock()))
+        held["source_frame"] = dict(held["source_frame"], arrival_mono=100)
+        self.assertIsNotNone(self.bridge._clip(self.clock()))
+
 
 class ClientTests(unittest.TestCase):
+    def test_definitive_refusals_carry_only_their_status_and_fixed_error_word(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "token"
+            path.write_text("a" * 64)
+            path.chmod(0o600)
+            for status, body, word in ((400, b'{"error":"invalid_request"}', "invalid_request"),
+                                       (404, b'{"error":"job_not_found"}', "job_not_found"),
+                                       (422, b'{"error":"private /path or model text"}', None),
+                                       (404, b"not json", None)):
+                with self.subTest(status=status, body=body):
+                    client = link.Client(9461, path, connection_factory=self.connection(status, body))
+                    with self.assertRaises(link.WorkerRefused) as caught:
+                        client.poll("request")
+                    self.assertEqual((caught.exception.status, caught.exception.error), (status, word))
+                    self.assertEqual(str(caught.exception), "worker_refused")
+                    self.assertEqual(caught.exception.unknown_request, word == "job_not_found")
+            for status in (302, 401, 409, 500):
+                with self.subTest(status=status):
+                    client = link.Client(9461, path, connection_factory=self.connection(status, b'{"error":"x"}'))
+                    with self.assertRaises(ValueError) as caught:
+                        client.submit({})
+                    self.assertNotIsInstance(caught.exception, link.WorkerRefused)
+
+    @staticmethod
+    def connection(status, body):
+        class Connection:
+            def __init__(self, host, port, **kwargs):
+                pass
+            def request(self, *args, **kwargs):
+                pass
+            def getresponse(self):
+                return NS(status=status, read=lambda count: body)
+            def close(self):
+                pass
+        return Connection
+
     def test_proxy_environment_and_redirect_never_leave_direct_loopback(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "token"

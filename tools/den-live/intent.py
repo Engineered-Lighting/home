@@ -23,6 +23,12 @@ LINEAGE = re.compile(r"[A-Za-z0-9_.:@-]{1,128}\Z")
 LINEAGE_FIELDS = frozenset(("transform_id",))
 DEPENDENCIES = frozenset(("camera_id", "service_run_id", "camera_epoch", "source_generation", "track_id",
                           "association_revision", "transform_id", "scan_revision", "calibration_revision"))
+# The clip sampling rule, identical to den-models contracts.SAMPLING: 32 uniform
+# causal slot centres, each holding the newest frame captured at or before it
+# for at most MAX_HOLD_SECONDS, repeats marked, true capture times. The bridge
+# names it in every request; every hint must echo it in its evidence.
+SAMPLING = "causal_slot_center_sample_hold/v2;max_hold_s=0.5"
+MAX_HOLD_SECONDS = .5
 
 
 def binding_values_valid(dependencies):
@@ -155,6 +161,8 @@ def from_wire(value, *, now_mono, request=None):
         raise ValueError("invalid_hint_generation")
     if not isinstance(evidence, dict) or evidence.get("additional_center_crop") is not False:
         raise ValueError("invalid_hint_preprocessing")
+    if evidence.get("sampling") != SAMPLING:
+        raise ValueError("invalid_hint_sampling")
     frames = evidence.get("frames")
     cutoff, produced, expires = evidence.get("cutoff_at"), value["produced_at"], value["expires_at"]
     if (not isinstance(frames, list) or len(frames) != 32
@@ -205,7 +213,7 @@ def from_wire(value, *, now_mono, request=None):
         for key in ("request_id", "clip_id", "profile_digest", "dependencies", "expires_at"):
             if value[key] != request.get(key):
                 raise ValueError("hint_request_mismatch")
-        for key in ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds"):
+        for key in ("frames", "source_size", "roi_xyxy", "cutoff_at", "duration_seconds", "sampling"):
             if evidence.get(key) != request.get(key):
                 raise ValueError("hint_request_mismatch")
         roi = request["roi_xyxy"]

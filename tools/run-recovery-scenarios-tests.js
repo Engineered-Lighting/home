@@ -5,6 +5,8 @@
 const fs = require("fs");
 const path = require("path");
 const H = require(path.join(__dirname, "..", "app", "src", "home-capabilities.js"));
+// Historical voice-outage scenarios opt in; the deployed default is disabled.
+global.window = { HG_VOICE_ENABLED: true };
 
 const REPO = path.resolve(__dirname, "..");
 const APP = fs.readFileSync(path.join(REPO, "app", "src", "home-app.jsx"), "utf8");
@@ -151,6 +153,14 @@ assert("metrics poll clears stale model/resource data on failure", /setSidecarOn
 assert("metrics poll clears latest metrics singleton on failure", APP.includes("__hav_metricsLatest = null"));
 
 process.stdout.write("\nDOC-S110_bridge_offline_contract_test\n");
+window.HG_VOICE_ENABLED = false;
+const retiredRows = H.deriveRuntimeServiceHealth(svcs({ kokoro: "err", "wyoming-parakeet": "err" }), {
+  connection: "online", bridgeOnline: false, bridgeHealth: null,
+});
+assert("disabled voice bridge does not degrade connected HA", byName(retiredRows, "haos").dot === "good", retiredRows);
+assert("disabled voice remains visible without an outage alarm", byName(retiredRows, "ha bridge").meta === "disabled" && H.summarizeCapabilityHealth(retiredRows) === null, retiredRows);
+assert("disabled voice capability is explicit", H.deriveCapabilityHealth(retiredRows).find(c => c.id === "voice").status === "disabled");
+window.HG_VOICE_ENABLED = true;
 const bridgeRows = H.deriveRuntimeServiceHealth(svcs(), {
   connection: "online",
   bridgeOnline: false,

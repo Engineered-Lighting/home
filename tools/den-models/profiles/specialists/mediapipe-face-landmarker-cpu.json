@@ -1,0 +1,52 @@
+{
+  "schema": "den.specialist-profile/v1",
+  "admission_status": "not_admitted",
+  "admission_scope": "none",
+  "production_admitted": false,
+  "execution": {
+    "cpu_threads": 2,
+    "memory_max_bytes": 2147483648,
+    "memory_swap_max_bytes": 0,
+    "tasks_max": 64,
+    "io_read_bytes_per_second": 104857600,
+    "maximum_seconds": 60
+  },
+  "observed_peak_host_bytes": null,
+  "observed_peak_gpu_bytes": null,
+  "id": "mediapipe-face-landmarker-cpu",
+  "role": "face_mesh_and_blendshape_candidate",
+  "backend": "mediapipe_tasks_face_cpu",
+  "files": {
+    "face_landmarker.task": null
+  },
+  "repository": "google-ai-edge/mediapipe",
+  "revision": "0.10.32",
+  "artifact_url": "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+  "runtime": {
+    "python": "3.12",
+    "mediapipe": "0.10.32",
+    "numpy": "2.3.5"
+  },
+  "known_linux_wheel_sha256": {
+    "mediapipe": "4b0941fbbbce41862f13cb1850c4878c13dbc62cd5e81e74880051b7a20ce3b6"
+  },
+  "io": {
+    "input_format": "rgb_uint8_from_rgb_ppm",
+    "api": "mediapipe_tasks_vision",
+    "mode": "IMAGE",
+    "delegate": "CPU",
+    "maximum_faces": 1,
+    "landmarks": 478,
+    "maximum_blendshapes": 52,
+    "output_coordinates": "original_image_pixels_with_relative_nonmetric_z",
+    "eye_gaze": false
+  },
+  "admission_gaps": [
+    "Official version1 task bundle SHA256 remains unresolved.",
+    "Wheel hash is Linux artifact-specific; full Python/transitive runtime closure remains unqualified.",
+    "CPU resource peaks and source-crop reference parity remain unmeasured; mesh direction is not gaze."
+  ],
+  "sources": [
+    "https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker/python"
+  ]
+}

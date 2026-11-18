@@ -17,6 +17,7 @@
 const config = window.HomeDenLive;
 const STOPPED_MS = 3000, REOPEN_MS = 5000, TICK_MS = 500, BODY_RETRY_MS = 2000;
 const BODY_CLOCK_REFRESH_MS = 60 * 60 * 1000;
+const SOURCE_CLOCK_REFRESH_MS = 60 * 1000;
 let qwenLine = () => '';   // home-den-live-qwen.mjs: what den-live's Qwen ask last said, a line in the chip
 
 if (config && typeof config.stream === 'string' && typeof config.site === 'string' && typeof window.EventSource === 'function') {
@@ -40,11 +41,17 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     const pipelineKit = config.pipeline === true
         ? await import(`./home-den-pipeline-layer.mjs${cb}`).catch(error => { console.warn('[den-live] pipeline unavailable', error); return null; })
         : null;
+    const modelKit = config.pipeline === true || config.virtual === true
+        ? await import(`./home-den-model-runtime.mjs${cb}`).catch(error => { console.warn('[den-live] model timing unavailable', error); return null; })
+        : null;
+    const forecastKit = config.virtual === true && modelKit
+        ? await import(`./home-den-forecast-layer.mjs${cb}`).catch(error => { console.warn('[den-live] forecast annotations unavailable', error); return null; })
+        : null;
     const latency = new URLSearchParams(window.location.search).get('den-latency') === '1'
         ? await import(`./home-den-latency.mjs${cb}`).then(module => module.createDenLatencyTrace())
             .catch(error => { console.warn('[den-live] timing unavailable', error); return null; }) : null;
     if (latency) window.HomeDenLatency = Object.freeze({ snapshot: latency.snapshot, exportJson: latency.exportJson, clear: latency.clear });
-    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit, pipelineKit, inferenceKit, latency);
+    const enableBody = start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit, pipelineKit, inferenceKit, latency, modelKit, forecastKit);
     if (typeof config.body === 'string') {
         void Promise.all([import(`./home-3d/apartment-body-layer.mjs${cb}`), import(`./home-3d/apartment-body-labels.mjs${cb}`),
             import(`./home-3d/apartment-body-frame.mjs${cb}`)])
@@ -54,12 +61,12 @@ if (config && typeof config.stream === 'string' && typeof config.site === 'strin
     }
 }
 
-function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit = null, pipelineKit = null, inferenceKit = null, latency = null) {
+function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, captionKit = null, pipelineKit = null, inferenceKit = null, latency = null, modelKit = null, forecastKit = null) {
     const lookOnly = window.HomeLookOnly?.active === true;
     let engine = null, scope = null, layer = null, source = null, openedAt = 0, lastAt = 0, closedAt = 0, latest = null, events = 0, chip = null;
-    let panel = null, caption = null, pipeline = null;
+    let panel = null, caption = null, pipeline = null, forecast = null, sourceClock = null;
     let bodyKit = null, body = null, bodyRetryAt = 0, bodyFrames = 0, bodyAt = 0, watermark = null, pageActive = true;
-    let spotTrace = null;
+    let spotTrace = null, spotReceipts = new WeakMap(), forecastFrame = null, forecastScopeKey = null;
     // A person's settled changes go to the coordinator to learn from (den-manual-1), as its other writes do; look-only
     // sends none.
     const post = !lookOnly && typeof config.coordinator === 'string' ? async (path, body) => {
@@ -68,7 +75,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         return { status: response.status, answer: await response.json().catch(() => null) };
     } : null;
     const spots = spotKit?.createSpotPlayback({ home: config.home, site: config.site, post, onPlayback: observeSpot,
-        onChange: () => { panel?.refresh(); caption?.setSpot(spots?.current() ?? null); pipeline?.setSpot(spots?.current() ?? null); } });
+        onChange: () => { panel?.refresh(); caption?.setSpot(spots?.current() ?? null);
+            pipeline?.setSpot(spots?.current() ?? null, spotReceivedAt(spots?.current())); updateForecast(); } });
     // With the den's live body feature (HomeDenLive.body), the body, its label and the label's ring carry each person, and
     // the people layer draws no floor marker: a gap between body frames can't flash it back. Without it, the marker shows them.
     const people = { floorMarker: typeof config.body !== 'string' };
@@ -103,6 +111,48 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     const sameScan = event => !!event && !!engine && typeof event.content_revision === 'string'
         && event.content_revision === engine.contentRevision;
 
+    // Current frame/track receipts are independent of the offered forecast. Missing receipts keep it hidden.
+    function forecastScope() {
+        const frame = latest?.frame;
+        return frame && sameScan(latest) && frame.scan_revision === engine.contentRevision
+            && frame.transform_id === latest.transform_id && frame.service_run_id === latest.service_run_id
+            && frame.camera_epoch === latest.camera_epoch ? { home: config.home, site: config.site,
+            service_run_id: frame.service_run_id, camera_epoch: frame.camera_epoch,
+            transform_id: frame.transform_id, scan_revision: frame.scan_revision,
+            depth_calibration_sha256: frame.depth_calibration_sha256 } : null;
+    }
+    function spotReceivedAt(snapshot) {
+        const path = snapshot?.path_lighting;
+        return path && typeof path === 'object' ? spotReceipts.get(path) ?? null : null;
+    }
+    function clearForecast() {
+        if (forecastFrame !== null) cancelAnimationFrame(forecastFrame);
+        forecastFrame = null; forecastScopeKey = null;
+        forecast?.clear();
+    }
+    function feedForecast() {
+        if (!latest || !sameScan(latest) || !sourceClock || !forecastScope()) { clearForecast(); return; }
+        forecast?.update({ tracks: latest.tracks, frame: latest.frame, spot: spots?.current() ?? null,
+            peopleReceivedAt: lastAt, spotReceivedAt: spotReceivedAt(spots?.current()) });
+    }
+    function updateForecast() {
+        const nextScope = forecastScope();
+        if (!forecast || !latest || !sameScan(latest) || !sourceClock || !nextScope) { clearForecast(); return; }
+        const nextKey = JSON.stringify(nextScope);
+        if (forecastScopeKey !== nextKey) { clearForecast(); forecastScopeKey = nextKey; }
+        // Admit the latest combined packet once at the render boundary, using ORIGINAL receipts.
+        // Immediate packet-time admission would clear a valid annotation during clock uncertainty,
+        // then restore it a frame later. The layer still checks expiry, Stop and holds every frame.
+        if (forecastFrame === null) {
+            const owned = forecast, connection = source, anchor = sourceClock, current = engine;
+            forecastFrame = requestAnimationFrame(() => {
+                forecastFrame = null;
+                if (forecast === owned && source === connection && sourceClock === anchor && engine === current
+                    && isCurrent() && JSON.stringify(forecastScope()) === nextKey) feedForecast();
+            });
+        }
+    }
+
     function onPeople(message) {
         let event;
         try { event = JSON.parse(message.data); } catch (_) { return; }
@@ -110,16 +160,23 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         latest = event; lastAt = performance.now(); events += 1;
         const matched = sameScan(event);
         spots?.tracking(matched ? event.transform_id : null, matched ? event.content_revision : null);
-        if (matched) { layer?.update(event); caption?.update(event, lastAt); pipeline?.update(event, lastAt); }
-        else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine, people); caption?.clear(); pipeline?.clear(); }
+        if (matched) { layer?.update(event); caption?.update(event, lastAt); pipeline?.update(event, lastAt); updateForecast(); }
+        else if (layer) { layer.dispose(); layer = attachApartmentPeopleLayer(engine, people); caption?.clear(); pipeline?.clear(); clearForecast(); }
         render();
     }
     const isCurrent = () => engine && engine === denEngine() && scope === scene(engine);
     function open() {
         openedAt = performance.now(); closedAt = 0;
+        sourceClock = null; spotReceipts = new WeakMap(); clearForecast();
         spots?.connect(openedAt);
         const next = source = new EventSource(config.stream);
         next.addEventListener('people', message => { if (source === next && isCurrent()) onPeople(message); });
+        if (modelKit) next.addEventListener('source_clock', message => {
+            if (source !== next || !isCurrent() || sourceClock) return;
+            const receivedAt = performance.now();
+            try { sourceClock = modelKit.createDenSourceClock(JSON.parse(message.data), { startedAt: openedAt, receivedAt }); }
+            catch (_) { sourceClock = null; }
+        });
         if (spots) next.addEventListener('spot_clock', message => {
             if (source !== next || !isCurrent()) return;
             try { spots.anchor(JSON.parse(message.data)); }
@@ -130,16 +187,19 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             const receivedAt = performance.now();
             try {
                 const snapshot = JSON.parse(message.data);
+                if (snapshot?.path_lighting && typeof snapshot.path_lighting === 'object')
+                    spotReceipts.set(snapshot.path_lighting, receivedAt);
                 spotTrace = latency?.receive('spot', snapshot, receivedAt) ?? null;
                 spots.receive(snapshot);
             }
             catch (_) { spots.sourceLost(); }
             caption?.setSpot(spots.current() ?? null);
-            pipeline?.setSpot(spots.current() ?? null);
+            pipeline?.setSpot(spots.current() ?? null, spotReceivedAt(spots.current()));
         });
         next.addEventListener('error', () => {
             if (source !== next) return;
             next.close(); source = null; closedAt = performance.now();
+            sourceClock = null; clearForecast();
             spots?.disconnect();
             panel?.pollNow();
         });
@@ -178,14 +238,18 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     }
     function openBody(owned) {
         const started = performance.now(), source = new EventSource(config.body);
-        const connection = { source, started, serverTs: null, runId: null };
+        const connection = { source, started, serverTs: null, clockReceivedAt: null, runId: null };
         owned.connection = connection;
         const current = () => body === owned && owned.connection === connection && isCurrent() && engine === owned.engine;
         source.addEventListener('body_clock', message => {
+            const receivedAt = performance.now();
             if (!current() || connection.serverTs !== null) return;
             let sample;
             try { sample = JSON.parse(message.data); } catch (_) { return; }
-            if (sample && Object.keys(sample).length === 1 && Number.isFinite(sample.server_ts)) connection.serverTs = sample.server_ts;
+            if (sample && Object.keys(sample).length === 1 && Number.isFinite(sample.server_ts)) {
+                connection.serverTs = sample.server_ts;
+                connection.clockReceivedAt = receivedAt;
+            }
         });
         source.addEventListener('body', message => {
             if (!current() || connection.serverTs === null) return;
@@ -202,7 +266,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             if (old && ['run_id', 'track_epoch', 'content_revision', 'transform_id', 'mode', 'track_id'].some(key => event[key] !== old.event[key]))
                 clearBody(owned, 'scope_changed');
             const trace = latency?.receive('body', event, receivedAt,
-                { producer_age_at_receive_ms: (producerNow(connection, receivedAt) - event.capture_ts) * 1000 });
+                latency.captureAgeTiming(connection, event.capture_ts, receivedAt));
             latency?.mark(trace, 'decoded');
             if (event.content_revision !== owned.engine.contentRevision) { clearBody(owned, 'scope_changed'); return; }
             if (event.status === 'clear') { clearBody(owned, event.reason); return; }
@@ -304,6 +368,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         if (pipelineKit) {
             try {
                 pipeline = pipelineKit.attachDenPipeline({ engine: current, host, markers: () => layer?.markers() ?? [], names, toggle: false,
+                    getSourceClock: () => sourceClock,
                     reducedMotion: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches });
             } catch (error) { console.warn('[den-live] pipeline not mounted', error); pipeline = null; }
         }
@@ -316,6 +381,9 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
     }
     function close() {
         source?.close(); source = null;
+        sourceClock = null;
+        clearForecast();
+        forecast?.dispose(); forecast = null;
         caption?.dispose(); caption = null;
         pipeline?.dispose(); pipeline = null;
         layer?.dispose(); layer = null; engine = null;
@@ -323,6 +391,7 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
         spots?.attach(null);
         disposeBody();
         latest = null; lastAt = 0;
+        spotReceipts = new WeakMap();
         closedAt = 0;
         panel?.pause();
         chip?.remove();
@@ -338,8 +407,20 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
             spots?.attach(current.overlay);
             layer = attachApartmentPeopleLayer(current, people);
             if (captionKit || pipelineKit) mountCaption(current);
+            if (forecastKit) {
+                try { forecast = forecastKit.attachDenForecastLayer(current, { getScope: forecastScope, getClock: () => sourceClock,
+                    getHeldFixtureIds: () => (current.overlay?.virtualFixtureHandHolds?.() ?? []).map(hold => hold.fixture_id),
+                    isStopped: () => spots?.control()?.on !== true || spots?.control()?.stopped !== false
+                        || !!spots?.holds()?.stop || !!spots?.holds()?.off,
+                    isCurrent: () => isCurrent() && engine === current && !!source }); }
+                catch (error) { console.warn('[den-live] forecast annotations not mounted', error); forecast = null; }
+            }
         }
         const now = performance.now();
+        if (source && sourceClock && now - openedAt >= SOURCE_CLOCK_REFRESH_MS) {
+            source.close(); source = null; sourceClock = null; clearForecast();
+            spots?.disconnect(); closedAt = 0;
+        }
         if (!source && (!closedAt || now - closedAt > REOPEN_MS)) open();
         if (bodyKit && !body) void mountBody(current);
         if (body?.labels && !body.connection && now >= bodyRetryAt) openBody(body);
@@ -472,7 +553,8 @@ function start(attachApartmentPeopleLayer, validPeopleEvent, panelKit, spotKit, 
                 mounted: !!body?.layer, frames: bodyFrames, since_s: bodyAt ? (performance.now() - bodyAt) / 1000 : null,
                 reason: body?.reason ?? null, last_paint_age_s: body?.lastPaintAge ?? null, layer: body?.layer?.status() ?? null } : null ,
             coordinator: panel ? panel.status() : null, spot: spots?.current() ?? null, caption: caption ? caption.status() : null,
-            pipeline: pipeline ? pipeline.status() : null }),
+            pipeline: pipeline ? pipeline.status() : null,
+            forecast: forecast ? forecast.snapshot() : null }),
         markers: () => layer ? layer.markers() : [],
     });
     return kit => { bodyKit = kit; sync(); };

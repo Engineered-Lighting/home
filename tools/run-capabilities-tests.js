@@ -16,6 +16,8 @@ const path = require("path");
 const H = require(path.join(__dirname, "..", "app", "src", "home-capabilities.js"));
 const APP_SRC = path.join(__dirname, "..", "app", "src", "home-app.jsx");
 const appSource = fs.readFileSync(APP_SRC, "utf8");
+// Existing suites exercise the explicit voice opt-in; default-off is tested below.
+global.window = { HG_VOICE_ENABLED: true };
 
 let passes = 0;
 let fails = 0;
@@ -70,6 +72,12 @@ function sourceSlice(startText, endText) {
 }
 
 /* Suite 1 — CAPABILITY_REGISTRY shape */
+assert("voice defaults off", H.homeVoiceEnabled({}) === false);
+assert("only explicit boolean enables voice", H.homeVoiceEnabled({ HG_VOICE_ENABLED: "true" }) === false && H.homeVoiceEnabled({ HG_VOICE_ENABLED: true }) === true);
+window.HG_VOICE_ENABLED = false;
+assert("retired voice is disabled instead of offline", H.deriveCapabilityHealth(svcs({ "kokoro": "err", "wyoming-parakeet": "err" })).find(c => c.id === "voice").status === "disabled");
+assert("retired voice does not degrade healthy typed capabilities", H.summarizeCapabilityHealth(svcs({ "kokoro": "err", "wyoming-parakeet": "err" })) === null);
+window.HG_VOICE_ENABLED = true;
 process.stdout.write("\nregistry_shape_test\n");
 
 assert("registry is non-empty", H.CAPABILITY_REGISTRY.length >= 4);

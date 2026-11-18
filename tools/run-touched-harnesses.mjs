@@ -80,11 +80,18 @@ const MAP = [
   [/^(?:app\/src\/home-3d\/apartment-body-[\w-]+\.mjs|tools\/test-apartment-body-webgpu\.mjs)$/, ["test-apartment-webgpu-ports.mjs", "test-apartment-body-webgpu.mjs"]],
   [/^(?:app\/src\/home-den-spot-playback\.mjs|tools\/test-den-spot-playback\.mjs)$/, ["test-den-spot-playback.mjs"]],
   [/^(?:app\/src\/home-den-spot-playback\.mjs|tools\/den-live\/(?:manual|preview|test_manual_authority)\.py|tools\/test-den-manual-authority\.mjs)$/, ["test-den-manual-authority.mjs"]],
+  [/^tools\/(?:den-live\/(?:test_)?(?:walking(?:_intent(?:_receipts)?)?|intent|motion(?:_native_clock)?|preview(?:_[a-z_]+)?|contracts|direction|model_projection|perceive|person_state|stream)\.py|test-den-walking-lighting\.mjs)$/, ["test-den-walking-lighting.mjs"]],
+  [/^tools\/den-models\//, ["test-den-model-topology.mjs"]],
+  [/^tools\/den-live\/native_clock_fixture\.json$/, ["test-den-model-topology.mjs", "test-den-walking-lighting.mjs"]],
+  [/^(?:tools\/den-live\/(?:(?:test_)?(?:motion(?:_native_clock)?|intent|contracts|model_projection|source_clock|forecast_spatial|specialist_spatial|enrichment_link|enrichment_service|enrichment_install|path_replay|run_service|install_la|perceive|person_state|run_local|stream|preview(?:_[a-z_]+)?|walking(?:_intent(?:_receipts)?)?)\.py|test_live\.py|fixtures\/path-replay[^/]*\.json)|stack\/services\/den-live\/(?:install\.sh|den-live\.service)|tools\/test-den-model-topology\.mjs)$/, ["test-den-model-topology.mjs"]],
   // The live den view's people layer: markers from den-live's people stream.
   [/^(?:app\/src\/home-3d\/apartment-people-layer\.mjs|tools\/test-apartment-people-layer\.mjs)$/, ["test-apartment-people-layer.mjs"]],
   [/^(?:app\/src\/home-den-live-qwen\.mjs|tools\/test-den-live-qwen-line\.mjs)$/, ["test-den-live-qwen-line.mjs"]],
   [/^(?:app\/src\/home-den-inference-model\.mjs|tools\/test-den-inference-model\.mjs)$/, ["test-den-inference-model.mjs"]],
   [/^(?:app\/src\/home-den-(?:pipeline-layer|inference-model)\.mjs|tools\/test-den-pipeline-cards\.mjs)$/, ["test-den-pipeline-cards.mjs"]],
+  [/^(?:app\/src\/home-den-(?:model-runtime|forecast-layer|live-view|pipeline-layer)\.mjs|tools\/(?:test-den-(?:model-runtime|forecast-layer)\.mjs|fixtures\/den-model-pipeline\.mjs))$/, ["test-den-model-runtime.mjs", "test-den-forecast-layer.mjs", "test-den-pipeline-cards.mjs"]],
+  [/^(?:app\/src\/home-den-(?:model-runtime|forecast-layer|live-view|pipeline-layer)\.mjs|tools\/(?:test-den-(?:model-runtime|forecast-layer|model-pipeline-browser|live-serve-browser(?:-part2)?)\.mjs|fixtures\/den-model-pipeline\.mjs))$/, ["test-den-model-pipeline-browser.mjs"]],
+  [/^(?:stack\/(?:\.env\.example|docker-compose\.yml|scripts\/stack\.sh|services\/supervisor\/(?:main|retire_voice|test_retire_voice)\.py|services\/video-labeler\/(?:videolabeler\/gpuexclusive|tests\/test_gpuexclusive)\.py)|ha-config\/packages\/homeai_good_morning\.yaml|tools\/(?:test-(?:voice-retirement-contracts|supervisor-service-actions)\.py|test-den-voice-retirement\.mjs))$/, ["test-den-voice-retirement.mjs"]],
   [/^(?:app\/src\/home-den-coordinator-panel\.mjs|tools\/test-den-coordinator-panel\.mjs)$/, ["test-den-coordinator-panel.mjs"]],
   [/^(?:app\/src\/(?:home-den-(?:live-view|live-qwen|coordinator-panel|labels-view|inference-model|inference-caption|pipeline-layer)\.mjs|home-lighting-control\.js|home-3d\/(?:apartment-people-layer|assets)\.m?js|home-(?:app|apartment)\.jsx|home-tokens\.css|index\.html)|web-gateway\/(?:server|den-live-route|serve-home|look-only|content-pack-route|equipment-registration|lighting-layer|home-location)\.mjs|tools\/test-den-live-serve-browser(?:-part2)?\.mjs)$/, ["test-den-live-serve-browser.mjs", "test-den-live-serve-browser-part2.mjs"]],
   [/^(?:app\/src\/home-3d\/(?:picking|engine)\.js|tools\/run-apartment-cutaway-pick-tests\.mjs)$/, ["run-apartment-cutaway-pick-tests.mjs"]],
@@ -265,6 +272,9 @@ const harnessFileName = name => /\.(?:cjs|mjs|js)$/.test(name) ? name : `${name}
  * 1 s before, as an unmeasured non-browser item. Room selection took 90 to 146 s hosted on #441's runs, and the den
  * Serve suite 166 to 180 s whole, so it runs as two parts of about 100 s each. */
 const SHARD_WEIGHT_S = {
+  "test-den-model-topology.mjs": 150,
+  "test-den-model-pipeline-browser.mjs": 150,
+  "test-den-voice-retirement.mjs": 65,
   "run-people-agent-tray-ui-tests.cjs": 60,
   "run-people-bridge-ui-tests.cjs": 45,
   "test-apartment-lit-splats-native-browser.mjs": 90,

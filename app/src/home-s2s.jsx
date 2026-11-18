@@ -139,6 +139,10 @@
     onPresence,
     onMedia,
   }) {
+    if (window.homeVoiceEnabled?.() !== true) {
+      onError?.("Voice is disabled. Typed chat is available.");
+      return { stop: () => {}, setVoice: () => {}, setVoiceMode: () => {} };
+    }
     // Simulation Mode: voice WS is not opened. Sim scenarios animate
     // voice.state synthetically (see simulation-data.jsx).
     if (typeof window !== "undefined" && window.__SIM_ACTIVE === true) {

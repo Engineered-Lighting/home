@@ -55,6 +55,8 @@ BIND_ADDR = os.environ.get("BIND_ADDR", "").strip()
 EXPECTED_VLLM_MODEL = os.environ.get("EXPECTED_VLLM_MODEL", "qwen3-vl-30b")
 STACK_SH = os.environ.get("STACK_SH", "/opt/home/stack/scripts/stack.sh")
 AUDIT_LOG_PATH = os.environ.get("AUDIT_LOG_PATH", "/var/log/hav-supervisor.log")
+VOICE_ENABLED = os.environ.get("VOICE_ENABLED", "0") == "1"
+VOICE_SERVICES = frozenset({"wyoming-parakeet", "kokoro", "chatterbox-tts", "wyoming-kokoro"})
 
 # Per-service probe map. Ports are host-published by docker-compose (see
 # stack/docker-compose.yml), so the supervisor — running on the host, not
@@ -409,8 +411,7 @@ async def aggregate_status() -> dict:
     )
     probe_results = await asyncio.gather(
         *(
-            _probe_http(s["probe"]) if s["probe_kind"] == "http"
-            else _probe_tcp(*s["probe"])  # type: ignore[arg-type]
+            _service_probe(s)
             for s in SERVICES
         ),
     )
@@ -421,6 +422,7 @@ async def aggregate_status() -> dict:
     all_running = True
     all_probes_ok = True
     for s, (cont, hlth), (probe, detail) in zip(SERVICES, container_results, probe_results):
+        enabled = VOICE_ENABLED or s["name"] not in VOICE_SERVICES
         out_services.append({
             "name": s["name"],
             "container": cont,
@@ -428,7 +430,10 @@ async def aggregate_status() -> dict:
             "probe": probe,
             "probe_kind": s["probe_kind"],
             "detail": detail,
+            "enabled": enabled,
         })
+        if not enabled:
+            continue
         if cont == "running":
             any_running = True
         else:
@@ -455,7 +460,16 @@ async def aggregate_status() -> dict:
         "last_action": _last_action,
         "vllm_model_loaded": vllm_model,
         "expected_vllm_model": EXPECTED_VLLM_MODEL,
+        "capabilities": {"voice": VOICE_ENABLED},
     }
+
+
+async def _service_probe(service: dict) -> tuple[str, Optional[str]]:
+    if not VOICE_ENABLED and service["name"] in VOICE_SERVICES:
+        return "disabled", None
+    if service["probe_kind"] == "http":
+        return await _probe_http(service["probe"])
+    return await _probe_tcp(*service["probe"])
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -878,6 +892,8 @@ async def get_service_logs(request: Request, service: str, n: int = 50) -> dict:
 async def post_service_restart(request: Request, service: str) -> dict:
     check_auth(request)
     cfg = _resolve_service(service)
+    if not VOICE_ENABLED and cfg["name"] in VOICE_SERVICES:
+        raise HTTPException(status_code=409, detail={"error": "voice_disabled"})
     proc = await _run_compose(["restart", cfg["compose"]], timeout_s=45.0)
     write_audit(f"restart:{cfg['name']}", _client_ip(request), f"svc-{uuid.uuid4().hex[:8]}", proc.returncode)
     _http_error_from_completed(proc, "restart")

@@ -36,13 +36,24 @@ def _release_cuda_cache():
     torch.cuda.empty_cache()
 
 
-def load_segmenter(models, state, device, detect, held_seg, *, release_cuda=_release_cuda_cache):
+def configure_cuda_precision(torch=None):
+    """The isolated CUDA worker uses full float32 matmul and convolution precision."""
+    if torch is None:
+        import torch
+    torch.set_float32_matmul_precision("highest")
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+
+
+def load_segmenter(models, state, device, detect, held_seg, *, release_cuda=_release_cuda_cache,
+                   configure_cuda=configure_cuda_precision):
     """Auto uses the tracking detector's existing CUDA resource gate, with a fresh CPU model on load failure."""
     fallback = None
     if device == "auto":
         usable, _why = detect.gpu_usable()
         if usable:
             try:
+                configure_cuda()
                 segmenter, _why = held_seg.load(models, "cuda:0", state=state)
                 if segmenter is not None:
                     return segmenter, "cuda:0", None, None

@@ -18,6 +18,13 @@
 
 "use strict";
 
+// Deployment capability, deliberately independent of saved voice preferences.
+// Set HG_VOICE_ENABLED=true in trusted app configuration only after restoring
+// the voice services and callers. Missing configuration keeps typed chat active.
+function homeVoiceEnabled(config = typeof window !== "undefined" ? window : {}) {
+  return config.HG_VOICE_ENABLED === true;
+}
+
 /* Capability metadata. `requires` lists service names matching the
  * shape buildStackList() emits in home-metrics-lab.jsx. `impact`
  * is the user-facing copy when the capability is degraded/offline.
@@ -167,7 +174,7 @@ function deriveRuntimeServiceHealth(services, runtime) {
   const bridgeSeesHa = runtime.bridgeHealth && runtime.bridgeHealth.ha_connected;
   if (runtime.connection === "auth_invalid") {
     _setServiceDot(rows, "haos", "err", "bad token");
-  } else if (runtime.connection === "online" && bridgeSeesHa === true) {
+  } else if (runtime.connection === "online" && (!homeVoiceEnabled() || bridgeSeesHa === true)) {
     _setServiceDot(rows, "haos", "good", "connected");
   } else if (runtime.connection === "online" || bridgeSeesHa === true) {
     _setServiceDot(rows, "haos", "warn", "degraded");
@@ -212,6 +219,11 @@ function deriveRuntimeServiceHealth(services, runtime) {
     _setServiceDot(rows, "frigate", "idle", "unknown");
   }
 
+  if (!homeVoiceEnabled()) {
+    for (const name of ["ha bridge", "wyoming-parakeet", "kokoro", "chatterbox-tts", "wyoming-kokoro"]) {
+      _setServiceDot(rows, name, "idle", "disabled");
+    }
+  }
   return rows;
 }
 
@@ -230,6 +242,11 @@ function deriveCapabilityHealth(services) {
   }
   const out = [];
   for (const cap of CAPABILITY_REGISTRY) {
+    if (cap.id === "voice" && !homeVoiceEnabled()) {
+      out.push({ id: cap.id, label: cap.label, status: "disabled", impact: null,
+        missing: [], affected_tools: [], fallback_hint: "typed input + slash commands still work." });
+      continue;
+    }
     let worst = 0;     // capability severity = worst of its required services
     const missing = [];
     for (const reqName of cap.requires) {
@@ -328,6 +345,7 @@ function summarizeCapabilityHealth(services) {
 
 // Dual export
 if (typeof window !== "undefined") {
+  window.homeVoiceEnabled = homeVoiceEnabled;
   window.CAPABILITY_REGISTRY = CAPABILITY_REGISTRY;
   window.deriveRuntimeServiceHealth = deriveRuntimeServiceHealth;
   window.deriveCapabilityHealth = deriveCapabilityHealth;
@@ -335,6 +353,7 @@ if (typeof window !== "undefined") {
 }
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    homeVoiceEnabled,
     CAPABILITY_REGISTRY,
     deriveRuntimeServiceHealth,
     deriveCapabilityHealth,

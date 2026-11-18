@@ -40,6 +40,25 @@ function distribution(values) {
     return { n: values.length, p50: percentile(0.5), p95: percentile(0.95), max: percentile(1) };
 }
 
+function clockMappingSummary(samples, attempted, completed) {
+    const summarize = select => distribution(samples.map(select));
+    return { basis: 'request_receive_interval', samples: samples.length,
+        missing_samples: completed - attempted, invalid_samples: attempted - samples.length,
+        causality_bounded_samples: samples.filter(row => row.lower < 0).length,
+        setup_round_trip_bound_ms: summarize(row => row.roundTrip),
+        uncertainty_at_receive_ms: summarize(row => row.uncertainty),
+        uncertainty_at_gpu_complete_ms: summarize(row => row.uncertainty + row.elapsed * 0.0001),
+        midpoint_age_at_receive_ms: summarize(row => row.midpoint),
+        midpoint_age_at_gpu_complete_ms: summarize(row => row.midpoint + row.elapsed),
+        raw_age_at_receive_ms: { lower: summarize(row => row.lower), upper: summarize(row => row.upper) },
+        raw_age_at_gpu_complete_ms: {
+            lower: summarize(row => row.lower + row.elapsed * 0.9999), upper: summarize(row => row.upper + row.elapsed * 1.0001) },
+        causal_age_at_receive_ms: { lower: summarize(row => Math.max(0, row.lower)), upper: summarize(row => row.upper) },
+        causal_age_at_gpu_complete_ms: {
+            lower: summarize(row => Math.max(0, row.lower + row.elapsed * 0.9999)),
+            upper: summarize(row => row.upper + row.elapsed * 1.0001) } };
+}
+
 export function reportTrace(trace) {
     if (trace?.schema !== 'home-den-latency-1' || !Array.isArray(trace.entries) || trace.entries.length > 600) {
         throw Error('Expected a bounded home-den-latency-1 trace');
@@ -69,6 +88,8 @@ export function reportTrace(trace) {
         const selected = [...samples.values()].filter(sample => sample.kind === kind);
         const stages = {}, incomplete = {};
         const captureAges = [], completedAges = [];
+        const clockMappings = [];
+        let mappingAttempts = 0, completedBodies = 0;
         for (const [name, from, to] of STAGES) {
             const durations = [];
             let invalidOrder = 0, wrongFrame = 0, excludedUnavailable = 0;
@@ -85,11 +106,27 @@ export function reportTrace(trace) {
                 }
                 if (stageTime(end) < stageTime(start)) { invalidOrder += 1; continue; }
                 durations.push(stageTime(end) - stageTime(start));
-                if (kind === 'body' && name === 'receive_to_gpu_complete'
-                    && start.capture_timing === 'producer_capture_estimate'
-                    && finite(start.producer_age_at_receive_ms) && start.producer_age_at_receive_ms >= 0) {
-                    captureAges.push(start.producer_age_at_receive_ms);
-                    completedAges.push(start.producer_age_at_receive_ms + stageTime(end) - stageTime(start));
+                if (kind === 'body' && name === 'receive_to_gpu_complete') {
+                    completedBodies++;
+                    const elapsed = stageTime(end) - stageTime(start);
+                    if (start.capture_timing === 'producer_capture_estimate'
+                        && finite(start.producer_age_at_receive_ms) && start.producer_age_at_receive_ms >= 0) {
+                        captureAges.push(start.producer_age_at_receive_ms);
+                        completedAges.push(start.producer_age_at_receive_ms + elapsed);
+                    }
+                    if (Object.hasOwn(start, 'producer_age_at_receive_interval_ms')) {
+                        mappingAttempts++;
+                        const bounds = start.producer_age_at_receive_interval_ms;
+                        const midpoint = start.producer_age_at_receive_midpoint_ms;
+                        const uncertainty = start.producer_clock_uncertainty_ms, roundTrip = start.producer_clock_round_trip_bound_ms;
+                        if (start.capture_timing === 'producer_capture_estimate' && start.producer_clock_mapping === 'request_receive_interval'
+                            && Array.isArray(bounds) && bounds.length === 2 && bounds.every(finite) && bounds[0] <= bounds[1] && bounds[1] >= 0
+                            && [midpoint, uncertainty, roundTrip].every(finite) && uncertainty >= 0 && roundTrip >= 0
+                            && Math.abs(midpoint - (bounds[0] / 2 + bounds[1] / 2)) <= 0.001
+                            && Math.abs(uncertainty - (bounds[1] - bounds[0]) / 2) <= 0.001) {
+                            clockMappings.push({ lower: bounds[0], upper: bounds[1], midpoint, uncertainty, roundTrip, elapsed });
+                        }
+                    }
                 }
             }
             stages[name] = distribution(durations);
@@ -98,7 +135,9 @@ export function reportTrace(trace) {
         }
         kinds[kind] = { samples: selected.length, stages_ms: stages, incomplete };
         if (kind === 'body') kinds[kind].capture_estimate = { qualified: false, source: 'producer_capture_estimate',
-            estimated_age_at_receive_ms: distribution(captureAges), estimated_age_at_gpu_complete_ms: distribution(completedAges) };
+            estimated_age_basis: 'conservative_clock_upper_bound',
+            estimated_age_at_receive_ms: distribution(captureAges), estimated_age_at_gpu_complete_ms: distribution(completedAges),
+            clock_mapping: clockMappingSummary(clockMappings, mappingAttempts, completedBodies) };
     }
     return { entries: trace.entries.length, rejected_entries: rejected, duplicate_phases: duplicates,
         dropped_entries: sequence(trace.dropped_entries) ? trace.dropped_entries : null,

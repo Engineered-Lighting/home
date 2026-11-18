@@ -38,6 +38,24 @@ estimates retain their unqualified status in the report. Head-shown production
 frames can use arrival-based capture estimates. Qualifying those estimates
 requires independent camera timing evidence for the installed release.
 
+The existing `estimated_age_at_receive_ms` and `estimated_age_at_gpu_complete_ms`
+fields retain the conservative producer-clock upper estimate. Current exports
+also supply `clock_mapping` results with midpoint estimates, raw lower and upper
+age bounds, and mapping uncertainty. The producer's bootstrap clock sample falls
+between EventSource request start and clock callback entry. That whole setup
+window, including connection queuing and asymmetric transit, bounds the mapping.
+The calculation retains the existing 5 ms margin and 100 ppm drift allowance.
+Every figure admission and expiry check continues to use the original upper
+clock bound.
+
+Raw bounds retain an uncertain negative lower endpoint. The report also gives
+the interval's intersection with nonnegative elapsed time and counts affected
+samples. A zero causal lower bound represents uncertainty. Endpoint percentile
+summaries describe the lower and upper bounds separately. Older exports retain
+their existing age distributions and count clock mapping as missing. Clock
+mapping bounds do not qualify the camera's capture timestamp or establish display
+presentation timing.
+
 GPU completion establishes a completed submitted frame. The export records
 `presentation_observed: false`. Establish camera-to-screen latency by correlating
 the packet/frame identity with a browser compositor trace and a locally recorded

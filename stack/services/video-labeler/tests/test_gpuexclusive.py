@@ -9,6 +9,7 @@ The dangerous properties under test:
   * acquire failure restores immediately and surfaces InsufficientVRAM.
 """
 from datetime import datetime, timedelta, timezone
+import json
 
 import pytest
 
@@ -181,6 +182,41 @@ def test_startup_recovery_restores_orphans(cfg, conn):
     assert len(gx2.startup_recover()) == 1
     assert ol.repinned == ["big:90b"]
     assert active_rows(cfg) == []
+
+
+@pytest.mark.parametrize("entrypoint", ["restore", "startup_recover", "supervisor_tick"])
+def test_pre_retirement_ledger_never_resurrects_voice(cfg, conn, monkeypatch, entrypoint):
+    monkeypatch.delenv("VOICE_ENABLED", raising=False)
+    units = [{"kind": "container", "name": name}
+             for name in sorted(gpuexclusive.RETIRED_VOICE_CONTAINERS)]
+    units.append({"kind": "container", "name": "hav-vllm"})
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    cur = conn.execute(
+        "INSERT INTO exclusive_state (units_json, deadline_at, state, created_at)"
+        " VALUES (?, ?, 'active', ?)", (json.dumps(units), expired, expired))
+    ledger_id = cur.lastrowid
+    dk = FakeDocker([])
+    gx = make_gx(cfg, FakeOllama([]), docker=dk)
+    if entrypoint == "restore":
+        assert gx.restore(ledger_id)
+    else:
+        assert getattr(gx, entrypoint)() == [ledger_id]
+    assert dk.started == ["hav-vllm"]
+    row = conn.execute("SELECT * FROM exclusive_state WHERE id = ?", (ledger_id,)).fetchone()
+    recorded = json.loads(row["units_json"])
+    assert row["state"] == "restored" and row["restored_at"]
+    assert [u["name"] for u in recorded] == [u["name"] for u in units]
+    assert all(u["restore_result"] == "skipped_retired" for u in recorded[:-1])
+    assert gx.startup_recover() == []  # history is retained, never replayed
+
+
+def test_explicit_voice_opt_in_restores_recorded_voice(cfg, conn, monkeypatch):
+    monkeypatch.setenv("VOICE_ENABLED", "1")
+    dk = FakeDocker(["hav-kokoro-tts"])
+    gx = make_gx(cfg, FakeOllama([]), docker=dk, free=FreeSeq(1.0, 95.0))
+    ledger_id = gx.acquire(min_free_gb=22, ttl_s=60, evict_containers=True)
+    assert gx.restore(ledger_id)
+    assert dk.started == ["hav-kokoro-tts"]
 
 
 def test_status_shape(cfg, conn):

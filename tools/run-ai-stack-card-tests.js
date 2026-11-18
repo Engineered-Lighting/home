@@ -159,8 +159,10 @@ for (const [verb, service] of Object.entries(S85_SERVICES)) {
 assert("unknown service restart verb is rejected",
   H._aiStackServiceRestartSpec("restart_everything") === null);
 assert("service restart buttons are rendered from registry",
-  source.includes("AI_STACK_SERVICE_RESTARTS.map((spec)") &&
+  source.includes("AI_STACK_SERVICE_RESTARTS.filter((spec) => !spec.voice || window.homeVoiceEnabled?.() === true).map((spec)") &&
     source.includes("onClick={() => confirmOrDispatch(spec.verb)}"));
+assert("voice restart registry entries require explicit opt-in",
+  H.AI_STACK_SERVICE_RESTARTS.filter((spec) => spec.voice).map((spec) => spec.service).sort().join(",") === "kokoro,wyoming-parakeet");
 
 process.stdout.write("\nai_stack_dependency_strip_contract_test\n");
 assert("Metrics strip uses shared AI stack dependency helper",
@@ -277,6 +279,13 @@ assert("probe fail is warn", H._serviceTone({ container: "running", probe: "fail
 assert("unhealthy service is crit", H._serviceTone({ container: "running", health: "unhealthy" }) === "crit");
 assert("starting health is warn", H._serviceTone({ container: "running", health: "starting" }) === "warn");
 assert("healthy service is ok", H._serviceTone({ container: "running", health: "healthy", probe: "ok" }) === "ok");
+assert("disabled absent voice is idle", H._serviceTone({ enabled: false, container: "missing" }) === "idle");
+assert("disabled running voice remains visible", H._serviceState({ enabled: false, container: "running" }) === "disabled · still running");
+assert("disabled absent voice is labeled disabled", H._serviceState({ enabled: false, container: "missing" }) === "disabled");
+assert("missing disabled voice does not block core readiness", H._aiStackHasReadySignals({
+  expected_vllm_model: "qwen", vllm_model_loaded: "qwen",
+  services: [{ container: "running", probe: "ok" }, { enabled: false, container: "missing", probe: "disabled" }],
+}));
 
 assert("missing service state text", H._serviceState({ container: "missing" }) === "missing");
 assert("exited service state text", H._serviceState({ container: "exited" }) === "exited");

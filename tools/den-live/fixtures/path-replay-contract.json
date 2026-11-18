@@ -1,0 +1,951 @@
+{
+  "schema": "den.path-replay/v1",
+  "evidence_kind": "synthetic_contract",
+  "observations": [
+    {
+      "available_mono": 100.05,
+      "snapshot": {
+        "schema": "den-person-state-1",
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "seq": 1,
+        "frame": {
+          "service_run_id": "synthetic-run",
+          "camera_epoch": 1,
+          "frame_id": 1,
+          "capture_mono": 100,
+          "arrival_mono": 100.02,
+          "transform_id": "synthetic-transform",
+          "scan_revision": "synthetic-scan",
+          "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "status": "fresh",
+        "presence": "present",
+        "tracks": [
+          {
+            "track_id": "synthetic-person",
+            "state": "confirmed",
+            "xy_m": [
+              0,
+              0
+            ],
+            "position_basis": "stereo",
+            "current_obs_ids": [
+              "synthetic-obs-1"
+            ],
+            "association": {
+              "status": "confident",
+              "revision": 1
+            },
+            "motion": {
+              "service_run_id": "synthetic-run",
+              "camera_epoch": 1,
+              "association_revision": 1,
+              "transform_id": "synthetic-transform",
+              "scan_revision": "synthetic-scan",
+              "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "frame_id": 1,
+              "observed_mono": 100,
+              "available_mono": 100.05,
+              "valid_until_mono": 101.4,
+              "xy_m": [
+                0,
+                0
+              ],
+              "velocity_mps": [
+                1,
+                0
+              ],
+              "covariance": [
+                [
+                  0.01,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0.01,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  0.01
+                ]
+              ],
+              "sample_count": 3,
+              "history_span_s": 0.4,
+              "white_accel_sigma_mps32": 0,
+              "registration_error_m": 0,
+              "timing_error_s": 0.01,
+              "source_obs_ids": [
+                "synthetic-obs-1"
+              ],
+              "basis": "den_track_kalman_cv",
+              "time_status": "estimated_source_elapsed",
+              "time_qualified": false,
+              "timing_evidence_id": "synthetic-age-1",
+              "track_id": "synthetic-person"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "available_mono": 101.05,
+      "snapshot": {
+        "schema": "den-person-state-1",
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "seq": 2,
+        "frame": {
+          "service_run_id": "synthetic-run",
+          "camera_epoch": 1,
+          "frame_id": 2,
+          "capture_mono": 101,
+          "arrival_mono": 101.02,
+          "transform_id": "synthetic-transform",
+          "scan_revision": "synthetic-scan",
+          "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "status": "fresh",
+        "presence": "present",
+        "tracks": [
+          {
+            "track_id": "synthetic-person",
+            "state": "confirmed",
+            "xy_m": [
+              1,
+              0
+            ],
+            "position_basis": "stereo",
+            "current_obs_ids": [
+              "synthetic-obs-2"
+            ],
+            "association": {
+              "status": "confident",
+              "revision": 1
+            },
+            "motion": {
+              "service_run_id": "synthetic-run",
+              "camera_epoch": 1,
+              "association_revision": 1,
+              "transform_id": "synthetic-transform",
+              "scan_revision": "synthetic-scan",
+              "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "frame_id": 2,
+              "observed_mono": 101,
+              "available_mono": 101.05,
+              "valid_until_mono": 102.4,
+              "xy_m": [
+                1,
+                0
+              ],
+              "velocity_mps": [
+                0,
+                0
+              ],
+              "covariance": [
+                [
+                  0.01,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0.01,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  0.01
+                ]
+              ],
+              "sample_count": 3,
+              "history_span_s": 0.4,
+              "white_accel_sigma_mps32": 0,
+              "registration_error_m": 0,
+              "timing_error_s": 0.01,
+              "source_obs_ids": [
+                "synthetic-obs-2"
+              ],
+              "basis": "den_track_kalman_cv",
+              "time_status": "estimated_source_elapsed",
+              "time_qualified": false,
+              "timing_evidence_id": "synthetic-age-2",
+              "track_id": "synthetic-person"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "available_mono": 102.05,
+      "snapshot": {
+        "schema": "den-person-state-1",
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "seq": 3,
+        "frame": {
+          "service_run_id": "synthetic-run",
+          "camera_epoch": 1,
+          "frame_id": 3,
+          "capture_mono": 102,
+          "arrival_mono": 102.02,
+          "transform_id": "synthetic-transform",
+          "scan_revision": "synthetic-scan",
+          "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "status": "fresh",
+        "presence": "present",
+        "tracks": [
+          {
+            "track_id": "synthetic-person",
+            "state": "confirmed",
+            "xy_m": [
+              1,
+              0
+            ],
+            "position_basis": "stereo",
+            "current_obs_ids": [
+              "synthetic-obs-3"
+            ],
+            "association": {
+              "status": "confident",
+              "revision": 1
+            },
+            "motion": {
+              "service_run_id": "synthetic-run",
+              "camera_epoch": 1,
+              "association_revision": 1,
+              "transform_id": "synthetic-transform",
+              "scan_revision": "synthetic-scan",
+              "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "frame_id": 3,
+              "observed_mono": 102,
+              "available_mono": 102.05,
+              "valid_until_mono": 103.4,
+              "xy_m": [
+                1,
+                0
+              ],
+              "velocity_mps": [
+                -1,
+                0
+              ],
+              "covariance": [
+                [
+                  0.01,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0.01,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  0.01
+                ]
+              ],
+              "sample_count": 3,
+              "history_span_s": 0.4,
+              "white_accel_sigma_mps32": 0,
+              "registration_error_m": 0,
+              "timing_error_s": 0.01,
+              "source_obs_ids": [
+                "synthetic-obs-3"
+              ],
+              "basis": "den_track_kalman_cv",
+              "time_status": "estimated_source_elapsed",
+              "time_qualified": false,
+              "timing_evidence_id": "synthetic-age-3",
+              "track_id": "synthetic-person"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "available_mono": 103.05,
+      "snapshot": {
+        "schema": "den-person-state-1",
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "seq": 4,
+        "frame": {
+          "service_run_id": "synthetic-run",
+          "camera_epoch": 1,
+          "frame_id": 4,
+          "capture_mono": 103,
+          "arrival_mono": 103.02,
+          "transform_id": "synthetic-transform",
+          "scan_revision": "synthetic-scan",
+          "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        },
+        "status": "fresh",
+        "presence": "present",
+        "tracks": [
+          {
+            "track_id": "synthetic-person",
+            "state": "confirmed",
+            "xy_m": [
+              0,
+              0
+            ],
+            "position_basis": "stereo",
+            "current_obs_ids": [
+              "synthetic-obs-4"
+            ],
+            "association": {
+              "status": "confident",
+              "revision": 1
+            },
+            "motion": {
+              "service_run_id": "synthetic-run",
+              "camera_epoch": 1,
+              "association_revision": 1,
+              "transform_id": "synthetic-transform",
+              "scan_revision": "synthetic-scan",
+              "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+              "frame_id": 4,
+              "observed_mono": 103,
+              "available_mono": 103.05,
+              "valid_until_mono": 104.4,
+              "xy_m": [
+                0,
+                0
+              ],
+              "velocity_mps": [
+                -1,
+                0
+              ],
+              "covariance": [
+                [
+                  0.01,
+                  0,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0.01,
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0,
+                  0,
+                  0.01
+                ]
+              ],
+              "sample_count": 3,
+              "history_span_s": 0.4,
+              "white_accel_sigma_mps32": 0,
+              "registration_error_m": 0,
+              "timing_error_s": 0.01,
+              "source_obs_ids": [
+                "synthetic-obs-4"
+              ],
+              "basis": "den_track_kalman_cv",
+              "time_status": "estimated_source_elapsed",
+              "time_qualified": false,
+              "timing_evidence_id": "synthetic-age-4",
+              "track_id": "synthetic-person"
+            }
+          },
+          {
+            "track_id": "synthetic-crossing-person",
+            "state": "confirmed",
+            "xy_m": [
+              0,
+              0
+            ],
+            "position_basis": "stereo",
+            "current_obs_ids": [
+              "synthetic-obs-4"
+            ],
+            "association": {
+              "status": "ambiguous",
+              "revision": 1
+            },
+            "motion": null
+          }
+        ]
+      }
+    }
+  ],
+  "decisions": [
+    {
+      "decision_id": "d1",
+      "cutoff_mono": 100.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "decision_id": "d2",
+      "cutoff_mono": 101.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "decision_id": "d3",
+      "cutoff_mono": 102.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    },
+    {
+      "decision_id": "d4",
+      "cutoff_mono": 103.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      }
+    }
+  ],
+  "recorded_candidates": [
+    {
+      "projection_id": "synthetic-unselected-routes",
+      "revision": "0000000000000000000000000000000000000000",
+      "source_hint_id": "synthetic-no-model",
+      "basis_frame_id": 1,
+      "observed_mono": 100,
+      "available_mono": 100.08,
+      "valid_until_mono": 100.5,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "selected_candidate_id": null,
+      "candidates": [
+        {
+          "candidate_id": "left",
+          "route_id": "left",
+          "samples": [
+            {
+              "at_mono": 100.3,
+              "xy_m": [
+                0.2,
+                0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            },
+            {
+              "at_mono": 100.6,
+              "xy_m": [
+                0.5,
+                0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            },
+            {
+              "at_mono": 101.1,
+              "xy_m": [
+                1,
+                0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            },
+            {
+              "at_mono": 102.1,
+              "xy_m": [
+                2,
+                0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            }
+          ]
+        },
+        {
+          "candidate_id": "right",
+          "route_id": "right",
+          "samples": [
+            {
+              "at_mono": 100.3,
+              "xy_m": [
+                0.2,
+                -0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            },
+            {
+              "at_mono": 100.6,
+              "xy_m": [
+                0.5,
+                -0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            },
+            {
+              "at_mono": 101.1,
+              "xy_m": [
+                1,
+                -0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            },
+            {
+              "at_mono": 102.1,
+              "xy_m": [
+                2,
+                -0.5
+              ],
+              "covariance_m2": [
+                [
+                  0.01,
+                  0
+                ],
+                [
+                  0,
+                  0.01
+                ]
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "truth": [
+    {
+      "at_mono": 100.3,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        0.3,
+        0
+      ],
+      "tangent_mps": [
+        1,
+        0
+      ]
+    },
+    {
+      "at_mono": 100.6,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        0.6,
+        0
+      ],
+      "tangent_mps": [
+        1,
+        0
+      ]
+    },
+    {
+      "at_mono": 101.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        1,
+        0
+      ],
+      "tangent_mps": [
+        0,
+        0
+      ],
+      "stopped": true,
+      "stop_axis_xy": [
+        1,
+        0
+      ]
+    },
+    {
+      "at_mono": 102.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        0.9,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    },
+    {
+      "at_mono": 101.3,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        1,
+        0
+      ],
+      "tangent_mps": [
+        0,
+        0
+      ],
+      "stopped": true,
+      "stop_axis_xy": [
+        1,
+        0
+      ]
+    },
+    {
+      "at_mono": 101.6,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        1,
+        0
+      ],
+      "tangent_mps": [
+        0,
+        0
+      ],
+      "stopped": true,
+      "stop_axis_xy": [
+        1,
+        0
+      ]
+    },
+    {
+      "at_mono": 103.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        -0.1,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    },
+    {
+      "at_mono": 102.3,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        0.7,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    },
+    {
+      "at_mono": 102.6,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        0.4,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    },
+    {
+      "at_mono": 104.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        -1.1,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    },
+    {
+      "at_mono": 103.3,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        -0.3,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    },
+    {
+      "at_mono": 103.6,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        -0.6,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    },
+    {
+      "at_mono": 105.1,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "xy_m": [
+        -2.1,
+        0
+      ],
+      "tangent_mps": [
+        -1,
+        0
+      ]
+    }
+  ],
+  "actuation": [
+    {
+      "decision_id": "d1",
+      "arm": "cpu_cv",
+      "horizon_s": 0.2,
+      "candidate_id": null,
+      "sent_mono": 100.1,
+      "arrival_mono": 100.3,
+      "beam_center_xy_m": [
+        0.3,
+        0
+      ],
+      "beam_radius_m": 0.2,
+      "receipt_basis": "synthetic"
+    }
+  ],
+  "events": [
+    {
+      "event_id": "synthetic-uturn",
+      "kind": "turn",
+      "at_mono": 102,
+      "dependencies": {
+        "service_run_id": "synthetic-run",
+        "camera_epoch": 1,
+        "track_id": "synthetic-person",
+        "association_revision": 1,
+        "transform_id": "synthetic-transform",
+        "scan_revision": "synthetic-scan",
+        "depth_calibration_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "recovery_tolerance_m": 0.05,
+      "required_consecutive": 2
+    }
+  ]
+}

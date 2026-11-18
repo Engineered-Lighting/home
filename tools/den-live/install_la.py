@@ -27,10 +27,12 @@ camera as LA reaches it, by default den-take's.
 """
 import argparse
 import json
+import re
 import shutil
+import stat
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
@@ -54,6 +56,200 @@ HA_TOKEN_FILE, HA_URL_FILE = "den-live-ha-token.txt", "den-live-ha-url.txt"
 BODY_PROFILE_FILE = "den-live-body-rgb.json"
 PREVIEW_GEOMETRY = "virtual-fixtures.json"
 INSTALL_SH = Path("stack") / "services" / "den-live" / "install.sh"
+
+
+def _private_json(path):
+    """Read an optional private packet without putting paths or values in errors."""
+    try:
+        path = Path(path)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 128 * 1024:
+            raise ValueError
+        def pairs(items):
+            value = {}
+            for key, item in items:
+                if key in value:
+                    raise ValueError
+                value[key] = item
+            return value
+        def reject(_):
+            raise ValueError
+        return json.loads(path.read_text(encoding="utf-8-sig"), object_pairs_hook=pairs, parse_constant=reject)
+    except (OSError, TypeError, ValueError):
+        raise Stop("the optional private JSON packet could not be validated") from None
+
+
+def enrichment_block(block):
+    """Target Linux paths stay POSIX paths even when this paste runs on Windows."""
+    keys = {"enabled", "port", "profile_file", "frame_root", "duration_s", "frame_access", "frame_group", "dependencies_file"}
+    if not isinstance(block, dict) or set(block) - keys:
+        raise Stop("the optional model settings have unsupported fields")
+    if block == {"enabled": False}:
+        return block
+    if (block.get("enabled") is not True or type(block.get("port")) is not int or not 1024 <= block["port"] <= 65535
+            or type(block.get("duration_s", 4)) is not int or block.get("duration_s", 4) not in (4, 8)
+            or block.get("frame_access") != "private_group" or type(block.get("frame_group")) is not int
+            or not 0 < block["frame_group"] <= 2147483647):
+        raise Stop("the optional model settings need an explicit port, window and private group")
+    for key in ("profile_file", "frame_root", "dependencies_file"):
+        value = block.get(key)
+        if (not isinstance(value, str) or not PurePosixPath(value).is_absolute()
+                or str(PurePosixPath(value)) != value):
+            raise Stop("the optional model settings need canonical absolute Linux paths")
+    frames, source = PurePosixPath(block["frame_root"]), PurePosixPath(block["dependencies_file"]).parent
+    if frames == source or frames in source.parents or source in frames.parents:
+        raise Stop("the optional model inputs need separate scoped directories")
+    protected = tuple(PurePosixPath(p) for p in ("/var/lib/den-live", "/var/lib/private/den-live", "/run/den-live",
+                                                 "/etc/den-live", "/opt/den-live"))
+    if any(root == path or root in path.parents for root in protected for path in (frames, source)):
+        raise Stop("optional model inputs must remain outside protected Den service state")
+    try:
+        rs.enrichment_dropin(block)
+    except (rs.Refusal, TypeError, ValueError, KeyError):
+        raise Stop("the optional model settings do not preserve the service boundary") from None
+    return dict(block)
+
+
+def model_worker_token(path):
+    try:
+        path = Path(path)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 256:
+            raise ValueError
+        value = path.read_text(encoding="utf-8-sig").strip()
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError
+        return value
+    except (OSError, TypeError, ValueError):
+        raise Stop("the optional model worker needs its own private 64-hex token") from None
+
+
+def enrichment_packet(settings_file, token_file, *, other_tokens=()):
+    block = None if settings_file is None else enrichment_block(_private_json(settings_file))
+    enabled = block is not None and block.get("enabled") is True
+    if not enabled:
+        if token_file is not None:
+            raise Stop("a model worker token needs explicitly enabled optional model settings")
+        return block, None
+    if token_file is None:
+        raise Stop("enabled optional model settings require the model worker's own token")
+    if any(Path(token_file).resolve() == Path(path).resolve() for path in other_tokens):
+        raise Stop("the optional model worker cannot reuse another service's credential")
+    return block, model_worker_token(token_file)
+
+
+def walking_packet(path, geometry):
+    if path is None:
+        return None
+    if geometry is None:
+        raise Stop("walking settings require this install's private preview geometry")
+    value = _private_json(path)
+    try:
+        import walking
+        if not isinstance(value, dict) or value.get("mode", "off") not in ("off", "shadow", "virtual"):
+            raise ValueError
+        walking._config(value)
+    except (ImportError, TypeError, ValueError, KeyError):
+        raise Stop("the optional walking settings are invalid for this release") from None
+    return value
+
+
+def walking_registration(value, geometry, receipt, transform_id):
+    """An optional floor belongs to this install's registration and scan only."""
+    if value is None or value.get("mode", "off") == "off":
+        return
+    try:
+        exported = geometry if isinstance(geometry, dict) else json.loads(geometry)
+        registered = _private_json(receipt)
+        floor = value["floor"]
+        if (floor["transform_id"] != transform_id or floor["scan_revision"] != exported["binding"]["content_revision"]
+                or floor["scan_revision"] != registered["scan_revision"]
+                or floor["depth_calibration_sha256"] not in registered["source_correction"]["calibrations"]):
+            raise ValueError
+    except (OSError, TypeError, ValueError, KeyError):
+        raise Stop("the optional walking floor does not match this install's registration") from None
+
+
+def target_enrichment(block, *, inspect=None, group_lookup=None, profile_reader=None):
+    """Read-only Linux preflight. Never creates groups or reconciles permissions."""
+    block = enrichment_block(block)
+    if block.get("enabled") is not True:
+        return
+    inspect = inspect or (lambda path: Path(str(path)).lstat())
+    if group_lookup is None:
+        import grp
+        group_lookup = grp.getgrgid
+    try:
+        group = group_lookup(block["frame_group"])
+        if group.gr_name in {"root", "sudo", "adm", "docker", "users", "video", "render", "audio", "wheel", "systemd-journal"}:
+            raise ValueError
+        paths = [PurePosixPath(block[k]) for k in ("frame_root", "dependencies_file", "profile_file")]
+        for path in paths:
+            for entry in (path, *path.parents):
+                try:
+                    metadata = inspect(entry)
+                except FileNotFoundError:
+                    if entry == paths[1]:  # the source receipt is created by Den, its parent must already exist
+                        continue
+                    raise
+                if stat.S_ISLNK(metadata.st_mode):
+                    raise ValueError
+        for directory in (paths[0], paths[1].parent):
+            metadata = inspect(directory)
+            if (not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != 0
+                    or metadata.st_gid != block["frame_group"] or stat.S_IMODE(metadata.st_mode) != 0o2770):
+                raise ValueError
+        profile = inspect(paths[2])
+        parent = inspect(paths[2].parent)
+        if (not stat.S_ISREG(profile.st_mode) or profile.st_uid != 0 or profile.st_mode & 0o022
+                or not (profile.st_mode & 0o004 or (profile.st_gid == block["frame_group"] and profile.st_mode & 0o040))
+                or not stat.S_ISDIR(parent.st_mode) or parent.st_uid != 0 or parent.st_mode & 0o022):
+            raise ValueError
+        try:
+            source = inspect(paths[1])
+        except FileNotFoundError:
+            source = None
+        if source is not None and (not stat.S_ISREG(source.st_mode) or source.st_gid != block["frame_group"]
+                                   or stat.S_IMODE(source.st_mode) != 0o640):
+            raise ValueError
+        profile_reader = profile_reader or (lambda path: _private_json(Path(str(path))))
+        model_profile = profile_reader(paths[2])
+        if (not isinstance(model_profile, dict) or model_profile.get("schema") != "den.model-profile/v1"
+                or model_profile.get("id") not in ("vjepa-lm-qwen3-8b", "vjepa-lm-qwen3-4b")):
+            raise ValueError
+    except (OSError, KeyError, TypeError, ValueError):
+        raise Stop("the optional model target inputs or private group have not been safely provisioned") from None
+
+
+def target_optional_inputs(settings_file, staging):
+    """Called from install.sh before any detector build, configuration write or switch."""
+    settings = _private_json(settings_file)
+    if not isinstance(settings, dict):
+        raise Stop("the optional install settings are invalid")
+    block = settings.get("enrichment")
+    token_path = Path(staging) / rs.MODEL_TOKEN
+    if block is None or block == {"enabled": False}:
+        if token_path.exists():
+            raise Stop("an optional model token was supplied without enabled settings")
+    else:
+        target_enrichment(block)
+        token = model_worker_token(token_path)
+        for name in ("camera-token.txt", rs.HA_TOKEN):
+            other = Path(staging) / name
+            try:
+                if other.is_file() and token == other.read_text(encoding="utf-8-sig").strip():
+                    raise Stop("the optional model worker cannot reuse another service's credential")
+            except (OSError, ValueError):
+                raise Stop("the private credential separation could not be validated") from None
+    coordinator = settings.get("coordinator") or {}
+    if isinstance(coordinator, dict) and "walking" in coordinator:
+        if coordinator.get("preview") is not True or not (Path(staging) / PREVIEW_GEOMETRY).is_file():
+            raise Stop("walking settings require this install's preview geometry")
+        try:
+            import walking
+            walking._config(coordinator["walking"])
+        except (ImportError, TypeError, ValueError, KeyError):
+            raise Stop("the optional walking settings are invalid for this release") from None
+        walking_registration(coordinator["walking"], _private_json(Path(staging) / PREVIEW_GEOMETRY),
+                             Path(staging) / "register-receipt.json", coordinator.get("transform_id"))
 
 
 def registration(root, tools, camera_id=rl.CAMERA_ID):
@@ -202,9 +398,14 @@ def undo_lines(host):
 
 
 def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel=None, source="HEAD", camera_id=rl.CAMERA_ID,
-        ha_token_file=None, ha_url_file=None, preview_geometry=None, body_profile_file=None, desk_file=None):
+        ha_token_file=None, ha_url_file=None, preview_geometry=None, body_profile_file=None, desk_file=None,
+        enrichment_settings_file=None, model_worker_token_file=None, walking_config_file=None):
     site = rl.den_site()
     geometry = None if preview_geometry is None else preview_geometry_export(preview_geometry, site)
+    private = Path(token_file).parent
+    enrichment, model_token = enrichment_packet(enrichment_settings_file, model_worker_token_file,
+        other_tokens=(token_file, ha_token_file or private / HA_TOKEN_FILE))
+    walking = walking_packet(walking_config_file, geometry)
     mapping = desk_bytes = None
     if desk_file is not None:
         if geometry is None:
@@ -213,14 +414,16 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
     tools_dir = root / "tools"
     observe, track = sc.archive(tools_dir, "observe"), sc.archive(tools_dir, "track")
     model, receipt, transform_id = registration(root, perceive.Tools(observe, track), camera_id)
+    walking_registration(walking, geometry, receipt, transform_id)
     take = rl.den_take(observe)
     try:
         token = take.read_token(token_file)
     except take.Refused as exc:
         raise Stop(sc.token_refusal(exc, token_file, observe)) from None
     rs.camera_address(camera_url)
-    private = Path(token_file).parent
     ha_token, ha_url = ha_inputs(ha_token_file or private / HA_TOKEN_FILE, ha_url_file or private / HA_URL_FILE)
+    if model_token is not None and model_token in (token, ha_token):
+        raise Stop("the optional model worker cannot reuse another service's credential")
     figure = body_profile(body_profile_file or private / BODY_PROFILE_FILE, receipt)
     if mapping is not None and not ha_token:
         raise Stop("the desk's commands go through Home Assistant: save %s and %s first (README, \"The Qwen ask\")"
@@ -260,7 +463,13 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
             shutil.copyfile(seed[0], outbox / rs.LABELS_SEED)
         if geometry is not None:
             settings["coordinator"] = {"preview": True, "transform_id": transform_id, "hue_overlay": False}
+            if walking is not None:
+                settings["coordinator"]["walking"] = walking
             (outbox / PREVIEW_GEOMETRY).write_bytes(geometry)
+        if enrichment is not None:
+            settings["enrichment"] = enrichment
+        if model_token is not None:
+            (outbox / rs.MODEL_TOKEN).write_text(model_token + "\n", encoding="utf-8", newline="\n")
         if desk_bytes is not None:
             settings["desk"] = True
             (outbox / rs.DESK_FILE).write_bytes(desk_bytes)
@@ -274,6 +483,7 @@ def run(*, root, host, camera_url, token_file, transport, models_dir=None, wheel
                                                                 "register-receipt.json", "settings.json")),
                  *([outbox / rs.HA_TOKEN] if ha_token else []), *([outbox / rs.LABELS_SEED] if seed else []),
                  *([outbox / PREVIEW_GEOMETRY] if geometry is not None else []),
+                 *([outbox / rs.MODEL_TOKEN] if model_token is not None else []),
                  *([outbox / rs.DESK_FILE] if desk_bytes is not None else [])]
         if transport.copy(files, REMOTE):
             raise Stop("scp to %s stopped part way" % host)
@@ -300,6 +510,9 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_
     parser.add_argument("--host", default=HOST, help="the ssh host for LA (default %(default)s)")
     parser.add_argument("--camera", help="the camera's URL as LA reaches it (default: den-take's)")
     parser.add_argument("--preview-geometry", type=Path, help="private registered Den geometry export from Home")
+    parser.add_argument("--enrichment-settings", type=Path, help="private optional model input settings with target Linux paths")
+    parser.add_argument("--model-worker-token", type=Path, help="the optional model worker's own private 64-hex token")
+    parser.add_argument("--walking-config", type=Path, help="optional off/shadow/virtual walking configuration; needs --preview-geometry")
     parser.add_argument("--desk", type=Path, help="private desk.json (den-c12-desk-1): one fixture's commands to its "
                                                   "board, for the desk stage; needs --preview-geometry")
     args = parser.parse_args(argv)
@@ -313,6 +526,12 @@ def main(argv=None, *, root=None, transport=None, console=sc.has_console, check_
         take = rl.den_take(sc.archive(root / "tools", "observe"))
         if args.preview_geometry is not None:
             kw["preview_geometry"] = args.preview_geometry
+        if args.enrichment_settings is not None:
+            kw["enrichment_settings_file"] = args.enrichment_settings
+        if args.model_worker_token is not None:
+            kw["model_worker_token_file"] = args.model_worker_token
+        if args.walking_config is not None:
+            kw["walking_config_file"] = args.walking_config
         if args.desk is not None:
             kw["desk_file"] = args.desk
         code = run(root=root, host=args.host, camera_url=args.camera or take.DEFAULT_CAMERA,

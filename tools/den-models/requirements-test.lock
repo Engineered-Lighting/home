@@ -1,0 +1,5 @@
+# Synthetic array/session fixtures only; no neural inference or GPU package.
+# PyPI numpy/2.3.5 JSON, CPython3.12 Linux x86_64 and Windows AMD64 wheels.
+numpy==2.3.5 \
+    --hash=sha256:0d8163f43acde9a73c2a33605353a4f1bc4798745a8b1d73183b28e5b435ae28 \
+    --hash=sha256:86945f2ee6d10cdfd67bcb4069c1662dd711f7e2a4343db5cecec06b87cf31aa

@@ -1209,6 +1209,7 @@ button.hg-no-press:active {
 .apt-home-stage .apt-room-label { transition: opacity .3s cubic-bezier(.2,.7,.2,1), visibility 0s; }
 .apt-home-stage:has(.home-den-pipeline[data-on="1"]) .apt-room-label { opacity: 0; visibility: hidden; transition: opacity .3s cubic-bezier(.2,.7,.2,1), visibility 0s .3s; }
 .home-den-pipeline-pop { position: absolute; left: 0; top: 0; width: 264px; pointer-events: auto; padding: 10px 12px; border: 1px solid rgba(255,255,255,.18);
+  box-sizing: border-box; max-width: calc(100% - 20px); max-height: min(50vh, 420px); overflow-y: auto; overscroll-behavior: contain;
   border-radius: 4px; background: rgba(10,10,10,.96); color: var(--den-pl-fg-1); font: 400 12px/1.4 'Geist', ui-sans-serif, system-ui, sans-serif; }
 .home-den-pipeline-pop[hidden] { display: none; }
 .home-den-pipeline-pop-title { margin: 0 0 6px; font-weight: 560; color: var(--den-pl-fg); }

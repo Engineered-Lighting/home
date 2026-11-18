@@ -16,6 +16,7 @@ import Core from '../app/src/home-equipment-registration.js';
 import { initRegistration, readActiveBinding } from '../web-gateway/equipment-registration.mjs';
 import { authoredDocument, installPack } from './fixtures/apartment-home-shell-fixtures.mjs';
 import { measuredBodyEvent } from './fixtures/den-measured-body.mjs';
+import { modelPipelineEvidence } from './fixtures/den-model-pipeline.mjs';
 import { reportTrace } from './den-latency-report.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -48,7 +49,7 @@ let previewPort = null;
 const relaySockets = new Set();
 const fake = { streams: new Set(), bodies: new Set(), sockets: new Set(), actions: [], ws: [], labels: null,
   bodyAvailable: true, bodyStreaming: true, bodySeq: 0, haOffline: false, inference: null, subject: null,
-  eventIntervalMs: 200, bodyLeaseS: 1,
+  eventIntervalMs: 200, bodyLeaseS: 1, modelPipeline: false, freezePipeline: false, pipelineEvidence: null,
   control: { on: false, stopped: false, stop_counter: 0 }, epoch: 'fixture-epoch', seq: 0 };
 
 function json(res, value, status = 200) {
@@ -61,16 +62,20 @@ function labelDocument() {
       box: { centre_m: [1.4, 1.5, 0.4], size_m: [0.8, 0.6, 0.8], yaw_deg: 0 },
       on_wall: false, made_by: 'owner', status: 'confirmed', updated_at: null }] };
 }
+function fixtureIds() {
+  return scene.equipment.filter(item => item.kind === 'mount' && item.position_m != null).map(mount =>
+    scene.equipment.find(item => item.kind === 'fixture' && item.mounted_at_ref === mount.id)?.id ?? `${mount.id}-virtual-fixture`);
+}
 function spotEvent() {
   const now = performance.now() / 1000;
   const on = fake.control.on && !fake.control.stopped;
   const row = on ? golden.snapshot.fixtures.F3 : golden.stopped_snapshot.fixtures.F3;
-  const ids = scene.equipment.filter(item => item.kind === 'mount' && item.position_m != null).map(mount =>
-    scene.equipment.find(item => item.kind === 'fixture' && item.mounted_at_ref === mount.id)?.id ?? `${mount.id}-virtual-fixture`);
+  const ids = fixtureIds();
   return { ...golden.snapshot, site: 'victoria', epoch: fake.epoch, seq: ++fake.seq,
     sampled_mono: now, valid_until_mono: now + 1.5, ...fake.control, subject: fake.subject ?? golden.snapshot.subject ?? null,
     binding: { transform_id: 'authored-transform', scan_revision: den.revision,
       equipment_revision: scene.revision, equipment_digest: scene.digest },
+    ...(fake.modelPipeline ? { path_lighting: fake.pipelineEvidence?.path ?? null } : {}),
     fixtures: Object.fromEntries(ids.map(fixture => [fixture, { ...row,
       last_move_trace_id: `${fake.epoch}/${fixture}/trace-1` }])) };
 }
@@ -100,6 +105,17 @@ async function upstreamRequest(req, res) {
   }
   if (pathname === denBase + '/stream') return openEvents(res, fake.streams, out => {
     const now = Date.now() / 1000;
+    const mono = performance.now() / 1000;
+    if (fake.modelPipeline && (!fake.freezePipeline || !fake.pipelineEvidence)) {
+      fake.pipelineEvidence = modelPipelineEvidence({ nowMono: mono, scanRevision: den.revision,
+        fixtureId: fixtureIds()[0], frameId: fake.seq + 1 });
+      // Exercise evidence produced immediately before writing, still inside the clock interval at receipt.
+      const forecast = fake.pipelineEvidence.track.motion_forecast;
+      forecast.qualified_at_mono = mono - .001;
+      forecast.remaining_freshness_s = forecast.valid_until_mono - forecast.qualified_at_mono;
+      fake.pipelineEvidence.path.evaluated_mono = mono - .001;
+    }
+    const evidence = fake.modelPipeline ? fake.pipelineEvidence : null;
     // With fake.inference, the fields the live caption reads (docs/design/den-inference/SPEC.md): Qwen's answer and
     // its facts, the seated flag and an identity. Without it, exactly what den-live sends today.
     // ageS keeps the answer that many seconds old in every event; without it, activity.at is fixed and the answer ages.
@@ -107,14 +123,32 @@ async function upstreamRequest(req, res) {
       at: fake.inference.ageS != null ? now - fake.inference.ageS : fake.inference.activity.at } };
     const people = { schema: 'den-live-people-1', home: 'den', seq: ++fake.seq, transform_id: 'authored-transform',
       content_revision: den.revision, capture_ts: now, emitted_ts: now, mode: 'rgb', camera: { status: 'ok' },
+      ...(evidence ? { service_run_id: evidence.frame.service_run_id, camera_epoch: evidence.frame.camera_epoch,
+        frame: evidence.frame } : {}),
       ...(inference ? { health: { qwen: { state: 'asking', why: null, last_reply_at: inference.activity?.at ?? null, reply_s_median: 1.6, asks_per_min: 28 },
-        timings_ms: { fetch: { n: 30, p50: 182, p95: 260 }, detector: { n: 30, p50: 41, p95: 63 }, lift: { n: 30, p50: 6, p95: 9 }, track: { n: 30, p50: 2, p95: 4 } },
+        timings_ms: { fetch: { n: 30, p50: 182, p95: 260 }, detector_model: { n: 30, p50: 41, p95: 63 },
+          detector_turnaround: { n: 30, p50: 57, p95: 82 }, lift: { n: 30, p50: 6, p95: 9 }, track: { n: 30, p50: 2, p95: 4 } },
         fps_in: 2.9, dropped_per_min: 1, lag_s_median: .42, transit_s_median: .15, occupancy: { effective: 'on', why: 'Frigate sees a person' } } } : {}),
       tracks: [{ track_id: 'authored-person', state: 'confirmed', xy_m: [1.2, 1.5], sigma_m: .1, age_s: 0,
-        camera_epoch: 1, association_revision: 1, ...(inference ? { seated: true, identity: inference.identity, activity: inference.activity } : {}) }] };
+        camera_epoch: 1, association_revision: 1, ...(evidence ? evidence.track : {}),
+        ...(inference ? { seated: true, identity: inference.identity, activity: inference.activity } : {}) }] };
+    if (evidence) {
+      const observed = evidence.frame.capture_mono;
+      people.health = { ...(people.health ?? {}), model_stages: { schema: 'den-model-stages-1', clock: 'producer_monotonic',
+        sampled_mono: mono, stages: [
+          { id: 'detector', role: 'detection', model_id: 'Ultralytics/YOLO26s', model_revision: 'authored-revision',
+            state: 'running', configured: true, provisioned: true, loaded: true, device: 'cuda:0',
+            queued: 0, running: 1, reason: 'ready', admission_scope: 'production', observed_mono: observed, valid_until_mono: observed + 1.5 },
+          { id: 'motion-intent', role: 'motion_intent', model_id: 'facebook/V-JEPA-LM-8B', model_revision: 'evaluation-revision',
+            state: 'provisioned', configured: true, provisioned: true, loaded: false, device: null,
+            queued: 0, running: 0, reason: 'evaluating', admission_scope: 'bounded_trial', observed_mono: observed, valid_until_mono: observed + 1.5 },
+        ] } };
+    }
     out.write('event: people\ndata: ' + JSON.stringify(people) + '\n\n');
     if (fake.spotStreaming !== false) out.write('event: spot_snapshot\ndata: ' + JSON.stringify(spotEvent()) + '\n\n');
-  }, {}, 'event: spot_clock\ndata: ' + JSON.stringify({ epoch: fake.epoch, server_mono: performance.now() / 1000 }) + '\n\n');
+  }, {}, (fake.modelPipeline ? 'event: source_clock\ndata: ' + JSON.stringify({ schema: 'den-source-clock-1',
+    clock_domain: 'producer_monotonic', server_mono: performance.now() / 1000 }) + '\n\n' : '')
+    + 'event: spot_clock\ndata: ' + JSON.stringify({ epoch: fake.epoch, server_mono: performance.now() / 1000 }) + '\n\n');
   if (pathname === denBase + '/body-v2' && fake.bodyAvailable) return openEvents(res, fake.bodies, out => {
     if (fake.bodyStreaming) emitBody(out);
   }, { 'X-Home-Den-Body-Schema': 'den-live-body-2' },
@@ -355,6 +389,12 @@ inPart(1, 'opt-in desktop and phone timing exports join exact body and spot draw
         const report = reportTrace(exported);
         assert.equal(report.visible_paint_observed, false);
         assert.equal(exported.schema, 'home-den-latency-1');
+        const capture = report.kinds.body.capture_estimate;
+        assert.equal(capture.qualified, false);
+        assert.ok(capture.clock_mapping.samples > 0, 'completed body draws include their bootstrap clock interval');
+        assert.equal(capture.clock_mapping.invalid_samples, 0);
+        assert.ok(capture.clock_mapping.setup_round_trip_bound_ms.p50 >= 0);
+        assert.ok(capture.clock_mapping.uncertainty_at_receive_ms.p50 >= 5);
       } catch (error) {
         const diagnostics = await Promise.race([page.evaluate(() => {
           const trace = window.HomeDenLatency?.snapshot(), den = window.HomeDenLiveView?.status();
@@ -814,6 +854,7 @@ inPart(1, 'the pipeline runs through the room: camera to perception to Qwen to t
   try {
     for (const mobile of [false, true]) {
       const now = Date.now() / 1000;
+      fake.modelPipeline = true; fake.freezePipeline = false; fake.pipelineEvidence = null;
       fake.inference = { ageS: 1, identity: { kind: 'household', label: 'Sam', score: .93, at: now - 4 },
         activity: { word: 'reading', close_up: true, at: now - 1, facts: { held_object: 'book' }, basis: ['book_in_hands'] } };
       fake.control.on = true; fake.control.stopped = false;
@@ -845,6 +886,53 @@ inPart(1, 'the pipeline runs through the room: camera to perception to Qwen to t
         assert.equal(shown.cards.qwen.value, 'Reading');
         assert.match(shown.cards.qwen.sub, /^\d+ s left$/);
         assert.match(shown.cards.coordinator.sub, /for Sam$/);
+        await page.waitForFunction(() => {
+          const forecast = window.HomeDenLiveView?.status()?.forecast;
+          return forecast?.forecasts.length === 1 && forecast.beams.length === 1;
+        }, null, { timeout: 10000 });
+        await page.locator('.home-den-pipeline-card[data-node="perception"]').click();
+        const pop = page.locator('.home-den-pipeline-pop');
+        await page.waitForFunction(() => document.querySelector('.home-den-pipeline-pop')?.textContent.includes('facebook/V-JEPA-LM-8B'));
+        const details = await pop.innerText();
+        assert.match(details, /Ultralytics\/YOLO26s/);
+        assert.match(details, /authored-revision/);
+        assert.match(details, /cuda:0/);
+        assert.match(details, /Production admitted/);
+        assert.match(details, /Bounded trial \/ evaluation/);
+        assert.match(details, /Not reported by model stage/);
+        assert.match(details, /Detector model\s+41 ms p50 · 63 ms p95/);
+        assert.match(details, /Detector round trip\s+57 ms p50 · 82 ms p95/);
+        const layout = await pop.evaluate(el => {
+          const r = el.getBoundingClientRect(), host = el.closest('.home-den-pipeline').getBoundingClientRect();
+          return { rightFits: r.right <= host.right + 1, bottomFits: r.bottom <= host.bottom + 1,
+            noHorizontalOverflow: el.scrollWidth <= el.clientWidth + 1, scrolls: el.scrollHeight > el.clientHeight };
+        });
+        assert.deepEqual(layout, { rightFits: true, bottomFits: true, noHorizontalOverflow: true, scrolls: true });
+        await page.keyboard.press('Escape');
+        // The optional adviser is unloaded, while the independent geometric path remains visible.
+        assert.equal((await page.evaluate(() => window.HomeDenLiveView.status().forecast.beams.length)), 1);
+        fake.freezePipeline = true;
+        await page.waitForFunction(() => {
+          const f = window.HomeDenLiveView?.status()?.forecast;
+          return f?.forecasts.length === 0 && f.beams.length === 0;
+        }, null, { timeout: 5000 });
+        assert.equal((await cards()).cards.camera.state, 'live', 'fresh people heartbeats cannot renew expired evidence');
+        fake.freezePipeline = false;
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.forecast?.beams.length === 1);
+        fake.freezePipeline = true;
+        const heldId = fake.pipelineEvidence.path.virtual_beams[0].fixture_id;
+        await page.evaluate(id => window.__APT_ENGINE.overlay.holdVirtualFixtureForHand(id), heldId);
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.forecast?.beams.length === 0);
+        await page.evaluate(id => window.__APT_ENGINE.overlay.releaseVirtualFixtureHand(id), heldId);
+        await delay(250);
+        assert.equal(await page.evaluate(() => window.HomeDenLiveView.status().forecast.beams.length), 0,
+          'releasing a hold cannot replay its previous selected source');
+        fake.freezePipeline = false;
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.forecast?.beams.length === 1);
+        fake.control.stopped = true;
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.forecast?.beams.length === 0);
+        fake.control.stopped = false;
+        await page.waitForFunction(() => window.HomeDenLiveView?.status()?.forecast?.beams.length === 1);
         await page.waitForFunction(() => { const w = window.HomeDenLiveView?.status()?.pipeline?.wires ?? []; return w.includes('room') && w.includes('light'); }, null, { timeout: 10000 });
         const shots = process.env.HOME_DEN_CAPTION_SHOTS;
         if (shots) await page.screenshot({ path: path.join(shots, `pipeline-${mobile ? 'phone' : 'desktop'}.png`) });
@@ -880,5 +968,6 @@ inPart(1, 'the pipeline runs through the room: camera to perception to Qwen to t
         }
       } finally { await context.close(); }
     }
-  } finally { fake.inference = null; fake.subject = null; Object.assign(fake.control, initial); }
+  } finally { fake.inference = null; fake.subject = null; fake.modelPipeline = false;
+    fake.freezePipeline = false; fake.pipelineEvidence = null; Object.assign(fake.control, initial); }
 });

@@ -260,6 +260,37 @@ async def main_async() -> None:
     mod._run_compose = fake_run_compose
     mod.write_audit = fake_audit
 
+    print("\nvoice_retirement_test")
+    check("voice is disabled without explicit opt-in", mod.VOICE_ENABLED is False)
+    calls_before = len(calls)
+    for service in sorted(mod.VOICE_SERVICES):
+        await expect_http("retired service cannot restart: " + service, 409,
+                          mod.post_service_restart(Req(token=mod.STACK_TOKEN), service))
+    check("retired restart never reaches compose", len(calls) == calls_before)
+    voice_containers = {s["container"] for s in mod.SERVICES if s["name"] in mod.VOICE_SERVICES}
+    probed = []
+    async def fake_inspect(container):
+        return ("missing", "none") if container in voice_containers else ("running", "healthy")
+    async def fake_http(url):
+        probed.append(url)
+        return "ok", None
+    async def fake_tcp(host, port):
+        probed.append(port)
+        return "fail", None
+    async def fake_model():
+        return mod.EXPECTED_VLLM_MODEL
+    mod._docker_inspect, mod._probe_http, mod._probe_tcp = fake_inspect, fake_http, fake_tcp
+    mod._vllm_model_loaded = fake_model
+    ready = await mod.aggregate_status()
+    check("Qwen and core healthy with voice absent is ready", ready["overall"] == "ready", ready)
+    check("voice absence does not trigger voice probes", 10300 not in probed and 10301 not in probed and not any(":888" in str(x) for x in probed), probed)
+    check("disabled voice reported separately", ready["capabilities"] == {"voice": False} and all(s["probe"] == "disabled" for s in ready["services"] if s["name"] in mod.VOICE_SERVICES))
+    mod.VOICE_ENABLED = True
+    check("explicit opt-in restores required voice health", (await mod.aggregate_status())["overall"] == "partial")
+    await mod.post_service_restart(Req(token=mod.STACK_TOKEN), "kokoro")
+    check("explicit opt-in permits voice restart", calls[-1][0] == ["restart", "kokoro-tts"])
+    mod.VOICE_ENABLED = False
+
     logs = await mod.get_service_logs(Req(token=mod.STACK_TOKEN), "kokoro", n=2)
     check("service logs maps kokoro to compose kokoro-tts",
           calls[-1][0] == ["logs", "--tail", "2", "kokoro-tts"], calls[-1])

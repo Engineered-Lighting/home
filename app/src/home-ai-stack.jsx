@@ -28,8 +28,8 @@ const _RESTARTABLE = new Set(["ready", "warming"]);
 const _STOPPABLE = new Set(["ready", "warming"]);
 const AI_STACK_SERVICE_RESTARTS = Object.freeze([
   { verb: "restart_vllm", service: "vllm", label: "restart vllm" },
-  { verb: "restart_parakeet", service: "wyoming-parakeet", label: "restart parakeet" },
-  { verb: "restart_kokoro", service: "kokoro", label: "restart kokoro" },
+  { verb: "restart_parakeet", service: "wyoming-parakeet", label: "restart parakeet", voice: true },
+  { verb: "restart_kokoro", service: "kokoro", label: "restart kokoro", voice: true },
   { verb: "restart_vision_sidecar", service: "vision-sidecar", label: "restart vision" },
   { verb: "restart_metrics_sidecar", service: "metrics-sidecar", label: "restart metrics" },
 ]);
@@ -72,6 +72,7 @@ function _overallTone(overall) {
 }
 
 function _serviceTone(svc) {
+  if (svc.enabled === false) return "idle";
   if (svc.container === "exited" || svc.container === "missing") return "crit";
   if (svc.container === "starting") return "warn";
   if (svc.probe === "fail") return "warn";
@@ -81,6 +82,7 @@ function _serviceTone(svc) {
 }
 
 function _serviceState(svc) {
+  if (svc.enabled === false) return svc.container === "running" ? "disabled · still running" : "disabled";
   if (svc.container === "missing") return "missing";
   if (svc.container === "exited") return "exited";
   if (svc.container === "starting") return "starting";
@@ -101,7 +103,8 @@ function _fmtElapsed(startedAtIso) {
 
 function _aiStackHasReadySignals(aiStackState = {}) {
   const services = Array.isArray(aiStackState.services) ? aiStackState.services : [];
-  const requiredServicesUp = services.length > 0 && services.every((svc) =>
+  const required = services.filter((svc) => svc?.enabled !== false);
+  const requiredServicesUp = required.length > 0 && required.every((svc) =>
     svc &&
     svc.container !== "missing" &&
     svc.container !== "exited" &&
@@ -592,7 +595,7 @@ function AiStackCard({
             marginBottom: 6,
           }}>service restarts</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {AI_STACK_SERVICE_RESTARTS.map((spec) => (
+            {AI_STACK_SERVICE_RESTARTS.filter((spec) => !spec.voice || window.homeVoiceEnabled?.() === true).map((spec) => (
               <_ActionButton
                 key={spec.verb}
                 onClick={() => confirmOrDispatch(spec.verb)}

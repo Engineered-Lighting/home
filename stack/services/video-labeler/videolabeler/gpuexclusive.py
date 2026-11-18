@@ -18,7 +18,9 @@ of GB that may be pinned by an idle model, so this module:
   3. RESTORES to the recorded baseline only: models that were pinned
      (keep_alive forever) are re-pinned; transient models are left for
      on-demand reload; only containers WE stopped are started. Nothing
-     the user had down is ever resurrected.
+     the user had down is ever resurrected. Retired voice containers are
+     skipped even in older active ledgers unless VOICE_ENABLED=1; the
+     skipped result remains in that ledger's units_json history.
 
 Transports (Ollama HTTP, docker.sock, NVML free-memory) are injected so
 the whole state machine is unit-testable on a GPU-less box.
@@ -27,6 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
 import time
 import urllib.error
@@ -45,6 +48,9 @@ PIN_HORIZON_DAYS = 3650
 EVICT_POLL_S = 3.0
 EVICT_TIMEOUT_S = 180.0
 SUPERVISOR_PERIOD_S = 30.0
+RETIRED_VOICE_CONTAINERS = frozenset({
+    "hav-wyoming-parakeet", "hav-kokoro-tts", "hav-chatterbox-tts", "hav-wyoming-kokoro",
+})
 
 
 class InsufficientVRAM(RuntimeError):
@@ -192,6 +198,7 @@ class GpuExclusive:
     protected_containers: tuple = ("hav-video-labeler", "hav-spatial-tracker")
     sleep: Callable[[float], None] = time.sleep
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
+    voice_enabled: Callable[[], bool] = lambda: os.environ.get("VOICE_ENABLED", "0") == "1"
 
     def survey(self) -> dict:
         return {
@@ -275,6 +282,13 @@ class GpuExclusive:
                     log.info("gpu-exclusive %d: re-pinning %s", ledger_id, u["name"])
                     self.ollama.repin(u["name"])
                 elif u["kind"] == "container":
+                    if (u["name"].lstrip("/") in RETIRED_VOICE_CONTAINERS
+                            and not self.voice_enabled()):
+                        # A pre-retirement ledger is historical evidence, not
+                        # authority to revive a service disabled by the owner.
+                        u["restore_result"] = "skipped_retired"
+                        log.info("gpu-exclusive %d: skipped retired %s", ledger_id, u["name"])
+                        continue
                     log.info("gpu-exclusive %d: starting %s", ledger_id, u["name"])
                     self.docker.start(u["name"])
                 # transient ollama models reload on demand: nothing to do
@@ -284,8 +298,9 @@ class GpuExclusive:
         with db.open_db(self.db_path) as conn:
             with db.tx(conn):
                 conn.execute(
-                    "UPDATE exclusive_state SET state = 'restored',"
-                    " restored_at = ? WHERE id = ?", (_iso_now(), ledger_id))
+                    "UPDATE exclusive_state SET state = 'restored', units_json = ?,"
+                    " restored_at = ? WHERE id = ?",
+                    (json.dumps(units), _iso_now(), ledger_id))
         return True
 
     # -- deadman ----------------------------------------------------------------

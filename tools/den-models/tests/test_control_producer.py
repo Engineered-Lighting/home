@@ -242,6 +242,51 @@ class ProducerTests(unittest.TestCase):
                     self.f.reader().read(now)
                 self.assertNotIsInstance(caught.exception, DependencyFlap)
 
+    def test_dependency_lapse_carries_only_the_verified_binding_free_state(self):
+        self.f.docs[self.f.config["dependencies_file"]]["valid_until"] = 100.5
+        published = self.f.publish()  # A bound person at 100; the source then ages out.
+        self.assertEqual(published["dependencies"], [fixtures.dependencies()])
+        with self.assertRaises(DependencyFlap) as caught:
+            self.f.reader().read(100.6)
+        state = caught.exception.state
+        self.assertEqual(state["dependencies"], [])  # The lapsed binding is never handed on.
+        self.assertFalse(state["qwen_busy"])
+        self.assertEqual(state["unallocated_reserve_bytes"], 0)
+
+    def test_operator_warmup_rides_out_a_real_lapse_but_not_ops_backoff(self):
+        for outcome in ("ready", "ops_backoff"):
+            with self.subTest(outcome=outcome):
+                self.f = Fixture(self.temp.name)
+                self.f.docs[self.f.config["dependencies_file"]]["valid_until"] = 100.5
+                runtime_fixture = fixtures.RuntimeTests()
+                runtime_fixture.setUp()
+                runtime = runtime_fixture.runtime
+                runtime.control, runtime.clock = self.f.reader(), self.f.clock
+                self.f.clock.now = 100.6  # The person-bound source aged out; Qwen evidence lasts to 101.
+                self.assertEqual(self.f.publish()["blocked_reasons"], ["dependencies_unavailable"])
+                runtime.warmup()
+                runtime.tick()
+                self.assertEqual(runtime_fixture.lease.held, "operator-warmup")
+                worker = runtime_fixture.workers[0]
+                runtime.tick()
+                self.assertFalse(worker.terminate_requested)
+                self.assertTrue(runtime.health()["startup_in_progress"])
+                # A live clip is still refused while the binding is lapsed.
+                if outcome == "ready":
+                    worker.complete("operator-warmup", kind="ready")
+                    runtime.tick()
+                    self.assertTrue(runtime.resident)
+                    self.assertIsNone(runtime_fixture.lease.held)
+                    runtime.submit(fixtures.request(cutoff=100.6))
+                    runtime.tick()
+                    self.assertEqual(runtime.get("job-1")["reason"], "control_state_unavailable")
+                else:
+                    self.f.docs[self.f.config["ops_status_file"]].update(level=1, step="cadence_reduced")
+                    self.f.publish()
+                    runtime.tick()
+                    self.assertTrue(worker.terminate_requested)
+                    self.assertEqual(runtime_fixture.lease.held, "operator-warmup")
+
     def test_real_den_transform_passes_and_lineage_failure_names_its_code(self):
         deps = self.f.docs[self.f.config["dependencies_file"]]["dependencies"]
         deps[0] = fixtures.dependencies("den-oak@2026-11-13.1")

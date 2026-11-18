@@ -3,7 +3,7 @@
 Frames are immutable P6 RGB PPM blobs below the operator's frame_root. A
 request carries exactly 32 sample slots, which may explicitly repeat an older
 source frame. No path, prompt, model name, or URL is supplied to the model by
-an HTTP caller.
+an HTTP caller. The request names its sampling rule; only SAMPLING is admitted.
 """
 from dataclasses import dataclass, asdict
 import hashlib
@@ -28,6 +28,13 @@ DEPENDENCIES = ("camera_id", "service_run_id", "camera_epoch", "source_generatio
                 "transform_id", "scan_revision", "calibration_revision")
 FRAME_REF_KEYS = ("service_run_id", "camera_epoch", "frame_id", "camera_session", "mode", "rgb", "right", "depth",
                   "depth_calibration_sha256", "transform_id", "scan_revision", "capture_mono", "arrival_mono", "capture_ts")
+# The one admitted sampling rule: 32 uniform causal slot centres, each holding
+# the newest frame captured at or before it for at most MAX_HOLD_SECONDS, with
+# repeats marked and true capture times kept. Den sends this identifier in every
+# request, the profile names it (so the admission receipt, which pins the
+# profile digest, names it too) and every hint echoes it. v1 (0.4 s) is refused.
+SAMPLING = "causal_slot_center_sample_hold/v2;max_hold_s=0.5"
+MAX_HOLD_SECONDS = .5
 
 
 class ContractError(ValueError):
@@ -168,9 +175,11 @@ def validate_lineage(frame, dependencies, source_size, cutoff):
 def validate_request(value, *, profile, now):
     keys(value, ("schema", "request_id", "clip_id", "profile_digest", "dependencies", "frames",
                  "roi_xyxy", "source_size", "cutoff_at", "expires_at", "duration_seconds",
-                 "mode"), "invalid_request_keys")
+                 "mode", "sampling"), "invalid_request_keys")
     if value["schema"] != "den.intent-request/v1" or value["profile_digest"] != profile_digest(profile):
         raise ContractError("profile_or_schema_mismatch")
+    if value["sampling"] != SAMPLING or (profile.get("inputs") or {}).get("sampling") != SAMPLING:
+        raise ContractError("unsupported_sampling")
     if not ident(value["request_id"]) or not ident(value["clip_id"]):
         raise ContractError("invalid_request_identity")
     keys(value["dependencies"], DEPENDENCIES, "invalid_dependencies")
@@ -211,10 +220,11 @@ def validate_request(value, *, profile, now):
         stamp, slot = frame["captured_at"], frame["sample_at"]
         expected_slot = cutoff - duration + (i + .5) * duration / 32
         # Slot centers are causal: sample-and-hold chooses the newest frame
-        # available at each slot, never a future nearest-neighbor frame.
+        # available at each slot, never a future nearest-neighbor frame, and
+        # holds it at most MAX_HOLD_SECONDS (so no stamp precedes the window by more).
         if (not finite(stamp) or not finite(slot) or abs(slot - expected_slot) > .00001
-                or not cutoff - duration - .25 <= stamp <= slot
-                or stamp < previous_time or slot <= previous_slot or slot - stamp > .4):
+                or not cutoff - duration - MAX_HOLD_SECONDS <= stamp <= slot
+                or stamp < previous_time or slot <= previous_slot or slot - stamp > MAX_HOLD_SECONDS):
             raise ContractError("noncausal_or_stale_frame")
         source = validate_lineage(frame, dep, size, cutoff)
         if camera_session is not None and camera_session != source["camera_session"]:
@@ -303,5 +313,5 @@ def make_hint(request, profile, receipt_digest, output, now):
         {"frames": request["frames"], "source_size": request["source_size"], "roi_xyxy": roi,
          "source_to_model": [[scale, 0, -roi[0] * scale], [0, scale, -roi[1] * scale], [0, 0, 1]],
          "cutoff_at": request["cutoff_at"], "duration_seconds": request["duration_seconds"],
-         "sampling": "causal_slot_center_sample_hold/v1", "additional_center_crop": False},
+         "sampling": request["sampling"], "additional_center_crop": False},
         now, request["expires_at"], intent, scores, text)

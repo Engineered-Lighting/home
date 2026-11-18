@@ -24,8 +24,8 @@ class VjepaBackend:
         self.receipt_digest = None
         self.module_cache = None
 
-    def native_gate(self, *, cold):
-        from .resources import ControlState, HostProbe, NvidiaProbe
+    def native_gate(self, *, cold, warmup=False):
+        from .resources import ControlState, DependencyFlap, HostProbe, NvidiaProbe
         caps = self.profile["execution"]
         try:
             state = ControlState(self.config["control_state_file"],
@@ -33,6 +33,13 @@ class VjepaBackend:
                                  queue_receipt_file=self.config["queue_receipt_file"], queue_receipt_gid=self.config["queue_receipt_gid"],
                                  expected_qwen_config_sha256=self.config["qwen_observer_config_sha256"],
                                  expected_qwen_policy_sha256=self.config["qwen_binding_policy_sha256"]).read(time.monotonic())
+        except DependencyFlap as flap:
+            # Dependencies gate live clips only. Operator warmup needs no Den
+            # binding, so a pure lapse (every other check held) gates it on
+            # that verified state; a live clip is still refused.
+            if not warmup or flap.state is None:
+                raise ContractError("control_state_unavailable_before_native_work") from None
+            state = flap.state
         except ContractError:
             raise ContractError("control_state_unavailable_before_native_work") from None
         if state["qwen_busy"]:
@@ -45,7 +52,7 @@ class VjepaBackend:
         if HostProbe().available_bytes() < caps["host_minimum_available_bytes"] + host_incremental:
             raise ContractError("host_memory_headroom_changed_before_native_work")
 
-    def load(self):
+    def load(self, *, warmup=False):
         if self.model is not None:
             return
         # All checks precede execution of the snapshot's reviewed Python code.
@@ -57,7 +64,7 @@ class VjepaBackend:
         caps = self.profile["execution"]
         # Recheck immediately before load; the parent gate is not a memory
         # partition and cannot make another process's allocation atomic.
-        self.native_gate(cold=True)
+        self.native_gate(cold=True, warmup=warmup)
         module_cache = tempfile.mkdtemp(prefix="reviewed-modules-", dir=self.config["cache_root"])
         self.module_cache = Path(module_cache).resolve()
         os.environ.update(HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1", HF_HUB_DISABLE_TELEMETRY="1",
@@ -143,12 +150,12 @@ class VjepaBackend:
         return result
 
     def warmup(self):
-        self.load()
+        self.load(warmup=True)
         # Exercise the actual tuple/attention/RoPE path before live deadlines.
         # Synthetic output is discarded and never becomes an IntentHint.
         frames = self.torch.zeros((3, 32, 384, 384), dtype=self.torch.float32)
         times = self.torch.arange(32, dtype=self.torch.float32) * (4 / 32)
-        self.native_gate(cold=False)
+        self.native_gate(cold=False, warmup=True)
         with self.torch.inference_mode():
             self.model.choose((frames, times), QUESTION, list(CHOICES))
 

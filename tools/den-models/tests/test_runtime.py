@@ -14,8 +14,8 @@ from unittest.mock import Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from den_models.artifacts import adapter_bundle_digest, check_receipt, load_profile, read_runtime_manifest, verify_snapshot
 from den_models.backend import VjepaBackend
-from den_models.contracts import (CHOICES, ContractError, canonical, load_rgb_frames, make_hint,
-                                 profile_digest, store_rgb_blob, strict_json, validate_request)
+from den_models.contracts import (CHOICES, MAX_HOLD_SECONDS, SAMPLING, ContractError, canonical, load_rgb_frames,
+                                 make_hint, profile_digest, store_rgb_blob, strict_json, validate_request)
 from den_models.resources import DependencyFlap, FileExecutionLease
 from den_models.runtime import CLIP_WINDOW_SECONDS, LIVE_JOB_CEILING_SECONDS, Runtime
 
@@ -52,7 +52,7 @@ def request(identity="job-1", cutoff=100, expiry=None, duration=4, transform="tr
             "profile_digest": profile_digest(PROFILE), "dependencies": dependencies(transform), "frames": frames,
             "roi_xyxy": [0, 0, 360, 360], "source_size": [640, 360], "cutoff_at": cutoff,
             "expires_at": cutoff + 2 if expiry is None else expiry, "duration_seconds": duration,
-            "mode": "choose"}
+            "mode": "choose", "sampling": SAMPLING}
 
 
 class Clock:
@@ -66,8 +66,8 @@ class Control:
         self.state = {"qwen_busy": False, "unallocated_reserve_bytes": 0, "dependencies": [dependencies()]}
         self.lapsed = False
     def read(self, now):
-        if self.lapsed:  # Only the Den binding lapsed; every other check held.
-            raise DependencyFlap("control_state_unavailable")
+        if self.lapsed:  # Only the Den binding lapsed; every other check held (ControlState's verified state).
+            raise DependencyFlap("control_state_unavailable", dict(copy.deepcopy(self.state), dependencies=[]))
         if self.state is None:
             raise ContractError("control_unavailable")
         return copy.deepcopy(self.state)
@@ -334,8 +334,9 @@ class RuntimeTests(unittest.TestCase):
         self.submit(request())
         self.workers[0].complete()
         self.runtime.tick()
-        self.clock.now += 120
+        self.clock.now += PROFILE["execution"]["idle_seconds"]
         self.runtime.tick()
+        self.assertTrue(self.workers[0].terminate_requested)
         self.assertTrue(self.runtime.resident)
         self.workers[0].alive = False
         self.runtime.tick()
@@ -588,8 +589,189 @@ class RuntimeTests(unittest.TestCase):
                     limit = idle + (.05 if ticks_per_clip == 20 else CLIP_WINDOW_SECONDS)
                     self.assertLessEqual(self.clock.now - start, limit + 1e-9)
 
+    # M3: dependencies gate live clips only; warmup needs no Den binding.
+    def test_warmup_dispatches_and_completes_through_a_pure_dependency_lapse(self):
+        self.control.lapsed = True
+        self.runtime.warmup()
+        self.runtime.tick()
+        self.assertEqual(self.lease.held, "operator-warmup")
+        worker = self.workers[0]
+        self.assertTrue(worker.sent[0]["_operator_warmup"])
+        for _ in range(3):  # The lapse continues while the child hashes and loads.
+            self.clock.now += 30
+            self.runtime.tick()
+        self.assertFalse(worker.terminate_requested)
+        self.assertTrue(self.runtime.health()["startup_in_progress"])
+        worker.complete("operator-warmup", kind="ready")
+        self.runtime.tick()
+        self.assertTrue(self.runtime.resident)
+        self.assertIsNone(self.lease.held)
+        self.assertEqual(self.runtime.counters["warmups_completed"], 1)
+        # Live clips stay refused while the binding is lapsed; the warmup is still the only dispatch.
+        self.assertEqual(self.submit(request(cutoff=self.clock.now))["reason"], "control_state_unavailable")
+        self.assertEqual(self.runtime.counters["dispatched"], 1)
+
+    def test_warmup_lapse_flips_never_retire_the_loading_child(self):
+        self.runtime.warmup()
+        self.runtime.tick()
+        worker = self.workers[0]
+        for step in range(400):  # Matching-to-None flips, as the M3 replay measured per bound minute and more.
+            self.clock.now += .05
+            self.control.lapsed = step % 4 == 0
+            self.runtime.tick()
+        self.assertFalse(worker.terminate_requested)
+        worker.complete("operator-warmup", kind="ready")
+        self.runtime.tick()
+        self.assertTrue(self.runtime.resident)
+
+    def test_warmup_during_a_lapse_still_respects_qwen_headroom_and_other_failures(self):
+        # Qwen busy and GPU headroom still come from the verified lapse state.
+        self.control.lapsed = True
+        self.control.state["qwen_busy"] = True
+        self.runtime.warmup()
+        self.runtime.tick()
+        self.assertEqual(self.runtime.health()["deferred_reason"], "qwen_busy")
+        self.control.state["qwen_busy"] = False
+        self.control.state["unallocated_reserve_bytes"] = 50 * GIB
+        self.runtime.tick()
+        self.assertEqual(self.runtime.health()["deferred_reason"], "gpu_headroom")
+        self.assertFalse(self.workers)
+        # Any other control failure (Ops backoff, Qwen evidence, attestation) gates nothing, as before.
+        self.control.state["unallocated_reserve_bytes"] = 0
+        self.control.lapsed, self.control.state = False, None
+        self.runtime.tick()
+        self.assertEqual(self.runtime.health()["deferred_reason"], "control_state_unavailable")
+        self.assertFalse(self.workers)
+        for cause in ("control_unavailable", "admission_expired", "flap_without_verified_state"):
+            with self.subTest(cause=cause):
+                self.setUp()
+                self.runtime.warmup()
+                self.runtime.tick()
+                worker = self.workers[0]
+                self.control.lapsed = True
+                self.runtime.tick()
+                self.assertFalse(worker.terminate_requested)
+                if cause == "control_unavailable":
+                    self.control.lapsed, self.control.state = False, None
+                elif cause == "admission_expired":
+                    self.runtime.admission_valid_until_utc = 1
+                else:
+                    # A lapse still never retires a running warmup, but cannot dispatch one without verified state.
+                    self.control.read = Mock(side_effect=DependencyFlap("control_state_unavailable"))
+                    self.runtime.tick()
+                    self.assertFalse(worker.terminate_requested)
+                    worker.alive = False
+                    self.runtime.tick()
+                    self.runtime.warmup()
+                    self.runtime.tick()
+                    self.assertEqual(self.runtime.health()["deferred_reason"], "control_state_unavailable")
+                    self.assertEqual(len(self.workers), 1)
+                    continue
+                self.runtime.tick()
+                self.assertTrue(worker.terminate_requested)
+                worker.alive = False
+                self.runtime.tick()
+                self.assertFalse(self.runtime.resident)
+                self.assertEqual(self.lease.releases, ["process_reaped"])
+
+    def test_trial_window_keeps_a_quiet_resident_worker_inside_the_hard_cap(self):
+        execution = PROFILE["execution"]
+        self.assertEqual((execution["idle_seconds"], execution["startup_timeout_seconds"],
+                          execution["lifetime_seconds"]), (900, 900, 1800))
+        # Hash every weight byte at the I/O cap twice (verify, then an uncached load) inside the startup deadline.
+        self.assertLess(2 * PROFILE["weights_total_bytes"] / execution["io_read_bytes_per_second"],
+                        execution["startup_timeout_seconds"] / 2)
+        self.runtime.warmup()
+        self.runtime.tick()
+        self.assertEqual(self.runtime.pending, None)
+        self.assertEqual(self.runtime.active["request"]["expires_at"], 100 + 900)
+        worker = self.workers[0]
+        self.clock.now += 600  # A slow cold load still inside the startup deadline.
+        worker.complete("operator-warmup", kind="ready")
+        self.runtime.tick()
+        self.assertTrue(self.runtime.resident)
+        self.clock.now += 899  # A quiet Den: no clip for almost 15 minutes.
+        self.runtime.tick()
+        self.assertFalse(worker.terminate_requested)
+        self.assertEqual(self.submit(request(cutoff=self.clock.now))["status"], "running")
+        worker.complete("job-1")
+        self.runtime.tick()
+        self.clock.now = 100 + execution["lifetime_seconds"]  # The hard cap still ends the run.
+        self.runtime.tick()
+        self.assertTrue(worker.terminate_requested)
+
+
+def request_at(captures, cutoff, duration=4, identity="job-hold"):
+    """Den's causal sample-hold over explicit capture times: newest capture at or before each slot centre."""
+    value = request(identity, cutoff=cutoff, duration=duration)
+    frames, seen = [], set()
+    for frame in value["frames"]:
+        index = max(k for k, stamp in enumerate(captures) if stamp <= frame["sample_at"])
+        captured = captures[index]
+        rgb = dict(frame["source_frame"]["rgb"], seq=index, device_s=captured - 50, host_s=captured - 10)
+        source = dict(frame["source_frame"], frame_id=index, capture_mono=captured, arrival_mono=captured + .01,
+                      capture_ts=1800000000 + captured, rgb=rgb)
+        frames.append(dict(frame, frame_id=str(index), blob_ref=f"frame{index}.ppm", captured_at=captured,
+                           repeated=index in seen, source_frame=source))
+        seen.add(index)
+    value["frames"] = frames
+    return value
+
+
+def holds(value):
+    return [frame["sample_at"] - frame["captured_at"] for frame in value["frames"]]
+
 
 class ContractTests(unittest.TestCase):
+    def test_v2_sampling_admits_a_half_second_hold_and_names_its_rule(self):
+        self.assertEqual((SAMPLING, MAX_HOLD_SECONDS), ("causal_slot_center_sample_hold/v2;max_hold_s=0.5", .5))
+        for name in ("vjepa-lm-qwen3-8b", "vjepa-lm-qwen3-4b"):
+            self.assertEqual(load_profile(name)["inputs"]["sampling"], SAMPLING)
+        # Den's measured ~2.3 frames/s: every hold under 0.5 s, some over the former 0.4 s.
+        captures = [100 - 8 + k / 2.3 for k in range(int(8 * 2.3) + 1)]
+        for duration in (4, 8):
+            with self.subTest(duration=duration):
+                value = request_at(captures, 100, duration)
+                self.assertGreater(max(holds(value)), .4)
+                self.assertLessEqual(max(holds(value)), MAX_HOLD_SECONDS)
+                clip = validate_request(value, profile=PROFILE, now=100)
+                self.assertEqual(clip["sampling"], SAMPLING)
+                self.assertTrue(any(frame["repeated"] for frame in clip["frames"]))
+                self.assertEqual([f["captured_at"] for f in clip["frames"]], [f["captured_at"] for f in value["frames"]])
+                hint = make_hint(clip, PROFILE, DIGEST, {"intent": "continue", "raw_option_scores": None, "text": None}, 100)
+                self.assertEqual(hint.evidence["sampling"], SAMPLING)
+
+    def test_holds_over_half_a_second_and_other_sampling_rules_are_refused(self):
+        # 1.9 frames/s: some slot would hold a frame longer than 0.5 s.
+        sparse = request_at([100 - 5 + k / 1.9 for k in range(10)], 100)
+        self.assertGreater(max(holds(sparse)), MAX_HOLD_SECONDS)
+        with self.assertRaisesRegex(ContractError, "noncausal_or_stale_frame"):
+            validate_request(sparse, profile=PROFILE, now=100)
+        for sampling in ("causal_slot_center_sample_hold/v1", "causal_slot_center_sample_hold/v2",
+                         "causal_slot_center_sample_hold/v2;max_hold_s=0.6", None):
+            with self.subTest(sampling=sampling), self.assertRaisesRegex(ContractError, "unsupported_sampling"):
+                validate_request(dict(request(), sampling=sampling), profile=PROFILE, now=100)
+        value = request()
+        del value["sampling"]
+        with self.assertRaisesRegex(ContractError, "invalid_request_keys"):
+            validate_request(value, profile=PROFILE, now=100)
+        # A profile that names another rule admits nothing, even for a v2 request bound to it.
+        other = copy.deepcopy(PROFILE)
+        other["inputs"]["sampling"] = "causal_slot_center_sample_hold/v1"
+        value = dict(request(), profile_digest=profile_digest(other))
+        with self.assertRaisesRegex(ContractError, "unsupported_sampling"):
+            validate_request(value, profile=other, now=100)
+
+    def test_first_stamp_may_precede_the_window_by_the_hold(self):
+        # Slot 0 (cutoff - 4 + 0.0625) holding a frame for 0.45 s: older than the former cutoff-duration-0.25 bound.
+        first = 100 - 4 + .0625 - .45
+        value = request_at([first] + [100 - 4 + .1 + k * .2 for k in range(20)], 100)
+        self.assertLess(value["frames"][0]["captured_at"], 100 - 4 - .25)
+        self.assertEqual(validate_request(value, profile=PROFILE, now=100)["frames"][0]["captured_at"], first)
+        value["frames"][0]["captured_at"] = value["frames"][0]["source_frame"]["capture_mono"] = 100 - 4 - .5 - 1e-3
+        with self.assertRaisesRegex(ContractError, "noncausal_or_stale_frame"):
+            validate_request(value, profile=PROFILE, now=100)
+
     def test_complete_causal_5hz_clip_records_repeated_frames(self):
         clip = validate_request(request(), profile=PROFILE, now=100)
         self.assertEqual(sum(f["repeated"] for f in clip["frames"]), 12)

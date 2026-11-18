@@ -188,8 +188,14 @@ class DependencyFlap(ContractError):
 
     Raised (still as control_state_unavailable) only when every other check
     holds, so Ops backoff, Qwen evidence, attestation or resource failures
-    never take this class.
+    never take this class. `state` is that otherwise fully verified control
+    state with an empty dependency list: live clips stay refused, but operator
+    warmup, which needs no Den binding, may be gated on it.
     """
+
+    def __init__(self, reason, state=None):
+        super().__init__(reason)
+        self.state = state
 
 
 class ControlState:
@@ -296,13 +302,15 @@ class ControlState:
                     or copied["binding_sha256"] != current["binding_sha256"]
                     or copied["observer"] != current["observer"] or copied["sequence"] > current["sequence"]):
                 raise ContractError("control_root_queue_binding_changed_or_unproven")
-            if lapse:
-                raise DependencyFlap("control_dependencies_lapsed")
             result = strict_json(canonical(state))
             result["qwen_busy"] = state["qwen_busy"] or bool(current["gauges"]["running"] or current["gauges"]["waiting"])
             result["sources"]["qwen"]["current_verified_observation"] = source_from_receipt(current)
+            if lapse:
+                # Never hand on a lapsed (possibly stale) binding: no person is bound.
+                result["dependencies"] = []
+                raise DependencyFlap("control_dependencies_lapsed", result)
             return result
-        except DependencyFlap:
-            raise DependencyFlap("control_state_unavailable") from None
+        except DependencyFlap as exc:
+            raise DependencyFlap("control_state_unavailable", exc.state) from None
         except (OSError, ValueError):
             raise ContractError("control_state_unavailable") from None

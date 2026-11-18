@@ -1,6 +1,6 @@
 {
   "schema": "den.model-profile/v1",
-  "adapter_bundle_sha256": "7089d829f7bb94c1f46fa7585a6f39daf0ce1e31ca6074fc4111a908eaa54426",
+  "adapter_bundle_sha256": "48a98b57f6188001b9ca4ff25b8ccf978aeb1eb493372912efea63c42831613c",
   "id": "vjepa-lm-qwen3-8b",
   "role": "selected_semantic_intent",
   "backend": "vjepa_lm",
@@ -12,6 +12,11 @@
     "Remaining null file hashes require bounded provisioning, explicit remote-code review, and receipt pinning.",
     "Research/non-commercial release terms require operator acceptance.",
     "Shared Blackwell runtime, observed load peak, latency, and sustained resource use are unvalidated."
+  ],
+  "trial_window_notes": [
+    "startup_timeout_seconds 900: the cold child hashes all 18480715744 weight bytes at the 104857600 B/s I/O cap (176 s), then from_pretrained may read them again uncached (another 176 s), plus CUDA transfer and one synthetic warmup inference; 900 s keeps more than twice that worst case.",
+    "idle_seconds 900: a resident worker survives 15 minutes without a dispatched clip, so a quiet or empty Den does not end residency inside the bounded live window; nothing reloads implicitly.",
+    "lifetime_seconds 1800 and the unit's RuntimeMaxSec=1800 stay the hard cap: warmup plus live window plus idle can never outlive one 30-minute bounded run."
   ],
   "license": {
     "publisher_use": "research_and_noncommercial",
@@ -79,18 +84,18 @@
     "tasks_max": 128,
     "io_read_bytes_per_second": 104857600,
     "lifetime_seconds": 1800,
-    "idle_seconds": 120,
+    "idle_seconds": 900,
     "host_minimum_available_bytes": 8589934592,
     "cold_host_reservation_bytes": 25769803776,
     "load_strategy": "cpu_then_cuda_low_cpu_mem_usage",
-    "startup_timeout_seconds": 600
+    "startup_timeout_seconds": 900
   },
   "auto_model": "modeling_jepa_llm.JepaLlmModel",
   "auto_config": "configuration_jepa_llm.JepaLlmConfig",
   "tokenizer_revision": "d059602a9cdb2d198301f103aa0c7362ff943cb7",
   "inputs": {
     "format": "rgb_ppm_p6",
-    "sampling": "causal_slot_center_sample_hold/v1",
+    "sampling": "causal_slot_center_sample_hold/v2;max_hold_s=0.5",
     "duration_seconds": [
       4,
       8

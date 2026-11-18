@@ -281,6 +281,21 @@ class Runtime:
         return (job["request"].get("_operator_warmup") is True
                 or job["request"]["dependencies"] in state["dependencies"])
 
+    @staticmethod
+    def _gate(job, state, flap):
+        """The control state that gates `job`, or None.
+
+        Dependencies gate only live clips. A pure Den-binding lapse
+        (DependencyFlap: every Ops, Qwen, attestation, broker and resource
+        check held) still gates operator warmup on that verified state, with
+        no binding; any other control failure gates nothing, as before.
+        """
+        if state is not None:
+            return state
+        if flap is not None and job is not None and job["request"].get("_operator_warmup") is True:
+            return flap.state
+        return None
+
     def tick(self):
         # Observe potentially slow driver subprocesses outside the state lock.
         # HTTP submit/poll/health can continue while a driver query is delayed.
@@ -291,8 +306,12 @@ class Runtime:
                     and self.retiring_at is None and not self.resource_fault
                     and self.clock() < self.pending["request"]["expires_at"]):
                 try:
-                    preflight = self.control.read(self.clock())
-                    if not preflight["qwen_busy"] and self._compatible(self.pending, preflight):
+                    try:
+                        preflight = self.control.read(self.clock())
+                    except DependencyFlap as flap:
+                        preflight = self._gate(self.pending, None, flap)
+                    if (preflight is not None and not preflight["qwen_busy"]
+                            and self._compatible(self.pending, preflight)):
                         observation_job = self.pending
                 except (ContractError, OSError, ValueError):
                     pass
@@ -304,13 +323,14 @@ class Runtime:
             except (ContractError, OSError, ValueError):
                 observation_error = True
         with self.lock:
-            now, lapsed = self.clock(), False
+            now, lapsed, flap = self.clock(), False, None
             try:
                 state = self.control.read(now)
                 self.source_validated_at = now
                 self.control_valid = True
             except (ContractError, OSError, ValueError) as exc:
                 state, lapsed = None, isinstance(exc, DependencyFlap)
+                flap = exc if lapsed else None
                 self.control_valid = False
             if self.admission_valid_until_utc is not None and time.time() >= self.admission_valid_until_utc:
                 self.admitted = False
@@ -327,13 +347,17 @@ class Runtime:
             if self.active is not None and self.active["status"] != "stopping":
                 # A live clip that expires or whose Den binding changes or
                 # lapses is discarded, never its resident child. Warmup has no
-                # result to discard, and any other control failure (Ops
-                # backoff, Qwen evidence, attestation) still retires as before.
-                stop = self._stop_active if self.active["request"].get("_operator_warmup") else self._discard_active
+                # result to discard and needs no binding, so a pure lapse
+                # leaves it running; any other control failure (Ops backoff,
+                # Qwen evidence, attestation) still retires as before.
+                warmup = self.active["request"].get("_operator_warmup") is True
+                stop = self._stop_active if warmup else self._discard_active
                 if now >= self.active["request"]["expires_at"]:
                     stop("expired", "clip_expired")
                 elif state is None and not lapsed:
                     self._stop_active("invalidated", "dependencies_unavailable_or_changed")
+                elif state is None and warmup:
+                    pass  # Only the Den binding lapsed; every other check held.
                 elif state is None or not self._compatible(self.active, state):
                     stop("invalidated", "dependencies_unavailable_or_changed")
             if (self.active is not None and not self.active["request"].get("_operator_warmup")
@@ -428,9 +452,10 @@ class Runtime:
                 return
             if self.resource_fault:
                 return self._defer("resource_lease_fault")
-            if state is None:
+            gate = self._gate(self.pending, state, flap)
+            if gate is None:
                 return self._defer("control_state_unavailable")
-            if state["qwen_busy"]:
+            if gate["qwen_busy"]:
                 return self._defer("qwen_busy")
             if observation_job is not self.pending or observation is None:
                 if observation_error:
@@ -445,7 +470,7 @@ class Runtime:
             host_incremental = 0 if self.resident else caps["cold_host_reservation_bytes"]
             if host_available < caps["host_minimum_available_bytes"] + host_incremental:
                 return self._defer("host_memory_headroom")
-            if free < caps["minimum_free_bytes"] + incremental + state["unallocated_reserve_bytes"]:
+            if free < caps["minimum_free_bytes"] + incremental + gate["unallocated_reserve_bytes"]:
                 return self._defer("gpu_headroom")
             try:
                 token = self.lease.try_acquire(self.pending["request"]["request_id"])

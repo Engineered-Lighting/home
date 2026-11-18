@@ -55,8 +55,8 @@ GPU/host probes, execution broker, and residency-accounting callback.
 
 The exact request keys and `IntentHint` dataclass are in
 `den_models/contracts.py`. The request contains exactly 32 causal sample
-slots, a fixed square original-RGB ROI, the profile digest, and complete
-`FrameRef` source dictionaries. Every source generation, track association,
+slots, a fixed square original-RGB ROI, the profile digest, its `sampling`
+rule, and complete `FrameRef` source dictionaries. Every source generation, track association,
 transform, scan, and calibration revision is bound and echoed. Numeric frame
 and association counters are canonical decimal strings in the envelope.
 `source_generation` is SHA256 of compact JSON `[service_run_id,camera_epoch]`
@@ -68,7 +68,21 @@ and frame identities, which appear in URLs, never accept `@`.
 
 Four-second walking and eight-second reference windows use uniform slot
 centers. Each slot uses the newest source frame captured at or before that
-slot; repeated 5 Hz source frames are explicitly marked and preserved.
+slot and holds it for at most 0.5 s; repeated source frames are explicitly
+marked and keep their true capture times. No frame may be captured more than
+that hold before the window starts (`cutoff - duration - 0.5`). Every request
+names this rule in `sampling`, and the worker admits exactly
+`causal_slot_center_sample_hold/v2;max_hold_s=0.5` (`contracts.SAMPLING`):
+the former 0.4 s rule, a missing key or any other value is refused as
+`unsupported_sampling` or `invalid_request_keys`, and so is a request bound to
+a profile whose `inputs.sampling` names anything else. The profile names the
+rule, so the admission receipt that pins the profile digest names it too, and
+every hint echoes it in `evidence.sampling`. The 0.5 s hold is an owner-approved
+research-trial setting: the Den camera delivers about 2.5 frames/s while
+someone is in view (5 frames/s was never reached in 12 h), so a 0.4 s hold
+left a median of zero feasible clips per occupied minute; 0.5 s gives a median
+of two. Fewer distinct frames per clip (about 12 instead of 17) is a fidelity
+cost that held-out evaluation must still judge.
 Source arrival must also be at or before the clip cutoff. The full track
 bounding box must remain inside the one fixed ROI for every frame. Do not
 recenter each frame: it changes apparent motion. Crops cannot restore detail
@@ -245,12 +259,30 @@ The observed 17.8 GiB publisher single-clip figure is not an NVML peak bound.
 Memory residency and GPU execution are separate. A successful native job
 calls `torch.cuda.synchronize` before its private-pipe completion proof and
 releases its execution lease, while model residency remains accounted. Idle
-residency expires 120 seconds after the last dispatch or completion, and child
-lifetime after 30 minutes. A deferred clip (Qwen busy, control state
-unavailable, headroom) never extends residency; only a just-submitted clip not
-yet evaluated holds it, for at most one 10-second clip window. After either
-limit, live clips get `not_resident` until an operator restarts the service
-with `--warmup`. Nothing reloads implicitly.
+residency expires `idle_seconds` after the last dispatch or completion, and
+child lifetime after `lifetime_seconds`. A deferred clip (Qwen busy, control
+state unavailable, headroom) never extends residency; only a just-submitted
+clip not yet evaluated holds it, for at most one 10-second clip window. After
+either limit, live clips get `not_resident` until an operator restarts the
+service with `--warmup`. Nothing reloads implicitly.
+
+The 8B trial profile sets this window for one bounded live run (the profile's
+`trial_window_notes` say the same):
+
+* `startup_timeout_seconds` 900. The cold child hashes all 18,480,715,744
+  weight bytes at the unit's 100 MiB/s read cap (176 s), and `from_pretrained`
+  may read them again uncached (another 176 s), before the CUDA transfer and
+  one synthetic warmup inference. 900 s is more than twice that worst case;
+  the former 600 s left under one extra pass of margin.
+* `idle_seconds` 900. A resident worker survives 15 minutes with no
+  dispatched clip, so a quiet or empty Den, or a stretch with no single bound
+  person, does not end residency inside the live window. The former 120 s
+  retired the model during ordinary gaps and forced a fresh cold warmup.
+* `lifetime_seconds` 1800 and the unit's `RuntimeMaxSec=1800` stay the hard
+  cap: warmup, live window and idle together never outlive one 30-minute run.
+
+The 4B benchmark control keeps 600 s startup (about 9.4 GiB of weights, 97 s
+per pass) and 120 s idle.
 
 A live clip that expires, is cancelled, or is invalidated because its Den
 binding changed or lapsed keeps the resident child: the job stays `stopping`
@@ -260,7 +292,18 @@ about one second, so ControlState reports a lapse separately, and only when
 every other check holds. Any other control failure while a clip runs (Ops
 backoff, Qwen evidence, producer attestation or freshness, resources) retires
 the child as before. The child likewise reports refusals before native work
-(expired clip, Qwen busy, unreadable control state) and keeps serving. A job
+(expired clip, Qwen busy, unreadable control state) and keeps serving.
+
+Dependencies gate live clips only. Operator warmup needs no Den binding, so
+a pure lapse neither defers its dispatch nor retires its child while it
+hashes, loads and runs the synthetic inference, on the host or in the
+child's own gates. The lapse carries the otherwise fully verified control
+state, with an empty dependency list, and warmup is still gated on its Qwen
+busy flag, reservations and headroom. Ops backoff, Qwen evidence, attestation,
+freshness, resource or admission failures still defer or stop warmup exactly
+as before. Person-bound sources lapse a few times a minute while someone is
+in view (the M3 replay measured about 3.5 times per bound minute), so a
+several-minute cold warmup would otherwise rarely survive one. A job
 still running 20 seconds after dispatch, twice the longest permitted clip
 window, retires the child. Malformed completion, a protocol violation, worker
 loss, admission expiry, lifetime, a lease-release fault or a headroom refusal

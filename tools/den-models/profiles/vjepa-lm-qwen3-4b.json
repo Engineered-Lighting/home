@@ -1,6 +1,6 @@
 {
   "schema": "den.model-profile/v1",
-  "adapter_bundle_sha256": "7089d829f7bb94c1f46fa7585a6f39daf0ce1e31ca6074fc4111a908eaa54426",
+  "adapter_bundle_sha256": "48a98b57f6188001b9ca4ff25b8ccf978aeb1eb493372912efea63c42831613c",
   "id": "vjepa-lm-qwen3-4b",
   "role": "benchmark_control",
   "backend": "vjepa_lm",
@@ -88,7 +88,7 @@
   "tokenizer_revision": "da5e0c682b1df2877dce25082bfa322c94ee0970",
   "inputs": {
     "format": "rgb_ppm_p6",
-    "sampling": "causal_slot_center_sample_hold/v1",
+    "sampling": "causal_slot_center_sample_hold/v2;max_hold_s=0.5",
     "duration_seconds": [
       4,
       8

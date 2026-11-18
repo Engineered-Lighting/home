@@ -59,7 +59,9 @@ const INTENT_REASONS = Object.freeze({ intent_hint_absent: 'No hint offered', ma
     current_binding_changed: 'Person or source binding changed', newer_measured_stop: 'Newer measured stop',
     newer_measured_turn: 'Newer measured turn', awaiting_held_out_admission: 'Awaiting held-out admission',
     request_id_conflict: 'Request identity conflict', request_identity_unavailable: 'Request identity unavailable',
-    invalid_request_identity: 'Invalid request identity', older_intent_hint: 'Older hint declined', idempotent_retry: 'Original receipt retained' });
+    invalid_request_identity: 'Invalid request identity', older_intent_hint: 'Older hint declined',
+    older_intent_receipt: 'Older receipt declined', oversized_intent_receipt: 'Receipt too large',
+    idempotent_retry: 'Original receipt retained' });
 const own = (value, key) => value && typeof value === 'object' && Object.hasOwn(value, key) ? value[key] : undefined;
 function runtimeOf(event, context = {}) {
     try {

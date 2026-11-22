@@ -1,0 +1,30 @@
+{
+  "repository": "rclone:unas:LinuxBackup/engineered-lighting-server1",
+  "host": "EngineeredLightingServer1",
+  "bandwidth_limit": "4M",
+  "include": [
+    "/srv/data/ha-backups",
+    "/var/lib/private/den-live",
+    "/srv/data/label-backups",
+    "/srv/data/unas-backup-inputs/rebuild-inventory.json",
+    "/etc/systemd/system",
+    "/usr/local/sbin",
+    "/usr/local/libexec",
+    "/opt/unas-haos",
+    "/opt/unas-linux-backup",
+    "/opt/unas-publish",
+    "/etc/unas-publish",
+    "/etc/home-agent",
+    "/var/spool/cron/crontabs",
+    "/etc/fstab"
+  ],
+  "required_mounts": [
+    "/srv/data"
+  ],
+  "exports": [],
+  "exclude": [
+    "/srv/data/ha-backups/incoming",
+    "*.partial",
+    "*.part"
+  ]
+}

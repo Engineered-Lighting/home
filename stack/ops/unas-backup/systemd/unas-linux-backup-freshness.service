@@ -1,0 +1,15 @@
+[Unit]
+Description=Check freshness of the last complete UNAS Linux backup
+
+[Service]
+Type=oneshot
+User=unas-backup
+Group=unas-backup
+ExecStart=/usr/bin/python3 /opt/unas-linux-backup/backup.py --mode status
+StateDirectory=unas-linux-backup
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only

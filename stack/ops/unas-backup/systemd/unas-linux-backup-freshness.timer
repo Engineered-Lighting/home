@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly Linux backup freshness check
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=unas-linux-backup-freshness.service
+
+[Install]
+WantedBy=timers.target

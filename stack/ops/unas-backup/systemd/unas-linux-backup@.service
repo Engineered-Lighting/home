@@ -1,0 +1,30 @@
+[Unit]
+Description=Victoria UNAS Linux backup (%i)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=unas-backup
+Group=unas-backup
+ExecStart=/usr/bin/python3 /opt/unas-linux-backup/backup.py --mode %i
+LoadCredential=restic-password:/etc/unas-linux-backup/restic-password
+LoadCredential=rclone.conf:/etc/unas-linux-backup/rclone.conf
+StateDirectory=unas-linux-backup
+StateDirectoryMode=0700
+CacheDirectory=unas-linux-backup
+CacheDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=75%
+MemoryHigh=768M
+MemoryMax=1G
+TimeoutStartSec=12h

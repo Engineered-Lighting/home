@@ -1,0 +1,21 @@
+[Unit]
+Description=Back up the LA Home Assistant configuration mirror to Victoria
+Wants=network-online.target
+After=network-online.target haos-precious-sync.service
+RequiresMountsFor=/srv/home-agent
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /opt/unas-haos/Backup-LAHaosConfig.sh
+LoadCredential=rclone.conf:/etc/unas-linux-backup/rclone.conf
+LoadCredential=restic-password:/etc/unas-linux-backup/restic-password
+StateDirectory=unas-la-haos-config
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/unas-linux-backup
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+Nice=15
+IOSchedulingClass=idle
+TimeoutStartSec=15min

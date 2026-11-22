@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly Linux backup to the Victoria UNAS
+
+[Timer]
+OnCalendar=*-*-* 02:45:00 America/Vancouver
+Persistent=true
+Unit=unas-linux-backup@backup.service
+
+[Install]
+WantedBy=timers.target

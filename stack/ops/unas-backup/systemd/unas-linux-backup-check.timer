@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly Linux repository structure check
+
+[Timer]
+OnCalendar=Sun *-*-* 16:00:00 America/Vancouver
+Persistent=true
+Unit=unas-linux-backup@check.service
+
+[Install]
+WantedBy=timers.target
